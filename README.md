@@ -1,5 +1,8 @@
 # JSFX
- bundle of JSFX and scripts for reaper.
+
+
+This is a small bundle of JSFX and scripts for reaper.
+
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
