@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.1
+@version 0.2
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
