@@ -1,0 +1,374 @@
+desc:Saike StereoManipulator
+//tags: processing stereo
+//author: Sai'ke
+/*
+ Copyright (C) 2018 Joep Vanlier
+ License: LGPL - http://www.gnu.org/licenses/lgpl.html
+*/
+slider1:100<0,200,1>Width Low (%)
+slider2:500<20,20000,1>Crossover (Hz)
+slider3:100<0,200,1>Width High (%)
+slider4:0<0,2,1{Mix,Left,Right}>Use Channel
+slider5:0<0,8,1{Cheapo,FIR32,FIR64,FIR128,FIR256,FIR512,FIR1024,IIR Butterworth 2 pole,IIR Butterworth 3 pole,IIR Butterworth 4 pole}>Filter Type
+slider6:0<0,2,1{All,Low,High}>Listen Channel
+ 
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+cDenorm = 10^-30;
+cDenorm2 = 10^-4;
+
+// Memory for the FIR delay chain
+firmeml = 1000;
+firmemr = 3000;
+firlocl = firmeml;
+firlocr = firmemr;
+
+// FIR location
+FIR     = 5000;
+NFIR    = 65;
+N       = 15;
+
+// IIR coefficients
+IIRn    = 7000;
+IIRd    = 7100;
+xCoeff  = 8000;
+yCoeff  = 8100;
+NIIR    = 12;
+
+// Memory for the IIR
+iirmemlx  = 9000;
+iirmemly  = 9100;
+iirmemrx  = 9200;
+iirmemry  = 9300;
+iirloclx = iirmemlx;
+iirlocly = iirmemly;
+iirlocrx = iirmemrx;
+iirlocry = iirmemry;
+
+lastfilt = 0;
+
+@slider
+widthLP = slider1 / 100;
+width = slider3 / 100;
+mode = slider6;
+filt = slider5;
+freq = min(slider2,srate);
+useForMono = slider4;
+
+(filt != lastfilt) ?
+(
+  lastfilt = filt;
+  memset(iirmemlx,0,100);
+  memset(iirmemly,0,100);
+  memset(iirmemrx,0,100);
+  memset(iirmemry,0,100);
+);
+
+( filt == 0 ) ? (
+  // Simple filter
+  x = exp(-2.0*$pi*freq/srate);
+  a0 = 1.0-x;
+  b1 = -x;
+);
+( filt < 7 ) ? (
+  // FIR filter
+  ( filt == 1 ) ? NFIR = 33;
+  ( filt == 2 ) ? NFIR = 65;   
+  ( filt == 3 ) ? NFIR = 129; 
+  ( filt == 4 ) ? NFIR = 257;  
+  ( filt == 5 ) ? NFIR = 513;
+  ( filt == 6 ) ? NFIR = 1025;  
+    
+  HN = (NFIR-1)/2;
+  lag = HN;
+
+  firmaxl = firmeml + NFIR;  
+  firmaxr = firmemr + NFIR;
+
+  n = 0;
+  sum = 0;
+  loop(NFIR,
+    // Window function
+    qq = ( 2 * $pi * n ) / ( NFIR-1 );
+    // Blackman-Harris
+    window = 0.35875 - 0.48829 * cos(qq) + 0.14128 * cos(2*qq) - 0.01168 * cos(3*qq);
+    // Hanning
+    //window = 0.54 - 0.46 * cos(qq);
+    
+    // Determine FIR
+    wc = 2*$pi*freq/(srate);
+    snc = wc*(n-HN);
+    FIR[n] = window / $pi * (wc) * ( (abs(snc)<cDenorm2) ? 1 : sin(snc)/(snc+cDenorm) );   
+    sum = sum + FIR[n];
+    
+    n+=1;
+  );
+  
+  // Normalize
+  cur = FIR;
+  loop(NFIR,
+    cur[] = cur[] / sum;
+    cur += 1;
+  )
+
+  ) : ( 
+  // IIR filters
+  
+  // Butterworth
+  ( filt == 7 ) ? (
+    // 2-pole
+    NIIR = 3;
+    IIRn[0] = 1;
+    IIRn[1] = 2;
+    IIRn[2] = 1;
+    
+    // Warping from continuous to digital
+    // c is given by cot( w * Ts / 2 )
+    // cot = cos(a) / sin(a)
+    f = $pi * freq / srate;
+    c = cos(f)/sin(f + cDenorm);
+    csq = c * c;
+    IIRd[0] = csq + sqrt(2) * c + 1.0;
+    IIRd[1] = -2 * ( csq - 1 );
+    IIRd[2] = csq - sqrt(2) * c + 1.0;
+  );
+  ( filt == 8 ) ? (
+    // 3-pole
+    NIIR = 4;    
+    IIRn[0] = 1;
+    IIRn[1] = 3;
+    IIRn[2] = 3;
+    IIRn[3] = 1;
+    
+    // Warping from continuous to digital
+    // c is given by cot( w * Ts / 2 )
+    // cot = cos(a) / sin(a)
+    f = $pi * freq / srate;
+    c = cos(f)/sin(f + cDenorm);
+    csq = c * c;
+    ctr = csq * c;
+    IIRd[0] = ctr + 2*csq + 2*c + 1;
+    IIRd[1] = -( 3 * ctr + 2 * csq - 2*c - 3 );
+    IIRd[2] = 3 * ctr - 2*csq -2*c + 3;
+    IIRd[3] = -ctr + 2 * csq - 2*c + 1;
+  );  
+  ( filt == 9 ) ? (
+    // 4-pole
+    NIIR = 5;    
+    
+    // Warping from continuous to digital
+    // c is given by cot( w * Ts / 2 )
+    // cot = cos(a) / sin(a)
+    f = $pi * freq / srate;
+    c = tan(f + cDenorm); //cos(f)/sin(f + cDenorm);
+    csq = c * c;
+    ctr = csq * c;
+    cq = csq * csq;
+    m = -2.0 * cos(5.0 * $pi / 8.0);
+    n = -2.0 * cos(7.0 * $pi / 8.0);
+    
+    IIRn[0] = 1 * cq;
+    IIRn[1] = 4 * cq;
+    IIRn[2] = 6 * cq;
+    IIRn[3] = 4 * cq;
+    IIRn[4] = 1 * cq;
+    IIRd[0] = (1.0 + (m + n) * c + (2.0 + n * m) * csq + (m + n) * ctr + cq);
+    IIRd[1] = (-4.0 - 2.0 * (n + m) * c + 2.0 * (m + n) * ctr + 4.0 * cq);
+    IIRd[2] = (6.0 - 2.0 * (2 + m * n) * csq + 6.0 * cq);
+    IIRd[3] = (-4.0 + 2.0 * (m + n) * c - 2.0 * (m + n) * ctr + 4.0 * cq);
+    IIRd[4] = (1.0 - (n + m) * c + (2.0 + m * n) * csq - (m + n) * ctr + cq);
+    
+    coeffa = IIRd[0];
+    coeffb = IIRd[1];
+    coeffc = IIRd[2];
+    coeffd = IIRd[3];
+    coeffe = IIRd[4];   
+  );
+  
+  // Calculate the filter coefficients
+  i = 0;
+  loop( NIIR,
+      xCoeff[i] = IIRn[i] / IIRd[0];
+      yCoeff[i] = -IIRd[i] / IIRd[0];
+      i += 1;
+  );
+  
+  // When to wrap
+  iirmaxlx = iirmaxx = iirmemlx + NIIR;
+  iirmaxly = iirmaxy = iirmemly + NIIR;
+  iirmaxrx = iirmemrx + NIIR;
+  iirmaxry = iirmemry + NIIR;
+);
+
+@sample
+s0 = spl0;
+s1 = spl1;
+
+// Lowpass the sample
+( filt == 0 ) ? (
+  // ------------------------
+  // CHEAP 1p
+  // ------------------------
+
+  spl0 = (tmpl = a0*spl0 - b1*tmpl + cDenorm);
+  spl1 = (tmpr = a0*spl1 - b1*tmpr + cDenorm);  
+) : (
+  ( filt < 7 ) ? (
+    // ------------------------
+    // FIR FILTERS
+    // ------------------------
+  
+    // Insert sample in the delay chain
+    firlocl[] = spl0;
+    firlocr[] = spl1;
+  
+    // Apply the FIR filter
+    firPtr = FIR;
+    lPtr = firlocl+1;
+    rPtr = firlocr+1;
+    spl0 = 0;
+    spl1 = 0;
+    loop(NFIR-1,
+      spl0 += firPtr[] * lPtr[];
+      spl1 += firPtr[] * rPtr[];
+      firPtr += 1;
+      lPtr += 1;
+      lPtr > firmaxl ? lPtr = firmeml;
+      rPtr += 1;
+      rPtr > firmaxr ? rPtr = firmemr;      
+    );
+    
+    // Construct high passed section (note the delay to make sure it is in phase)
+    lPtr = firlocl - lag-1;
+    ( lPtr < firmeml ) ? lPtr += NFIR+1;
+    rPtr = firlocr - lag-1;
+    ( rPtr < firmemr ) ? rPtr += NFIR+1;
+    s0 = lPtr[];
+    s1 = rPtr[];
+    
+    // Shift the position where we insert the current sample in the delay chain
+    firlocr += 1;
+    firlocr > firmaxr ? firlocr = firmemr;
+    firlocl += 1;
+    firlocl > firmaxl ? firlocl = firmeml;
+  ) : (  
+    // ------------------------
+    // IIR FILTERS
+    // ------------------------
+  
+    // Insert input sample in the input history (x), iirloclx is a pointer to this address
+    iirloclx[] = spl0;
+    iirlocrx[] = spl1;
+  
+    // Apply IIR filter
+    spl0 = 0;
+    spl1 = 0;
+
+    // Apply filter coefficients to direct input history first (x)
+    lcur = iirloclx;
+    rcur = iirlocrx;
+    xC   = xCoeff;
+    loop( NIIR,
+      spl0 = spl0 + xC[] * lcur[];
+      spl1 = spl1 + xC[] * rcur[];      
+      
+      // Go over the input history
+      xC += 1;
+      lcur -= 1;
+      rcur -= 1;
+      
+      // Wrap around delay chain start
+      ( lcur < iirmemlx ) ? ( lcur = iirmaxlx; );
+      ( rcur < iirmemrx ) ? ( rcur = iirmaxrx; );
+    );
+    
+    // Apply filter coefficients to output history (y)
+    lcur = iirlocly-1;
+    rcur = iirlocry-1;
+    yC   = yCoeff + 1;
+    loop( NIIR-1,
+      // Wrap around delay chain start
+      ( lcur < iirmemly ) ? ( lcur = iirmaxly; );
+      ( rcur < iirmemry ) ? ( rcur = iirmaxry; );
+   
+      spl0 = spl0 + yC[] * lcur[];
+      spl1 = spl1 + yC[] * rcur[];  
+
+      // Go over the output history          
+      yC += 1;
+      lcur -= 1;
+      rcur -= 1;
+    );
+    
+    // Insert output sample in the delay chain
+    iirlocly[] = spl0;
+    iirlocry[] = spl1;
+    
+    // Shift to next sample
+    iirloclx += 1;
+    iirlocrx += 1;    
+    iirloclx > iirmaxx ? ( iirloclx = iirmemlx; iirlocrx = iirmemrx; );
+    iirlocly += 1;
+    iirlocry += 1;
+    iirlocly > iirmaxy ? ( iirlocly = iirmemly; iirlocry = iirmemry; );
+  );  
+);
+
+// Construct high passed section
+s0 -= spl0;
+s1 -= spl1;
+
+mono = (s0 + s1)/2;
+stereo = (s0 - s1)/2;
+s0 = (mono + stereo * width) / max(width,1);
+s1 = (mono - stereo * width) / max(width,1);
+
+// Are we including the low passed signal?
+(mode < 2) ? (
+  // What do we use as mono?
+  ( useForMono == 0 ) ? (
+    // A mix of both?
+    monoLP = (spl0 + spl1)/2;
+    stereoLP = (spl0 - spl1)/2;
+    
+    spl0 = (monoLP + stereoLP * widthLP) / max(widthLP,1);
+    spl1 = (monoLP - stereoLP * widthLP) / max(widthLP,1);
+  ) : (
+    ( useForMono == 1 ) ? (
+      // Left?
+      monoLP = spl0;
+      stereoLP = (spl1 - spl0);
+      
+      spl0 = monoLP;
+      spl1 = (monoLP + stereoLP * widthLP) / max(widthLP,1);
+    ) : (
+      // Right?
+      monoLP = spl1;
+      stereoLP = (spl0 - spl1);
+      
+      spl0 = (monoLP + stereoLP * widthLP) / max(widthLP,1);
+      spl1 = monoLP;
+    );    
+  );  
+) : (
+  // Drop lowpassed version if mode < 1
+  spl0 = 0;
+  spl1 = 0;
+);
+
+(mode == 0||mode == 2) ? (
+  spl0 += s0;
+  spl1 += s1;
+)
+
+@gfx
+    gfx_x=0; 
+    gfx_y=.5;
+    gfx_r = gfx_g = gfx_b = 1.0;
+    gfx_printf("\nStereo width modifier\n\nSplits the channel into two via crossover filter.\nBoth channels can then be mono-ified separately.\n\nUse FIR filter for strong transients, but note\nthat this incurs N/2 delay of the signal.\nLarger filters are required for cutting lower freq.\nLarger filters will also reduce aliasing.\n\nUse high order IIR for less transient heavy stuff.\nThis incurs no global delay but may alter transients.\n\nFIRs are much more expensive than IIRs!\n\nIf you hear phase cancellation, set use channel\nto left or right rather than mix. Note that widths\nother than 0 or 100\% in this setting is not\nrecommended since this will create volume\ndifferences between left and right.");
+    
+

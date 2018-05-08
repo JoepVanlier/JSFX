@@ -1,0 +1,422 @@
+desc:Saike SideSpectrum Meter
+//tags: analysis FFT meter spectrum
+//author: Cockos, Joep Vanlier
+/*
+Copyright (C) 2007 Cockos Incorporated
+Copyright (C) 2018 Joep Vanlier
+License: LGPL - http://www.gnu.org/licenses/lgpl.html
+
+This file was modified by Joep Vanlier to enable stereo analysis
+*/
+
+slider1:10<0,9,1{16,32,64,128,256,512,1024,2048,4096,8192,16384,32768}>-FFT size
+slider2:-108<-450,-12,6>-floor
+slider3:0<0,1,1{disabled,enabled}>-show phase
+slider4:2<0,3,1{rectangular,hamming,blackman-harris,blackman}>-window
+slider5:200<0,2500,1>-integration time (ms)
+slider6:1<1,6,.2>-scaling
+
+in_pin:left input
+in_pin:right input
+options:no_meter
+
+@init
+gfx_ext_retina=1.0;
+ext_nodenorm=1;
+recpos=0;
+max_fft_size=32768;
+shift=327680;
+recpos2=shift;
+fftsize=max_fft_size;
+gfx_clear=-1;
+windowtype=-1;
+fftidx=-1;
+scaling=1;
+
+histsize=max_fft_size + (max_fft_size*0.5 - 1);
+window=histsize;
+fftworkspace=window+(max_fft_size*0.5 + 1);
+integrate_buf = fftworkspace + max_fft_size*2;
+
+histsize2=max_fft_size + (max_fft_size*0.5 - 1) + shift;
+fftworkspace2=window+(max_fft_size*0.5 + 1) + shift;
+integrate_buf2 = fftworkspace + max_fft_size*2 + shift;
+
+
+@slider
+slider2 != lfloor ? old_w=0;
+
+@block
+slider2 != lfloor ? (
+  lfloor = slider2;
+  minvol=2*exp(log(10)/20*slider2);
+);
+
+@sample
+abs(recpos[]=spl0) > minvol ? update=1;
+recpos = ((recpos+1) >= histsize ? 0 : (recpos+1));
+
+abs(recpos2[]=spl1) > minvol ? update=1;
+recpos2 = ((recpos2+1) >= histsize2 ? shift : (recpos2+1));
+
+@gfx 640 400
+
+gfx_ext_retina>1 ? gfx_setfont(1,"Arial",16*gfx_ext_retina,'b') : gfx_setfont(0);
+
+function draw_button(xp, yp, str) 
+  instance(w,h,x,y) 
+  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y) 
+(
+  gfx_measurestr(str, w, h);
+  xp -= w+3;
+  x=xp;
+  y=yp;
+  gfx_set(0,0,.75);
+  w+=3;
+  h+=3;
+  gfx_rect(x,y,w,h);
+  gfx_set(0,.5,1);
+  gfx_line(x,y,x+w,y);
+  gfx_line(x+w,y,x+w,y+h);
+  gfx_line(x,y+h,x+w,y+h);
+  gfx_line(x,y,x,y+h);
+  h+=1;
+  w+=1;
+  gfx_x=xp+2; gfx_y=yp+2;
+  gfx_drawstr(str);
+  gfx_x = xp;
+);
+function hit_button(xp,yp,cm) 
+  instance(w,h,x,y) 
+  globals(cap_mode, cap_last_x, cap_last_y) 
+( 
+  xp>=x&&yp>=y&&xp<x+w&&yp<y+h ? (
+    cap_last_x = xp;
+    cap_last_y = yp;
+    cap_mode=cm;
+  );
+);
+
+function drag_slider(x, y, z, dx)
+  globals(mouse_y, cap_last_y, cap_drag)
+(
+  x = min(max(x + dx * (cap_last_y-mouse_y),y),z);
+  cap_last_y=mouse_y;
+  cap_drag=1;
+  x;
+);
+
+function drag_slider_precise(x, y, z, dx)
+  globals(mouse_cap)
+(
+  (mouse_cap & 4) ? dx *= 0.1;
+  drag_slider(x, y, z, dx);
+);
+
+function cycle_slider(x, y, z, dx)
+  globals(last_mouse_cap)
+(
+  (last_mouse_cap & 16) ? x -= dx : x += dx;
+  y > z ? ( dx=y; y=z; z=dx; );
+  x > z ? y : x < y ? z : x;
+);
+
+function drawFFT(rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb)
+(
+  buf1=rpos-fftsize;
+  buf1<bufStart ? buf1+=histsize;
+  buf2=window;
+  buf3=fftwspace;
+  loop(fftsize*.5 + 1,
+    buf3[] = buf1[]*buf2[];
+    buf3+=1;
+
+    buf2+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+  buf2-=1;
+  loop(fftsize*.5 - 1,
+    buf3[] = buf1[]*(buf2-=1)[];
+    buf3+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+
+  fft_real(fftwspace,fftsize);
+  fft_permute(fftwspace,fftsize/2);
+  fftwspace[1]=0;
+
+  ascale=gfx_h/$pi*0.25;
+  xscale=800/(fftsize-4);
+
+  buf3=fftwspace;
+  buf2=intbuf+max_fft_size*0.5;
+  i=0;
+  lx=0;
+  // Draw phase
+  slider3 ? loop(fftsize*0.5,
+    ang=-atan2(buf3[1],buf3[]);
+    buf3+=2;
+    
+    integrate_en ? (
+      ang = buf2[] += integrate_sc * (ang - buf2[]);
+      buf2+=1;
+    );
+    
+
+    ty2=ang*ascale + gfx_h*0.5;
+    tx = log(1.0+i*xscale)*wsc;
+
+    i ? 
+    ( 
+      gfX_r=0.6; gfx_g=0; gfx_b=0.8; gfx_a=1;
+      gfx_x=lx; gfx_y=ly2; gfx_lineto(tx,ty2,1) ;
+    );
+
+    lx=tx; ly2=ty2;
+    i+=1;
+  );  
+  
+  // Draw FFT
+  buf3=fftwspace;
+  buf2=intbuf;
+  lx=0;
+  i=0;
+  fill_slmin=gfx_h;
+  fill_slast=0;
+  loop(fftsize*0.5,   
+    ty = log(max(sqr(buf3[0])+sqr(buf3[1]),(10^(-500/20*2))));
+    buf3+=2;    
+
+    integrate_en ? (
+      ty = buf2[] += integrate_sc * (ty - buf2[]);
+      buf2+=1;
+    );
+    
+    ty = ty*-0.5*sc + 20;
+    tx = log(1.0+i*xscale)*wsc;
+
+    i ? 
+    ( 
+      gfX_r=rr;
+      gfx_g=gg;
+      gfx_b=bb;
+      
+      1/*fill?*/ ? (
+        gfx_a=0.125;
+        tx0=tx|0;
+        lx0=lx|0;
+        tx0>lx0? (
+          ly < gfx_h || ty < gfx_h ? gfx_triangle(lx0,max(gfx_h,ly),lx0,ly,tx0-1,ty,tx0-1,max(gfx_h,ty));
+        ) : (
+          tx0 > fill_slast ? (
+           fill_slast < gfx_h ? gfx_line(fill_slast,gfx_h,fill_slast,fill_slmin);
+           fill_slmin=gfx_h;
+         ) : (
+           fill_slmin=min(fill_slmin,ty);
+          );
+        );
+        fill_slast=tx0;        
+      );  
+      gfx_a=1.0;
+      gfx_x=lx; gfx_y=ly; gfx_lineto(tx,ty,1) ;
+    );
+
+    ty<gfx_h ? update=1;
+
+    lx=tx; ly=ty; ly2=ty2;
+    i+=1;
+  );
+);
+
+(mouse_cap & 1) ? (
+   !(last_mouse_cap & 1) ? (
+       (cap_mode == 1||cap_mode == 4||cap_mode == 5) && !cap_drag && cap_timer < 12 ? (
+         cap_mode == 1 ? (
+            slider2 = -120;
+            slider_automate(slider2);
+          ) : (
+            cap_mode == 4 ? (
+              slider5 = 0;
+              slider_automate(slider5);
+            ) : (
+              slider6 = 0;
+              slider_automate(slider6);
+            )
+          );
+         cap_mode=0;
+         old_w=0;
+       ) : (
+         cap_mode = cap_drag = cap_timer = 0;
+         phase_button.hit_button(mouse_x,mouse_y,-1) ? (
+           slider3=!slider3;
+           slider_automate(slider3);
+           old_w = 0;
+         ) : (
+           floor_button.hit_button(mouse_x,mouse_y,1)||
+           window_button.hit_button(mouse_x,mouse_y,2)||
+           fft_button.hit_button(mouse_x,mouse_y,3)||
+           integrate_button.hit_button(mouse_x,mouse_y,4);
+           scaling.hit_button(mouse_x,mouse_y,5);
+         );
+       );
+    );
+    cap_mode == 1 && cap_last_y != mouse_y ? (
+      slider2 = drag_slider_precise(slider2, -450, -12, 0.2);
+      old_w=0;
+      slider_automate(slider2);
+    );
+    cap_mode == 2 && cap_last_y != mouse_y ? (
+      slider4 = drag_slider(slider4, 0.0, 3.0, .03);
+      old_w=0;
+      slider_automate(slider4);
+    );
+    cap_mode == 3 && cap_last_y != mouse_y ? (
+      slider1 = drag_slider(slider1, 0.0, 11.0, .03);
+      old_w=0;
+      slider_automate(slider1);
+    );
+    cap_mode == 4 && cap_last_y != mouse_y ? (
+      // Integration time
+      slider5 = drag_slider_precise(slider5, 0.0, 2500.0, 5);
+      old_w=0;
+      slider_automate(slider5);
+    );
+    cap_mode == 5 && cap_last_y != mouse_y ? (
+      // Scale
+      slider6 = drag_slider_precise(slider6, 1.0, 6, .2);
+      old_w=0;
+      slider_automate(slider6);
+    );
+) :
+(last_mouse_cap & 1) && !cap_drag ? (
+  cap_mode == 2 ? (
+    slider4 = cycle_slider(slider4, 0.0, 3.0, 1.0);
+    old_w=0;
+    slider_automate(slider4);
+  );
+  cap_mode == 3 ? (
+    slider1 = cycle_slider(slider1, 0.0, 11.0, 1.0);
+    old_w=0;
+    slider_automate(slider1);
+  );
+);
+
+cap_mode && cap_timer < 12 ? cap_timer += 1;
+last_mouse_cap = mouse_cap;
+
+// only update if new fft data is there or if the size changed
+update || old_w != gfx_w || old_h!=gfx_h? (
+
+old_w=gfx_w; old_h=gfx_h;
+
+gfx_r=gfx_g=gfx_b=0; gfx_a=.6;
+gfx_x=gfx_y=0;
+gfx_rectto(gfx_w,gfx_h);
+
+sc=(gfx_h-20)*20/(-slider2 * log(10));
+
+// draw horz grid
+gfx_r=gfx_g=gfx_b=0.6;
+gfx_a=0.5;
+gv=1;
+cnt=100;
+gfx_y=-100;
+while(
+  y=20-log(gv)*sc;
+  y> gfx_y ? (
+    gfx_line(0,y,gfx_w,y,0);
+    bottom_line = gfx_y;
+    gfx_x=0; 
+    gfx_y=y+2;
+    gfx_drawnumber(log10(gv)*20,0);
+    gfx_drawchar($'d');
+    gfx_drawchar($'B');
+    gfx_y+=gfx_texth;
+  );
+  gv*=0.5;
+
+  gfx_y<gfx_h && cnt-=1 > 0;
+);
+
+
+wsc=scaling*gfx_w/log(1+400);
+
+// draw vert grid
+f=20;
+gfx_x+=4;
+lx=gfx_x;
+while(
+  tx = log(1.0+(f/srate*2.0)*400)*wsc;
+  dotext = tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
+     (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000);
+  tx > lx ? ( lx=tx+4; gfx_line(tx,0,tx,gfx_h - (dotext ? 0 : gfx_texth+2),0); );
+  dotext ? (
+    gfx_x=tx +3;
+    gfx_y = gfx_h-gfx_texth;
+    f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
+  );
+  f += (f<100?10:f<1000?100:f<10000?1000:5000);
+  f < srate*0.5;
+);
+
+fft_button.draw_button(gfx_w, 0, sprintf(#,"FFT: %d",16<<slider1));
+window_button.draw_button(gfx_x-8, 0, 
+  (slider4|0)==1 ? "hamming" :  
+  (slider4|0)==2 ? "blackman-harris" :
+  (slider4|0)==3 ? "blackman" :
+  "rectangular"); 
+floor_button.draw_button(gfx_x-8,0, sprintf(#,"floor: %.1fdB",slider2));
+integrate_button.draw_button(gfx_x-8,0, sprintf(#,"integrate: %dms",slider5|0));
+phase_button.draw_button(gfx_x-8,0, slider3?"phase on" : "phase off");
+scaling.draw_button(gfx_x-8,0,sprintf(#,"Scale: %.1f",slider6));
+
+update ? (
+  update=0;
+  scaling = slider6;
+
+  integrate_sc = 1;
+  slider5 > 0 ? (
+    integrate_now = time_precise();
+    integrate_en ? (
+      // fps = 1/(integrate_now - integrate_lastt);
+      integrate_sc -= exp(-5 * 1000.0 * (integrate_now - integrate_lastt) / slider5);
+    ) : (
+      // force overwrite of buffer
+      integrate_en = 1;
+    );
+    integrate_lastt = integrate_now;
+  ) : (
+    integrate_en = 0;
+  );
+
+  fftidx != (slider1|0) ? (
+    fftidx=slider1|0;
+    fftsize=2^(min(max(fftidx,0),11)+4);
+    integrate_sc=1;
+  );
+
+  windowsize != fftsize || windowtype != (slider4|0) ? (
+    windowtype=slider4|0; 
+    windowsize=fftsize;
+    dwindowpos = $pi*2/fftsize;
+    i=pwr=0;
+    loop(fftsize*.5+1,
+       windowpos=i*dwindowpos;
+       pwr += (window[i] = (
+         windowtype==1 ? 0.53836 - cos(windowpos)*0.46164 :
+         windowtype==2 ? 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) :
+         windowtype==3 ? 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) :
+          1.0));
+       i+=1;
+    );
+    pwr=.5/(pwr*2-window[i-1]);
+    loop(fftsize*.5+1,window[i-=1]*=pwr);
+    integrate_sc=1;
+  );
+
+  drawFFT(recpos, fftworkspace, integrate_buf, 0, histsize, .6, .6, 1);
+  drawFFT(recpos2, fftworkspace2, integrate_buf2, shift, histsize2, 1, 0, 0);
+);
+
+
+);
