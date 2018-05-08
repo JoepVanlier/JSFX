@@ -4,6 +4,7 @@
 @provides
   [main] .
   SaikeMultiSpectralAnalyzer.jsfx
+  colormaps.jsfx-inc
 @links
   https://github.com/JoepVanlier/JSFX
 @license MIT
