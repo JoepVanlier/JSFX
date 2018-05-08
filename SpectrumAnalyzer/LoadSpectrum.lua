@@ -1,14 +1,14 @@
 --[[
-@description SaikeMultiSpectroMeter: Script to open the analyzer.
+@description Spectral analyzer for multiple channels: Script to open the analyzer.
 @author: Joep Vanlier
 @provides
   [main] .
-  SaikeMultiSpectroMeter.jsfx
+  SaikeMultiSpectralAnalyzer.jsfx
 @links
   https://github.com/JoepVanlier/JSFX
 @license MIT
 @version 0.1
-@about 
+@about ### Multi-Channel Spectral Analyzer
   This script opens the JSFX multispectrum analyzer on a new FX track.
   It will automatically route up to 16 channels to this FX and open the window.
 --]]
@@ -71,7 +71,7 @@ local function Main()
   end
   
   -- Add spectrum track
-  local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectroMeter", 0, -1)
+  local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer", 0, -1)
   reaper.TrackFX_SetOpen(spectroTrack, 0, true)
   reaper.TrackFX_Show(spectroTrack, 0, 3)
   reaper.TrackFX_Show(spectroTrack, 0, 0)  
