@@ -1,13 +1,15 @@
 --[[
-@description Helper script for the spectral plugin.
+@description SaikeMultiSpectroMeter: Script to open the analyzer.
 @author: Joep Vanlier
 @provides
   [main] .
-@links
-@license MIT
-@version 0.01
+  SaikeMultiSpectroMeter.jsfx
+@links https://github.com/JoepVanlier/JSFX
+@license LGPL
+@version 0.1
 @about 
-Still very unfinished. Do not use yet.
+This script opens the JSFX multispectrum analyzer on a new FX track.
+It will automatically route up to 16 channels to this FX and open the window.
 --]]
 --[[
  * Changelog:
