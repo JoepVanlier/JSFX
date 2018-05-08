@@ -3,7 +3,7 @@
 @author Joep Vanlier
 @provides
   [main] .
-@links
+@links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
 @version 0.1
