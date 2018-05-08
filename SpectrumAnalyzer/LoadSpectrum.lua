@@ -71,7 +71,7 @@ local function Main()
   end
   
   -- Add spectrum track
-  local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer", 0, -1)
+  local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer.jsfx", 0, -1)
   reaper.TrackFX_SetOpen(spectroTrack, 0, true)
   reaper.TrackFX_Show(spectroTrack, 0, 3)
   reaper.TrackFX_Show(spectroTrack, 0, 0)  
