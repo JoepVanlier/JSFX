@@ -1,5 +1,5 @@
 --[[
-@description Spectral analyzer for multiple channels: Script to open the analyzer.
+@description Spectral analyzer call script.
 @author: Joep Vanlier
 @provides
   [main] .
