@@ -1,8 +1,11 @@
 # JSFX
 
-
 This is a small bundle of JSFX and scripts for reaper.
-
+ You can install 
+these by adding the link:
+https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
+to your reapack (https://reapack.com/) list of repositories. In order to 
+use these, install everything that has saike in the name.
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
