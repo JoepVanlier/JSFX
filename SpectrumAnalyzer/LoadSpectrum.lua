@@ -4,12 +4,13 @@
 @provides
   [main] .
   SaikeMultiSpectroMeter.jsfx
-@links https://github.com/JoepVanlier/JSFX
-@license LGPL
+@links
+  https://github.com/JoepVanlier/JSFX
+@license MIT
 @version 0.1
 @about 
-This script opens the JSFX multispectrum analyzer on a new FX track.
-It will automatically route up to 16 channels to this FX and open the window.
+  This script opens the JSFX multispectrum analyzer on a new FX track.
+  It will automatically route up to 16 channels to this FX and open the window.
 --]]
 --[[
  * Changelog:
