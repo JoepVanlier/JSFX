@@ -1,6 +1,6 @@
 --[[
 @description Spectral analyzer call script.
-@author: Joep Vanlier
+@author Joep Vanlier
 @provides
   [main] .
   SaikeMultiSpectralAnalyzer.jsfx
