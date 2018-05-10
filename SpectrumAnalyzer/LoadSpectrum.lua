@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.2
+@version 0.3
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -79,6 +79,12 @@
 --]]
 --[[
  * Changelog:
+ * v0.3 (2018-05-10)
+   + Added transparency setting
+   + Added "OFF" option for sonogram/time window
+   + Added solo (doubleclick on a channel)
+   + Do not recreate spectrum track when it already exists, but merely add/remove channels
+   + Only add top level channels to avoid adding channels multiple times
 ]]--
 
 local function print(...)
@@ -96,6 +102,8 @@ local function Main()
   local project = 0
   local tracks = reaper.CountTracks(project)
 
+  local spectroTrack
+  local exists = 0
   local oldParams
 
   -- Kill a spectro channel if it already exists
@@ -106,20 +114,22 @@ local function Main()
     if ( name == specname ) then
       -- Fetch the old spectro settings if there's already one here
       local count = reaper.TrackFX_GetNumParams(track, 0);
-      
-      -- Store old settings
-      oldParams = {}
-      for i=0,count-1 do
-        oldParams[i] = reaper.TrackFX_GetParam(track, 0, i)
-      end
-      reaper.DeleteTrack(track)
-      tracks = tracks - 1;
+      spectroTrack = track
+      exists = 1
     end
   end
   
   -- Create track at the end
-  reaper.InsertTrackAtIndex(tracks, true)
-  local spectroTrack = reaper.GetTrack(project, tracks)
+  if ( not spectroTrack ) then
+    reaper.InsertTrackAtIndex(tracks, true)
+    spectroTrack = reaper.GetTrack(project, tracks)
+  else
+    -- Remove existing track sends
+    for i=reaper.GetTrackNumSends(spectroTrack, -1)-1, 0, -1 do
+      reaper.RemoveTrackSend(spectroTrack, -1, i)
+    end
+  end
+ 
   reaper.GetSetMediaTrackInfo_String(spectroTrack, "P_NAME", specname, true)
   reaper.SetMediaTrackInfo_Value(spectroTrack, 'B_MAINSEND', 0) 
 
@@ -128,28 +138,24 @@ local function Main()
   for i=0,tracks-1 do
     local track   = reaper.GetTrack(project, i)  
 
+    local depth = reaper.GetTrackDepth(track)
     local ret, name = reaper.GetTrackName(track, "                                                              ")
-    if ( name ~= "MASTER" ) then  
+    if ( name ~= "MASTER" and ( depth == 0 ) ) then
       local sendidx = reaper.CreateTrackSend(track, spectroTrack)
       local sn = reaper.SetTrackSendInfo_Value(track, 0, sendidx, "I_DSTCHAN", 2*i)
     end
   end
   
   -- Add spectrum track
-  local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer.jsfx", 0, -1)
+  if ( exists == 0 ) then
+    local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer.jsfx", 0, -1)
+  end
   reaper.TrackFX_SetOpen(spectroTrack, 0, true)
-  reaper.TrackFX_Show(spectroTrack, 0, 3)
   reaper.TrackFX_Show(spectroTrack, 0, 0)  
-  local hwnd = reaper.TrackFX_GetFloatingWindow(spectroTrack, 0)
+  reaper.TrackFX_Show(spectroTrack, 0, 3)
+  --local hwnd = reaper.TrackFX_GetFloatingWindow(spectroTrack, 0)  
   
   reaper.Undo_EndBlock( 'Added spectrograph', -1 )
-  
-  -- Set back to old settings
-  if ( oldParams ) then
-    for i=0,#oldParams do
-      reaper.TrackFX_SetParam(spectroTrack, 0, i, oldParams[i])
-    end
-  end
 end
 
 Main()
