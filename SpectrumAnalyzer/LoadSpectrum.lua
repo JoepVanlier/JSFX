@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.3
+@version 0.4
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -85,6 +85,8 @@
    + Added solo (doubleclick on a channel)
    + Do not recreate spectrum track when it already exists, but merely add/remove channels
    + Only add top level channels to avoid adding channels multiple times
+ * v0.4 (2018-05-10)
+   + Added colors to identify channels
 ]]--
 
 local function print(...)
