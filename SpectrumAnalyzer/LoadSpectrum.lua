@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.4
+@version 0.6
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -32,6 +32,9 @@
   Integrate spectrum over time. This makes the spectrum less noisy, but less sensitive to short 
   transients. Smoothness is a tradeoff between smoothing (width), integration time (transients) 
   and noise (no smoothing or integration time).
+
+  ### Slope
+  Modify the spectrum using a slope. -3 dB/oct will make pink noise seem flat.
 
   ### Floor
   Specify where to put the noise floor.
@@ -79,14 +82,18 @@
 --]]
 --[[
  * Changelog:
+ * v0.6 (2018-05-10)
+   + Added slope option
+ * v0.5 (2018-05-10)
+   + Fix bug with channel assignment 
+ * v0.4 (2018-05-10)
+   + Added colors to identify channels 
  * v0.3 (2018-05-10)
    + Added transparency setting
    + Added "OFF" option for sonogram/time window
    + Added solo (doubleclick on a channel)
    + Do not recreate spectrum track when it already exists, but merely add/remove channels
    + Only add top level channels to avoid adding channels multiple times
- * v0.4 (2018-05-10)
-   + Added colors to identify channels
 ]]--
 
 local function print(...)
@@ -137,6 +144,7 @@ local function Main()
 
   -- Fetch all the tracks
   reaper.SetMediaTrackInfo_Value(spectroTrack, "I_NCHAN", tracks*2)
+  local targetidx = 0
   for i=0,tracks-1 do
     local track   = reaper.GetTrack(project, i)  
 
@@ -144,7 +152,8 @@ local function Main()
     local ret, name = reaper.GetTrackName(track, "                                                              ")
     if ( name ~= "MASTER" and ( depth == 0 ) ) then
       local sendidx = reaper.CreateTrackSend(track, spectroTrack)
-      local sn = reaper.SetTrackSendInfo_Value(track, 0, sendidx, "I_DSTCHAN", 2*i)
+      local sn = reaper.SetTrackSendInfo_Value(track, 0, sendidx, "I_DSTCHAN", 2*targetidx)
+      targetidx = targetidx + 1;
     end
   end
   
