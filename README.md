@@ -92,7 +92,6 @@ The next buttons indicate what channels are visualized. Enabling
 or disabling them can be done 
   by clicking them with the left 
 mouse button. Clicking them with the right mouse button will make 
-
 them the active channel in the sonogram or time window. This way,
 you can study the sonograms of  the channels separately.
 
@@ -120,7 +119,6 @@ Double-clicking the sonogram will toggle its size. Clicking and
 dragging with the left mouse button 
 will change how bright it is. 
 Clicking with the right mouse button will switch colormap. The channel 
-
 you're viewing and the scale are shown on the top left. The colormap 
 on the bottom left. Switch with outer mouse button on the channel 
 button in the second row on the top. Mousewheel will change the 
