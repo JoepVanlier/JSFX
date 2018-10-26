@@ -1,15 +1,15 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
 version: 1.4
-author: Joep Vanlier, tvm79, Cockos
+author: Joep Vanlier, Trond-Viggo Melssen, Cockos
 provides: colormaps.jsfx-inc
-changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope
+changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting
 
 Copyright (C) 2007 Cockos Incorporated
-Copyright (C) 2018 Joep Vanlier
+Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
 License: LGPL - http://www.gnu.org/licensses/lgpl.html
 
-This file was modified by Joep Vanlier and tvm79 to enable multispectrum analysis analysis, sonogram and time domain plots.
+This file was modified by Joep Vanlier and Trond-Viggo Melssen to enable multispectrum analysis analysis, sonogram and time domain plots.
 
 import colormaps.jsfx-inc
 
@@ -65,10 +65,11 @@ options:no_meter
 
 @init
 
-magma   = 2000;
-viridis = 4000;
-inferno = 6000;
-plasma  = 8000;
+magma     = 2000;
+viridis   = 4000;
+inferno   = 6000;
+plasma    = 8000;
+sono_frac = .35;
 
 freeze = 0;
 
@@ -855,7 +856,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
     ch15.hit_button(mouse_x,mouse_y,-1) ? ( slider28=14; slider_automate(slider28); old_w = 0);
     ch16.hit_button(mouse_x,mouse_y,-1) ? ( slider28=15; slider_automate(slider28); old_w = 0);
     showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider28=-1; slider_automate(slider28); old_w = 0);  
-    showChannel = slider28;    
+    showChannel = slider28;        
 
     slider29 == 0 && cap_last_y != mouse_y ) ? (
       sonogram.hit_button(mouse_x,mouse_y,-1) ? ( slider32 = cycle_slider(slider32, 0, 7, 1);
@@ -976,7 +977,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
          slider42 == 0 ? theme_button.hit_button(mouse_x,mouse_y,-1) ? ( slider43=!slider43; slider_automate(slider43); old_w = 0; );
          slider42 == 0 ? grid_button.hit_button(mouse_x,mouse_y,-1) ? ( slider39=!slider39; slider_automate(slider39); old_w = 0; );
          slider42 == 0 ? gridAlpha_button.hit_button(mouse_x,mouse_y,31);
-         slider42 == 0 ? background_button.hit_button(mouse_x,mouse_y,30);
+         slider42 == 0 ? background_button.hit_button(mouse_x,mouse_y,30);         
          
          channels_button.hit_button(mouse_x,mouse_y,-1) ? ( slider41=!slider41; slider_automate(slider41); old_w = 0; ) :
          
@@ -1000,6 +1001,12 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
                     slider42 == 0 ? sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>2?slider29=0; slider_automate(slider29); old_w = 0 ):
                     drawHz = 1;
                 )                
+          );
+          
+          ( (mouse_y > (gfx_h-sono_yoffset_bottom-sono_size-14)) && (mouse_y < (gfx_h-sono_yoffset_bottom-sono_size + 14)) ) ?
+          (
+            cap_mode = 60;
+            cap_last_y = mouse_y;
           );
     ) :
     cap_mode == 1 && cap_last_y != mouse_y ? (
@@ -1076,12 +1083,14 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
       old_w=0;
       slider_automate(slider10);
     );
-  
     cap_mode == 31 && cap_lasty_y != mouse_y ? (
       // Grid Alpha
       slider40 = drag_slider_precise(slider40, 0, 1, .025);
       old_w=0;
       slider_automate(slider40);
+    );
+    cap_mode == 60 && cap_lasty_y != mouse_y ? (
+      sono_frac = (1-(mouse_y+sono_yoffset_bottom)/gfx_h);
     );
 ) : (
   drawHz = 0;
@@ -1220,7 +1229,7 @@ function DrawButtons()
     slider42 == 0 ? grid_button.draw_button2(gfx_w-15, 80, "|    GRID    |", slider39, slider39>1, slider39== 2, slider39>-1, -1);
     slider42 == 0 ? slider39 == 1 ? gridAlpha_button.draw_button(gfx_w-15, 99, sprintf(#,"^ Alpha: %.1f ^" ,slider40)); 
     
-  slider29 == 2 ? sono_size = 0 : sono_size = .35*gfx_h;
+  slider29 == 2 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
     
   // SET THE OFFSETS HERE
   ( slider42 == 0 ) ? (
@@ -1271,7 +1280,7 @@ UI_SCREEN = 0;
   old_w=gfx_w; old_h=gfx_h;
   
   // Clear screen
-  gfx_r=gfx_g=gfx_b=bgcolor -0; gfx_a=0.8;
+  gfx_r=gfx_g=gfx_b=bgcolor -0; gfx_a=1.0;
   gfx_x=gfx_y=0;
   gfx_rectto(gfx_w,gfx_h);
   sc=(gfx_h-20)*20/(-slider2 * log(10));
@@ -1392,8 +1401,9 @@ UI_SCREEN = 0;
         scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshl, slider31, histsizes[0] - shifts[0], cref[4], cref[5], cref[6] );  
         scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshr, slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );
       ) : (
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposl, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], cref[4], cref[5], cref[6] );
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );
+        sll = sumposl; srr= sumposr;
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sll, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], cref[4], cref[5], cref[6] );
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, srr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );
       );    
     
       gfx_r=gfx_g=gfx_b=1.0-bgColor;      

@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.6
+@version 0.7
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -82,6 +82,8 @@
 --]]
 --[[
  * Changelog:
+ * v0.7 (2018-05-11)
+   + Made the new one default
  * v0.6 (2018-05-10)
    + Added slope option
  * v0.5 (2018-05-10)
@@ -159,7 +161,7 @@ local function Main()
   
   -- Add spectrum track
   if ( exists == 0 ) then
-    local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer.jsfx", 0, -1)
+    local tfx = reaper.TrackFX_AddByName(spectroTrack, "SaikeMultiSpectralAnalyzer_alt.jsfx", 0, -1)
   end
   reaper.TrackFX_SetOpen(spectroTrack, 0, true)
   reaper.TrackFX_Show(spectroTrack, 0, 0)  
