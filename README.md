@@ -9,12 +9,34 @@ https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 to your reapack (https://reapack.com/) list of repositories. If you run 
 into issues with these, feel free to open an issue here on github.
 
+# Filther, a waveshaping filter / distortion plugin with dynamic processing.
+![Filther](https://i.imgur.com/nWvkRdx.png)
+
+Filther is a waveshaping / filter plugin that allows for some dynamic processing as well.
+
+## Waveshaping
+Filther supports saturating soft clipping as well as drawing custom voltage curves using a spline. For the simpler filters, the distortion is simply applied before the filtering stage, but for some the filter is located in the filter scheme. In these cases, the distortion is either applied on the delayed or during solving the implicit equations for the supplied zero delay feedback filters (ZDF).
+
+Waveshaping introduces higher harmonics and can cause aliasing (frequencies above Nyquist that wrap back into the spectrum and cause inharmonic artefacts). To mitigate this, filther allows oversampling. Note that oversampling incurs more CPU cost though. Some of the filters in filther require a minimal amount of oversampling for stability.
+
+## Filters
+Filther contains a large variety of filters, each with their own advantages and drawbacks. Most of the filters behave non-ideal and are intended for creative purposes rather than fidelity to specification. Currently filther contains the following filters: LP RC-C, LP Diode Ladder (303), Vowel filter, Karlsen Ladder III, Waveshaped LP, Waveshaped HP, Waveshaped BP, Expensive Moog (ZDF, based on a paper by Paschou et al), Notch filter, Narsty, Modulator, Phaser (OTA), Phaser (FET), Delay Feedbok, Phase Mangler, Kr0g MS-20 (ZDF) Kr0g MS-20 non-linear (ZDF)) but more may be added in the future. Note that not all filters are stable for all combinations of resonance and waveshaping. Using very sharp transitions in the spline waveshaper can result in filter instability for the filters where waveshaping is part of the filter.
+
+## Dynamics
+Filther also supports dynamically modifying the filter and waveshaping settings, by checking "Filter" and/or "Shaping" in the Dynamics section. Dynamics can be monitored in the dynamics window. Here you will see the input RMS (red curve), output RMS (blue curve), dynamic variable and threshold (click and drag to zoom). The dynamic variable (yellow curve) will start accumulating when the input RMS is above the threshold. The threshold can be dragged with the mouse or set in the dynamics panel. Averaging can be increased by modifying the RMS time. This will smoothen out the RMS values that you see (and the dynamics will respond accordingly).
+
+### Waveshaping Dynamics
+For waveshaping, Filther will interpolate between the non-waveshaped and waveshaped voltage response (1 being the fully waveshaped version). 
+
+### Filter Dynamics
+The extent of modulation on the filter can be set with the outer mouse button. This will showed a greyed area that will show the extent of the dynamics being applied. When the dynamics are at maximum, the parameter value will be at the full extent of this greyed area.
+
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
 Hence I modified the stock Reaper spectral analyzer to allow for 
 multi-channel analysis and combine it with a sonogram and time window.
 
-![Spectral Analyzer](https://i.imgur.com/BkDa0S5.png)
+![Spectral Analyzer](https://i.imgur.com/CRpRL00.png)
 
 The JSFX comes with a lua script which sets up the routing appropriately
 on a new FX track.
