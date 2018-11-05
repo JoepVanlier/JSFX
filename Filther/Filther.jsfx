@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 0.81
+version: 0.82
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues
 
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -80,7 +80,7 @@ out_pin:right output
 options:no_meter
 
 @init
-nFilters = 25;
+nFilters = 26;
 nModes = 6;
 nLFO = 14;
 
@@ -117,6 +117,7 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 22 ) ? ( str = "Kr0g MS-20 nonlin BP (ZDF)"
       ) : ( curitem == 23 ) ? ( str = "Kr0g MS-20 nonlin HP (ZDF)"
       ) : ( curitem == 24 ) ? ( str = "Experimental"
+      ) : ( curitem == 25 ) ? ( str = "Rezzy (ZDF)"
       );
     ) : (stridx == 1) ? 
     (
@@ -332,6 +333,9 @@ local(fx, fy, wx, wx2, wy)
   ) : ( slider47 == 24 ) ? (
     gfx_printf("Filter: Multiphase\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Experimental thingamabob. Bits of phaser, bits of a saturating lowpass, some distortion gibberish and some ugly ass feedback. Be careful with this thing. Especially when you're combining it with a waveshaper. It has plenty of bite. P.S. It self-oscillates too. ;_;", wx2);
+  ) : ( slider47 == 25 ) ? (
+    gfx_printf("Filter: Rezzy\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("", wx2);    
   )
 );
 
@@ -1093,6 +1097,9 @@ function updateActiveFilters()
       R.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
       L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterReso * 50);
       R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 51);  
+    ) : ( slider47 == 25 ) ? (
+      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);      
     );
   );
  
@@ -3411,6 +3418,53 @@ function eval_MS20_nonlin(x)
     d2 = y2;
     
     distort(y2) 
+  );  
+  
+function eval_MS20_nonlin_mod(x)
+  global(slider54)
+  local(hk, sig1, sig2, a, b, c, d, norm, f1, f2, gkd2, gky2, dgky2, sfunsq, sub3, sub3i, sub4sq, sub5, atanterm1, atanterm2)
+  instance(y1, y2, d1, d2, h, hh, k, obs)
+  (
+    gkd2  = k*d2; // g(k*d2)
+    gkd2  = max(-1,min(1,gkd2));
+    hk    = h*k;
+    
+    atanterm1 = atan(d1 -  x + gkd2);
+    atanterm2 = atan(d1 - d2 + gkd2);
+    
+    loop(3,
+      //gky2    = distort(k*y2);
+      //dgky2   = distortderiv(k*y2);
+      gky2    = k*y2-2*k*(y2*y2-y2*y2*y2)-.1*k*y1;
+      dgky2   = k - k * min( abs(gky2), 1 );
+      gky2    = max(-1,min(1,gky2));
+    
+      sig1    = y1 - y2 + gky2;
+      sig2    = y1 - x +  gky2;
+      f1      = y1 - d1 + hh*(atanterm1 + atan(sig2));
+      f2      = y2 - d2 - hh*(atanterm2 + atan(sig1));
+      
+      sfunsq  = sig2 * sig2;
+      sub3    = 2*(sfunsq + 1);
+      sub3i   = 1 / sub3;
+      sub4sq  = sig1*sig1;
+      sub5    = 1/(2*(sub4sq + 1));      
+      
+      a       = h*sub3i + 1;
+      b       = hk*dgky2*sub3i;
+      c       = -h*sub5;
+      d       = 1.0 - (hk*dgky2 - h)*sub5;
+  
+      norm    = 1.0 / ( a*d - b*c );
+      
+      y1      = y1 - ( d*f1 - b*f2 ) * norm;
+      y2      = y2 - ( a*f2 - c*f1 ) * norm;
+    );
+    
+    d1 = y1;
+    d2 = y2;
+    
+    distort(y2) 
   );
   
 function eval_MS20_nonlinBP(x)
@@ -3605,6 +3659,8 @@ function process(sample)
       
      // L.filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq * 1000);
      // R.filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 2000);  
+    ) : ( slider47 == 25 ) ? (
+      sample = this.filter_ms20.eval_MS20_nonlin_mod(sample);     
     );
     
     sample;
