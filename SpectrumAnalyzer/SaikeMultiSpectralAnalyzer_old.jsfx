@@ -1,0 +1,1200 @@
+desc:Saike Spectral Analyzer (Old)
+tags: analysis FFT meter spectrum
+version: 1.52
+author: Joep Vanlier, Cockos
+provides: colormaps.jsfx-inc
+changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, added flat-top, fixed decibel display
+
+Copyright (C) 2007 Cockos Incorporated
+Copyright (C) 2018 Joep Vanlier
+License: LGPL - http://www.gnu.org/licenses/lgpl.html
+
+This file was modified by Joep Vanlier to enable multispectrum analysis analysis, sonogram and time domain plots.
+
+import colormaps.jsfx-inc
+
+slider1:9<0,9,1{16,32,64,128,256,512,1024,2048,4096,8192,16384,32768}>-FFT size
+slider2:-90<-450,-12,6>-floor
+slider38:0<0,9,.25>-slope
+slider3:0<0,1,1{disabled,enabled}>-show phase
+slider4:2<0,4,1{rectangular,hamming,blackman-harris,blackman,flat-top}>-window
+slider5:200<0,2500,1>-integration time (ms)
+slider6:1<1,6,.2>-scaling
+slider7:20<0,100,1>-smoothing
+slider8:1<0,14,1{dark,intense,fluo,colorblind,pimp,shades,fancy,pastel,purple,dark2,dark3,dark4,dark5,colorblind2}>-colormap
+slider9:16<1,16,1>-mxchannels
+slider10:1<0,1,1{white,black}>-background color
+
+slider11:1<0,1,1>-Ch1
+slider12:1<0,1,1>-Ch2
+slider13:1<0,1,1>-Ch3
+slider14:1<0,1,1>-Ch4
+slider15:1<0,1,1>-Ch5
+slider16:1<0,1,1>-Ch6
+slider17:1<0,1,1>-Ch7
+slider18:1<0,1,1>-Ch8
+slider19:1<0,1,1>-Ch9
+slider20:1<0,1,1>-Ch10
+slider21:1<0,1,1>-Ch11
+slider22:1<0,1,1>-Ch12
+slider23:1<0,1,1>-Ch13
+slider24:1<0,1,1>-Ch14
+slider25:1<0,1,1>-Ch15
+slider26:1<0,1,1>-Ch16
+slider27:1<0,1,1>-Sum
+slider28:-1<-1,1,16>-Channel
+slider29:0<1,0,2{Sample,Sonogram,Off}>-Sonogram
+slider33:1<1,0,1{Logarithmic,Linear}>-Sonolog
+slider34:0<0,0,1{Yes,No}>-SonoBig
+slider35:1<1,8,1>-Factor
+slider36:-1<-1,1,16>-Solo channel
+slider37:.15<0,1,.4>-Alpha
+
+slider30:2500<10,45000,100>-SonoScale
+slider31:.5<0.1,3,.03>-SignalScale
+slider32:6<0,7,1{viridis,viridisinv,magma,magmainv,inferno,infernoinv,plasma,plasmainv}>-colormap2
+
+//in_pin:left input 
+//in_pin:right input
+options:no_meter
+
+@init
+
+magma   = 2000;
+viridis = 4000;
+inferno = 6000;
+plasma  = 8000;
+
+function updateChannelSliders()
+(
+  // For some reason this isn't being called in @slider
+  actc = activechannels;
+  actc[] = slider11; actc += 1;
+  actc[] = slider12; actc += 1;
+  actc[] = slider13; actc += 1;
+  actc[] = slider14; actc += 1;
+  actc[] = slider15; actc += 1;
+  actc[] = slider16; actc += 1;
+  actc[] = slider17; actc += 1;
+  actc[] = slider18; actc += 1;
+  actc[] = slider19; actc += 1;
+  actc[] = slider20; actc += 1;
+  actc[] = slider21; actc += 1;
+  actc[] = slider22; actc += 1;
+  actc[] = slider23; actc += 1;
+  actc[] = slider24; actc += 1;
+  actc[] = slider25; actc += 1;
+  actc[] = slider26; actc += 1;
+  
+  showSum = slider27;
+);
+
+function printColorMapName(cmapidx, inv)
+(
+  ( cmapidx == 1 && inv == 0 ) ? gfx_printf( "Magma" ) : (
+  ( cmapidx == 1 && inv == 1 ) ? gfx_printf( "Magma inv" ) : (
+  ( cmapidx == 2 && inv == 0 ) ? gfx_printf( "Viridis" ) : (
+  ( cmapidx == 2 && inv == 1 ) ? gfx_printf( "Viridis inv" ) : (
+  ( cmapidx == 3 && inv == 0 ) ? gfx_printf( "Inferno" ) : (
+  ( cmapidx == 3 && inv == 1 ) ? gfx_printf( "Inferno inv" ) : (
+  ( cmapidx == 4 && inv == 0 ) ? gfx_printf( "Plasma" ) : (
+  ( cmapidx == 4 && inv == 1 ) ? gfx_printf( "Plasma inv" ) : (
+    gfx_printf("Unknown"); ))))))));
+);
+
+gfx_ext_retina  = 1.0;
+ext_nodenorm    = 1; 
+gfx_clear       = -1;
+windowtype      = -1;
+fftidx          = -1;
+scaling         = 1;
+max_fft_size    = 32768;
+fftsize         = max_fft_size;
+window          = max_fft_size + (max_fft_size*0.5 - 1);
+histsize        = max_fft_size + (max_fft_size*0.5 - 1);
+//fftworkspace    = window+(max_fft_size*0.5 + 1);
+//integrate_buf   = fftworkspace + max_fft_size*2;
+
+SONOSURFACE   = 4;
+gfx_dest      = SONOSURFACE;
+gfx_setimgdim(SONOSURFACE, 0.5*fftsize, 0.5*fftsize);
+gfx_x=gfx_y   = 0;
+gfx_r=gfx_g   = 0;
+gfx_b         = 0;
+gfx_a         = 1;
+gfx_rectto(0.5*fftsize, 0.5*fftsize);
+gfx_dest      = -1;
+
+recpositions    = 100;
+histsizes       = 200;
+fftworkspaces   = 300;
+integrate_bufs  = 400;
+shifts          = 500;
+activechannels  = 600;
+maxchannels     = 16;
+offscreenbuf    = 1;
+
+bgcolor         = 0;
+drawHz          = 0;
+
+//memset(activechannels,1,maxchannels);
+updateChannelSliders();
+
+rpos      = recpositions;
+hsize     = histsizes;
+fftw      = fftworkspaces; 
+ibuf      = integrate_bufs;
+csh       = shifts;
+curshift  = 65536;
+
+spacing   = 3;
+loop(maxchannels,
+  rpos[]  = curshift;
+  hsize[] = window + curshift;
+  fftw[]  = window + (max_fft_size*0.5 + 1) + curshift;
+  ibuf[]  = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + curshift;
+  csh[]   = curshift;
+   
+  rpos  += 1;
+  hsize += 1;
+  fftw  += 1;
+  ibuf  += 1;
+  csh   += 1;
+  
+  curshift += spacing*65536;
+);
+
+// Memory for the filter on the spectrum
+filtout   = 65536*spacing*(maxchannels+1);
+filtout2  = 65536*spacing*(maxchannels+2);
+
+// Memory for the sum signals
+sumshl  = 65536*spacing*(maxchannels+3);
+sumposl = sumshl;
+fftwl   = window + (max_fft_size*0.5 + 1) + sumshl;
+ibufl   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshl;
+sumhsl  = window + sumshl;
+
+sumshr  = 65536*spacing*(maxchannels+4);
+sumposr = sumshr;
+fftwr   = window + (max_fft_size*0.5 + 1) + sumshr;
+ibufr   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshr;
+sumhsr  = window + sumshr;
+
+@slider
+slider2 != lfloor ? old_w=0;
+
+@block
+slider2 != lfloor ? (
+  lfloor = slider2;
+  minvol=2*exp(log(10)/20*slider2);
+);
+
+@sample
+iLoad     = 0;
+jch       = 0;
+active    = activechannels;
+recpos    = recpositions;
+hs        = histsizes;
+sh        = shifts;
+sl        = 0;
+sr        = 0;
+
+loop(maxchannels,
+  (active[] == 1 || (slider28==iLoad)) ? (
+    recpos[][]=(spl(jch)+spl(jch+1));
+    recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
+  );
+  // GO HERE
+  sl = sl+spl(jch);
+  sr = sr+spl(jch+1);
+  
+  active += 1;
+  recpos += 1; 
+  hs     += 1;
+  sh     += 1;
+  jch    += 2;
+  iLoad  += 1;
+);
+
+sumposl[] = sl;
+sumposr[] = sr;
+sumposl = ((sumposl+1) >= sumhsl ? sumshl : (sumposl+1));
+sumposr = ((sumposr+1) >= sumhsr ? sumshr : (sumposr+1));  
+
+@gfx 900 600
+
+gfx_ext_retina>1 ? gfx_setfont(1,"Arial",16*gfx_ext_retina,'b') : gfx_setfont(0);
+
+function draw_button(xp, yp, str) 
+  instance(w,h,x,y) 
+  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y,bgcolor) 
+(
+  gfx_measurestr(str, w, h);
+  xp -= w+3;
+  x=xp;
+  y=yp;
+  gfx_set(bgcolor,bgcolor,bgcolor-.15*bgcolor);
+  w+=3;
+  h+=3;
+  gfx_rect(x,y,w,h);
+
+  ( bgcolor == 1 ) ? (
+    gfx_set(1-.4, 1-.6, 1-.8);
+  ) : (
+    gfx_set(.4, .6, .8);  
+  );
+  gfx_line(x,y,x+w,y);
+  gfx_line(x+w,y,x+w,y+h);
+  gfx_line(x,y+h,x+w,y+h);
+  gfx_line(x,y,x,y+h);
+  h+=1;
+  w+=1;
+  gfx_x=xp+2; gfx_y=yp+2;
+  gfx_drawstr(str);
+  gfx_x = xp;
+);
+
+function draw_button2(xp, yp, str, active, selected, solo, somethingsolo, coloridx)
+  instance(w,h,x,y,fade,cc) 
+  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y,gfx_a,slider8,bgcolor)
+(
+  gfx_measurestr(str, w, h);
+  xp -= w+3;
+  x=xp;
+  y=yp;
+  gfx_set(bgcolor,bgcolor,bgcolor-.15*bgcolor);
+  w+=3;
+  h+=3;
+  gfx_rect(x,y,w,h);
+  ( solo == 0 || somethingsolo > -1 ) ? active = active - 0.5;
+
+  cc = (10000 + 100*floor(slider8));
+  cc += 3 * coloridx; 
+  ( coloridx > -1 ) ? (
+    gfx_set(cc[0], cc[1], cc[2]);
+    gfx_rect(x, y+13,w,1);
+    gfx_a = .8;
+    gfx_rect(x, y+13,w+1,1);
+    gfx_rect(x, y+14,w+1,1);
+    gfx_a = 1;
+  );
+  
+  fade = .5+.5 * active;  
+  ( bgcolor == 1 ) ? (
+    gfx_set(1-.4*fade+.8*solo, 1-.6*fade+.5*selected, 1-.8*fade);
+  ) : (
+    gfx_set(.4*fade+.8*solo, .6*fade+.5*selected, .8*fade);
+  );
+  gfx_line(x,y,x+w,y);
+  gfx_line(x+w,y,x+w,y+h);
+  gfx_line(x,y+h,x+w,y+h);
+  gfx_line(x,y,x,y+h);
+  selected == 1 ? (
+    gfx_line(x+1,y,x+1,y+h);
+    gfx_line(x,y+h-1,x+w,y+h-1);
+    gfx_line(x,y+1,x+w,y+1);
+    gfx_line(x+w-1,y,x+w-1,y+h);
+  );
+  
+  h+=1;
+  w+=1;
+  gfx_x=xp+2; gfx_y=yp+2;
+  gfx_drawstr(str);
+  gfx_x = xp;
+);
+
+function hit_button(xp,yp,cm) 
+  instance(w,h,x,y) 
+  globals(cap_mode, cap_last_x, cap_last_y) 
+( 
+  xp>=x&&yp>=y&&xp<x+w&&yp<y+h ? (
+    cap_last_x = xp;
+    cap_last_y = yp;
+    cap_mode=cm;
+  );
+);
+
+
+function drag_slider(x, y, z, dx)
+  globals(mouse_y, cap_last_y, cap_drag)
+(
+  x = min(max(x + dx * (cap_last_y-mouse_y),y),z);
+  cap_last_y=mouse_y;
+  cap_drag=1;
+  x;
+);
+
+function mouse_wheel_button(x, y, z, dx)
+(
+  x = min(max(x + dx,y),z);
+  x;
+);
+
+function drag_slider_precise(x, y, z, dx)
+  globals(mouse_cap)
+(
+  (mouse_cap & 4) ? dx *= 0.1;
+  drag_slider(x, y, z, dx);
+);
+
+function drag_slider_micro(x, y, z, dx)
+  globals(mouse_cap)
+(
+  (mouse_cap & 4) ? dx *= 0.01;
+  drag_slider(x, y, z, dx);
+);
+
+
+function cycle_slider(x, y, z, dx)
+  globals(last_mouse_cap)
+(
+  (last_mouse_cap & 16) ? x -= dx : x += dx;
+  y > z ? ( dx=y; y=z; z=dx; );
+  x > z ? y : x < y ? z : x;
+);
+  
+function scope.drawSignal( xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb)
+  instance(w, h, x, y, dx, last, xcoord, hh, sig)
+  globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl)
+(
+  x = xp;
+  y = yp;
+  w = wp;
+  h = hp;
+  hh = 0.5 * h;
+  
+  dx = w / sampleSize;
+  last = scaling * ( rpos[] );
+  xcoord = x;
+  
+  gfx_r=gfx_g=gfx_b=gfx_a=1.;
+  gfx_line(xcoord,  y+h,  xcoord+w,   y+h);
+  gfx_line(xcoord,  y,    xcoord+w,   y);
+  gfx_line(xcoord,  y,    xcoord,     y+h);  
+  gfx_line(xcoord+w,y,    xcoord+w,   y+h);    
+  
+  gfx_r=rr; gfx_g=gg; gfx_b=bb; gfx_a=.6;
+  loop(sampleSize,
+    xcoord += dx;
+    sig = scaling * ( rpos[] );
+    ( sig > 1.0 ) ? sig = 1.0 : ( sig < -1.0 ? sig = -1.0 );
+    
+    gfx_line(xcoord,y+hh*sig+hh,xcoord+dx,y+hh*last+hh);
+    last = sig;
+    rpos += 1;
+  );
+);
+
+function hit(xp,yp,cm) 
+  instance(w,h,x,y) 
+  globals(cap_mode, cap_last_x, cap_last_y) 
+( 
+  xp>=x&&yp>=y&&xp<x+w&&yp<y+h ? (
+    cap_last_x = xp;
+    cap_last_y = yp;
+    cap_mode=cm;
+  );
+);
+
+function checkChannelButtons()
+(
+  hit = 0;
+  ( slider36 == -1 ) ?
+  (
+    ch1.hit_button(mouse_x,mouse_y,11)  ? ( slider36 = -1; slider11=!slider11; slider_automate(slider11); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch2.hit_button(mouse_x,mouse_y,12)  ? ( slider36 = -1; slider12=!slider12; slider_automate(slider12); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch3.hit_button(mouse_x,mouse_y,13)  ? ( slider36 = -1; slider13=!slider13; slider_automate(slider13); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch4.hit_button(mouse_x,mouse_y,14)  ? ( slider36 = -1; slider14=!slider14; slider_automate(slider14); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch5.hit_button(mouse_x,mouse_y,15)  ? ( slider36 = -1; slider15=!slider15; slider_automate(slider15); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch6.hit_button(mouse_x,mouse_y,16)  ? ( slider36 = -1; slider16=!slider16; slider_automate(slider16); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch7.hit_button(mouse_x,mouse_y,17)  ? ( slider36 = -1; slider17=!slider17; slider_automate(slider17); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch8.hit_button(mouse_x,mouse_y,18)  ? ( slider36 = -1; slider18=!slider18; slider_automate(slider18); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch9.hit_button(mouse_x,mouse_y,19)  ? ( slider36 = -1; slider19=!slider19; slider_automate(slider19); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch10.hit_button(mouse_x,mouse_y,20) ? ( slider36 = -1; slider20=!slider20; slider_automate(slider20); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch11.hit_button(mouse_x,mouse_y,21) ? ( slider36 = -1; slider21=!slider21; slider_automate(slider21); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch12.hit_button(mouse_x,mouse_y,22) ? ( slider36 = -1; slider22=!slider22; slider_automate(slider22); updateChannelSliders(); old_w = 0; hit=1; ) :                                                                       
+    ch13.hit_button(mouse_x,mouse_y,23) ? ( slider36 = -1; slider23=!slider23; slider_automate(slider23); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch14.hit_button(mouse_x,mouse_y,24) ? ( slider36 = -1; slider24=!slider24; slider_automate(slider24); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch15.hit_button(mouse_x,mouse_y,25) ? ( slider36 = -1; slider25=!slider25; slider_automate(slider25); updateChannelSliders(); old_w = 0; hit=1; ) :
+    ch16.hit_button(mouse_x,mouse_y,26) ? ( slider36 = -1; slider26=!slider26; slider_automate(slider26); updateChannelSliders(); old_w = 0; hit=1; );
+  ) : ( slider36 = -1 );
+  hit == 1;
+);
+
+SONOSURFACE2 = 3;
+function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, hp, logarithmic, fmaxFactor)
+  instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, N, norm, fmax)
+  globals(gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode)
+(
+  x = xp;
+  y = yp;
+  w = wp;
+  h = hp;
+
+  sonosurf = SONOSURFACE;
+  blurred  = SONOSURFACE2;    
+  
+  preSonoDest = gfx_dest;
+  gfx_a = 1;
+  sonoSize  = 2048;
+  sonoSizeX = 256;
+
+  // MaxF
+  fmax     = fftsize / fmaxFactor;
+
+  // For log-drawing
+  xscale   = 800/(fmax-4);
+  wsc      = sonoSize/(log(1+.5*fmax*xscale));
+  
+  // Start by drawing the previous buffer to this one
+  gfx_dest = sonosurf;
+  gfx_setimgdim(sonosurf, sonoSizeX, sonoSize);
+  gfx_setimgdim(blurred, sonoSizeX, sonoSize);  
+  gfx_x = -1;
+  gfx_y = 0;
+  gfx_blit(sonosurf, 1, 0);
+
+  // Draw the stuff
+  gfx_x = sonoSizeX-1;
+  gfx_y = sonoSize;
+  tl = 0;
+  i = 0; 
+  
+  ( logarithmic == 0 ) ? 
+  (
+    // Actual FFT density is better than what we can display
+    N = .5*fmax/sonoSize;
+    norm = sonoScale/N;
+    ( N > 1 ) ?
+    (
+      loop(sonoSize,
+        cv = 0;
+        loop(N,
+          cv = cv + norm * sonogramBuffer[];
+          sonogramBuffer += 1;
+        );
+      
+        sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-cv))  )*255);   
+        gfx_setpixel(sonoColorLoc[],sonoColorLoc[1],sonoColorLoc[2]);
+        gfx_y -= 1;
+      );
+    ) : ( 
+      // Actual FFT density is crappier    
+      N = 1/N;
+      i = sonoSize;
+      loop(sonoSize/N,
+        sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-sonogramBuffer[]*sonoScale))  )*255);   
+        gfx_r = sonoColorLoc[];
+        gfx_g = sonoColorLoc[1];
+        gfx_b = sonoColorLoc[2];
+        gfx_a = 1.0;
+        
+        gfx_line(sonoSizeX-1,i,sonoSizeX-1,i+N);
+        
+        i -= N;
+        sonogramBuffer += 1;
+      );
+    )
+  ) : (
+    loop(.5*fmax,
+      tx = log(1.0+i*xscale)*wsc;     
+      sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(- sonogramBuffer[]*sonoScale))  )*255);
+      
+      gfx_r = sonoColorLoc[];
+      gfx_g = sonoColorLoc[1];
+      gfx_b = sonoColorLoc[2];    
+      gfx_line(sonoSizeX-1,sonoSize-tl,sonoSizeX-1,sonoSize-tx);
+      i += 1;
+      sonogramBuffer += 1;
+      tl = tx;
+    );
+  );  
+  
+  // Draw the sonogram to the screen
+  gfx_dest = preSonoDest;
+  gfx_x = x;
+  gfx_y = y;
+  gfx_a = .95;
+  gfx_blit(sonosurf, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);
+  
+  // Blur it in a second buffer
+  gfx_dest = blurred;
+  gfx_x = gfx_y = 0;
+  gfx_blit(sonosurf, 1, 0);
+  gfx_x = gfx_y = 0;
+  loop(2,
+    gfx_blurto(sonoSizeX,sonoSizeX);
+  );
+  
+  // Add it on top
+  gfx_mode = 1;
+  gfx_x = gfx_y = 0;
+  gfx_dest = preSonoDest; 
+  gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);  
+  gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);    
+  gfx_mode = 0;
+);
+
+function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill)
+(
+  buf1=rpos-fftsize;
+  buf1<bufStart ? buf1+=histsize;
+  buf2=window;
+  buf3=fftwspace;
+  loop(fftsize*.5 + 1,
+    buf3[] = buf1[]*buf2[];
+    buf3+=1;
+
+    buf2+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+  buf2-=1;
+  loop(fftsize*.5 - 1,
+    buf3[] = buf1[]*(buf2-=1)[];
+    buf3+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+
+  fft_real(fftwspace,fftsize);
+  fft_permute(fftwspace,fftsize/2);
+  fftwspace[1]=0;
+
+  ascale=gfx_h/$pi*0.25;
+  xscale=800/(fftsize-4);
+ 
+  buf3=fftwspace;
+  buf2=intbuf+max_fft_size*0.5;
+  i=0;
+  lx=0;
+  // Draw phase
+  slider3 ? loop(fftsize*0.5,
+    ang=-atan2(buf3[1],buf3[]);
+    buf3+=2;
+    
+    integrate_en ? (
+      ang = buf2[] += integrate_sc * (ang - buf2[]);
+      buf2+=1;
+    );
+    
+    ty2=ang*ascale + gfx_h*0.5;
+    tx = log(1.0+i*xscale)*wsc;
+
+    i ? 
+    ( 
+      gfx_x=lx; gfx_y=ly2; gfx_lineto(tx,ty2,1) ;
+    );
+
+    lx=tx; ly2=ty2;
+    i+=1;
+  );  
+  
+  smoothing = slider7;
+  lx=0;
+  i=0;
+  fill_slmin=gfx_h;
+  fill_slast=0;
+
+  // Process FFT
+  kernelSize  = floor( smoothing/5 + 1 );
+  bufout = filtout + kernelSize;
+  
+  // Integrate the FFT over time to smooth it.
+  // Note that yOut and buf3 both point to the FFTW space. yOut is written after buf3 is read so 
+  // they don't conflict.
+  buf3 = fftwspace;
+  yOut = fftwspace;  
+  buf2 = intbuf;
+  i    = 0;
+  slope = .5*log(2)*slider38;
+  loop(fftsize*0.5,   
+    yOut[] = sqr(buf3[0])+sqr(buf3[1]);
+    ty = log(max(yOut[],(10^(-500/20*2))));
+    ty = ty + slope*log(1.0+i*xscale);
+    yOut += 1;
+    buf3 += 2;    
+  
+    integrate_en ? (
+      ty = buf2[] += integrate_sc * (ty - buf2[]);
+      buf2+=1;
+    );
+      
+    bufout[] = ty*-0.5*sc + 20;
+    bufout += 1;
+    i += 1;
+  );
+    
+  // Copy the last few to the front
+  bufout = filtout + kernelSize;
+  last = bufout[];
+  loop(kernelSize,
+    bufout -= 1;
+    bufout[] = last;
+  );
+  
+  ( smoothing > 0 ) ? (
+    // Convolve it
+    bufout      = filtout+kernelSize;
+    fout        = filtout2;
+    scfac       = kernelSize * scaling / log(1+400);
+    jk          = 1;
+    loop(fftsize*0.5,
+      fout[]    = 0;
+      //curSize   = ceil( jk * incr );
+      curSize   = ceil( scfac * log(1.0+jk*xscale) );
+      kern      = bufout-curSize;
+      loop(2*curSize+1,
+        fout[] = fout[] + kern[] /(2*curSize+1);
+        kern += 1;
+      );
+      bufout += 1;
+      fout += 1;
+      jk += 1;
+    );
+    
+    bufout = filtout2;
+  ) : bufout = filtout;
+  
+  i = 0;
+  loop(fftsize*0.5,
+    tx = log(1.0+i*xscale)*wsc;
+    ty = bufout[];
+      
+    i ? 
+    ( 
+      gfx_r=rr;
+      gfx_g=gg;
+      gfx_b=bb;
+      
+      fill/*fill?*/ ? (
+        gfx_a=slider37;
+        tx0=tx|0;
+        lx0=lx|0;
+        tx0>lx0? (
+          ly < gfx_h || ty < gfx_h ? gfx_triangle(lx0,max(gfx_h,ly),lx0,ly,tx0-1,ty,tx0-1,max(gfx_h,ty));
+        ) : (
+          tx0 > fill_slast ? (
+           fill_slast < gfx_h ? gfx_line(fill_slast,gfx_h,fill_slast,fill_slmin);
+           fill_slmin=gfx_h;
+         ) : (
+           fill_slmin=min(fill_slmin,ty);
+          );
+        );
+        fill_slast=tx0;        
+      );  
+      gfx_a=1.0;
+      gfx_x=lx; gfx_y=ly; gfx_lineto(tx,ty,1) ;
+    );
+
+    // CHECK THIS
+    //ty<gfx_h ? update=1;
+
+    lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1;
+  )
+);
+
+// Scrollwheel
+(abs(mouse_wheel) > 0) ?
+(
+  mouse_wheel = 0.01 * mouse_wheel;
+  sonogram.hit_button(mouse_x,mouse_y,-1) ? (
+    ( slider29 == 0 ) ? slider35 = mouse_wheel_button(slider35, 1, 8, mouse_wheel) : slider31 = mouse_wheel_button(slider31, 1, 8, mouse_wheel);
+  ) : ( 
+    slider6 = mouse_wheel_button(slider6, 1, 8, mouse_wheel);
+  );
+  mouse_wheel = 0;
+);
+
+(mouse_cap & 2) ? (
+  !(last_mouse_cap & 2) ? (
+    ch1.hit_button(mouse_x,mouse_y,-1) ? ( slider28=0; slider_automate(slider28); old_w = 0);
+    ch2.hit_button(mouse_x,mouse_y,-1) ? ( slider28=1; slider_automate(slider28); old_w = 0);
+    ch3.hit_button(mouse_x,mouse_y,-1) ? ( slider28=2; slider_automate(slider28); old_w = 0);
+    ch4.hit_button(mouse_x,mouse_y,-1) ? ( slider28=3; slider_automate(slider28); old_w = 0);
+    ch5.hit_button(mouse_x,mouse_y,-1) ? ( slider28=4; slider_automate(slider28); old_w = 0);
+    ch6.hit_button(mouse_x,mouse_y,-1) ? ( slider28=5; slider_automate(slider28); old_w = 0);
+    ch7.hit_button(mouse_x,mouse_y,-1) ? ( slider28=6; slider_automate(slider28); old_w = 0);
+    ch8.hit_button(mouse_x,mouse_y,-1) ? ( slider28=7; slider_automate(slider28); old_w = 0);
+    ch9.hit_button(mouse_x,mouse_y,-1) ? ( slider28=8; slider_automate(slider28); old_w = 0);
+    ch10.hit_button(mouse_x,mouse_y,-1) ? ( slider28=9; slider_automate(slider28); old_w = 0);
+    ch11.hit_button(mouse_x,mouse_y,-1) ? ( slider28=10; slider_automate(slider28); old_w = 0);
+    ch12.hit_button(mouse_x,mouse_y,-1) ? ( slider28=11; slider_automate(slider28); old_w = 0);                                                                        
+    ch13.hit_button(mouse_x,mouse_y,-1) ? ( slider28=12; slider_automate(slider28); old_w = 0);
+    ch14.hit_button(mouse_x,mouse_y,-1) ? ( slider28=13; slider_automate(slider28); old_w = 0);
+    ch15.hit_button(mouse_x,mouse_y,-1) ? ( slider28=14; slider_automate(slider28); old_w = 0);
+    ch16.hit_button(mouse_x,mouse_y,-1) ? ( slider28=15; slider_automate(slider28); old_w = 0);
+    showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider28=-1; slider_automate(slider28); old_w = 0);  
+    showChannel = slider28;    
+
+    slider29 == 0 && cap_last_y != mouse_y ) ? (
+      sonogram.hit_button(mouse_x,mouse_y,-1) ? ( slider32 = cycle_slider(slider32, 0, 7, 1);
+    );  
+  );
+);
+
+(mouse_cap & 1) ? (
+   !(last_mouse_cap & 1) ? (
+      // Reset to defaults
+       (cap_mode == 1||cap_mode == 4||cap_mode == 5||cap_mode == 6||cap_mode == 8||cap_mode == 9||cap_mode == 10||(cap_mode > 10 && cap_mode < 27)||cap_mode==28) && !cap_drag && cap_timer < 12 ? (
+         cap_mode == 1 ? (
+            slider2 = -120;
+            slider_automate(slider2);
+          ) : (
+            cap_mode == 4 ? (
+              slider5 = 0;
+              slider_automate(slider5);
+            ) : (
+              cap_mode == 5 ? (
+                slider6 = 1.0;
+                slider_automate(slider6);
+              ) : (
+                cap_mode == 6 ? (
+                  // Smoothing
+                  slider7 = 20;
+                  slider_automate(slider7);
+                ) : (
+                  cap_mode == 8 ? (                
+                    // Sonogram
+                    slider34 = !slider34;
+//                    slider30 = 2500;
+                    slider_automate(slider34);
+                  ) : (
+                    cap_mode == 9 ? (
+                      // Time
+                      slider34 = !slider34;
+//                      slider31 = 1;
+                      slider_automate(slider31);
+                    ) : (
+                      cap_mode == 10 ? (
+                        // Sonogram scaling
+                        slider35 = 1;
+                        slider_automate(slider35);
+                      ) : ( 
+                        cap_mode == 29 ? (
+                          // Slope
+                          slider38 = 1;
+                          slider_automate(slider38);
+                        ) : (                       
+                          cap_mode == 28 ? (
+                            // Alpha
+                            slider37 = .5;
+                          ) : (
+                            // One of the channel buttons
+                            (cap_mode > 10 && cap_mode < 27) ? (
+                              // Was something solo'd?
+                              ( slider36 > -1 ) ? ( slider36 = -1; ) : ( 
+                                ( ch1.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 11 ) ? ( slider36 = 0; slider11 = 1; slider_automate(slider11); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch2.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 12 ) ? ( slider36 = 1; slider12 = 1; slider_automate(slider12); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch3.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 13 ) ? ( slider36 = 2; slider13 = 1; slider_automate(slider13); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch4.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 14 ) ? ( slider36 = 3; slider14 = 1; slider_automate(slider14); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch5.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 15 ) ? ( slider36 = 4; slider15 = 1; slider_automate(slider15); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch6.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 16 ) ? ( slider36 = 5; slider16 = 1; slider_automate(slider16); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch7.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 17 ) ? ( slider36 = 6; slider17 = 1; slider_automate(slider17); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch8.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 18 ) ? ( slider36 = 7; slider18 = 1; slider_automate(slider18); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch9.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 19 ) ? ( slider36 = 8; slider19 = 1; slider_automate(slider19); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch10.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 20 ) ? ( slider36 = 9; slider20 = 1; slider_automate(slider20); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch11.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 21 ) ? ( slider36 = 10; slider21 = 1; slider_automate(slider21); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch12.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 22 ) ? ( slider36 = 11; slider22 = 1; slider_automate(slider22); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch13.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 23 ) ? ( slider36 = 12; slider23 = 1; slider_automate(slider23); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch14.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 24 ) ? ( slider36 = 13; slider24 = 1; slider_automate(slider24); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch15.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 25 ) ? ( slider36 = 14; slider25 = 1; slider_automate(slider25); updateChannelSliders(); ) : checkChannelButtons(); );
+                                ( ch16.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 26 ) ? ( slider36 = 15; slider26 = 1; slider_automate(slider26); updateChannelSliders(); ) : checkChannelButtons(); );
+                              );
+                            );
+                          );
+                        );
+                      );
+                    );
+                  );
+                );
+              );
+            );
+          );
+         cap_mode=0;
+         old_w=0;
+       ) : (
+         cap_mode = cap_drag = cap_timer = 0;
+         phase_button.hit_button(mouse_x,mouse_y,-1) ? ( slider3=!slider3; slider_automate(slider3); old_w = 0; ) :
+         background_button.hit_button(mouse_x,mouse_y,-1) ? ( slider10=!slider10; slider_automate(slider10); old_w = 0 ):
+         sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>2?slider29=0; slider_automate(slider29); old_w = 0 ):
+         checkChannelButtons() ? :
+         sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateChannelSliders(); old_w = 0) :                  
+         showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateChannelSliders(); old_w = 0) :       
+         floor_button.hit_button(mouse_x,mouse_y,1)||
+         slope_button.hit_button(mouse_x,mouse_y,29)||
+         window_button.hit_button(mouse_x,mouse_y,2)||
+         fft_button.hit_button(mouse_x,mouse_y,3)||
+         integrate_button.hit_button(mouse_x,mouse_y,4)||
+         scaling.hit_button(mouse_x,mouse_y,5)||
+         colormap.hit_button(mouse_x,mouse_y,7)||              
+         smoothing.hit_button(mouse_x,mouse_y,6)||
+         alphalevel.hit_button(mouse_x,mouse_y,28)||
+         sonoScale.hit_button(mouse_x,mouse_y,10) ? :
+         sonogram.hit_button(mouse_x,mouse_y,8+slider29) ? : (      // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position
+         drawHz = 1;
+         )
+       );
+    ) :
+    cap_mode == 1 && cap_last_y != mouse_y ? (
+      slider2 = drag_slider_precise(slider2, -450, -12, 0.2);
+      old_w=0;
+      slider_automate(slider2);
+    ) :
+    cap_mode == 2 && cap_last_y != mouse_y ? (
+      slider4 = drag_slider(slider4, 0.0, 4.0, .03);
+      old_w=0;
+      slider_automate(slider4);
+    ) :
+    cap_mode == 3 && cap_last_y != mouse_y ? (
+      slider1 = drag_slider(slider1, 0.0, 11.0, .03);
+      old_w=0;
+      slider_automate(slider1);
+    ) :
+    cap_mode == 4 && cap_last_y != mouse_y ? (
+      // Integration time
+      slider5 = drag_slider_precise(slider5, 0.0, 2500.0, 5);
+      old_w=0;
+      slider_automate(slider5);
+    ) :
+    cap_mode == 5 && cap_last_y != mouse_y ? (
+      // Scale
+      slider6 = drag_slider_precise(slider6, 1.0, 6, .2);
+      old_w=0;
+      slider_automate(slider6);
+    ) :
+    cap_mode == 6 && cap_last_y != mouse_y ? (
+      // Smoothing
+      slider7 = drag_slider_precise(slider7, 0.0, 100, 1);
+      old_w=0;
+      slider_automate(slider7);
+    ) :
+    cap_mode == 7 && cap_last_y != mouse_y ? (
+      // Colormap
+      slider8 = drag_slider(slider8, 0.01, 14, .03);
+      old_w=0;
+      slider_automate(slider8);
+    ) :
+    cap_mode == 8 && cap_last_y != mouse_y ? (
+      // Sonogram
+      slider30 = drag_slider(slider30, 0, 15000, 100);
+      old_w=0;
+      slider_automate(slider30);
+    ) :
+    cap_mode == 9 && cap_last_y != mouse_y ? (
+      // Signal
+      slider31 = drag_slider_precise(slider31, .1, 3, .03);
+      old_w=0;
+      slider_automate(slider31);
+    ) :
+    cap_mode == 10 && cap_lasty_y != mouse_y ? (
+      // Sono scaling
+      slider35 = floor(drag_slider_precise(slider35, 1, 8, .1));
+      old_w=0;
+      slider_automate(slider35);
+    ) :
+    cap_mode == 28 && cap_lasty_y != mouse_y ? (
+      // Alpha level
+      slider37 = drag_slider_precise(slider37, 0, 1, .025);
+      old_w=0;
+      slider_automate(slider37);
+    );
+    cap_mode == 29 && cap_lasty_y != mouse_y ? (
+      slider38 = drag_slider_precise(slider38, 0,9,.25);
+      old_w=0;
+      slider_automate(slider38);      
+    );
+) : (
+  drawHz = 0;
+  (last_mouse_cap & 1) && !cap_drag ? (
+    cap_mode == 2 ? (
+    slider4 = cycle_slider(slider4, 0.0, 4.0, 1.0);
+      old_w=0;
+      slider_automate(slider4);
+    );
+    cap_mode == 3 ? (
+      slider1 = cycle_slider(slider1, 0.0, 11.0, 1.0);
+      old_w=0;
+      slider_automate(slider1);
+    );
+  );
+);
+
+cap_mode && cap_timer < 12 ? cap_timer += 1;
+last_mouse_cap = mouse_cap;
+
+UI_SCREEN = 0;
+
+// only update if new fft data is there or if the size changed
+( update || old_w != gfx_w || old_h!=gfx_h ) ? (
+  update = 0; 
+  
+  gfx_dest = UI_SCREEN;
+  gfx_setimgdim(UI_SCREEN, gfx_w, gfx_h);
+  gfx_clear = 0;
+
+  //gfx_dest = scroll_buf;
+  old_w=gfx_w; old_h=gfx_h;
+  
+  // Clear screen
+  gfx_r=gfx_g=gfx_b=bgcolor; gfx_a=0.8;
+  gfx_x=gfx_y=0;
+  gfx_rectto(gfx_w,gfx_h);
+  
+  sc=(gfx_h-20)*20/(-slider2 * log(10));
+  
+  intensity = 0.4 * bgColor + 0.6 * ( 1 - bgColor );
+  textintensity = 0.1 * bgColor + 1.0 * ( 1 - bgColor );
+  // draw horz grid
+  gfx_r=gfx_g=gfx_b=intensity;
+  gv=1;
+  cnt=100;
+  gfx_y=-100;
+  while(
+    y=20-log(gv)*sc;
+    y> gfx_y ? (
+      gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.6;
+      gfx_line(0,y,gfx_w,y,0);
+      bottom_line = gfx_y;
+      gfx_x=0; 
+      gfx_y=y+2;
+      gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
+      gfx_drawnumber(log10(gv)*20,0);
+      gfx_drawchar($'d');
+      gfx_drawchar($'B');
+      gfx_y+=gfx_texth;
+    );
+    gv*=0.5;
+  
+    gfx_y<gfx_h && cnt-=1 > 0;
+  );
+  
+  wsc=scaling*gfx_w/log(1+400);
+  
+  // draw vert grid
+  f=20;
+  gfx_x+=4;
+  lx=gfx_x;
+  while(
+    gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.6;
+    tx = log(1.0+(f/srate*2.0)*400)*wsc;
+    dotext = tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
+       (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000);
+    tx > lx ? ( lx=tx+4; gfx_line(tx,0,tx,gfx_h - (dotext ? 0 : gfx_texth+2),0); );
+    gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
+    dotext ? (
+      gfx_x=tx +3;
+      gfx_y = gfx_h-gfx_texth;
+      f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
+    );
+    f += (f<100?10:f<1000?100:f<10000?1000:5000);
+    f < srate*0.5;
+  );
+  
+  fft_button.draw_button(gfx_w, 0, sprintf(#,"FFT: %d",16<<slider1));
+  window_button.draw_button(gfx_x-8, 0, 
+    (slider4|0)==1 ? "hamming" :  
+    (slider4|0)==2 ? "blackman-harris" :
+    (slider4|0)==3 ? "blackman" :
+    (slider4|0)==4 ? "rectangular" :    
+    "flat-top"); 
+  floor_button.draw_button(gfx_x-8,0, sprintf(#,"floor: %.1fdB", slider2));
+  slope_button.draw_button(gfx_x-8,0, sprintf(#,"slope: %.1fdB/oct", slider38));
+  integrate_button.draw_button(gfx_x-8,0, sprintf(#,"integrate: %dms",slider5|0));
+  phase_button.draw_button(gfx_x-8,0, slider3?"phase on" : "phase off");
+//  scaling.draw_button(gfx_x-8,0,sprintf(#,"Scale: %.1f",slider6));
+  colormap.draw_button(gfx_x-8,0, 
+    (slider8|0)==0 ? "dark" :  
+    (slider8|0)==1 ? "intense" :
+    (slider8|0)==2 ? "fluo" :
+    (slider8|0)==3 ? "colorblind" :  
+    (slider8|0)==4 ? "pimp" :
+    (slider8|0)==5 ? "shades" :
+    (slider8|0)==6 ? "fancy" :  
+    (slider8|0)==7 ? "pastel" :
+    (slider8|0)==8 ? "purple" :
+    (slider8|0)==9 ? "dark2" :
+    (slider8|0)==10 ? "dark3" :  
+    (slider8|0)==11 ? "dark4" :
+    (slider8|0)==12 ? "dark5" :
+    "colorblind2"); 
+  smoothing.draw_button(gfx_x-8,0,sprintf(#,"smoothing: %.1f",slider7));
+  alphalevel.draw_button(gfx_x-8,0, sprintf(#,"alpha: %.1f",slider37));
+  background_button.draw_button(gfx_x-8,0, slider10?"white" : "black");
+  
+  ch16.draw_button2(gfx_w,   16, "Ch16", slider26, slider28==15, slider36==15, slider36>-1, 15);
+  ch15.draw_button2(gfx_x-8, 16, "Ch15", slider25, slider28==14, slider36==14, slider36>-1, 14);
+  ch14.draw_button2(gfx_x-8, 16, "Ch14", slider24, slider28==13, slider36==13, slider36>-1, 13);
+  ch13.draw_button2(gfx_x-8, 16, "Ch13", slider23, slider28==12, slider36==12, slider36>-1, 12);
+  ch12.draw_button2(gfx_x-8, 16, "Ch12", slider22, slider28==11, slider36==11, slider36>-1, 11);
+  ch11.draw_button2(gfx_x-8, 16, "Ch11", slider21, slider28==10, slider36==10, slider36>-1, 10);
+  ch10.draw_button2(gfx_x-8, 16, "Ch10", slider20, slider28==9,  slider36==9,  slider36>-1, 9);
+  ch9.draw_button2(gfx_x-8,  16, "Ch9",  slider19, slider28==8,  slider36==8,  slider36>-1, 8);
+  ch8.draw_button2(gfx_x-8,  16, "Ch8",  slider18, slider28==7,  slider36==7,  slider36>-1, 7);
+  ch7.draw_button2(gfx_x-8,  16, "Ch7",  slider17, slider28==6,  slider36==6,  slider36>-1, 6);
+  ch6.draw_button2(gfx_x-8,  16, "Ch6",  slider16, slider28==5,  slider36==5,  slider36>-1, 5);
+  ch5.draw_button2(gfx_x-8,  16, "Ch5",  slider15, slider28==4,  slider36==4,  slider36>-1, 4);
+  ch4.draw_button2(gfx_x-8,  16, "Ch4",  slider14, slider28==3,  slider36==3,  slider36>-1, 3);
+  ch3.draw_button2(gfx_x-8,  16, "Ch3",  slider13, slider28==2,  slider36==2,  slider36>-1, 2);
+  ch2.draw_button2(gfx_x-8,  16, "Ch2",  slider12, slider28==1,  slider36==1,  slider36>-1, 1);
+  ch1.draw_button2(gfx_x-8,  16, "Ch1",  slider11, slider28==0,  slider36==0,  slider36>-1, 0);
+  showSumButton.draw_button2(gfx_x-8, 16, "Sum", slider27, slider28==-1, 0, 0, -1);
+  sonogram_button.draw_button(gfx_x-8, 16, slider29==1?"Time" : slider29==0?"Sonogram": "Off");
+  slider29 == 0 ? sonoLog.draw_button2(gfx_x-8, 16, "Log(Sonogram)", slider33, 0, 0, 0, -1);
+//  sonoScale.draw_button(gfx_x-8, 16, sprintf(#,"SonoScale: %d",slider35));
+  
+  scaling = slider6;
+  bgcolor = slider10;
+
+  integrate_sc = 1;
+  slider5 > 0 ? (
+    integrate_now = time_precise();
+    integrate_en ? (
+      // fps = 1/(integrate_now - integrate_lastt);
+      integrate_sc -= exp(-5 * 1000.0 * (integrate_now - integrate_lastt) / slider5);
+    ) : (
+      // force overwrite of buffer
+      integrate_en = 1;
+    );
+    integrate_lastt = integrate_now;
+  ) : (
+    integrate_en = 0;
+  );
+
+  fftidx != (slider1|0) ? (
+    fftidx=slider1|0;
+    fftsize=2^(min(max(fftidx,0),11)+4);
+    integrate_sc=1;
+  );
+
+  smoothing != slider7 || windowsize != fftsize || windowtype != (slider4|0) ? (
+    windowtype=slider4|0; 
+    windowsize=fftsize;
+    dwindowpos = $pi*2/fftsize;
+    i=pwr=0;
+    loop(fftsize*.5+1,
+       windowpos=i*dwindowpos;
+       pwr += (window[i] = (
+         windowtype==1 ? ( 0.53836 - cos(windowpos)*0.46164 ) :
+         windowtype==2 ? ( 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) ) :
+         windowtype==3 ? ( 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) ) :
+         windowtype==4 ? ( 1.0 ) :
+         ( .21557895 - 0.41663158 * cos(windowpos) + 0.277263158 * cos(2*windowpos) - 0.083578947 * cos(3*windowpos) + 0.006947368 * cos(4*windowpos) )
+         ) );
+       i+=1;
+    );
+    pwr=.5/(pwr*2-window[i-1]);
+    loop(fftsize*.5+1,window[i-=1]*=pwr);
+    integrate_sc=1;
+  );
+
+  rpos = recpositions;
+  fftw = fftworkspaces;
+  ibuf = integrate_bufs;
+  shft = shifts;
+  hsiz = histsizes;
+  
+  incr  = 3;
+  cref = (10000 + 100*floor(slider8));
+  
+  ccolor  = cref;
+  jl      = 1;
+  blah    = activechannels;
+  loop(maxchannels,
+    (blah[] == 1) ? (
+      ( slider36 < 0 || ( slider36 == (jl-1) ) ) ? (
+        drawFFT(1, rpos[], fftw[], ibuf[], shft[], hsiz[], ccolor[0], ccolor[1], ccolor[2], 1);
+      );
+    );
+    jl      += 1;
+    rpos    += 1;
+    fftw    += 1;
+    ibuf    += 1;
+    shft    += 1;
+    hsiz    += 1;
+    ccolor  += incr;
+    blah    += 1; 
+  );
+
+  ( showSum == 1 ) ? (
+    halfshade = 0.3 * bgcolor + 0.7 * ( 1-bgcolor );
+    shade = 1-bgcolor;
+    drawFFT(100, sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0);  
+    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0);
+  );
+  
+  ( drawHz == 1 ) ? (
+    gfx_r = gfx_g = gfx_b = 1 - bgColor;
+    gfx_a = 1.0;
+    gfx_x = mouse_x + 10;
+    gfx_y = mouse_y;
+    
+    f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate;
+    y  = 1+(slider2-1)*mouse_y/gfx_h;
+
+    y = -(20/log(10)*(mouse_y-20)/sc);
+    gfx_printf("%dHz %gdB", f, y); 
+  );
+  
+  gfx_r = gfx_g = gfx_b = 1;
+  gfx_a = 1;
+  sigw = 0.23*(1+2*slider34);
+  sigh = 0.23*(1+2*slider34);
+  siglocx = 1.0 - sigw - 8/gfx_w;
+  siglocy = 40/gfx_h;
+  gfx_x = siglocx * gfx_w;
+  gfx_y = siglocy * gfx_h;
+  selected = slider28;
+  
+  ( slider29 == 1 ) ? (
+    // Time window
+    ( selected > -1 ) ? (
+      scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, shifts[selected], slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );  
+
+      gfx_r=gfx_g=gfx_b=1.0-bgColor;
+      gfx_y = gfx_y + 5;
+      gfx_x = siglocx * gfx_w + 5;
+      gfx_printf( "Ch %d", selected + 1 );
+    ) : (
+      scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshl, slider31, histsizes[0] - shifts[0], cref[4], cref[5], cref[6] );  
+      scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshr, slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );
+
+      gfx_r=gfx_g=gfx_b=1.0-bgColor;      
+      gfx_y = gfx_y + 5;
+      gfx_x = siglocx * gfx_w + 5;
+      gfx_printf( "Sum" );
+    );
+  ) : ( slider29 == 0 ) ? (
+    // Sonogram
+    cmapidx = (floor(slider32/2) + 1);
+    invert = slider32 - (floor(slider32/2))*2;
+    ( selected > -1 ) ? (
+      sonogram.drawSono( fftworkspaces[selected], cmapidx * 2000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35 );
+      gfx_mode = 1;
+      gfx_r = gfx_g = gfx_a = 1.0;
+      gfx_y = siglocy * gfx_h + 5;
+      gfx_x = siglocx * gfx_w + 5;
+      gfx_printf( "Ch: %d, Sc: %d", selected + 1, slider30 );
+    ) : (
+      sonogram.drawSono( fftwr, cmapidx * 2000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35 );    
+      gfx_mode = 0;
+      gfx_r = gfx_g = gfx_a = 1.0;
+      gfx_y = siglocy * gfx_h + 5;
+      gfx_x = siglocx * gfx_w + 5;
+      gfx_printf( "Sum, Sc: %d", slider30 );      
+    );
+    gfx_x = siglocx * gfx_w + 5;
+    gfx_y = siglocy * gfx_h + sigh*gfx_h - 12;
+    
+    printColorMapName(cmapidx, invert);
+    gfx_mode = 0;
+  );
+  
+  gfx_r=gfx_g=gfx_b=gfx_a=1.0;  
+  gfx_dest = -1;
+  gfx_x = 0;
+  gfx_y = 0;
+  gfx_blit(UI_SCREEN, 1, 0);
+  
+  // Finished
+  update = 1;
+);
