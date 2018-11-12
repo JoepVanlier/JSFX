@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 0.85
+version: 0.86
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion
 
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -11,7 +11,7 @@ Filter attribution:
 LP Diode Ladder (MIT Licensed)
 Copyright (c) 2012 Dominique Wurtz (www.blaukraut.info)
 Karlsen Fast Ladder III
-Copyright (c) ? Ove Hy Karlsen
+Copyright (c) Ove Hy Karlsen
 
 slider1:3<0,10,1>-Nodes negative
 slider2:2<0,10,1>-Nodes positive
@@ -63,7 +63,7 @@ slider51:0<-1,1,.01>-Pre-Gain/Drive Mod %
 slider52:0<-40,40,.01>-PreGain
 slider53:0<-40,40,.01>-PostGain
 slider54:1<0,8,1>-Oversampling
-slider56:0<0,3,{Spline, Tanh, Fast Tanh, None}>-Waveshaping Mode
+slider56:0<0,4,{Spline, Tanh, Fast Tanh, None, Sine}>-Waveshaping Mode
 
 slider58:1<0,2,1{OFF,Filter,Waveshaper,Both}>-Dynamics
 slider59:1<0,1,.001>-Thresh
@@ -80,7 +80,7 @@ out_pin:right output
 options:no_meter
 
 @init
-nFilters = 31;
+nFilters = 35;
 nModes = 6;
 nLFO = 14;
 
@@ -122,7 +122,10 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 27 ) ? ( str = "4p LP SSM 2020 NL (Approx)"      
       ) : ( curitem == 28 ) ? ( str = "4p LP CEM 3389 NL (ZDF)"      
       ) : ( curitem == 29 ) ? ( str = "4p LP SSM 2020 L (ZDF)"        
-      ) : ( curitem == 30 ) ? ( str = "4p LP CEM 3389 L (ZDF)"        
+      ) : ( curitem == 30 ) ? ( str = "4p LP CEM 3389 L (ZDF)"
+      ) : ( curitem == 31 ) ? ( str = "Sine"  
+      ) : ( curitem == 32 ) ? ( str = "FM Feedback"  
+      ) : ( curitem == 33 ) ? ( str = "Filter FM-ish 2" 
       );
     ) : (stridx == 1) ? 
     (
@@ -351,11 +354,20 @@ local(fx, fy, wx, wx2, wy)
     gfx_printf("Filter: 4 pole non-linear LP\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Zero delay feedback 4-pole CEM 3389 emulation with non-linearity (tanh) in the model. The waveshaper is applied to the output and can be used to tame the output.", wx2);
   ) : ( slider47 == 29 ) ? (
-    gfx_printf("Filter: Linearlized 4 pole non-linear LP\n\n"); gfx_x = fx+5;
+    gfx_printf("Filter: Linearized 4 pole non-linear LP\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Linearized zero delay feedback 4-pole SSM2020 emulation. The waveshaper is applied to the output and can be used to tame the output. Note that this filter doesn't saturate or self-oscillate in the way the non-linear emulation would. The computational cost is much lower however.", wx2);    
   ) : ( slider47 == 30 ) ? (
-    gfx_printf("Filter: Linearlized 4 pole non-linear LP\n\n"); gfx_x = fx+5;
+    gfx_printf("Filter: Linearized 4 pole non-linear LP\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Linearized zero delay feedback 4-pole CEM 3389 emulation. The waveshaper is applied to the output and can be used to tame the output. Note that this filter doesn't saturate or self-oscillate in the way the non-linear emulation would. The computational cost is much lower however.", wx2);        
+  ) : ( slider47 == 31 ) ? (
+    gfx_printf("Filter: Sine\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Take the sine of the signal. Cutoff controls frequency, resonance controls mix.", wx2); 
+  ) : ( slider47 == 32 ) ? (
+    gfx_printf("Filter: FM feedback\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Non-linear MS-20 but with the feedback signal FM modulated.", wx2);     
+  ) : ( slider47 == 33 ) ? (
+    gfx_printf("Filter: FM MS-20\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Use signal as modulation source for the cutoff of an MS-20 linear.", wx2);    
   )
 );
 
@@ -931,8 +943,8 @@ function init_MS20lin(freq, reso)
     
 function init_MS20(freq, reso)
   global(slider54)
-  local(fg, invTerm, smallg)
-  instance(s1, s2, G, Gsq, Gsqk, Gk, k)
+  local(fg, invTerm)
+  instance(s1, s2, G, Gsq, Gsqk, Gk, k, smallg)
   (
 //    fg      = 1 - exp( - $pi * ( freq / max(slider54,1) ) );
     smallg  = .5 * (pow(10, freq)-1)/9 * $pi / (slider54+1);
@@ -1088,9 +1100,10 @@ function init_cem_lin(freq, reso)
 function init_MS20_nonlin(freq, reso)
   global(slider54)
   local()
-  instance(y1, y2, d1, d2, h, hh, k)
+  instance(y1, y2, d1, d2, h, hh, k, f)
   (
-    h  = .5 * (pow(10, freq)-1)/9 * $pi / (slider54+1);
+    f = .5 * (pow(10, freq)-1)/9 * $pi;
+    h  = f / (slider54+1);
     hh = 0.5 * h;
     k  = 2*reso;
     
@@ -1132,6 +1145,16 @@ function initphaserFET(freq, reso)
     C1=.5*freq/max(1,slider54);C2=1;
   );  
 
+function initSine(f, r)
+  global(srate, slider54)
+  local()
+  instance(freq, res, fraw)
+  (
+    freq  = 80 * $pi * ( ( pow(10, f) - 1 ) / 9 );
+    res   = r;
+    fraw  = f;
+  );
+ 
 function resetphaserFET()
   global()
   local()
@@ -1183,7 +1206,7 @@ function updateActiveFilters()
         slider_automate(slider54);
         forceUpdate = 1;
         ); 
-      ( slider56 == 0 ) ? (
+      ( slider56 == 0 || slider56 == 4 ) ? (
         slider56 = 3;
         slider_automate(slider56);
         forceUpdate = 1;
@@ -1274,7 +1297,20 @@ function updateActiveFilters()
       R.filter_ssm_lin.init_ssm_lin(filterFreq, filterReso);         
     ) : ( slider47 == 30 ) ? (
       L.filter_cem_lin.init_cem_lin(filterFreq, filterReso);
-      R.filter_cem_lin.init_cem_lin(filterFreq, filterReso);      
+      R.filter_cem_lin.init_cem_lin(filterFreq, filterReso);
+    ) : ( slider47 == 31 ) ? (
+      L.filter_sine.initSine(filterFreq, filterReso);
+      R.filter_sine.initSine(filterFreq, filterReso);
+    ) : ( slider47 == 32 ) ? (
+      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);       
+      L.filter_sine.initSine(filterFreq, filterReso);
+      R.filter_sine.initSine(filterFreq, filterReso);      
+    ) : ( slider47 == 33 ) ? (
+      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);    
+      L.filter_sine.initSine(filterFreq, filterReso);
+      R.filter_sine.initSine(filterFreq, filterReso);
     );
   );
  
@@ -1753,6 +1789,12 @@ function plot_spline(x, y, w, h)
       );
     );
     
+    ( slider56 == 4 ) ? ( 
+      gfx_rect( x+.75*w - 5, y + .5*h, 10, 2 );
+      gfx_rect( x+.25*w - 5, y + .5*h, 10, 2 );
+      gfx_rect( x+.25*w - 2, y + .5*h-4, 4, 10 );
+    );
+    
     xx = 0;
     res = 500;
     lastx = x;
@@ -1766,6 +1808,8 @@ function plot_spline(x, y, w, h)
         yout = tanh(xx);
       ) : ( slider56 == 2 ) ? (
         yout = fasttanh(xx);
+      ) : ( slider56 == 4 ) ? (
+        yout = xx < 0.5 ? sin(2*$pi*xx) : sin(2*$pi*(-xx));
       ) : (
         yout = xx;
       );
@@ -2408,7 +2452,7 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
   );
 
 function gen_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, splineCoordsX2, splineCoordsY2, indices, tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ, c1_storage, c2_storage, c3_storage, c1_storage2, c2_storage2, c3_storage2)
-  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline)
+  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline, buttonSine)
   global(buttonOff.selectionButton)
   local(hy)
   (
@@ -2422,6 +2466,7 @@ function gen_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, 
     buttonArctan.selectionButton(x+5, y+4+hy, 55, 10, "Atan",  .3, .4, .8, .3);
     buttonFast.selectionButton(x+5, y+4+2*hy, 55, 10, "Fast",  .3, .4, .8, .3);
     buttonSpline.selectionButton(x+5, y+4+3*hy, 55, 10, "Spline", .3, .4, .8, .3);
+    buttonSine.selectionButton(x+5, y+4+4*hy, 55, 10, "Sine", .3, .4, .8, .3);    
     
     spline = spline.gen_spline(N, splineIdx, splineCoordsX, splineCoordsY, splineCoordsX2, splineCoordsY2, indices, tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ, c1_storage, c2_storage, c3_storage, c1_storage2, c2_storage2, c3_storage2);
   );
@@ -2446,7 +2491,7 @@ function gen_dynamics(xp, yp, wp, hp)
   );
 
 function processMouse(mx, my, dx, dy, mc)
-  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline)
+  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline, buttonSine)
   global(slider56, buttonOff.selectionButton_processMouse, buttonOff.selectionButton_setActive)
   local()  
   (
@@ -2454,7 +2499,9 @@ function processMouse(mx, my, dx, dy, mc)
     buttonArctan.selectionButton_setActive(0);
     buttonFast.selectionButton_setActive(0);
     buttonSpline.selectionButton_setActive(0);
-    
+    buttonSine.selectionButton_setActive(0);
+
+    buttonSine.selectionButton_processMouse(mx, my, mc)   ? ( slider56 = 4; slider_automate(slider56); );  
     buttonOff.selectionButton_processMouse(mx, my, mc)    ? ( slider56 = 3; slider_automate(slider56); );
     buttonArctan.selectionButton_processMouse(mx, my, mc) ? ( slider56 = 1; slider_automate(slider56); );
     buttonFast.selectionButton_processMouse(mx, my, mc)   ? ( slider56 = 2; slider_automate(slider56); );
@@ -2464,6 +2511,7 @@ function processMouse(mx, my, dx, dy, mc)
       ) : ( slider56 == 1 ) ? ( buttonArctan.selectionButton_setActive(1);
       ) : ( slider56 == 2 ) ? ( buttonFast.selectionButton_setActive(1);
       ) : ( slider56 == 3 ) ? ( buttonOff.selectionButton_setActive(1);
+      ) : ( slider56 == 4 ) ? ( buttonSine.selectionButton_setActive(1);
     );
     
     spline.processMouse((mx-x)/w, (my-y)/h, dx/w, dy/h, mc);
@@ -2593,7 +2641,7 @@ function draw_back()
   );
 
 function draw_window(movAvgL, movAvgR, movAvgOL, movAvgOR)
-  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline)
+  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline, buttonSine)
   globals(gfx_r, gfx_g, gfx_b, gfx_x, gfx_y, buttonOff.selectionButton_draw)
   (
     this.draw_back();
@@ -2613,6 +2661,7 @@ function draw_window(movAvgL, movAvgR, movAvgOL, movAvgOR)
     buttonArctan.selectionButton_draw();
     buttonFast.selectionButton_draw();
     buttonSpline.selectionButton_draw();
+    buttonSine.selectionButton_draw();
   );
   
 function draw_buffer(scopeptr, scopebuffer, scopebuffermax, mul)
@@ -3035,6 +3084,10 @@ function distort(s)
     ) : ( slider56 == 2 ) ? (
       os = s;
       s = fasttanh(s);
+      distortionDynamics ? s = (1.0-dynval) * os + dynval * s;
+    ) : ( slider56 == 4 ) ? (
+      os = s;
+      s = sin(2*$pi*s);
       distortionDynamics ? s = (1.0-dynval) * os + dynval * s;
     );
 
@@ -3610,6 +3663,55 @@ function eval_MS20_nonlin(x)
     distort(y2) 
   );  
   
+function eval_MS20_nonlin_FM(x)
+  global(slider54)
+  local(mag, hk, sig1, sig2, a, b, c, d, norm, f1, f2, gkd2, gky2, dgky2, sfunsq, sub3, sub3i, sub4sq, sub5, atanterm1, atanterm2)
+  instance(y1, y2, d1, d2, h, hh, k, obs, f)
+  (
+    mag   = f*5;
+      
+    gkd2  = k * sin(mag*d2); // g(k*d2)
+    gkd2  = mag * k * cos(mag*d2);
+    hk    = h*k;
+    
+    atanterm1 = atan(d1 -  x + gkd2);
+    atanterm2 = atan(d1 - d2 + gkd2);
+    
+    loop(3,
+      //gky2    = distort(k*y2);
+      //dgky2   = distortderiv(k*y2);
+      gky2    = k*sin(mag*y2); //k*y2;
+      dgky2   = mag * k* cos(mag*y2);
+      gky2    = max(-1,min(1,gky2));
+    
+      sig1    = y1 - y2 + gky2;
+      sig2    = y1 - x +  gky2;
+      f1      = y1 - d1 + hh*(atanterm1 + atan(sig2));
+      f2      = y2 - d2 - hh*(atanterm2 + atan(sig1));
+      
+      sfunsq  = sig2 * sig2;
+      sub3    = 2*(sfunsq + 1);
+      sub3i   = 1 / sub3;
+      sub4sq  = sig1*sig1;
+      sub5    = 1/(2*(sub4sq + 1));      
+      
+      a       = h*sub3i + 1;
+      b       = hk*dgky2*sub3i;
+      c       = -h*sub5;
+      d       = 1.0 - (hk*dgky2 - h)*sub5;
+  
+      norm    = 1.0 / ( a*d - b*c );
+      
+      y1      = y1 - ( d*f1 - b*f2 ) * norm;
+      y2      = y2 - ( a*f2 - c*f1 ) * norm;
+    );
+    
+    d1 = y1;
+    d2 = y2;
+    
+    distort(y2) 
+  );    
+  
 function eval_MS20_nonlin_mod(x)
   global(slider54)
   local(hk, sig1, sig2, a, b, c, d, norm, f1, f2, gkd2, gky2, dgky2, sfunsq, sub3, sub3i, sub4sq, sub5, atanterm1, atanterm2)
@@ -4120,6 +4222,16 @@ function process(sample)
     ) : ( slider47 == 30 ) ? (
       sample = this.filter_cem_lin.eval_cem_lin(sample);   
       sample = distort(sample);
+    ) : ( slider47 == 31 ) ? (
+      sample = ( 1 - this.filter_sine.res ) * sample + this.filter_sine.res * sin(sample * this.filter_sine.freq);
+      sample = distort(sample);
+    ) : ( slider47 == 32 ) ? (
+      sample = ( 1 - this.filter_sine.res ) * sample + this.filter_sine.res * this.filter_ms20.eval_MS20_nonlin_FM(sample);
+      sample = distort(sample);
+    ) : ( slider47 == 33 ) ? (
+      os = .7 + .3* sin(.5*sample * this.filter_sine.freq);
+      this.filter_ms20.init_MS20_nonlin(os*this.filter_sine.fraw, this.filter_sine.res);
+      sample = this.filter_ms20.eval_MS20_nonlin(sample);
     );
     
     sample;
