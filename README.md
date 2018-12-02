@@ -20,7 +20,7 @@ https://soundcloud.com/saike/ohnoesitsaboss2/s-zYCOt
 
 The more experimental filters (such as "Experimental" and "Phase Mangler") can be used on pads to make eerie soundscapes: https://soundcloud.com/saike/filter-ambience/s-UxdLO
 
-Here's a short tutorial on how to use it: [url]https://www.youtube.com/watch?v=YlgsVy-C2yI[/url]
+Here's a short tutorial on how to use it: https://www.youtube.com/watch?v=YlgsVy-C2yI
 
 ### Waveshaping
 Filther supports saturating soft clipping as well as drawing custom voltage curves using a spline. For the simpler filters, the distortion is simply applied before the filtering stage, but for some the filter is located in the filter scheme. In these cases, the distortion is either applied on the delayed or during solving the implicit equations for the supplied zero delay feedback filters (ZDF).
