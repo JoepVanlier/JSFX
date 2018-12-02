@@ -18,6 +18,10 @@ Filther is a waveshaping / filter plugin that allows for some dynamic processing
 All the distortion/filtering on that track was done with this filter (mostly nonlin Kr0g and Rezzy):
 https://soundcloud.com/saike/ohnoesitsaboss2/s-zYCOt
 
+It can also sound pretty destructive:
+https://soundcloud.com/saike/sine/s-mbHJL
+https://soundcloud.com/saike/fm-modes-filther/s-KXwEQ
+
 The more experimental filters (such as "Experimental" and "Phase Mangler") can be used on pads to make eerie soundscapes: https://soundcloud.com/saike/filter-ambience/s-UxdLO
 
 Here's a short tutorial on how to use it: https://www.youtube.com/watch?v=YlgsVy-C2yI
