@@ -14,6 +14,18 @@ into issues with these, feel free to open an issue here on github.
 
 Filther is a waveshaping / filter plugin that allows for some dynamic processing as well.
 
+#### What does it sound like?
+All the distortion/filtering on that track was done with this filter (mostly nonlin Kr0g and Rezzy):
+https://soundcloud.com/saike/ohnoesitsaboss2/s-zYCOt
+
+It can also sound pretty destructive:
+https://soundcloud.com/saike/sine/s-mbHJL
+https://soundcloud.com/saike/fm-modes-filther/s-KXwEQ
+
+The more experimental filters (such as "Experimental" and "Phase Mangler") can be used on pads to make eerie soundscapes: https://soundcloud.com/saike/filter-ambience/s-UxdLO
+
+Here's a short tutorial on how to use it: https://www.youtube.com/watch?v=YlgsVy-C2yI
+
 ### Waveshaping
 Filther supports saturating soft clipping as well as drawing custom voltage curves using a spline. For the simpler filters, the distortion is simply applied before the filtering stage, but for some the filter is located in the filter scheme. In these cases, the distortion is either applied on the delayed or during solving the implicit equations for the supplied zero delay feedback filters (ZDF).
 
@@ -30,6 +42,18 @@ For waveshaping, Filther will interpolate between the non-waveshaped and wavesha
 
 #### Filter Dynamics
 The extent of modulation on the filter can be set with the outer mouse button. This will showed a greyed area that will show the extent of the dynamics being applied. When the dynamics are at maximum, the parameter value will be at the full extent of this greyed area.
+
+#### A few notes/tips/warnings:
+- Play with the Pre-Gain / Drive. It can make a huge difference for both the filters and the waveshaper.
+- Some filters such as the MS-20 (my fav), Rezzy and CEM/SSM saturate quite nicely when driven. These can be used without wave-shaper to get a cleaner distortion.
+- Not all filters are unconditionally stable, so that means that some can bite your head of and end in a sad click. Most are though. 
+- Some originate from music fora (Diode ladder, Karlsen ladder), others I implemented from papers (Expensive Moog, the phasers), others I modeled after circuit boards or diagrams found online (Kr0g, SSM, CEM) and some I circuit bended into existence (Experimental, Rezzy, Phase Mangler).
+- The filters, all IIRs are not meant to be clean, many of them saturate in non-linear ways and add a lot of color to your sounds.
+- The routing on each filter is different. For some the waveshaper is inside the filter feedback, for others it is a pre or post processing step. Deciding where to put the waveshaper was done subjectively.
+- The nonlinear filters are more expensive since they solve a nonlinear system of equations at every sample. For all of the nonlinear filters I have also implemented a linearized variant and if you don't use the filter in its saturation range, it is better to use the linear variants for performance reasons.
+- ZDF in the filter name stands for Zero Delay Feedback, which means that there is no extra delay present in the feedback loop.
+- Spline waveshaping is significantly more expensive than atanh or fast waveshaping. It can also cause instability in some filters where the spline is in the feedback loop. Yet, because a lot of sonic sweetspots exist that make use of this, I have decided to still expose the ability to do this. Tread lightly.
+- Have fun with dynamics. Motion makes everything better.
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
