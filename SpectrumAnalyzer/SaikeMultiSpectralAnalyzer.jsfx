@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
-version: 2.0
+version: 2.1
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos
-changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting
+changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting, fix issue with freeze freezing :D
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -207,27 +207,30 @@ sh        = shifts;
 sl        = 0;
 sr        = 0;
 
-loop(maxchannels,
-  (active[] == 1 || (slider28==iLoad)) ? (
-    recpos[][]=(spl(jch)+spl(jch+1));
-    recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
+( slider44 == 0 ) ?
+(
+  loop(maxchannels,
+    (active[] == 1 || (slider28==iLoad)) ? (
+      recpos[][]=(spl(jch)+spl(jch+1));
+      recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
+    );
+    // GO HERE
+    sl = sl+spl(jch);
+    sr = sr+spl(jch+1);
+    
+    active += 1;
+    recpos += 1; 
+    hs     += 1;
+    sh     += 1;
+    jch    += 2;
+    iLoad  += 1;
   );
-  // GO HERE
-  sl = sl+spl(jch);
-  sr = sr+spl(jch+1);
-  
-  active += 1;
-  recpos += 1; 
-  hs     += 1;
-  sh     += 1;
-  jch    += 2;
-  iLoad  += 1;
-);
 
-sumposl[] = sl;
-sumposr[] = sr;
-sumposl = ((sumposl+1) >= sumhsl ? sumshl : (sumposl+1));
-sumposr = ((sumposr+1) >= sumhsr ? sumshr : (sumposr+1));  
+  sumposl[] = sl;
+  sumposr[] = sr;
+  sumposl = ((sumposl+1) >= sumhsl ? sumshl : (sumposl+1));
+  sumposr = ((sumposr+1) >= sumhsr ? sumshr : (sumposr+1));  
+)
 
 @gfx 900 600
 
@@ -497,7 +500,7 @@ function checkChannelButtons()
 SONOSURFACE2 = 3;
 function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, hp, logarithmic, fmaxFactor)
   instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, N, norm, fmax)
-  globals(gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode)
+  globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode)
 (
   x = xp;
   y = yp;
@@ -520,68 +523,70 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   wsc      = sonoSize/(log(1+.5*fmax*xscale));
   
   // Start by drawing the previous buffer to this one
-  gfx_dest = sonosurf;
-  gfx_setimgdim(sonosurf, sonoSizeX, sonoSize);
-  gfx_setimgdim(blurred, sonoSizeX, sonoSize);  
-  gfx_x = -1;
-  gfx_y = 0;
-  gfx_blit(sonosurf, 1, 0);
-
-  // Draw the stuff
-  gfx_x = sonoSizeX-10;
-  gfx_y = sonoSize;
-  tl = 0;
-  i = 0; 
+  ( slider44 == 0 ) ? (
+    gfx_dest = sonosurf;
+    gfx_setimgdim(sonosurf, sonoSizeX, sonoSize);
+    gfx_setimgdim(blurred, sonoSizeX, sonoSize);  
+    gfx_x = -1;
+    gfx_y = 0;
+    gfx_blit(sonosurf, 1, 0);
   
-  ( logarithmic == 0 ) ? 
-  (
-    // Actual FFT density is better than what we can display
-    N = .5*fmax/sonoSize;
-    norm = sonoScale/N;
-    ( N > 1 ) ?
+    // Draw the stuff
+    gfx_x = sonoSizeX-10;
+    gfx_y = sonoSize;
+    tl = 0;
+    i = 0; 
+    
+    ( logarithmic == 0 ) ? 
     (
-      loop(sonoSize,
-        cv = 0;
-        loop(N,
-          cv = cv + norm * sonogramBuffer[];
+      // Actual FFT density is better than what we can display
+      N = .5*fmax/sonoSize;
+      norm = sonoScale/N;
+      ( N > 1 ) ?
+      (
+        loop(sonoSize,
+          cv = 0;
+          loop(N,
+            cv = cv + norm * sonogramBuffer[];
+            sonogramBuffer += 1;
+          );
+        
+          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-cv))  )*255);   
+          gfx_setpixel(sonoColorLoc[],sonoColorLoc[1],sonoColorLoc[2]);
+          gfx_y -= 1;
+        );
+      ) : ( 
+        // Actual FFT density is crappier    
+        N = 1/N;
+        i = sonoSize;
+        loop(sonoSize/N,
+          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-sonogramBuffer[]*sonoScale))  )*255);   
+          gfx_r = sonoColorLoc[];
+          gfx_g = sonoColorLoc[1];
+          gfx_b = sonoColorLoc[2];
+          gfx_a = 1.0;
+          
+          gfx_line(sonoSizeX-1,i,sonoSizeX-1,i+N);
+          
+          i -= N;
           sonogramBuffer += 1;
         );
-      
-        sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-cv))  )*255);   
-        gfx_setpixel(sonoColorLoc[],sonoColorLoc[1],sonoColorLoc[2]);
-        gfx_y -= 1;
-      );
-    ) : ( 
-      // Actual FFT density is crappier    
-      N = 1/N;
-      i = sonoSize;
-      loop(sonoSize/N,
-        sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-sonogramBuffer[]*sonoScale))  )*255);   
+      )
+    ) : (
+      loop(.5*fmax,
+        tx = log(1.0+i*xscale)*wsc;     
+        sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(- sonogramBuffer[]*sonoScale))  )*255);
+        
         gfx_r = sonoColorLoc[];
         gfx_g = sonoColorLoc[1];
-        gfx_b = sonoColorLoc[2];
-        gfx_a = 1.0;
-        
-        gfx_line(sonoSizeX-1,i,sonoSizeX-1,i+N);
-        
-        i -= N;
+        gfx_b = sonoColorLoc[2];    
+        gfx_line(sonoSizeX-1,sonoSize-tl,sonoSizeX-1,sonoSize-tx);
+        i += 1;
         sonogramBuffer += 1;
+        tl = tx;
       );
-    )
-  ) : (
-    loop(.5*fmax,
-      tx = log(1.0+i*xscale)*wsc;     
-      sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(- sonogramBuffer[]*sonoScale))  )*255);
-      
-      gfx_r = sonoColorLoc[];
-      gfx_g = sonoColorLoc[1];
-      gfx_b = sonoColorLoc[2];    
-      gfx_line(sonoSizeX-1,sonoSize-tl,sonoSizeX-1,sonoSize-tx);
-      i += 1;
-      sonogramBuffer += 1;
-      tl = tx;
     );
-  );  
+  );
   
   // Draw the sonogram to the screen
   gfx_dest = preSonoDest;
@@ -970,7 +975,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
          old_w=0;
        ) : (
          cap_mode = cap_drag = cap_timer = 0;
-         freeze_button.hit_button(mouse_x,mouse_y,-1) ? ( slider44=!slider44; slider_automate(slider44); old_w = 0) :   
+         freeze_button.hit_button(mouse_x,mouse_y,-1) ? ( slider44=1 - slider44; slider_automate(slider44); old_w = 0) :   
          options_button.hit_button(mouse_x,mouse_y,-1) ? ( slider42=!slider42; slider_automate(slider42); old_w = 0; ) :
          slider42 == 0 ? phase_button.hit_button(mouse_x,mouse_y,-1) ? ( slider3=!slider3; slider_automate(slider3); old_w = 0; );
          slider42 == 0 ? theme_button.hit_button(mouse_x,mouse_y,-1) ? ( slider43=!slider43; slider_automate(slider43); old_w = 0; );
@@ -1138,7 +1143,7 @@ function DrawButtons()
       "Flat-top");
     slider42 == 0 ? gfx_w < 314 ? fft_button.draw_button(gfx_w -8-spectrum_xpad, 80, sprintf(#,"FFT: %d",16<<slider1));
     
-    freeze_button.draw_button(gfx_y/gfx_w+95,0, slider44 ?"Freeze" : "Unfreeze");
+    freeze_button.draw_button(gfx_y/gfx_w+95,0, slider44 == 1 ? "Unfreeze" : "Freeze");
           
    
   //  scaling.draw_button(gfx_x-8,0,sprintf(#,"Scale: %.1f",slider6));
@@ -1265,10 +1270,8 @@ last_mouse_cap = mouse_cap;
 
 UI_SCREEN = 0;
 
-( slider44 ) ? freeze = 1 - freeze;
-
 // only update if new fft data is there or if the size changed
-( slider44 == 0 ) && ( update || old_w != gfx_w || old_h!=gfx_h ) ? (
+( update || old_w != gfx_w || old_h!=gfx_h ) ? (
   update = 0; 
   
   gfx_dest = UI_SCREEN;
@@ -1414,7 +1417,7 @@ UI_SCREEN = 0;
     // Sonogram
     cmapidx = (floor(slider32/2) + 1);
     invert = slider32 - (floor(slider32/2))*2;
-    ( selected > -1 ) ? (
+    ( selected > -1 ) ? (    
       sonogram.drawSono( fftworkspaces[selected], cmapidx * 2000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35 );
       gfx_mode = 1;
       gfx_r = gfx_g = gfx_a = 1.0;
