@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
-version: 2.1
+version: 2.4
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos
-changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting, fix issue with freeze freezing :D
+changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting, fix issue with freeze freezing, bugfix linear sonogram, adding free zoom (outer mouse drag), bugfix smoothing, added maximum smoothing, added adaptive smoothing
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -58,6 +58,7 @@ slider41:0<0,1,1{disabled,enabled}>-show channels
 slider42:0<0,1,1{disabled,enabled}>-show options
 slider43:0<0,1,1{disabled,enabled}>-show theme
 slider44:0<0,1,1{disabled,enabled}>-freeze spectrum
+slider45:3<0,3,1{Average,Maximum,Loess,Adaptive}>-Smoothing method
 //in_pin:left input 
 //in_pin:right input
 options:no_meter
@@ -423,7 +424,6 @@ function scope.drawSignal( xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb
     last = sig;
     rpos += 1;
   );
-  
 );
 
 function scope.drawMovingSignal( xp, yp, wp, hp, rpos, endpos, startpos, scaling, sampleSize, rr, gg, bb)
@@ -544,6 +544,7 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
       norm = sonoScale/N;
       ( N > 1 ) ?
       (
+        gfx_x = sonoSizeX-1;
         loop(sonoSize,
           cv = 0;
           loop(N,
@@ -645,13 +646,13 @@ function drawGrid()
     y<(gfx_h-spectrum_yoffsetbottom) && cnt-=1 > 0;
   );
   
-  wsc=scaling*gfx_w/log(1+400) * (spectrum_xmax/gfx_w);
+  wsc = scaling*gfx_w/log(1+400) * (spectrum_xmax/gfx_w);
   
   // draw vert grid
   f=20;
   gfx_x+=4;
   lx=gfx_x;
-  tx = log(1.0+(f/srate*2.0)*400) * wsc;
+  tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
   while(
     gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
     dotext = tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
@@ -661,10 +662,11 @@ function drawGrid()
     dotext ? (
       gfx_x = tx + 3;
       gfx_y = gfx_h-gfx_texth-spectrum_yoffsetbottom;
+      gfx_line( gfx_x-3, gfx_y, gfx_x-3, gfx_y+gfx_texth );
       f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
     );
     f += (f<100?10:f<1000?100:f<10000?1000:5000);
-    tx = log(1.0+(f/srate*2.0)*400) * wsc;
+    tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
     tx < spectrum_xmax
   );
 );
@@ -767,32 +769,142 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
   );
   
   ( smoothing > 0 ) ? (
-    // Convolve it
-    bufout      = filtout+kernelSize;
-    fout        = filtout2;
-    scfac       = kernelSize * scaling / log(1+400);
-    jk          = 1;
-    loop(fftsize*0.5,
-      fout[]    = 0;
-      curSize   = ceil( scfac * log(1.0+jk*xscale) );
-      kern      = bufout-curSize;
-      loop(2*curSize+1,
-        fout[] = fout[] + kern[] / (2*curSize+1);
-        kern += 1;
+    smoothMode = floor(slider45);
+    ( smoothMode == 0 ) ? (
+      // Convolve it
+      bufout      = filtout+kernelSize;
+      fout        = filtout2;
+      scfac       = kernelSize / log(1+400);
+      jk          = 1;
+      
+      loop(fftsize*0.5,
+        tmp = 0;
+        curSize   = ceil( scfac * log(1.0+jk*xscale) );
+        kern      = bufout-curSize;
+        tsc       = 1 / (2*curSize+1);
+        loop(2*curSize+1,
+          tmp = tmp + kern[];
+          kern += 1;
+        );
+        fout[] = tmp * tsc;
+        bufout += 1;
+        fout += 1;
+        jk += 1;
       );
-      bufout += 1;
-      fout += 1;
-      jk += 1;
-    );
     
-    bufout = filtout2;
+      bufout = filtout2;
+    ) : ( smoothMode == 1 ) ? (
+      // Determine maximum
+      bufout      = filtout+kernelSize;
+      fout        = filtout2;
+      scfac       = kernelSize / log(1+400);
+      jk          = 1;
+      
+      loop(fftsize*0.5,
+        tmp       = 10000;
+        curSize   = ceil( scfac * log(1.0+jk*xscale) );
+        kern      = bufout-curSize;
+        loop(2*curSize+1,
+          tmp = min( tmp, kern[] );
+          
+          kern += 1;
+        );
+        fout[] = tmp;
+        bufout += 1;
+        fout += 1;
+        jk += 1;
+      );
+          
+      bufout = filtout2;
+    ) : ( smoothMode == 2 ) ? (
+      // LOESS filtering
+      bufout      = filtout+kernelSize;
+      fout        = filtout2;
+      scfac       = kernelSize / log(1+400);
+      jk          = 1;
+      
+      loop(fftsize*0.5,
+        tmp       = 10000;
+        curSize   = 1+ceil( scfac * log(1.0+jk*xscale) );
+        kern      = bufout-curSize;
+        
+        SumWtY    = 0;
+        isize     = 1.0 / curSize;
+        xij       = - curSize;
+ 
+        SumWts    = 1.1571 * curSize;
+        loop(2*curSize+1,
+          d       = abs(xij) * isize;
+          w       = (1.0 - d*d*d);
+          w       = w*w*w;
+          SumWtY  = SumWtY + kern[] * w;
+                    
+          kern    += 1;
+          xij     += 1;
+        );
+        
+        fout[] = SumWtY / SumWts;
+        bufout += 1;
+        fout += 1;
+        jk += 1;
+      );
+          
+      bufout = filtout2;
+    ) : ( smoothMode == 3 ) ? (
+      // Adaptive filtering
+      bufout      = filtout+kernelSize;
+      fout        = filtout2;
+      scfac       = kernelSize / log(1+400);
+      jk          = 1;
+      
+      loop(fftsize*0.5,
+        tmp       = 10000;
+        curSize   = 1+ceil( scfac * log(1.0+jk*xscale) );
+        kern      = bufout-curSize;
+        
+        SumWtY    = 0;
+        isize     = 1.0 / curSize;
+        xij       = - curSize;
+ 
+        SumWts    = 1.1571 * curSize;
+        loop(2*curSize+1,
+          d       = abs(xij) * isize;
+          w       = (1.0 - d*d*d);
+          w       = w*w*w;
+          SumWtY  = SumWtY + kern[] * w;
+                    
+          kern    += 1;
+          xij     += 1;
+        );
+        yAdaptive    = SumWtY / SumWts;
+        
+        res  = bufout[] - yAdaptive;
+        ( -res < abs( M_est + 2*sqrt( S_est ) ) ) ?
+        ( 
+          alpha   = 0.99;
+          M_est   = alpha * M_est  + ( 1 - alpha ) * res;
+          Sq_est  = alpha * Sq_est + ( 1 - alpha ) * res * res;
+          S_est   = Sq_est - M_est*M_est;
+        ) : (
+          // Don't use LOESS value at peaks
+          yAdaptive = bufout[];
+        );
+        
+        fout[] = yAdaptive;
+        bufout += 1;
+        fout += 1;
+        jk += 1;
+      );
+          
+      bufout = filtout2;
+    )
   ) : bufout = filtout;
   
   i = 0;
   curh = gfx_h-spectrum_yoffsetbottom;
   rescaleY = (1.0-(spectrum_yoffset+spectrum_yoffsetbottom)/gfx_h);
   loop(fftsize*0.5-kernelSize,
-    tx = log(1.0+i*xscale)*wsc;
+    tx = log(1.0+i*xscale-fftsize*spectrum_xoffset*xscale)*wsc;
     ty = bufout[]*rescaleY + spectrum_yoffset;
     ty > gfx_h-spectrum_yoffsetbottom ? ty = gfx_h-spectrum_yoffsetbottom;
 
@@ -862,9 +974,51 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
     showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider28=-1; slider_automate(slider28); old_w = 0);  
     showChannel = slider28;        
 
+    ( mouse_y < (gfx_h-sono_yoffset_bottom-sono_size) ) ? 
+    (
+      ( zoomMode == 0 ) ? (
+        // Not zooming
+        old_mouse_x = mouse_x;
+        old_mouse_y = mouse_y;
+        zoomMode = 1;
+      );
+      ( zoomMode == 2 ) ? (
+        spectrum_xoffset = 0;
+        slider6 = 1.0;
+        scaling = slider6;
+        slider_automate(slider6);
+        zoomMode = 0;
+      );
+    );
+
     slider29 == 0 && cap_last_y != mouse_y ) ? (
       sonogram.hit_button(mouse_x,mouse_y,-1) ? ( slider32 = cycle_slider(slider32, 0, 7, 1);
     );  
+  );
+) : (
+  ( zoomMode == 1 ) ? (
+    zoomMode = 2;
+      
+    f1 = (1/800) * ( exp(old_mouse_x/wsc)-1 ) + spectrum_xoffset;
+    f2 = (1/800) * ( exp(mouse_x/wsc)-1 ) + spectrum_xoffset;
+    f2 < f1 ? (
+      tmp = f2;
+      f2 = f1;
+      f1 = tmp;
+    );
+  
+    spectrum_xoffset = f1;  
+    diff  = f2-spectrum_xoffset;
+    
+    // Notes
+    // f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate + spectrum_xoffset * srate;
+    // wsc   = spectrum_xmax / log( 1.0 + 800 * diff );
+    // denom = spectrum_xmax / log( 1 + 400 );
+
+    newscale = log( 1 + 400 ) / log( 1.0 + 800 * diff );
+    slider6 = newscale;
+    scaling = slider6;
+    slider_automate(slider6);
   );
 );
 
@@ -977,18 +1131,22 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
          cap_mode = cap_drag = cap_timer = 0;
          freeze_button.hit_button(mouse_x,mouse_y,-1) ? ( slider44=1 - slider44; slider_automate(slider44); old_w = 0) :   
          options_button.hit_button(mouse_x,mouse_y,-1) ? ( slider42=!slider42; slider_automate(slider42); old_w = 0; ) :
-         slider42 == 0 ? phase_button.hit_button(mouse_x,mouse_y,-1) ? ( slider3=!slider3; slider_automate(slider3); old_w = 0; );
-         slider42 == 0 ? theme_button.hit_button(mouse_x,mouse_y,-1) ? ( slider43=!slider43; slider_automate(slider43); old_w = 0; );
-         slider42 == 0 ? grid_button.hit_button(mouse_x,mouse_y,-1) ? ( slider39=!slider39; slider_automate(slider39); old_w = 0; );
-         slider42 == 0 ? gridAlpha_button.hit_button(mouse_x,mouse_y,31);
-         slider42 == 0 ? background_button.hit_button(mouse_x,mouse_y,30);         
+         (
+           slider42 == 0 ? (
+              phase_button.hit_button(mouse_x,mouse_y,-1) ? ( slider3=!slider3; slider_automate(slider3); old_w = 0; );
+              theme_button.hit_button(mouse_x,mouse_y,-1) ? ( slider43=!slider43; slider_automate(slider43); old_w = 0; );
+              grid_button.hit_button(mouse_x,mouse_y,-1) ? ( slider39=!slider39; slider_automate(slider39); old_w = 0; );
+              background_button.hit_button(mouse_x,mouse_y,30);
+              gridAlpha_button.hit_button(mouse_x,mouse_y,31);
+            );
+          );
          
          channels_button.hit_button(mouse_x,mouse_y,-1) ? ( slider41=!slider41; slider_automate(slider41); old_w = 0; ) :
          
          sonogram.hit_button(mouse_x,mouse_y,8+slider29);
          
-         checkChannelButtons() ? :                  
-                 slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateChannelSliders(); old_w = 0) :       
+         checkChannelButtons() ? : 
+                 slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateChannelSliders(); old_w = 0) :
                  slider42 == 0 ? floor_button.hit_button(mouse_x,mouse_y,1);
                  slider42 == 0 ? slope_button.hit_button(mouse_x,mouse_y,29);
                  slider42 == 0 ? window_button.hit_button(mouse_x,mouse_y,2);
@@ -999,6 +1157,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
                  slider42 == 0 ? smoothing.hit_button(mouse_x,mouse_y,6);
                  slider42 == 0 ? alphalevel.hit_button(mouse_x,mouse_y,28);
                  slider42 == 0 ? sonoScale.hit_button(mouse_x,mouse_y,10) ? :
+                 slider42 == 0 ? smoothing_type.hit_button(mouse_x,mouse_y,45);
                 
                  (      // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position 
                     slider42 == 0 ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateChannelSliders(); old_w = 0) :
@@ -1075,28 +1234,34 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
       slider37 = drag_slider_precise(slider37, 0, 1, .025);
       old_w=0;
       slider_automate(slider37);
-    );
+    ) :
     cap_mode == 29 && cap_lasty_y != mouse_y ? (
       slider38 = drag_slider_precise(slider38, 0,9,.25);
       old_w=0;
       slider_automate(slider38);      
-    );
+    ) :
     cap_mode == 30 && cap_lasty_y != mouse_y ? (
       // Alpha level
       slider10 = drag_slider_precise(slider10, 0, 1, .025);
       old_w=0;
       slider_automate(slider10);
-    );
+    ) :
     cap_mode == 31 && cap_lasty_y != mouse_y ? (
       // Grid Alpha
       slider40 = drag_slider_precise(slider40, 0, 1, .025);
       old_w=0;
       slider_automate(slider40);
-    );
+    ) :
     cap_mode == 60 && cap_lasty_y != mouse_y ? (
       sono_frac = (1-(mouse_y+sono_yoffset_bottom)/gfx_h);
+    ) : cap_mode == 45 && cap_last_y != mouse_y ? (
+      slider45 = drag_slider(slider45, 0.0, 3.0, .03);
+      old_w=0;
+      slider_automate(slider45);
     );
 ) : (
+  // RMB
+  
   drawHz = 0;
   (last_mouse_cap & 1) && !cap_drag ? (
     cap_mode == 2 ? (
@@ -1109,29 +1274,52 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
       old_w=0;
       slider_automate(slider1);
     );
+    cap_mode == 45 ? (
+      slider45 = cycle_slider(slider45, 0.0, 3.0, 1.0);
+      old_w=0;
+      slider_automate(slider45);
+    );
   );
+);
+
+function proceed(val)
+(
+  gfx_x < val ? (
+    gfx_y = gfx_y + 15;
+    gfx_x = optBar;
+    ) : gfx_y = gfx_y - 5;
 );
 
 function DrawButtons()
 (
     // hide buttons
     channels_button.draw_button(gfx_h/gfx_y +53 ,gfx_h-23, slider41 ?"| -> |" : "| <- |");
-    options_button.draw_button(gfx_w -10,3, slider42 ?"<<:: OPTIONS ::" : ">>:: OPTIONS ::");
+    options_button.draw_button(gfx_w - 10, 3, slider42 ?"<<:: OPTIONS ::" : ">>:: OPTIONS ::");
+    optBar = gfx_x;
     
-    slider42 == 0 ? gfx_x > 180 ? fft_button.draw_button(gfx_x -8, 3, sprintf(#,"FFT: %d",16<<slider1));
-    slider42 == 0 ? gfx_x > 230 ? window_button.draw_button(gfx_x-8, 3, 
-      (slider4|0)==1 ? "Hamming" :  
-      (slider4|0)==2 ? "Blackman-Harris" :
-      (slider4|0)==3 ? "Blackman" : 
-      (slider4|0)==4 ? "Rectangular":
-      "Flat-top");
+    gfx_y = 8;
+    slider42 == 0 ? (
+      proceed(180); fft_button.draw_button(gfx_x-8, gfx_y, sprintf(#,"FFT: %d",16<<slider1));
+      proceed(230); window_button.draw_button(gfx_x-8, gfx_y, 
+                        (slider4|0)==1 ? "Hamming" :  
+                        (slider4|0)==2 ? "Blackman-Harris" :
+                        (slider4|0)==3 ? "Blackman" : 
+                        (slider4|0)==4 ? "Rectangular":
+                          "Flat-top");
     
-    slider42 == 0 ? gfx_x > 230 ? floor_button.draw_button(gfx_x-8,3, sprintf(#,"Floor: %.1fdB", slider2));
-    slider42 == 0 ? gfx_x > 240 ? slope_button.draw_button(gfx_x-8,3, sprintf(#,"Slope: %.1fdB/oct", slider38));
-    slider42 == 0 ? gfx_x > 240 ? smoothing.draw_button(gfx_x-8,3,sprintf(#,"Smoothing: %.1f",slider7));
-    slider42 == 0 ? gfx_x > 240 ? integrate_button.draw_button(gfx_x-8,3, sprintf(#,"Integrate: %dms",slider5|0));
+      proceed(230); floor_button.draw_button(gfx_x-8, gfx_y, sprintf(#,"Floor: %.1fdB", slider2));
+      proceed(240); slope_button.draw_button(gfx_x-8, gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38));
+      proceed(240); smoothing.draw_button(gfx_x-8, gfx_y,sprintf(#,"Smoothing: %.1f",slider7));
+      proceed(230); smoothing_type.draw_button(gfx_x-8, gfx_y, 
+                        (slider45|0)==0 ? "Average" :  
+                        (slider45|0)==1 ? "Maximum" :
+                        (slider45|0)==2 ? "LOESS" : 
+                          "Adaptive");
+      proceed(240); integrate_button.draw_button(gfx_x-8, gfx_y, sprintf(#,"Integrate: %dms",slider5|0));
+    );
     
-    slider42 == 0 ? gfx_w < 925 ? integrate_button.draw_button(gfx_w+9-spectrum_xpad, 23, sprintf(#,"Integrate: %dms",slider5|0));
+    
+    /*slider42 == 0 ? gfx_w < 925 ? integrate_button.draw_button(gfx_w+9-spectrum_xpad, 23, sprintf(#,"Integrate: %dms",slider5|0));
     slider42 == 0 ? gfx_w < 794 ? smoothing.draw_button(gfx_x-8,23,sprintf(#,"Smoothing: %.1f",slider7));
     slider42 == 0 ? gfx_w < 655 ? slope_button.draw_button(gfx_w-8-spectrum_xpad,43, sprintf(#,"Slope: %.1fdB/oct", slider38));
     slider42 == 0 ? gfx_w < 522 ? floor_button.draw_button(gfx_x-8,43, sprintf(#,"Floor: %.1fdB", slider2));
@@ -1142,6 +1330,8 @@ function DrawButtons()
       (slider4|0)==4 ? "Rectangular":
       "Flat-top");
     slider42 == 0 ? gfx_w < 314 ? fft_button.draw_button(gfx_w -8-spectrum_xpad, 80, sprintf(#,"FFT: %d",16<<slider1));
+    */
+    
     
     freeze_button.draw_button(gfx_y/gfx_w+95,0, slider44 == 1 ? "Unfreeze" : "Freeze");
           
@@ -1234,7 +1424,7 @@ function DrawButtons()
     slider42 == 0 ? slider39 == 1 ? gridAlpha_button.draw_button(gfx_w-15, 99, sprintf(#,"^ Alpha: %.1f ^" ,slider40)); 
     
   slider29 == 2 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
-    
+        
   // SET THE OFFSETS HERE
   ( slider42 == 0 ) ? (
     spectrum_yoffset = 5;
@@ -1370,9 +1560,18 @@ UI_SCREEN = 0;
     gfx_x = mouse_x + 10;
     gfx_y = mouse_y;
     
-    f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate;
-    y = -20 * ( (mouse_y-20-spectrum_yoffset) / (sc*rescaleY) ) / log(10);
+    f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate + spectrum_xoffset * srate;
+    y = -20 * ( (mouse_y-20-spectrum_yoffset) / (sc*rescaleY) ) / log(10);   
+        
     gfx_printf("%dHz %gdB", f, y); 
+  );  
+  
+  ( zoomMode == 1 ) ? (
+    gfx_r = gfx_g = gfx_b = gfx_a = 1.0;
+    gfx_line( old_mouse_x, old_mouse_y, mouse_x, old_mouse_y );
+    gfx_line( old_mouse_x, old_mouse_y, old_mouse_x, mouse_y );
+    gfx_line( old_mouse_x, mouse_y, mouse_x, mouse_y );
+    gfx_line( mouse_x, old_mouse_y, mouse_x, mouse_y );
   );
   
   // Note: slider34 can still be used to detect clicks on the sono
