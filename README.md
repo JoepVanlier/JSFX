@@ -10,6 +10,7 @@ to your reapack (https://reapack.com/) list of repositories. If you run
 into issues with these, feel free to open an issue here on github.
 
 # Filther, a waveshaping filter / distortion plugin with dynamic processing.
+![Filther_animated](https://i.imgur.com/qY8gQ7p.gif)
 ![Filther](https://i.imgur.com/nWvkRdx.png)
 
 Filther is a waveshaping / filter plugin that allows for some dynamic processing as well.
