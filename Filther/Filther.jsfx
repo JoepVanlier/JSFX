@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.10
+version: 1.15
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -86,9 +86,10 @@ options:no_meter
 
 @init
 gfx_ext_retina  = 1.0;
+plugname = "FILTHER 1.15";
 newUI = 1;
 refreshDynMode = 1;
-nFilters = 49;
+nFilters = 52;
 nModes = 6;
 nLFO = 14;
 
@@ -147,7 +148,10 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 44 ) ? ( str = "Everything is a saw (ZDF)"     
       ) : ( curitem == 45 ) ? ( str = "SVF with waveshaped resonance (ZDF)"
       ) : ( curitem == 46 ) ? ( str = "Voodoo"
-      ) : ( curitem == 47 ) ? ( str = "Junk"      
+      ) : ( curitem == 47 ) ? ( str = "Junk (ZDF)"  
+      ) : ( curitem == 48 ) ? ( str = "Comb"    
+      ) : ( curitem == 49 ) ? ( str = "Combed resonance (LP)"
+      ) : ( curitem == 50 ) ? ( str = "Combed resonance (BP)"
       );
     ) : (stridx == 1) ? 
     (
@@ -426,6 +430,21 @@ local(fx, fy, wx, wx2, wy)
   ) : ( slider47 == 45 ) ? (
     gfx_printf("Filter: SVF with waveshaped resonance (ZDF)\n\n"); gfx_x = fx+5;
     gfx_wrapprint("ZDF filter that lowpasses the signal twice. Once with and once without resonance. Subsequently it waveshapes the version with resonance minus the version without and adds the waveshaped resonance to the no resonance lowpass mix.", wx2);  
+  ) : ( slider47 == 46 ) ? (
+    gfx_printf("Filter: Voodoo\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("This one is a meanie. It filters the signal with and without resonance, computes the difference, amplifies it, saturates it and then adds it to a moving average that gets added to the signal. The result is then waveshaped. Yum.", wx2);  
+  ) : ( slider47 == 47 ) ? (
+    gfx_printf("Filter: Junk (ZDF)\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("This one is fickle. It filters the signal with and without resonance, computes the difference, amplifies it, saturates it and then adds it back to the signal. The result is then waveshaped. Yum.", wx2);
+  ) : ( slider47 == 48 ) ? (
+    gfx_printf("Filter: Comb)\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Basic comb filter. Set resonance one to have alternating notches between left and right (wide) or zero for mono phasing. Waveshaper is applied before the comb.", wx2);
+  ) : ( slider47 == 49 ) ? (
+    gfx_printf("Filter: Combed resonance (ZDF)\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Signal is lowpassed twice with and withou resonance. Resonance is lifted by differencing the signal, this resonance is amplified, saturated and mixed with a delayed copy of itself before being added to the signal. Waveshaper is applied after the filter.", wx2);
+  ) : ( slider47 == 50 ) ? (
+    gfx_printf("Filter: Combed BP (ZDF)\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Signal is BP passed twice with and withou resonance. Resonance is lifted by differencing the signal, this resonance is mixed with a delayed copy of itself before being added to the signal. Waveshaper is applied after the filter. Not nearly as fun as the lowpassed version (previous).", wx2);
   );
 );
 
@@ -1446,6 +1465,7 @@ function resetphaserFET()
 function updateActiveFilters()
   (
     filterDynamics ? (
+      //modval = max(0,min(1,dynval + modulator.modvalue));
       modval = dynval + modulator.modvalue;
       filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modval ) );
       filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modval ) );
@@ -1532,7 +1552,9 @@ function updateActiveFilters()
       filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 2000);
     ) : ( slider47 == 17 ) ? (
       L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-      R.filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
+      R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+      filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
+      filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
     ) : ( slider47 == 18 ) ? (
       L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
       R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
@@ -1633,6 +1655,40 @@ function updateActiveFilters()
       R.filter_SVF2.init_linearSVF( filterFreq*.5, filterReso*.5 );
       L.filter_delay1.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*(400*filterReso));      
       R.filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*(400*filterReso));
+    ) : ( slider47 == 48 ) ? (
+      L.chan = 0;
+      R.chan = 1;
+      val = ( pow(10, filterFreq) - 1 ) / 9;
+      L.stereoize = filterReso > 0.5 ? 1 : 0;
+      R.stereoize = filterReso > 0.5 ? 1 : 0;
+      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
+      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
+    ) : ( slider47 == 49 ) ? (
+      L.chan = 0;
+      R.chan = 1;
+      val = ( pow(10, filterFreq) - 1 ) / 9;
+      
+      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+       
+      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
+      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
+    ) : ( slider47 == 50 ) ? (
+      L.chan = 0;
+      R.chan = 1;
+      val = ( pow(10, filterFreq) - 1 ) / 9;
+      L.stereoize = filterReso;
+      R.stereoize = filterReso;
+      
+      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+       
+      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
+      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
     );
   );
  
@@ -2108,7 +2164,7 @@ function evalSplineAudioDiff(x)
 function plot_spline(x, y, w, h)
   instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
   local(xx, res, lastx, lasty, dx, yout, nx, ny, epsx, epsy, xc, yc, yout)
-  global(gfx_x, gfx_y, distortPlot, slider56, dynval)
+  global(gfx_x, gfx_y, distortPlot, slider56, dynval, distortionDynamics)
   (
     epsx = 3;
     epsy = 3;
@@ -2164,6 +2220,37 @@ function plot_spline(x, y, w, h)
       lastx = nx;
       lasty = ny;
     );
+    
+    // Draw intermediate if dynamically processed
+    gfx_set( .8, .8, .2, .3 );
+    ( distortionDynamics ) ? (
+      xx = 0;
+      res = 500;
+      lastx = x;
+      lasty = y+h;
+      dx = 1/res;
+      
+      loop(res,
+        xx = xx + dx;
+        ( slider56 == 0 ) ? (
+          yout = xx * (1-dynval) + dynval * this.evalSplineLin(xx);
+        ) : ( slider56 == 1 ) ? ( 
+          yout = xx * (1-dynval) + dynval * tanh(xx);
+        ) : ( slider56 == 2 ) ? (
+          yout = xx * (1-dynval) + dynval * fasttanh(xx);
+        ) : ( slider56 == 4 ) ? (
+          yout = xx * (1-dynval) + dynval * (xx < 0.5 ? sin(2*$pi*xx) : sin(2*$pi*(-xx)));
+        ) : (
+          yout = xx;
+        );
+  
+        nx = x + w*xx - 1;
+        ny = y + h*(1-yout) - 1;
+        gfx_line(lastx, lasty, nx, ny, 0);
+        lastx = nx;
+        lasty = ny;
+      );
+    )
   );
   
 function evalDist(xx)
@@ -2353,13 +2440,13 @@ function groupWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in)
   
 function groupWidget_draw()
   local(siz, jnk)
-  global(gfx_x, gfx_y, retina_scaling)
+  global(gfx_x, gfx_y, retina_scaling, widgetFontSize)
   instance(x, y, w, h, r, g, b, a, label)
   (
     gfx_set( r, g, b, .05 );
     gfx_rect( x, y, w, h );
     
-    gfx_setfont(1, "Sans Serif", 12*retina_scaling);
+    gfx_setfont(1, "Sans Serif", widgetFontSize*retina_scaling);    
     gfx_set( r, g, b, 1.0);
     gfx_measurestr(label, siz, jnk);
     gfx_x = x + 8;
@@ -2460,7 +2547,7 @@ function setLabel( _label )
   
 function selectionButton_draw()
   local(jnk, siz)
-  global(gfx_x, gfx_y)
+  global(gfx_x, gfx_y, buttonFontSize, retina_scaling)
   instance(x, y, w, h, r, g, b, a, active, label, lastleft)
   (
     gfx_set( r, g, b, .2 + .5*active );
@@ -2472,6 +2559,7 @@ function selectionButton_draw()
     gfx_line(x+w, y, x+w, y+h);
     gfx_line(x+1, y+h, x+w-1, y+h);
     gfx_set( 0.8, 0.8, 0.8, 0.8 );
+    retina_scaling > 1 ? gfx_setfont(1, "Sans Serif", buttonFontSize*retina_scaling);
     gfx_measurestr(label, siz, jnk);
     gfx_x = x + .5 * (w-siz);
     gfx_y = y - .5*(jnk-h) + 1;
@@ -2708,10 +2796,10 @@ function sliderWidget_getValue()
   
 function sliderWidget_draw()
   local(jnk, siz, q, str)
-  global(gfx_x, gfx_y, lastUI, retina_scaling)
+  global(gfx_x, gfx_y, lastUI, retina_scaling,widgetFontSize, filterDynamics, dynval, modulator.modvalue, mlevel)
   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, unit, thisUI)
   (
-    gfx_setfont(1, "Sans Serif", 12*retina_scaling);
+    gfx_setfont(1, "Sans Serif", widgetFontSize*retina_scaling);
     gfx_set( r, g, b, .1 );
     gfx_rect( x-3*retina_scaling, yslidercenter-.25*h, w+6*retina_scaling, h*.5 );
 
@@ -2727,6 +2815,12 @@ function sliderWidget_draw()
 
     gfx_set( r, g, b, 0.4 );
     value2 > 0 ? gfx_rect( x + value*w, yslidercenter - .1*h, value2*w+1, h*.3 ) : gfx_rect( x + (value+value2)*w, yslidercenter - .1*h, abs(value2)*w, h*.3 );
+
+    gfx_set( .9, .9, .7, .7 );
+    mlevel = modulator.modvalue + (filterDynamics > 0 ? dynval : 0);
+    mlevel = x + (value+value2*mlevel)*w;
+    mlevel = max( x, min( x+w, mlevel ) );
+    gfx_rect( mlevel-1, yslidercenter - .2*h, 2, h*.4 );
     
     gfx_set( 0.8, 0.8, 0.8, 0.8 );
     gfx_x = x;
@@ -2866,7 +2960,7 @@ function gen_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, 
 function gen_dynamics(xp, yp, wp, hp)
   instance(x, y, w, h, yref, sc, cap_mode, inLight, outLight, dynLight, lastleft)
   global(inLight.toggleLight, retina_scaling)
-  local(bw, bh, ych)
+  local(bw, bh, ych, xoff, yoff)
   (
     x = xp;
     y = yp;
@@ -2878,9 +2972,11 @@ function gen_dynamics(xp, yp, wp, hp)
     bw = 10*retina_scaling;
     bh = 10*retina_scaling;
     ych = 2*bh;
-    inLight.toggleLight(x+w-15, y+5, bw, bh, "In", 1, 1, .3, .3, .3, 1);
-    outLight.toggleLight(x+w-15, y+5+ych, bw, bh, "Out", 1, .6, .3, 1, .9, 1);
-    dynLight.toggleLight(x+w-15, y+5+2*ych, bw, bh, "Dynamics", 1, .8, .8, .2, .3, 1);    
+    xoff = x+w-15*retina_scaling;
+    yoff = y+5*retina_scaling;
+    inLight.toggleLight(xoff, yoff, bw, bh, "In", 1, 1, .3, .3, .3, 1);
+    outLight.toggleLight(xoff, yoff+ych, bw, bh, "Out", 1, .6, .3, 1, .9, 1);
+    dynLight.toggleLight(xoff, yoff+2*ych, bw, bh, "Dynamics", 1, .8, .8, .2, .3, 1);    
     
     sc = h;
   );
@@ -3193,7 +3289,7 @@ function initRMS(N, loc_in)
     loc     = loc_in;
     loc_end = loc_in + N;
     
-    loop(N,
+    loop(N+1,
      ptr[]  = 0;
      ptr   += 1; 
     );
@@ -3466,6 +3562,16 @@ function setupGUI()
 (
   UI_Loaded = 1;
   retina_scaling = gfx_ext_retina;
+  widgetFontSize = 12;
+  buttonFontSize = 11;
+  
+  gfx_setfont(1, "Sans Serif", 12);
+  gfx_measurestr("MMMMMMMMMM", str_width, str_height);
+  font_factor = 70/str_width;
+  font_factor > 1 ? (
+    widgetFontSize = 11;
+    buttonFontSize = 9;
+  );
 
   // Initialize object instances
   wndX    = 250 * retina_scaling;
@@ -3491,7 +3597,7 @@ function setupGUI()
   filterPanelX = masterPanelX;
   filterPanelY = 140 * retina_scaling;
   filterPanel.groupWidget(filterPanelX, filterPanelY, sliderWidth, sliderHeight*4+6*sliderPad, "FILTER", wR, wG, wB, wA );
-  filterSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 2 );
+  filterSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 3 );
   modeSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad*2+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes, 1, 0, 1 );
   cutoffSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0);
   resonanceSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+5*sliderPad+3*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0);
@@ -5074,6 +5180,35 @@ function process(sample)
       diff = this.filter_SVF2.eval_linearSVF_LP( sample+diff );
       diff = this.filter_SVF2.eval_linearSVF_LP( diff );                
       sample = distort((lp + diff)*.7);
+    ) : ( slider47 == 48 ) ? (
+      //sample = distort(sample);
+      sample = distort(sample);
+      os = this.filter_delay.getBuffer();
+      this.filter_delay.updateBuffer(sample);
+      sample = (this.chan > 0) ? (sample + os) : (sample + os - 2 * this.stereoize * os);
+      
+    ) : ( slider47 == 49 ) ? (  
+      reso = this.filter_SVF.eval_linearSVF_LP( sample );
+      lp = this.filter_SVF_nores.eval_linearSVF_LP( sample );
+      diff = tanh(3*(reso-lp));
+      sample = lp;
+      
+      os = this.filter_delay.getBuffer();
+      this.filter_delay.updateBuffer(diff);
+      
+      sample = sample+(diff+os);
+      sample = distort(sample);
+    ) : ( slider47 == 50 ) ? (  
+      reso = this.filter_SVF.eval_linearSVF_BP( sample );
+      lp = this.filter_SVF_nores.eval_linearSVF_BP( sample );
+      diff = reso-lp;
+      sample = lp;
+      
+      os = this.filter_delay.getBuffer();
+      this.filter_delay.updateBuffer(diff);
+      
+      sample = sample+(diff+os);
+      sample = distort(sample);
     );
     
     sample;
@@ -5261,7 +5396,7 @@ updateActiveFilters();
   );
 
   function draw_logo(x, y, size)
-  global(gfx_x, gfx_y, gfx_r, gfx_g, gfx_b)
+  global(gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, retina_scaling, plugname)
   local(t1, t2, t3, a, ang1, ang2, dif, range)
   (
     gfx_set(.7,.9,1.5,.7);
@@ -5324,6 +5459,13 @@ updateActiveFilters();
     gfx_arc(x, y, t3, ang2 - range, ang2 + range );
     ang2 += (2/3)*$pi;
     gfx_arc(x, y, t3, ang2 - range, ang2 + range );
+    
+    gfx_setfont(1, "Sans Serif", 10*retina_scaling);
+    gfx_measurestr( "FILTHER", t1, t2 );
+    gfx_x = x + 18;
+    gfx_y = y - .5*t2;
+    gfx_a = .3 + .5 * sin(a);
+    gfx_printf(plugname)
   );
 
   UI_Loaded == 0 ? SetupGUI();
