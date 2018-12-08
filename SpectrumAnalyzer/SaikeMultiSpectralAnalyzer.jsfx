@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
-version: 2.4
+version: 2.7
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos
-changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting, fix issue with freeze freezing, bugfix linear sonogram, adding free zoom (outer mouse drag), bugfix smoothing, added maximum smoothing, added adaptive smoothing
+changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting, fix issue with freeze freezing, bugfix linear sonogram, adding free zoom (outer mouse drag), bugfix smoothing, added maximum smoothing, added adaptive smoothing, perf improvements for when not all channels are active, perf improvements sonogram, use maximum operator for sonogram to prevent missing peaks, increase number of displayed Hz labels when zoomed in, fixed bug when zooming out of spectrum range
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -42,7 +42,7 @@ slider26:1<0,1,1>-Ch16
 slider27:1<0,1,1>-Sum
 slider28:-1<-1,1,16>-Channel
 slider29:0<1,0,2{Sample,Sonogram,Off}>-Sonogram
-slider30:2500<10,45000,100>-SonoScale
+slider30:5000<10,45000,100>-SonoScale
 slider31:.5<0.1,3,.03>-SignalScale
 slider32:6<0,7,1{viridis,viridisinv,magma,magmainv,inferno,infernoinv,plasma,plasmainv}>-colormap2
 slider33:1<1,0,1{Logarithmic,Linear}>-Sonolog
@@ -52,13 +52,14 @@ slider36:-1<-1,1,16>-Solo channel
 slider37:.15<0,1,.4>-Alpha
 slider38:0<0,9,.25>-slope
 
-slider39:0<0,1,1{disabled,enabled}>-show grid
+slider39:1<0,1,1{disabled,enabled}>-show grid
 slider40:.15<0,1,.4>-gridAlpha
 slider41:0<0,1,1{disabled,enabled}>-show channels
 slider42:0<0,1,1{disabled,enabled}>-show options
 slider43:0<0,1,1{disabled,enabled}>-show theme
 slider44:0<0,1,1{disabled,enabled}>-freeze spectrum
 slider45:3<0,3,1{Average,Maximum,Loess,Adaptive}>-Smoothing method
+slider50:0<0,1,0>-Initialized
 //in_pin:left input 
 //in_pin:right input
 options:no_meter
@@ -77,24 +78,40 @@ function updateChannelSliders()
 (
   // For some reason this isn't being called in @slider
   actc = activechannels;
-  actc[] = slider11; actc += 1;
-  actc[] = slider12; actc += 1;
-  actc[] = slider13; actc += 1;
-  actc[] = slider14; actc += 1;
-  actc[] = slider15; actc += 1;
-  actc[] = slider16; actc += 1;
-  actc[] = slider17; actc += 1;
-  actc[] = slider18; actc += 1;
-  actc[] = slider19; actc += 1;
-  actc[] = slider20; actc += 1;
-  actc[] = slider21; actc += 1;
-  actc[] = slider22; actc += 1;
-  actc[] = slider23; actc += 1;
-  actc[] = slider24; actc += 1;
-  actc[] = slider25; actc += 1;
-  actc[] = slider26; actc += 1;
-  
+  actc[] = slider11 ? (maxchannels=1; 1); actc += 1;
+  actc[] = slider12 ? (maxchannels=2; 1); actc += 1;
+  actc[] = slider13 ? (maxchannels=3; 1); actc += 1;
+  actc[] = slider14 ? (maxchannels=4; 1); actc += 1;
+  actc[] = slider15 ? (maxchannels=5; 1); actc += 1;
+  actc[] = slider16 ? (maxchannels=6; 1); actc += 1;
+  actc[] = slider17 ? (maxchannels=7; 1); actc += 1;
+  actc[] = slider18 ? (maxchannels=8; 1); actc += 1;
+  actc[] = slider19 ? (maxchannels=9; 1); actc += 1;
+  actc[] = slider20 ? (maxchannels=10; 1); actc += 1;
+  actc[] = slider21 ? (maxchannels=11; 1); actc += 1;
+  actc[] = slider22 ? (maxchannels=12; 1); actc += 1;
+  actc[] = slider23 ? (maxchannels=13; 1); actc += 1;
+  actc[] = slider24 ? (maxchannels=14; 1); actc += 1;
+  actc[] = slider25 ? (maxchannels=15; 1); actc += 1;
+  actc[] = slider26 ? (maxchannels=16; 1); actc += 1;
+
   showSum = slider27;
+);
+
+function initCh()
+(
+  slider50 == 0 ? (
+    slider11 = slider12 = slider13 = slider14 = slider15 = slider16 = slider17 = slider18 = slider19 = slider20 = slider21 = slider22 = slider23 = slider24 = slider25 = slider26 = 0;
+  
+    i1 = 11;
+    loop(num_ch*.5,
+      slider(i1) = 1;
+      i1 = i1 + 1;
+    );
+    
+    updateChannelSliders();
+    slider50 = 1;
+  )
 );
 
 function printColorMapName(cmapidx, inv)
@@ -140,12 +157,12 @@ integrate_bufs  = 400;
 shifts          = 500;
 activechannels  = 600;
 maxchannels     = 16;
+totchannels     = 16;
 offscreenbuf    = 1;
 
 bgcolor         = 0;
 drawHz          = 0;
 
-//memset(activechannels,1,maxchannels);
 updateChannelSliders();
 
 rpos      = recpositions;
@@ -156,13 +173,17 @@ csh       = shifts;
 curshift  = 65536;
 
 spacing   = 3;
-loop(maxchannels,
+loop(totchannels,
   rpos[]  = curshift;
   hsize[] = window + curshift;
   fftw[]  = window + (max_fft_size*0.5 + 1) + curshift;
   ibuf[]  = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + curshift;
   csh[]   = curshift;
-   
+  
+  memset(fftw[],0,max_fft_size);
+  memset(ibuf[],0,max_fft_size);
+  memset(rpos[],0,max_fft_size);
+  
   rpos  += 1;
   hsize += 1;
   fftw  += 1;
@@ -173,17 +194,19 @@ loop(maxchannels,
 );
 
 // Memory for the filter on the spectrum
-filtout   = 65536*spacing*(maxchannels+1);
-filtout2  = 65536*spacing*(maxchannels+2);
+filtout   = 65536*spacing*(totchannels+1);
+memset(filtout,0,max_fft_size);
+filtout2  = 65536*spacing*(totchannels+2);
+memset(filtout2,0,max_fft_size);
 
 // Memory for the sum signals
-sumshl  = 65536*spacing*(maxchannels+3);
+sumshl  = 65536*spacing*(totchannels+3);
 sumposl = sumshl;
 fftwl   = window + (max_fft_size*0.5 + 1) + sumshl;
 ibufl   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshl;
 sumhsl  = window + sumshl;
 
-sumshr  = 65536*spacing*(maxchannels+4);
+sumshr  = 65536*spacing*(totchannels+4);
 sumposr = sumshr;
 fftwr   = window + (max_fft_size*0.5 + 1) + sumshr;
 ibufr   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshr;
@@ -234,7 +257,8 @@ sr        = 0;
 )
 
 @gfx 900 600
-
+initCh();
+updateChannelSliders();
 gfx_ext_retina>1 ? gfx_setfont(1,"Arial",6*gfx_ext_retina,'b') : gfx_setfont(1);
 
 function draw_button(xp, yp, str) 
@@ -501,6 +525,7 @@ SONOSURFACE2 = 3;
 function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, hp, logarithmic, fmaxFactor)
   instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, N, norm, fmax)
   globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode)
+  local(val)
 (
   x = xp;
   y = yp;
@@ -512,7 +537,8 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   
   preSonoDest = gfx_dest;
   gfx_a = 1;
-  sonoSize  = 2048;
+  //sonoSize  = 2048;
+  sonoSize  = hp;
   sonoSizeX = 256;
 
   // MaxF
@@ -574,30 +600,43 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
         );
       )
     ) : (
+      tl = 0; val = 0;
       loop(.5*fmax,
-        tx = log(1.0+i*xscale)*wsc;     
-        sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(- sonogramBuffer[]*sonoScale))  )*255);
+        tx = log(1.0+i*xscale)*wsc;
+        //val = val + sonogramBuffer[];
+        val = max(val, sonogramBuffer[]);
         
-        gfx_r = sonoColorLoc[];
-        gfx_g = sonoColorLoc[1];
-        gfx_b = sonoColorLoc[2];    
-        gfx_line(sonoSizeX-1,sonoSize-tl,sonoSizeX-1,sonoSize-tx);
+        (tx - tl) > 0.999999 ?
+        (  
+          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(- val*sonoScale))  )*255);
+          val = 0;
+          
+          gfx_r = sonoColorLoc[];
+          gfx_g = sonoColorLoc[1];
+          gfx_b = sonoColorLoc[2];    
+          gfx_line(sonoSizeX-1,sonoSize-tl,sonoSizeX-1,sonoSize-tx);
+          tl = tx;
+        );
+        
         i += 1;
         sonogramBuffer += 1;
-        tl = tx;
       );
     );
   );
+  
+  //gfx_x = gfx_y = 0;
+  //gfx_blurto(sonoSizeX,sonoSizeX);
+  //gfx_blurto(sonoSizeX,sonoSizeX);
   
   // Draw the sonogram to the screen
   gfx_dest = preSonoDest;
   gfx_x = x;
   gfx_y = y;
   gfx_a = .95;
-  gfx_blit(sonosurf, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);
+  gfx_blit(sonosurf, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);  
   
   // Blur it in a second buffer
-  gfx_dest = blurred;
+  /*gfx_dest = blurred;
   gfx_x = gfx_y = 0;
   gfx_blit(sonosurf, 1, 0);
   gfx_x = gfx_y = 0;
@@ -610,7 +649,7 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   gfx_x = gfx_y = 0;
   gfx_dest = preSonoDest; 
   gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);  
-  gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);    
+  gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h); */   
   gfx_mode = 0;
 );
 
@@ -652,14 +691,16 @@ function drawGrid()
   f=20;
   gfx_x+=4;
   lx=gfx_x;
+  ltxt = 0;
   tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
   while(
     gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
     dotext = tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
-       (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000);
+       (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000) || (tx-ltxt)>.1*gfx_w;
     tx > lx ? ( lx=tx+4; gfx_line(tx,20-log(1)*sc+spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
     gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
     dotext ? (
+      ltxt = tx;
       gfx_x = tx + 3;
       gfx_y = gfx_h-gfx_texth-spectrum_yoffsetbottom;
       gfx_line( gfx_x-3, gfx_y, gfx_x-3, gfx_y+gfx_texth );
@@ -723,7 +764,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
 
     lx=tx; ly2=ty2;
     i+=1;
-  );  
+  );
   
   smoothing = slider7;
   lx=0;
@@ -743,9 +784,10 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
   buf2 = intbuf;
   i    = 0;
   slope = .5*log(2)*slider38;
+  prec = (10^(-500/20*2));
   loop(fftsize*0.5,   
     yOut[] = sqr(buf3[0])+sqr(buf3[1]);
-    ty = log(max(yOut[],(10^(-500/20*2))));
+    ty = log(max(yOut[],prec));
     ty = ty + slope*log(1.0+i*xscale);
     yOut += 1;
     buf3 += 2;    
@@ -903,10 +945,13 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
   i = 0;
   curh = gfx_h-spectrum_yoffsetbottom;
   rescaleY = (1.0-(spectrum_yoffset+spectrum_yoffsetbottom)/gfx_h);
+  ixsc = 0;
+  prec = fftsize*spectrum_xoffset*xscale;
   loop(fftsize*0.5-kernelSize,
-    tx = log(1.0+i*xscale-fftsize*spectrum_xoffset*xscale)*wsc;
+    tx = log(1.0+ixsc-prec)*wsc;
     ty = bufout[]*rescaleY + spectrum_yoffset;
-    ty > gfx_h-spectrum_yoffsetbottom ? ty = gfx_h-spectrum_yoffsetbottom;
+    //ty > gfx_h-spectrum_yoffsetbottom ? ty = gfx_h-spectrum_yoffsetbottom;
+    ty = min( ty, gfx_h - spectrum_yoffsetbottom );
 
     ( i && ( tx < spectrum_xmax ) ) ?
     ( 
@@ -935,9 +980,9 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
     );
 
     // CHECK THIS
-    //ty<gfx_h ? update=1;
+    // ty<gfx_h ? update=1;
 
-    lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1;
+    lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
   )
 );
 
@@ -974,7 +1019,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
     showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider28=-1; slider_automate(slider28); old_w = 0);  
     showChannel = slider28;        
 
-    ( mouse_y < (gfx_h-sono_yoffset_bottom-sono_size) ) ? 
+    ( mouse_y < (gfx_h-sono_yoffset_bottom-sono_size) ) && ( mouse_x < ( gfx_w - spectrum_xpad ) ) ? 
     (
       ( zoomMode == 0 ) ? (
         // Not zooming
@@ -1007,18 +1052,21 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
       f1 = tmp;
     );
   
-    spectrum_xoffset = f1;  
-    diff  = f2-spectrum_xoffset;
-    
-    // Notes
-    // f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate + spectrum_xoffset * srate;
-    // wsc   = spectrum_xmax / log( 1.0 + 800 * diff );
-    // denom = spectrum_xmax / log( 1 + 400 );
-
-    newscale = log( 1 + 400 ) / log( 1.0 + 800 * diff );
-    slider6 = newscale;
-    scaling = slider6;
-    slider_automate(slider6);
+    f2-f1 > .001 ?
+    (
+      spectrum_xoffset = f1;  
+      diff  = f2-spectrum_xoffset;
+      
+      // Notes
+      // f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate + spectrum_xoffset * srate;
+      // wsc   = spectrum_xmax / log( 1.0 + 800 * diff );
+      // denom = spectrum_xmax / log( 1 + 400 );
+  
+      newscale = log( 1 + 400 ) / log( 1.0 + 800 * diff );
+      slider6 = newscale;
+      scaling = slider6;
+      slider_automate(slider6);
+    );
   );
 );
 
@@ -1414,14 +1462,15 @@ function DrawButtons()
         ) 
       )
     );
-    slider42 == 0 ? sonogram_button.draw_button(gfx_w-10, 130, slider29==1?">>    Hide   >>" : slider29==0?"<    Time     >" : "<   Sonogram  |");
-    slider42 == 0 ? slider29 == 0 ? sonoLog.draw_button2(gfx_w-18, 148, "Log(Sonogram)", slider33, 0, 0, 0, -1);
-    
-    
-    slider42 == 0 ? showSumButton.draw_button2(gfx_w-15, 30, "|     SUM    |", slider27, slider28==-1, 0, 0, -1);
-    slider42 == 0 ? phase_button.draw_button2(gfx_w-15,55, "|    Phase   |", slider3, slider3>1, slider3== 2, slider3>-1, -1);
-    slider42 == 0 ? grid_button.draw_button2(gfx_w-15, 80, "|    GRID    |", slider39, slider39>1, slider39== 2, slider39>-1, -1);
-    slider42 == 0 ? slider39 == 1 ? gridAlpha_button.draw_button(gfx_w-15, 99, sprintf(#,"^ Alpha: %.1f ^" ,slider40)); 
+    slider42 == 0 ?
+    (
+      sonogram_button.draw_button(gfx_w-10, 130, slider29==1?">>    Hide   >>" : slider29==0?"<    Time     >" : "<   Sonogram  |");
+      slider29 == 0 ? sonoLog.draw_button2(gfx_w-18, 148, "Log(Sonogram)", slider33, 0, 0, 0, -1);
+      showSumButton.draw_button2(gfx_w-15, 30, "|     SUM    |", slider27, slider28==-1, 0, 0, -1);
+      phase_button.draw_button2(gfx_w-15,55, "|    Phase   |", slider3, slider3>1, slider3== 2, slider3>-1, -1);
+      grid_button.draw_button2(gfx_w-15, 80, "|    GRID    |", slider39, slider39>1, slider39== 2, slider39>-1, -1);
+      slider39 == 1 ? gridAlpha_button.draw_button(gfx_w-15, 99, sprintf(#,"^ Alpha: %.1f ^" ,slider40)); 
+    );
     
   slider29 == 2 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
         
@@ -1461,8 +1510,8 @@ last_mouse_cap = mouse_cap;
 UI_SCREEN = 0;
 
 // only update if new fft data is there or if the size changed
-( update || old_w != gfx_w || old_h!=gfx_h ) ? (
-  update = 0; 
+( update == 1 || old_w != gfx_w || old_h!=gfx_h ) ? (
+  update = 0;
   
   gfx_dest = UI_SCREEN;
   gfx_setimgdim(UI_SCREEN, gfx_w, gfx_h);
