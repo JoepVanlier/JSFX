@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.16
+version: 1.18
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -86,10 +86,10 @@ options:no_meter
 
 @init
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.16";
+plugname = "FILTHER 1.18";
 newUI = 1;
-refreshDynMode = 1;
-nFilters = 52;
+refreshDynMode = -1;
+nFilters = 51;
 nModes = 6;
 nLFO = 14;
 
@@ -217,10 +217,11 @@ modulator.modulator();
 
 function updateModulator()
   instance( invpi2, twopi, invsrate, reset, modvalue, modrate, t, lastt, lastrand )
-  global( slider38, slider36 )
+  global( slider38, slider36, modulatorDynamics )
   local(ct, st)
   (
     slider36 > 0 ? (
+      modulatorDynamics = 1;
       t = t + modrate*invsrate;
       slider38 && reset == 1 ? ( t = 0; reset = 0 );
       modvalue = slider36 == 1 ? .5 + .5 * cos(twopi*t) 
@@ -237,7 +238,7 @@ function updateModulator()
       : ( slider36==12 ) ? ( ( t > (lastt+1) ) ? ( lastt = t; lastrand=rand() ); min((15*(.2+.8*lastrand)*(t-floor(t))),1)*exp(-4*lastrand*(t-floor(t))) )
       : ( slider36==13 ) ? ( exp(-t) )    
       : ( slider36==14 ) ? ( min((15*(t-floor(t))),1)*exp(-t) )
-    ) : ( modvalue = 0 );
+    ) : ( modvalue = 0; modulatorDynamics = 0; );
   );
 
 function gfx_wrapprint(str, maxlen)
@@ -1183,8 +1184,6 @@ function init_MS20_nonlin(freq, reso)
     h  = f / (slider54+1);
     hh = 0.5 * h;
     k  = 2*reso;
-    
-    //f1 = wcT * ( y1 - d1 + (h*(atan(d1 -  x + g(d2*k)) + atan(y1 - x + g(k*y2))))/2 );
   );
     
   
@@ -1460,18 +1459,17 @@ function resetphaserFET()
   instance(C1, C2, dw, dx, thresh, iVpsq, IDSSdivVpSq, thresh)
   (
     dw = dx = 0;
-  );
+  ); 
   
 function updateActiveFilters()
   (
     filterDynamics ? (
-      //modval = max(0,min(1,dynval + modulator.modvalue));
       modval = dynval + modulator.modvalue;
       filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modval ) );
       filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modval ) );
     ) : (
-      filterFreq = slider48 + dyn_mod_filt * modulator.modvalue;
-      filterReso = slider49 + dyn_mod_reso * modulator.modvalue;
+      filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modulator.modvalue ) );
+      filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modulator.modvalue ) );
     );
     
     calcGain();
@@ -2707,7 +2705,7 @@ function combobox_processMouse(xx, yy, mc)
     xmin = x - (cols-1)*w;
     ymin = y + h - delta;
     xmax = x + w;
-    ymax = ( y+((nitems+1)/cols)*h-delta );
+    ymax = ( y+((nitems)/cols+1)*h-delta );
     
     ( lastUI == thisUI ) ?
     (
@@ -5261,7 +5259,7 @@ updateActiveFilters();
     dynBuf.updateBuffer(dynval);
   ) : ( dynval = 1 );
   
-  filterDynamics ? updateActiveFilters();
+  ( filterDynamics || modulatorDynamics ) ? updateActiveFilters();
   
   ( lookAhead ) ?
   (
@@ -5595,7 +5593,7 @@ updateActiveFilters();
           
           lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=lookAheadButton.active; ); forceUpdate = 1; );
           lfoResetButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)  ? ( slider_automate( slider38=lfoResetButton.active; ); forceUpdate = 1; );
-          dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active; ); refreshDynMode = 1; forceUpdate = 1; );
+          dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active; ); forceUpdate = 1; );
           
           lfoFrequency.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( slider_automate( slider37=lfoFrequency.sliderWidget_getValue(); ); forceUpdate = 1; );
           
@@ -5626,7 +5624,7 @@ updateActiveFilters();
     lx = mouse_x;
     ly = mouse_y;
     
-    ( refreshDynMode == 1 ) ?
+    ( refreshDynMode != slider45 ) ?
     (
       ( slider45 == 0 ) ?
       (
@@ -5639,9 +5637,9 @@ updateActiveFilters();
         decaySlider.setLabel("Inversion");
       );
       
-      refreshDynMode = 0;
+      refreshDynMode = slider45;
     );
-  
+      
     updating = 0;
   );
   
