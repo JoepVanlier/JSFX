@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.18
+version: 1.19
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, added FIR option for up/downsampling
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -54,6 +54,7 @@ slider36:0<0,16,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,1,1>-Reset LFO
 
+slider40:0<0,1,1>-FIR resampling
 slider45:0<0,1,1>-Dynamics RMS mode
 slider46:<0,6,1>-Filter Operation Mode
 slider47:<0,30,1{OFF, LP RC-C,LP Diode Ladder (303/Non-Linear Dominique Wurtz),Vowel,LP Karlsen Fast Ladder III,LP Karlsen Fast Ladder III (sat),Saike`s Waveshaped Resonance (LP),Saike`s Waveshaped Resonance (HP),Saike`s Waveshaped Resonance (BP),Expensive Moog,Less Expensive Moog (DANGEROUS),Notch filter,Narsty,Modulator,Phaser (OTA),Phaser (FET),Delay Feedbok,Mangler,,MS-20 linear LP, MS-20 linear BP, MS-20 linear HP, MS-20 nonlinear LP, MS-20 nonlinear BP, MS-20 nonlinear HP}>-Filter Type
@@ -86,7 +87,7 @@ options:no_meter
 
 @init
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.18";
+plugname = "FILTHER 1.19";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -94,6 +95,7 @@ refreshDynMode = -1;
 nFilters = 51;
 nModes = 6;
 nLFO = 14;
+lastOversample = 0;
 
 function comboStrings(stridx, curitem)
   local(str)
@@ -1757,6 +1759,164 @@ movavgRP = 0;
 
 updateActiveFilters();
 
+// Generate windowed sinc filter at memory location FIR
+// Inputs are:
+//    fir   - Memory location to store windowed sinc
+//    nt    - Number of taps
+//    bw    - Fractional bandwidth
+//     g    - Gain
+function sinc(fir, nt, bw, g)
+  local(a, ys, yg, yw, i, pibw2, pifc2, pidnt2, hnt)
+  global()
+  (
+    pibw2   = 2.0*$pi*bw;
+    pidnt2  = 2.0*$pi/nt;
+    hnt     = 0.5*nt;
+    i       = 1;
+        
+    loop(nt-1,
+      // Sinc width
+      a  = (i - hnt) * pibw2;
+        
+      // Sinc
+      ys = (a != 0) ? sin(a)/a : 1.0;
+ 
+      // Window gain
+      yg = g * (4.0 * bw);
+        
+      // Hamming window (could be replaced with Kaiser in the future)
+      yw = 0.54 - 0.46 * cos(i * pidnt2);
+         
+      // Calc FIR coeffs
+      fir[i-1] = yw * yg * ys;
+      
+      i += 1;
+    );
+  );
+
+// Generate sinc filters for a specific upsampling ratio
+//
+// Upsampling leads to a sample followed by N-1 zeroes. Hence 
+// to compute each subsample, we only need 1/Nth of the taps.
+// This is why we set up a specific filter for each subsample.
+// i.e. for N=4, you get something like f1*Zn + f5*Zn-1 + ...
+//
+// Inputs:
+//    N_in            - oversampling factor
+//    tapsPerFilter   - Taps per subfilter (should be 8 in this implementation)
+//    targetmem       - Location to store the coefficients
+//    tmp             - Working memory
+function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
+  local(nHist, iFilt, nTaps)
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta)
+  global()
+  (
+    N       = N_in;
+    nHist   = tapsPerFilter;
+    loc     = 0;
+    coeffs  = targetmem;
+    nTaps   = N*nHist;
+    
+    // Memory being set is conservatively large.
+    memset(coeffs,0,10000);
+    memset(tmp,0,10000);
+    
+    sinc(tmp, nTaps, .5/N, .5*N);
+    
+    // Divide sinc over the different filters
+    iFilt = 0; // Filter idx for which subsample this filter is
+    delta = 0; // Sample idx
+    loop(nTaps,
+      coeffs[delta + iFilt*100] = tmp[];
+      iFilt += 1;
+      iFilt == N ? ( iFilt = 0; delta += 1 );
+      tmp += 1;
+    );
+  );
+
+// Generate downsample filter
+// Here, the full N*nHist tap filter has to be evaluated for every sample, 
+// but only every Nth sample has to be evaluated.
+function updateSincDownsampleFilter(N_in, histmem, coeffmem)
+  global()
+  instance(hist, hend, hptr, coeffs, loc, N, delta, nTaps)
+  local()
+  (
+    N       = N_in;
+    hist    = histmem;
+    coeffs  = coeffmem;
+    nTaps   = 16;
+    hptr    = hist;
+    hend    = hist + nTaps;
+    
+    memset(coeffs,0,10000);
+    sinc(coeffs, nTaps, .5/N, .5);
+  );
+  
+function advanceHist(sample)
+  global()
+  instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+  local(nHist, nTaps)
+  (
+    hptr += 1;
+    ( hptr == hend ) ? hptr = hist;
+    hptr[] = sample;
+  );
+
+function sincDownSample()
+  global()
+  instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+  local(nHist, hm1, hptr2, out, cfptr)
+  (
+    hm1   = hist-1;
+    hptr2 = hptr;
+    cfptr = coeffs;
+    out   = 0;
+    
+    loop(nTaps,
+      out = out + hptr2[] * cfptr[];
+      
+      cfptr += 1;
+      hptr2 -= 1;
+      ( hptr2 == hm1 ) ? hptr2 = hend-1;
+    );
+    
+    out
+  );
+
+// Maintain input sample history. Hardcoded for speed.
+// Note h7 is omitted because for integer upsampling it is always zero!
+function advanceSinc(sample)
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+  global()
+  local(filt)
+  (
+    h6 = h5;
+    h5 = h4;
+    h4 = h3;
+    h3 = h2;
+    h2 = h1;
+    h1 = h0;
+    h0 = sample;
+    loc = 0;
+  );
+
+// Note h7 is omitted because for integer upsampling it is always zero!
+function getSubSample()
+  instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+  global()
+  local(filt, out)
+  (
+    filt = coeffs + loc;
+
+    //out = filt[] * h0 + (filt+=1)[] * h1 + (filt+=1)[] * h2 + (filt+=1)[] * h3 + (filt+=1)[] * h4 + (filt+=1)[] * h5 + (filt+=1)[] * h6;
+    out =  filt[] * h0 + filt[1] * h1 + filt[2] * h2 + filt[3] * h3 + filt[4] * h4 + filt[5] * h5 + filt[6] * h6;
+
+    loc += 100;
+    out
+  );
+ 
+// IIR RBJ based up/down sampling
 function updateFilter(newlen)
   instance(len, d1, d2, d3, d4, o1, o2, o3, o4, a1, a2, b0, b1, b2)
   local (Q, sc, pos, cpos, spos, alpha)
@@ -3354,21 +3514,30 @@ function updateIntegrationTime()
       
       lookAhead ? (
         // delays the first two channels (spl0/spl1).
-        pdc_bot_ch=0; 
-        pdc_top_ch=2;
-        pdc_delay = ndelay;
+        lookAheadDelay = ndelay;
       ) : ( 
-        pdc_delay = 0;
+        lookAheadDelay = 0;
       );
     );
   );
   
-updateIntegrationTime();
+//updateIntegrationTime();
 
+//////////////////////////////////////////////////////////
+// Memory layout
+//////////////////////////////////////////////////////////
 delay_buf1      = 500000;
 delay_buf2      = 600000;
 delay_buf3      = 700000;
 delay_buf4      = 800000;
+
+sinc_tmp        = 900000;
+sinc_flt        = 910000; // Upsample filters are spaced at 100 difference. There are N filters, with 8 taps per filter.
+sinc_flt2       = 920000;
+sinc_flt3       = 930000; // Downsamplers
+sinc_flt4       = 940000;
+sinc_hist1      = 950000; // Downsampler history
+sinc_hist2      = 960000;
 
 // Global storage for variables
 negative_xloc   = 100;
@@ -3453,6 +3622,7 @@ function updateSliders( hard )
   decay_x4_2.active       = slider57 & 8 ? 1 : 0;
   rms_x4_1.active         = slider57 & 16 ? 1 : 0;
   rms_x4_2.active         = slider57 & 32 ? 1 : 0;
+  firButton.active        = slider40==1 ? 1 : 0;
   
   lfoFrequency.sliderWidget_setValue(slider37);
   lfoResetButton.active = slider38==1 ? 1 : 0;
@@ -3541,11 +3711,36 @@ function updateSliders( hard )
     window1.update_spline();
     window2.update_spline();
   );
-   
-  filterL.updateFilter(slider54);
-  filterR.updateFilter(slider54);
+
+  // Only update the oversampling filters when needed.
+  ( slider54 != lastOversample ) ? 
+  (
+    lastOversample = slider54;   
+
+    filterL.updateFilter(slider54);
+    filterR.updateFilter(slider54);
+    // Memory for the sincs is located at sinc_tmp, sinc_flt, sinc_flt2, sinc_flt3 and sinc_flt4
+    sincFilterL.updateSincFilter(slider54, 8, sinc_flt,  sinc_tmp);
+    sincFilterR.updateSincFilter(slider54, 8, sinc_flt2, sinc_tmp);
+    sincDownL.updateSincDownsampleFilter(slider54, sinc_hist1, sinc_flt3);
+    sincDownR.updateSincDownsampleFilter(slider54, sinc_hist2, sinc_flt4);  
+ );
   
-  updateIntegrationTime();
+  // Calculate group delay incurred by sincs
+  iN = 1 / slider54;
+  pdcDelay  = ( slider40 == 0 ) ? 0 : iN * (.5 * 8 * slider54 - 1);
+  pdcDelay += ( slider40 == 0 ) ? 0 : iN * (.5 * 16 - 1);
+  
+  updateIntegrationTime(); // updates lookAheadDelay
+  pdcDelay += lookAheadDelay;
+  
+ ( pdcDelay != lastpdcDelay ) ?
+  (
+    lastpdcDelay = pdcDelay;
+    pdc_bot_ch=0; 
+    pdc_top_ch=2;
+    pdc_delay = predelay;
+  );
 );
 
 function initGUI()
@@ -3590,7 +3785,8 @@ function setupGUI()
   inClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3);
   outGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+2*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Post-Gain", wR, wG, wB, wA, 0, -40, 40, 0, " dB", 0);
   outClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+2*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3);
-  overSampling.sliderWidget(masterPanelX+sliderPad, masterPanelY+3*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Oversampling", wR, wG, wB, wA, 0, 0, 8, 0, "x", 1);
+  overSampling.sliderWidget(masterPanelX+sliderPad, masterPanelY+3*sliderPad+2*sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Oversampling", wR, wG, wB, wA, 0, 0, 8, 0, "x", 1);
+  firButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+3*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "FIR",  .3, .4, .8, .3);
   
   filterPanelX = masterPanelX;
   filterPanelY = 140 * retina_scaling;
@@ -5297,11 +5493,23 @@ updateActiveFilters();
     // N>1 oversampling
     sli = sl;
     sri = sr;
+ //   slider40=0;
+    ( slider40 == 1 ) ? (
+      sincFilterL.advanceSinc(sli);
+      sincFilterR.advanceSinc(sri);
+    );
+ //   slider40=1;
     loop( slider54,
       // Upsampling
-      ssl = filterL.inputFilter(sli);
-      ssr = filterR.inputFilter(sri);
-            
+ //     slider40=0;
+      ( slider40 == 0 ) ? (
+        ssl = filterL.inputFilter(sli);
+        ssr = filterR.inputFilter(sri);
+      ) : (
+        ssl = sincFilterL.getSubSample();
+        ssr = sincFilterR.getSubSample();
+      );
+ //     slider40=1;
       ( slider46 == 0 ) ?
       (
         ssl = L.process(ssl);
@@ -5346,14 +5554,27 @@ updateActiveFilters();
         ssr  = mid - side;
       );
       
-      (q += 1)==1 ? (
-        sl = filterL.outputFilter(ssl);
-        sr = filterR.outputFilter(ssr);
+      // IIR downsampling?
+      ( slider40 == 0 ) ? (      
+        (q += 1)==1 ? (
+          sl = filterL.outputFilter(ssl);
+          sr = filterR.outputFilter(ssr);
+        ) : (
+          filterL.outputFilter(ssl);
+          filterR.outputFilter(ssr);
+        );
       ) : (
-        filterL.outputFilter(ssl);
-        filterR.outputFilter(ssr);
-      )
-    )
+        sincDownL.advanceHist(ssl);
+        sincDownR.advanceHist(ssr);
+      );
+    );
+    
+    // FIR downsampling?
+    ( slider40 == 1 ) ?
+    (
+      sl = sincDownL.sincDownSample();
+      sr = sincDownR.sincDownSample();
+    );
   );
   
   // DC correction
@@ -5530,6 +5751,7 @@ updateActiveFilters();
     inClip.selectionButton_draw();
     outGain.sliderWidget_draw();
     outClip.selectionButton_draw();
+    firButton.selectionButton_draw();
     overSampling.sliderWidget_draw();
     
     lfoFrequency.sliderWidget_draw();
@@ -5583,6 +5805,9 @@ updateActiveFilters();
           outClip.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
           newClipMode = inClip.active + 2 * outClip.active;
           ( slider55 != newClipMode ) ? ( slider_automate( slider55=newClipMode; ); forceUpdate = 1; );
+          
+          firButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+          ( slider40 != firButton.active ) ? ( slider_automate( slider40=firButton.active; ); forceUpdate = 1; );
           
           atk_x4_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
           atk_x4_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
