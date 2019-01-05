@@ -2,7 +2,7 @@ desc:Filther
 tags: Filther
 version: 1.19
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, added FIR option for up/downsampling
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, added FIR option for up/downsampling, fix pdc_delay
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -87,7 +87,7 @@ options:no_meter
 
 @init
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.19";
+plugname = "FILTHER 1.20";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -96,6 +96,9 @@ nFilters = 51;
 nModes = 6;
 nLFO = 14;
 lastOversample = 0;
+lastpdcDelay = -1000;
+lastIntegrationTime = -1000;
+nTapSinc = slider54 < 5 ? 16 : slider54*4;
 
 function comboStrings(stridx, curitem)
   local(str)
@@ -1837,7 +1840,7 @@ function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
 // Generate downsample filter
 // Here, the full N*nHist tap filter has to be evaluated for every sample, 
 // but only every Nth sample has to be evaluated.
-function updateSincDownsampleFilter(N_in, histmem, coeffmem)
+function updateSincDownsampleFilter(N_in, nTaps_in, histmem, coeffmem)
   global()
   instance(hist, hend, hptr, coeffs, loc, N, delta, nTaps)
   local()
@@ -1845,7 +1848,7 @@ function updateSincDownsampleFilter(N_in, histmem, coeffmem)
     N       = N_in;
     hist    = histmem;
     coeffs  = coeffmem;
-    nTaps   = 16;
+    nTaps   = nTaps_in;
     hptr    = hist;
     hend    = hist + nTaps;
     
@@ -3508,7 +3511,7 @@ function updateIntegrationTime()
       RMS1.initRMS(ndelay, 100000);
       RMS2.initRMS(ndelay, 200000);
 
-      ndelay = ceil(ndelay * 0.5);
+      ndelay = ndelay * 0.5;
       preBufferL.initBuffer(300000, 300000 + ndelay);
       preBufferR.initBuffer(400000, 400000 + ndelay);
       
@@ -3722,25 +3725,19 @@ function updateSliders( hard )
     // Memory for the sincs is located at sinc_tmp, sinc_flt, sinc_flt2, sinc_flt3 and sinc_flt4
     sincFilterL.updateSincFilter(slider54, 8, sinc_flt,  sinc_tmp);
     sincFilterR.updateSincFilter(slider54, 8, sinc_flt2, sinc_tmp);
-    sincDownL.updateSincDownsampleFilter(slider54, sinc_hist1, sinc_flt3);
-    sincDownR.updateSincDownsampleFilter(slider54, sinc_hist2, sinc_flt4);  
+    nTapSinc = slider54 < 5 ? 16 : slider54*4;
+    sincDownL.updateSincDownsampleFilter(slider54, nTapSinc, sinc_hist1, sinc_flt3);
+    sincDownR.updateSincDownsampleFilter(slider54, nTapSinc, sinc_hist2, sinc_flt4);  
  );
   
   // Calculate group delay incurred by sincs
-  iN = 1 / slider54;
-  pdcDelay  = ( slider40 == 0 ) ? 0 : iN * (.5 * 8 * slider54 - 1);
-  pdcDelay += ( slider40 == 0 ) ? 0 : iN * (.5 * 16 - 1);
-  
+  iN = 1.0 / slider54;
+  cDelay  = ( slider40 == 0 ) ? 0 : iN * (.5 * 7 * slider54 - 1);
+  cDelay += ( slider40 == 0 ) ? 0 : iN * (.5 * nTapSinc - 1);
   updateIntegrationTime(); // updates lookAheadDelay
-  pdcDelay += lookAheadDelay;
-  
- ( pdcDelay != lastpdcDelay ) ?
-  (
-    lastpdcDelay = pdcDelay;
-    pdc_bot_ch=0; 
-    pdc_top_ch=2;
-    pdc_delay = predelay;
-  );
+  cDelay += lookAheadDelay;
+ 
+  pdcDelay = cDelay;
 );
 
 function initGUI()
@@ -5422,6 +5419,14 @@ updateActiveFilters();
     updateSliders();
     updateActiveFilters();
   );
+  
+ ( pdcDelay != lastpdcDelay ) ?
+  (
+    lastpdcDelay = pdcDelay;
+    pdc_bot_ch=0; 
+    pdc_top_ch=2;
+    pdc_delay = pdcDelay;
+  );  
   
   while (midirecv(offset,msg1,msg2,msg3)) (
      msg1==$x90 && msg3!=0 ? modulator.reset=1; // note-on!
