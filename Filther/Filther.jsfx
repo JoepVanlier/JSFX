@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.23
+version: 1.24
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -87,7 +87,7 @@ options:no_meter
 
 @init
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.23";
+plugname = "FILTHER 1.24";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -206,12 +206,6 @@ function modulator()
     twopi = 2*$pi;
   );
 
-function calcGain()
-(
-  pregain  = 2^((slider52 + 40 * dyn_mod_gain * dynval)/6);
-  postgain = 2^(slider53/6);
-  gaincompensation = 1/pregain;
-);
 
 function setmodrate(val)
   global()
@@ -1314,15 +1308,15 @@ function eval_wasp_nonlin_extrareso(Vi)
     offset  = 0.1;
     tv1nl   = tanh(V1*nl+offset);
     tv2nl   = tanh(V2*nl+offset);
-    td1nl   = tanh(D1*nl+offset);
-    td2nl   = tanh(D2*nl+offset);    
+    td1nl   = fasttanh(D1*nl+offset);
+    td2nl   = fasttanh(D2*nl+offset);    
     ttd1nl  = tanh(td1nl);
-    fixterm = tanh(fasttanh(nl*(Di + clamp(-r*td1nl) - td2nl)));
+    fixterm = fasttanh(fasttanh(nl*(Di + clamp(-r*td1nl) - td2nl)));
     
     loop(3,
       resclamp= clamp(-r*tv1nl);
       
-      clterm  = tanh(nl*(Vi + resclamp - tv2nl));
+      clterm  = fasttanh(nl*(Vi + resclamp - tv2nl));
       clterm2 = fasttanh(clterm);
       f0      = -D1 + V1 - hah*(fixterm + clterm2);
       f1      = -D2 + V2 - hah*(ttd1nl + tanh(tv1nl));
@@ -1336,7 +1330,7 @@ function eval_wasp_nonlin_extrareso(Vi)
       V1      = V1 - (-Jb*f1 + f0)*idet;
       V2      = V2 - (Ja*f1 - Jc*f0)*idet;
       
-      tv1nl   = tanh(V1*nl)*(1-.8*V2);
+      tv1nl   = fasttanh(V1*nl)*(1-.8*V2);
       tv2nl   = tanh(V2*nl);
     );
     
@@ -1351,7 +1345,7 @@ function eval_wasp_nonlin_extrareso(Vi)
     -V2;
   );  
   
-function eval_wasp_nonlin(Vi)
+function eval_wasp_nonlin_realatanh(Vi)
   local(idet, Ja, Jb, Jc, tv1nl, tv2nl, ttd1nl, td1nl, td2nl, shrterm, fixterm, clterm, clterm2, V1, V2, f0, f1, resclamp)
   instance(nl, hah, hahnl, D2, D1, Di, r, offset)
   global()
@@ -1396,7 +1390,7 @@ function eval_wasp_nonlin(Vi)
     -V2;
   );
   
-function eval_wasp_nonlin_BP(Vi)
+function eval_wasp_nonlin(Vi)
   local(idet, Ja, Jb, Jc, tv1nl, tv2nl, ttd1nl, td1nl, td2nl, shrterm, fixterm, clterm, clterm2, V1, V2, f0, f1, resclamp)
   instance(nl, hah, hahnl, D2, D1, Di, r, offset)
   global()
@@ -1404,18 +1398,18 @@ function eval_wasp_nonlin_BP(Vi)
     Vi      = clamp(Vi);
     tv1nl   = tanh(V1*nl+offset);
     tv2nl   = tanh(V2*nl+offset);
-    td1nl   = tanh(D1*nl+offset);
-    td2nl   = tanh(D2*nl+offset);    
+    td1nl   = fasttanh(D1*nl+offset);
+    td2nl   = fasttanh(D2*nl+offset);    
     ttd1nl  = tanh(td1nl);
-    fixterm = tanh(fasttanh(nl*(Di + clamp(-r*td1nl) - td2nl)));
+    fixterm = fasttanh(fasttanh(nl*(Di + clamp(-r*td1nl) - td2nl)));
     
     loop(3,
       resclamp= clamp(-r*tv1nl);
       
-      clterm  = tanh(nl*(Vi + resclamp - tv2nl));
+      clterm  = fasttanh(nl*(Vi + resclamp - tv2nl));
       clterm2 = fasttanh(clterm);
       f0      = -D1 + V1 - hah*(fixterm + clterm2);
-      f1      = -D2 + V2 - hah*(ttd1nl + tanh(tv1nl));
+      f1      = -D2 + V2 - hah*(ttd1nl + fasttanh(tv1nl));
 
       shrterm = hahnl*nl*(1-clterm*clterm)*(1-clterm2*clterm2);
       Jb      = shrterm*(1-tv2nl*tv2nl);      
@@ -1426,7 +1420,52 @@ function eval_wasp_nonlin_BP(Vi)
       V1      = V1 - (-Jb*f1 + f0)*idet;
       V2      = V2 - (Ja*f1 - Jc*f0)*idet;
       
-      tv1nl   = tanh(V1*nl);
+      tv1nl   = fasttanh(V1*nl);
+      tv2nl   = tanh(V2*nl);
+    );
+    
+    // Forced to do this to keep things stable :(
+    V1        = clamp(V1);
+    V2        = clamp(V2);
+    
+    Di = Vi;
+    D1 = V1;
+    D2 = V2;
+    
+    -V2;
+  );  
+  
+function eval_wasp_nonlin_BP(Vi)
+  local(idet, Ja, Jb, Jc, tv1nl, tv2nl, ttd1nl, td1nl, td2nl, shrterm, fixterm, clterm, clterm2, V1, V2, f0, f1, resclamp)
+  instance(nl, hah, hahnl, D2, D1, Di, r, offset)
+  global()
+  ( 
+    Vi      = clamp(Vi);
+    tv1nl   = tanh(V1*nl+offset);
+    tv2nl   = tanh(V2*nl+offset);
+    td1nl   = fasttanh(D1*nl+offset);
+    td2nl   = fasttanh(D2*nl+offset);    
+    ttd1nl  = tanh(td1nl);
+    fixterm = fasttanh(fasttanh(nl*(Di + clamp(-r*td1nl) - td2nl)));
+    
+    loop(3,
+      resclamp= clamp(-r*tv1nl);
+      
+      clterm  = fasttanh(nl*(Vi + resclamp - tv2nl));
+      clterm2 = fasttanh(clterm);
+      f0      = -D1 + V1 - hah*(fixterm + clterm2);
+      f1      = -D2 + V2 - hah*(ttd1nl + fasttanh(tv1nl));
+
+      shrterm = hahnl*nl*(1-clterm*clterm)*(1-clterm2*clterm2);
+      Jb      = shrterm*(1-tv2nl*tv2nl);      
+      Ja      = r*shrterm*(1-tv1nl*tv1nl)*Dclamp(-r*tv1nl) + 1;
+      Jc      = -hahnl*(1-tv1nl*tv1nl)*(1-tv1nl*tv1nl);
+      
+      idet    = 1.0 / (Ja - Jb*Jc);
+      V1      = V1 - (-Jb*f1 + f0)*idet;
+      V2      = V2 - (Ja*f1 - Jc*f0)*idet;
+      
+      tv1nl   = fasttanh(V1*nl);
       tv2nl   = tanh(V2*nl);
     );
     
@@ -1469,232 +1508,235 @@ function resetphaserFET()
     dw = dx = 0;
   ); 
   
-function updateActiveFilters()
+function updateActiveFilters( force )
   (
-    filterDynamics ? (
-      modval = dynval + modulator.modvalue;
-      filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modval ) );
-      filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modval ) );
-    ) : (
-      filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modulator.modvalue ) );
-      filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modulator.modvalue ) );
-    );
+    modval = filterDynamics * dynval + modulator.modvalue;
+    filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modval ) );
+    filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modval ) );
+    updateFiltersNow = ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) || force;
     
-    calcGain();
-   
-    ( slider47 == 1 ) ? (
-      L.rc_filter.initRC(filterFreq, filterReso);
-      R.rc_filter.initRC(filterFreq, filterReso);
-    ) : ( slider47 == 2 ) ? (
-      L.filter_303.init303(filterFreq, filterReso);
-      R.filter_303.init303(filterFreq, filterReso);
-    ) : ( slider47 == 3 ) ? (
-      L.filter_vowel.initvowel(filterFreq, filterReso);
-      R.filter_vowel.initvowel(filterFreq, filterReso);
-    ) : ( slider47 == 4 ) ? (
-      L.filter_karlsen.initkarlsen(filterFreq, filterReso);
-      R.filter_karlsen.initkarlsen(filterFreq, filterReso);
-    ) : ( slider47 == 5 ) ? (
-      L.filter_karlsen_sat.initkarlsen_sat(filterFreq, filterReso);
-      R.filter_karlsen_sat.initkarlsen_sat(filterFreq, filterReso);
-    ) : ( slider47 == 6 ) ? (
-      L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-      R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-    ) : ( slider47 == 7 ) ? (
-      L.filter_dualfiltHP.initdualfilt(filterFreq, filterReso);
-      R.filter_dualfiltHP.initdualfilt(filterFreq, filterReso);
-    ) : ( slider47 == 8 ) ? (
-      L.filter_dualfiltBP.initdualfilt(filterFreq, filterReso);
-      R.filter_dualfiltBP.initdualfilt(filterFreq, filterReso);
-    ) : ( slider47 == 9 || slider47 == 10 ) ? (
-      ( slider54 < 2 ) ? ( 
-        slider54 = 2;
-        slider_automate(slider54);
-        forceUpdate = 1;
-        ); 
-      ( slider56 == 0 || slider56 == 4 ) ? (
-        slider56 = 3;
-        slider_automate(slider56);
-        forceUpdate = 1;
+    pregain  = 2^((slider52 + 40 * dyn_mod_gain * modval)/6);
+    postgain = 2^(slider53/6);
+    gaincompensation = 1/pregain;
+    
+    ( updateFiltersNow && slider47 > 0 ) ? (
+      lastFilterReso = filterReso;
+      lastFilterFreq = filterFreq;
+    
+      ( slider47 == 1 ) ? (
+        L.rc_filter.initRC(filterFreq, filterReso);
+        R.rc_filter.initRC(filterFreq, filterReso);
+      ) : ( slider47 == 2 ) ? (
+        L.filter_303.init303(filterFreq, filterReso);
+        R.filter_303.init303(filterFreq, filterReso);
+      ) : ( slider47 == 3 ) ? (
+        L.filter_vowel.initvowel(filterFreq, filterReso);
+        R.filter_vowel.initvowel(filterFreq, filterReso);
+      ) : ( slider47 == 4 ) ? (
+        L.filter_karlsen.initkarlsen(filterFreq, filterReso);
+        R.filter_karlsen.initkarlsen(filterFreq, filterReso);
+      ) : ( slider47 == 5 ) ? (
+        L.filter_karlsen_sat.initkarlsen_sat(filterFreq, filterReso);
+        R.filter_karlsen_sat.initkarlsen_sat(filterFreq, filterReso);
+      ) : ( slider47 == 6 ) ? (
+        L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+        R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+      ) : ( slider47 == 7 ) ? (
+        L.filter_dualfiltHP.initdualfilt(filterFreq, filterReso);
+        R.filter_dualfiltHP.initdualfilt(filterFreq, filterReso);
+      ) : ( slider47 == 8 ) ? (
+        L.filter_dualfiltBP.initdualfilt(filterFreq, filterReso);
+        R.filter_dualfiltBP.initdualfilt(filterFreq, filterReso);
+      ) : ( slider47 == 9 || slider47 == 10 ) ? (
+        ( slider54 < 2 ) ? ( 
+          slider54 = 2;
+          slider_automate(slider54);
+          forceUpdate = 1;
+          ); 
+        ( slider56 == 0 || slider56 == 4 ) ? (
+          slider56 = 3;
+          slider_automate(slider56);
+          forceUpdate = 1;
+        );
+        L.filter_fancymoog.initfancymoog(filterFreq, filterReso);
+        R.filter_fancymoog.initfancymoog(filterFreq, filterReso);
+      ) : ( slider47 == 11 ) ? (
+        L.filter_notch.initnotch(filterFreq, filterReso);
+        R.filter_notch.initnotch(filterFreq, filterReso);
+      ) : ( slider47 == 12 ) ? (
+        L.filter_sai0.initsai0(filterFreq, filterReso);
+        R.filter_sai0.initsai0(filterFreq, filterReso);
+        ( slider56 == 3 ) ? (
+          slider56 = 1;
+          slider_automate(slider56);
+          forceUpdate = 1;
+        );
+      ) : ( slider47 == 13 ) ? (
+        L.filter_modulator.initmodulator(filterFreq, filterReso);
+        R.filter_modulator.initmodulator(filterFreq, filterReso);      
+      ) : ( slider47 == 14 ) ? (
+        L.filter_phaser.initphaserOTA(filterFreq, filterReso);
+        L.filter_phaser2.initphaserOTA(filterFreq*2, filterReso);
+        L.filter_phaser3.initphaserOTA(filterFreq/2, filterReso);
+        L.filter_phaser4.initphaserOTA(filterFreq/3, filterReso);
+        R.filter_phaser.initphaserOTA(filterFreq, filterReso);
+        R.filter_phaser2.initphaserOTA(filterFreq*2, filterReso);
+        R.filter_phaser3.initphaserOTA(filterFreq/2, filterReso);
+        R.filter_phaser4.initphaserOTA(filterFreq/3, filterReso);      
+      ) : ( slider47 == 15 ) ? (
+        L.filter_phaser.initphaserFET(filterFreq, filterReso);
+        L.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
+        L.filter_phaser3.initphaserFET(filterFreq/2, filterReso);
+        L.filter_phaser4.initphaserFET(filterFreq/3, filterReso);
+        R.filter_phaser.initphaserFET(filterFreq, filterReso);
+        R.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
+        R.filter_phaser3.initphaserFET(filterFreq/2, filterReso);
+        R.filter_phaser4.initphaserFET(filterFreq/3, filterReso);
+      ) : ( slider47 == 16 ) ? (
+        L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+        R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+        filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq * 1000);
+        filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 2000);
+      ) : ( slider47 == 17 ) ? (
+        L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+        R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
+        filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
+        filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
+      ) : ( slider47 == 18 ) ? (
+        L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
+        R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
+      ) : ( slider47 == 19 ) ? (
+        L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
+        R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
+      ) : ( slider47 == 20 ) ? (
+        L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
+        R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);            
+      ) : ( slider47 == 21 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      ) : ( slider47 == 22 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      ) : ( slider47 == 23 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      ) : ( slider47 == 24 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        L.filter_phaser.initphaserFET(filterFreq, filterReso);
+        L.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
+        R.filter_phaser.initphaserFET(filterFreq, filterReso);
+        R.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
+        L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterReso * 50);
+        R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 51);  
+      ) : ( slider47 == 25 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);      
+      ) : ( slider47 == 26 ) ? (
+        L.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);
+        R.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);  
+      ) : ( slider47 == 27 ) ? (
+        L.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);
+        R.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);  
+      ) : ( slider47 == 28 ) ? (
+        L.filter_cem.init_cem_nonlin(filterFreq, filterReso);
+        R.filter_cem.init_cem_nonlin(filterFreq, filterReso);
+      ) : ( slider47 == 29 ) ? (
+        L.filter_ssm_lin.init_ssm_lin(filterFreq, filterReso);
+        R.filter_ssm_lin.init_ssm_lin(filterFreq, filterReso);         
+      ) : ( slider47 == 30 ) ? (
+        L.filter_cem_lin.init_cem_lin(filterFreq, filterReso);
+        R.filter_cem_lin.init_cem_lin(filterFreq, filterReso);
+      ) : ( slider47 == 31 ) ? (
+        L.filter_sine.initSine(filterFreq, filterReso);
+        R.filter_sine.initSine(filterFreq, filterReso);
+      ) : ( slider47 == 32 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);       
+        L.filter_sine.initSine(filterFreq, filterReso);
+        R.filter_sine.initSine(filterFreq, filterReso);      
+      ) : ( slider47 == 33 ) ? (
+        L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+        R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);    
+        L.filter_sine.initSine(filterFreq, filterReso);
+        R.filter_sine.initSine(filterFreq, filterReso);
+      ) : ( slider47 == 34 ) ? (
+        L.filter_broken.init_MS20_nonlin(.5*filterFreq, filterReso);
+        R.filter_broken.init_MS20_nonlin(.5*filterFreq, filterReso);        
+      ) : ( slider47 == 35 ) ? (
+        //L.filter_wasp2.init_ssm_nonlin(.5*filterFreq, filterReso);
+        //R.filter_wasp2.init_ssm_nonlin(.5*filterFreq, filterReso); 
+        L.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
+        R.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
+      ) : ( slider47 == 36 ) ? (
+        L.filter_wasp_lin.init_wasplin(filterFreq, filterReso);
+        R.filter_wasp_lin.init_wasplin(filterFreq, filterReso);
+      ) : ( slider47 == 37 ) ? (
+        L.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
+        R.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
+      ) : ( slider47 == 38 ) ? (
+        L.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
+        R.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
+      ) : ( ( slider47 > 38 ) && ( slider47 < 44 ) ) ? (
+        L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+        R.filter_SVF.init_linearSVF( filterFreq, filterReso );      
+      ) : ( slider47 == 44 ) ? (
+        L.filter_wasp.init_wasp_nonlin_saw(filterFreq, filterReso);
+        R.filter_wasp.init_wasp_nonlin_saw(filterFreq, filterReso);
+      ) : ( slider47 == 45 ) ? (
+        L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+        R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+      ) : ( slider47 == 46 ) ? (
+        L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+        R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+      ) : ( slider47 == 47 ) ? (
+        L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+        R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+        L.filter_SVF2.init_linearSVF( filterFreq*.5, filterReso*.5 );
+        R.filter_SVF2.init_linearSVF( filterFreq*.5, filterReso*.5 );
+        L.filter_delay1.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*(400*filterReso));      
+        R.filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*(400*filterReso));
+      ) : ( slider47 == 48 ) ? (
+        L.chan = 0;
+        R.chan = 1;
+        val = ( pow(10, filterFreq) - 1 ) / 9;
+        L.stereoize = filterReso > 0.5 ? 1 : 0;
+        R.stereoize = filterReso > 0.5 ? 1 : 0;
+        L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
+        R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
+      ) : ( slider47 == 49 ) ? (
+        L.chan = 0;
+        R.chan = 1;
+        val = ( pow(10, filterFreq) - 1 ) / 9;
+        
+        L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+        R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+         
+        L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
+        R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
+      ) : ( slider47 == 50 ) ? (
+        L.chan = 0;
+        R.chan = 1;
+        val = ( pow(10, filterFreq) - 1 ) / 9;
+        L.stereoize = filterReso;
+        R.stereoize = filterReso;
+        
+        L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
+        L.filter_SVF.init_linearSVF( filterFreq, filterReso );
+        R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
+         
+        L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
+        R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
       );
-      L.filter_fancymoog.initfancymoog(filterFreq, filterReso);
-      R.filter_fancymoog.initfancymoog(filterFreq, filterReso);
-    ) : ( slider47 == 11 ) ? (
-      L.filter_notch.initnotch(filterFreq, filterReso);
-      R.filter_notch.initnotch(filterFreq, filterReso);
-    ) : ( slider47 == 12 ) ? (
-      L.filter_sai0.initsai0(filterFreq, filterReso);
-      R.filter_sai0.initsai0(filterFreq, filterReso);
-      ( slider56 == 3 ) ? (
-        slider56 = 1;
-        slider_automate(slider56);
-        forceUpdate = 1;
-      );
-    ) : ( slider47 == 13 ) ? (
-      L.filter_modulator.initmodulator(filterFreq, filterReso);
-      R.filter_modulator.initmodulator(filterFreq, filterReso);      
-    ) : ( slider47 == 14 ) ? (
-      L.filter_phaser.initphaserOTA(filterFreq, filterReso);
-      L.filter_phaser2.initphaserOTA(filterFreq*2, filterReso);
-      L.filter_phaser3.initphaserOTA(filterFreq/2, filterReso);
-      L.filter_phaser4.initphaserOTA(filterFreq/3, filterReso);
-      R.filter_phaser.initphaserOTA(filterFreq, filterReso);
-      R.filter_phaser2.initphaserOTA(filterFreq*2, filterReso);
-      R.filter_phaser3.initphaserOTA(filterFreq/2, filterReso);
-      R.filter_phaser4.initphaserOTA(filterFreq/3, filterReso);      
-    ) : ( slider47 == 15 ) ? (
-      L.filter_phaser.initphaserFET(filterFreq, filterReso);
-      L.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
-      L.filter_phaser3.initphaserFET(filterFreq/2, filterReso);
-      L.filter_phaser4.initphaserFET(filterFreq/3, filterReso);
-      R.filter_phaser.initphaserFET(filterFreq, filterReso);
-      R.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
-      R.filter_phaser3.initphaserFET(filterFreq/2, filterReso);
-      R.filter_phaser4.initphaserFET(filterFreq/3, filterReso);
-    ) : ( slider47 == 16 ) ? (
-      L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-      R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-      filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq * 1000);
-      filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 2000);
-    ) : ( slider47 == 17 ) ? (
-      L.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-      R.filter_dualfilt.initdualfilt(filterFreq, filterReso);
-      filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
-      filter_delay2.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
-    ) : ( slider47 == 18 ) ? (
-      L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
-      R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
-    ) : ( slider47 == 19 ) ? (
-      L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
-      R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
-    ) : ( slider47 == 20 ) ? (
-      L.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
-      R.filter_ms20lin.init_MS20lin(filterFreq, filterReso);            
-    ) : ( slider47 == 21 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-    ) : ( slider47 == 22 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-    ) : ( slider47 == 23 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-    ) : ( slider47 == 24 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      L.filter_phaser.initphaserFET(filterFreq, filterReso);
-      L.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
-      R.filter_phaser.initphaserFET(filterFreq, filterReso);
-      R.filter_phaser2.initphaserFET(filterFreq*2, filterReso);
-      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*filterReso * 50);
-      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*filterReso * 51);  
-    ) : ( slider47 == 25 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);      
-    ) : ( slider47 == 26 ) ? (
-      L.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);
-      R.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);  
-    ) : ( slider47 == 27 ) ? (
-      L.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);
-      R.filter_ssm.init_ssm_nonlin(filterFreq, filterReso);  
-    ) : ( slider47 == 28 ) ? (
-      L.filter_cem.init_cem_nonlin(filterFreq, filterReso);
-      R.filter_cem.init_cem_nonlin(filterFreq, filterReso);
-    ) : ( slider47 == 29 ) ? (
-      L.filter_ssm_lin.init_ssm_lin(filterFreq, filterReso);
-      R.filter_ssm_lin.init_ssm_lin(filterFreq, filterReso);         
-    ) : ( slider47 == 30 ) ? (
-      L.filter_cem_lin.init_cem_lin(filterFreq, filterReso);
-      R.filter_cem_lin.init_cem_lin(filterFreq, filterReso);
-    ) : ( slider47 == 31 ) ? (
-      L.filter_sine.initSine(filterFreq, filterReso);
-      R.filter_sine.initSine(filterFreq, filterReso);
-    ) : ( slider47 == 32 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);       
-      L.filter_sine.initSine(filterFreq, filterReso);
-      R.filter_sine.initSine(filterFreq, filterReso);      
-    ) : ( slider47 == 33 ) ? (
-      L.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
-      R.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);    
-      L.filter_sine.initSine(filterFreq, filterReso);
-      R.filter_sine.initSine(filterFreq, filterReso);
-    ) : ( slider47 == 34 ) ? (
-      L.filter_broken.init_MS20_nonlin(.5*filterFreq, filterReso);
-      R.filter_broken.init_MS20_nonlin(.5*filterFreq, filterReso);        
-    ) : ( slider47 == 35 ) ? (
-      //L.filter_wasp2.init_ssm_nonlin(.5*filterFreq, filterReso);
-      //R.filter_wasp2.init_ssm_nonlin(.5*filterFreq, filterReso); 
-      L.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
-      R.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
-    ) : ( slider47 == 36 ) ? (
-      L.filter_wasp_lin.init_wasplin(filterFreq, filterReso);
-      R.filter_wasp_lin.init_wasplin(filterFreq, filterReso);
-    ) : ( slider47 == 37 ) ? (
-      L.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
-      R.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
-    ) : ( slider47 == 38 ) ? (
-      L.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
-      R.filter_wasp.init_wasp_nonlin(filterFreq, filterReso);
-    ) : ( ( slider47 > 38 ) && ( slider47 < 44 ) ) ? (
-      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
-      R.filter_SVF.init_linearSVF( filterFreq, filterReso );      
-    ) : ( slider47 == 44 ) ? (
-      L.filter_wasp.init_wasp_nonlin_saw(filterFreq, filterReso);
-      R.filter_wasp.init_wasp_nonlin_saw(filterFreq, filterReso);
-    ) : ( slider47 == 45 ) ? (
-      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
-      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
-    ) : ( slider47 == 46 ) ? (
-      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
-      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
-    ) : ( slider47 == 47 ) ? (
-      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
-      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
-      L.filter_SVF2.init_linearSVF( filterFreq*.5, filterReso*.5 );
-      R.filter_SVF2.init_linearSVF( filterFreq*.5, filterReso*.5 );
-      L.filter_delay1.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*(400*filterReso));      
-      R.filter_delay1.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*(400*filterReso));
-    ) : ( slider47 == 48 ) ? (
-      L.chan = 0;
-      R.chan = 1;
-      val = ( pow(10, filterFreq) - 1 ) / 9;
-      L.stereoize = filterReso > 0.5 ? 1 : 0;
-      R.stereoize = filterReso > 0.5 ? 1 : 0;
-      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
-      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
-    ) : ( slider47 == 49 ) ? (
-      L.chan = 0;
-      R.chan = 1;
-      val = ( pow(10, filterFreq) - 1 ) / 9;
-      
-      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
-      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
-       
-      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
-      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
-    ) : ( slider47 == 50 ) ? (
-      L.chan = 0;
-      R.chan = 1;
-      val = ( pow(10, filterFreq) - 1 ) / 9;
-      L.stereoize = filterReso;
-      R.stereoize = filterReso;
-      
-      L.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      R.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
-      L.filter_SVF.init_linearSVF( filterFreq, filterReso );
-      R.filter_SVF.init_linearSVF( filterFreq, filterReso );  
-       
-      L.filter_delay.initBufferNoReset(delay_buf1, delay_buf1 + max(1,slider54)*val * 250);
-      R.filter_delay.initBufferNoReset(delay_buf2, delay_buf2 + max(1,slider54)*val * 250);  
     );
   );
  
@@ -1761,7 +1803,7 @@ movavgLP = 0;
 movavgRN = 0;
 movavgRP = 0;
 
-updateActiveFilters();
+updateActiveFilters(1);
 
 // Generate windowed sinc filter at memory location FIR
 // Inputs are:
@@ -3655,8 +3697,6 @@ initialized = 1;
 
 function updateSliders( hard )
 (
-  calcGain();
-  
   modulator.setModRate( (1+2*slider37)^4 - 1 );
   overSampling.sliderWidget_setValue(slider54);
   inGain.sliderWidget_setValue(slider52);
@@ -3705,10 +3745,11 @@ function updateSliders( hard )
       dyn_atk     = (2^(2*(atkmul * slider60-25)/25));
       dyn_decay   = decaymul * slider61/50;
     );
-    dyn_mod_filt  = cutoffSlider.sliderWidget_getValue2();
-    dyn_mod_reso  = resonanceSlider.sliderWidget_getValue2();
-    dyn_mod_gain  = inGain.sliderWidget_getValue2();
   );
+  
+  dyn_mod_filt  = cutoffSlider.sliderWidget_getValue2();
+  dyn_mod_reso  = resonanceSlider.sliderWidget_getValue2();
+  dyn_mod_gain  = inGain.sliderWidget_getValue2();  
   
   ( ( dynamics == 1 ) || ( dynamics == 3 ) ) ? ( filterDynamics = 1; ) : ( filterDynamics = 0; );
   ( ( dynamics == 2 ) || ( dynamics == 3 ) ) ? ( distortionDynamics = 1; ) : ( distortionDynamics = 0; );
@@ -3807,7 +3848,7 @@ function initGUI()
   window2.init_window(2*wndPad+wndX, wndPad, wndX, wndY, 10, 2, positive_xloc, positive_yloc, positive_xloc2, positive_yloc2, neg_indices, temp_xloc, temp_yloc, temp_indices, pos_c1s, pos_c2s, pos_c3s, pos_c1s2, pos_c2s2, pos_c3s2);
   
   updateSliders(1);
-  updateActiveFilters();
+  updateActiveFilters(1);
 );
 
 function setupGUI()
@@ -3886,7 +3927,7 @@ function setupGUI()
   lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+3*sliderPad+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 0, 0, 1, 0, "", 0, "LFO rate");
   
   updateSliders(1);
-  updateActiveFilters();
+  updateActiveFilters(1);
 );
 
 // Initialize the splines
@@ -5471,13 +5512,13 @@ updateSliders();
 
 @slider
 updateSliders();
-updateActiveFilters();
+updateActiveFilters(1);
 
 @block
   ( forceUpdate==1 ) ? (
     forceUpdate = 0;
     updateSliders();
-    updateActiveFilters();
+    updateActiveFilters(1);
   );
   
  ( pdcDelay != lastpdcDelay ) ?
@@ -5496,12 +5537,13 @@ updateActiveFilters();
 @sample
   sl      = spl0 * pregain;
   sr      = spl1 * pregain;
-  alpha   = 0.9999;
-  
+ 
   modulator.updateModulator();
   
   // Dynamics
   // Optional input clipping
+  // Note that this input clipping is just for the dynamics and that the real clipping
+  // is done on the oversampled samples to avoid aliasing issues.
   ( slider55 & 1 ) ?
   ( 
     sbl = min(1,max(-1,sl));
@@ -5532,7 +5574,8 @@ updateActiveFilters();
     dynBuf.updateBuffer(dynval);
   ) : ( dynval = 1 );
   
-  ( filterDynamics || modulatorDynamics ) ? updateActiveFilters();
+  // Update active filter only if cutoff changed
+  updateActiveFilters(0);
   
   ( lookAhead ) ?
   (
@@ -5544,6 +5587,7 @@ updateActiveFilters();
     sr = oldr; 
   );
   
+  alpha = .9999;
   movavgLN = max(alpha*movavgLN, -sl);
   movavgLP = max(alpha*movavgLP,  sl);
   movavgRN = max(alpha*movavgRN, -sr);
@@ -5568,15 +5612,12 @@ updateActiveFilters();
     // N>1 oversampling
     sli = sl;
     sri = sr;
- //   slider40=0;
     ( slider40 == 1 ) ? (
       sincFilterL.advanceSinc(sli);
       sincFilterR.advanceSinc(sri);
     );
- //   slider40=1;
     loop( slider54,
       // Upsampling
- //     slider40=0;
       ( slider40 == 0 ) ? (
         ssl = filterL.inputFilter(sli);
         ssr = filterR.inputFilter(sri);
@@ -5584,7 +5625,6 @@ updateActiveFilters();
         ssl = sincFilterL.getSubSample();
         ssr = sincFilterR.getSubSample();
       );
- //     slider40=1;
       ( slider46 == 0 ) ?
       (
         ssl = L.process(ssl);
@@ -5661,15 +5701,13 @@ updateActiveFilters();
   );
   
   // DC correction
-  1 ? (
-    otm1=0.999*otm1 + sl - itm1;
-    itm1=sl;
-    sl=otm1;
-    otm2=0.999*otm2 + sr - itm2;
-    itm2=sr;
-    sr=otm2;
-  );
-  
+  otm1=0.999*otm1 + sl - itm1;
+  itm1=sl;
+  sl=otm1;
+  otm2=0.999*otm2 + sr - itm2;
+  itm2=sr;
+  sr=otm2;
+   
   movavgOLN = max(alpha*movavgOLN, -sl);
   movavgOLP = max(alpha*movavgOLP,  sl);
   movavgORN = max(alpha*movavgORN, -sr);
