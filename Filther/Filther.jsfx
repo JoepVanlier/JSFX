@@ -2,7 +2,7 @@ desc:Filther
 tags: Filther
 version: 1.26
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -54,11 +54,13 @@ slider36:0<0,16,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,1,1>-Reset LFO
 slider40:0<0,1,1>-FIR resampling
+
 slider45:0<0,1,1>-Dynamics RMS mode
 slider46:<0,6,1>-Filter Operation Mode
 slider47:<0,30,1{OFF, LP RC-C,LP Diode Ladder (303/Non-Linear Dominique Wurtz),Vowel,LP Karlsen Fast Ladder III,LP Karlsen Fast Ladder III (sat),Saike`s Waveshaped Resonance (LP),Saike`s Waveshaped Resonance (HP),Saike`s Waveshaped Resonance (BP),Expensive Moog,Less Expensive Moog (DANGEROUS),Notch filter,Narsty,Modulator,Phaser (OTA),Phaser (FET),Delay Feedbok,Mangler,,MS-20 linear LP, MS-20 linear BP, MS-20 linear HP, MS-20 nonlinear LP, MS-20 nonlinear BP, MS-20 nonlinear HP}>-Filter Type
 slider48:<0,1,.001>-Cutoff
 slider49:<0,1,.001>-Reso
+slider50:1<0,1,1>-Interpolation
 
 slider51:0<-1,1,.01>-Pre-Gain/Drive Mod %
 slider52:0<-40,40,.01>-PreGain
@@ -1848,9 +1850,13 @@ function outputFilter(sample)
   
 function updateActiveFilters( force )
   (
+    // Lerping
+    sliderCutoff  = sliderCutoff + dCutoff;
+    sliderReso    = sliderReso + dReso;
+    
     modval = filterDynamics * dynval + modulator.modvalue;
-    filterFreq = max( 0, min( 1, slider48 + dyn_mod_filt * modval ) );
-    filterReso = max( 0, min( 1, slider49 + dyn_mod_reso * modval ) );
+    filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * modval ) );
+    filterReso = max( 0, min( 1, sliderReso + dyn_mod_reso * modval ) );
     updateFiltersNow = ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) || force;
     
     pregain  = 2^((slider52 + 40 * dyn_mod_gain * modval)/6);
@@ -5773,6 +5779,22 @@ updateSliders();
 updateActiveFilters(1);
 
 @block
+  nextCutoff    = slider48;
+  nextReso      = slider49;
+  (samplesblock > 0) && ( samplesblock < 44100 ) && (slider50 == 1) ? (
+    dCutoff = (nextCutoff - prevCutoff) / (samplesblock);
+    dReso = (nextReso - prevReso) / (samplesblock);
+    sliderCutoff  = prevCutoff;
+    sliderReso    = prevReso;
+  ) : (
+    dCutoff       = 0;
+    dReso         = 0;
+    sliderCutoff  = slider48;
+    sliderReso    = slider49;
+  );
+  prevCutoff    = nextCutoff;
+  prevReso      = nextReso;
+
   // Check if the filter or filter mode changed
   flushIt = ( slider46 != currentMode ) || ( slider47 != currentFilter );
   ( flushIt == 1 ) ? (
