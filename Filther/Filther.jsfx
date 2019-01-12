@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.35
+version: 1.37
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation, display modulation range (to avoid confusion), added option to change modulation amnt, added filter frequency in Hz where sensible, made default tooltip wait time a bit longer and added a toggle to turn them off (T key), extra optimization wasp, made gui sizing / hide persistent. Added linux mode for font (L key). Minor bugfix vowel filter display. Add minimum oversampling.
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation, display modulation range (to avoid confusion), added option to change modulation amnt, added filter frequency in Hz where sensible, made default tooltip wait time a bit longer and added a toggle to turn them off (T key), extra optimization wasp, made gui sizing / hide persistent. Added linux mode for font (L key). Minor bugfix vowel filter display. Add minimum oversampling. Made sliders draggable. Added tempo synced modulation option.
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -52,7 +52,7 @@ slider34:0.9<0,1,.01>-Neg8y
 slider35:1<0,1,1{Off, On}>-Lookahead
 slider36:0<0,16,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
-slider38:0<0,1,1>-Reset LFO
+slider38:0<0,3,1>-Reset LFO
 slider39:1<0,4,.00001>-Modulation range
 slider40:0<0,1,1>-FIR resampling
 
@@ -95,7 +95,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.35";
+plugname = "FILTHER 1.37";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -107,6 +107,7 @@ lastOversample = 0;
 lastpdcDelay = -1000;
 lastIntegrationTime = -1000;
 nTapSinc = slider54 < 5 ? 16 : slider54*4;
+modulator.t = 0;
 
 function comboStrings(stridx, curitem)
   local(str)
@@ -233,7 +234,7 @@ function updateModulator()
     slider36 > 0 ? (
       modulatorDynamics = 1;
       t = t + modrate*invsrate;
-      slider38 && reset == 1 ? ( t = 0; reset = 0 );
+      (slider38 & 1) && reset == 1 ? ( t = 0; reset = 0 );
       modvalue = slider36 == 1 ? .5 + .5 * cos(twopi*t) 
       : ( slider36==2 )  ? .5 + .5 * sin(twopi*t)
       : ( slider36==3 )  ? ( ct = cos($pi*t); ct*ct )
@@ -3441,7 +3442,7 @@ function combobox_processMouse(xx, yy, mc)
 function sliderWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, two_values, minval_in, maxval_in, default_in, unit_in, isInteger_in, hint_in )
   local()
   global(newUI)
-  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, unit, isInteger, thisUI, htime, hint)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, unit, isInteger, thisUI, htime, hint, onmarker)
   (
       thisUI        = newUI+=1;
       x             = x_in+2;
@@ -3468,6 +3469,7 @@ function sliderWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, 
       isInteger     = isInteger_in;
       htime         = 0;
       hint          = hint_in;
+      onmarker      = 0;
   );
   
 function sliderWidget_setValue(value_in)
@@ -3491,7 +3493,7 @@ function sliderWidget_getValue()
 function sliderWidget_draw()
   local(jnk, siz, q, str, modmax, modmin)
   global(gfx_x, gfx_y, lastUI, retina_scaling,widgetFontSize, filterDynamics, dynval, modulator.modvalue, mlevel, fontface, slider39, modulatorDynamics )
-  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, unit, thisUI, htime, overridevalue, overrideunit)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, unit, thisUI, htime, overridevalue, overrideunit, onmarker)
   (
     gfx_setfont(1, fontface, widgetFontSize*retina_scaling);
     //gfx_set( r, g, b, .1 );
@@ -3522,7 +3524,13 @@ function sliderWidget_draw()
     gfx_rect( x-2*retina_scaling + value*w, yslidercenter - .2*h, 4*retina_scaling, h*.4 );
     gfx_set( r*.2, g*.2, b*.2, 0.4 );
     gfx_rect( x-retina_scaling + value*w, yslidercenter - .2*h + 1, 2*retina_scaling, h*.4-2 );
-
+    
+    onmarker == 1 ? 
+    (
+      gfx_set( 1, 1, 1, 0.4 );
+      gfx_rect( x-2*retina_scaling + value*w-1, yslidercenter - .2*h-1, 4*retina_scaling+2, h*.4+2 );
+    );
+    
     gfx_set( r, g, b, 0.4 );
     value2 > 0 ? gfx_rect( x + value*w, yslidercenter - .1*h, value2*w+1, h*.3 ) : gfx_rect( x + (value+value2)*w, yslidercenter - .1*h, abs(value2)*w, h*.3 );
 
@@ -3540,11 +3548,15 @@ function sliderWidget_draw()
     ( overridevalue == 0 ) ? (
       sprintf( str, "%2.3g%s", this.sliderWidget_getValue(), unit );
     ) : (
-      ( overridevalue > 1000 ) ? (
-        sprintf( str, "%2.3g (%2.3g k%s)", this.sliderWidget_getValue(), overridevalue/1000, overrideunit );
+      ( overridevalue == -1000 ) ? (
+        sprintf( str, "%2.3g (%s)", this.sliderWidget_getValue(), overrideunit );
       ) : (
-        sprintf( str, "%2.3g (%2.3g %s)", this.sliderWidget_getValue(), overridevalue, overrideunit );      
-      )
+        ( overridevalue > 1000 ) ? (
+          sprintf( str, "%2.3g (%2.3g k%s)", this.sliderWidget_getValue(), overridevalue/1000, overrideunit );
+        ) : (
+          sprintf( str, "%2.3g (%2.3g %s)", this.sliderWidget_getValue(), overridevalue, overrideunit );      
+        )
+      );
     );
     gfx_measurestr(str, siz, jnk);
     gfx_x = x + w - siz;
@@ -3587,8 +3599,8 @@ function sliderWidget_getValue2_nn()
   
 function sliderWidget_processMouse(xx, yy, dx, dy, mc)
   local(left, right, change, newcap, onslider, shft)
-  global(gfx_x, gfx_y, mouse_wheel, mouse_cap, lastUI, lastChar)
-  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, thisUI, htime, hint)
+  global(gfx_x, gfx_y, mouse_wheel, mouse_cap, lastUI, lastChar, retina_scaling)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, thisUI, htime, hint, onmarker)
   (
     left  = mc & 1;
     right = mc & 2;
@@ -3597,6 +3609,7 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
     change = 0;
     newcap = 0;
     onslider = ( ( xx > x ) && ( xx < (x+w) ) && ( yy > (yslidercenter-.2*h) ) && ( yy < (yslidercenter+.2*h) ) );
+    onmarker = abs( value * w + x - xx ) < 5*retina_scaling && ( yy > (yslidercenter-.2*h) ) && ( yy < (yslidercenter+.2*h) );
     
     onslider ? (
       htime = updateHintTime(hint);
@@ -3613,8 +3626,12 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
       (
         value       = default;
         change      = 1;
-      ) : ( ( cap == 1 ) || ( onslider && lastleft == 0 ) ) ? ( 
-        value       = (xx-x)/w;
+      ) : ( ( cap == 1 ) || ( ( onslider || onmarker ) && lastleft == 0 ) ) ? ( 
+        (mouse_cap & 8 == 0) ? (
+          value       = (xx-x)/w;
+        ) : (
+          value       = value - .125*dx/w;
+        );
         change      = 1;
         newcap      = 1;
         lastclick   = time_precise();
@@ -3623,7 +3640,7 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
     ) : ( 
       twoval && right ? 
       (
-        ( ( cap == 2 ) || (onslider && lastright == 0) ) ? ( 
+        ( ( cap == 2 ) || ((onmarker || onslider) && lastright == 0) ) ? ( 
           value2 = (xx-x)/w - value;
           change = 1;
           newcap = 2;
@@ -4155,7 +4172,218 @@ initialized = 1;
 
 function updateSliders( hard )
 (
-  modulator.setModRate( (1+2*slider37)^4 - 1 );
+  (slider38&2) == 0 ? (
+    modulator.setModRate( (1+2*slider37)^4 - 1 );
+  ) : (
+    cTime = slider37;
+    ( cTime < 0.0196078 ) ?
+    (
+      tempoLabel = "256";
+      cRate = 256;
+    ) : ( cTime < 0.0392157 ) ?
+    (
+      tempoLabel = "224";
+      cRate = 224;
+    ) : ( cTime < 0.0588235 ) ?
+    (
+      tempoLabel = "192";
+      cRate = 192;
+    ) : ( cTime < 0.0784314 ) ?
+    (
+      tempoLabel = "160";
+      cRate = 160;
+    ) : ( cTime < 0.0980392 ) ?
+    (
+      tempoLabel = "144";
+      cRate = 144;
+    ) : ( cTime < 0.117647 ) ?
+    (
+      tempoLabel = "128";
+      cRate = 128;
+    ) : ( cTime < 0.137255 ) ?
+    (
+      tempoLabel = "112";
+      cRate = 112;
+    ) : ( cTime < 0.156863 ) ?
+    (
+      tempoLabel = "96";
+      cRate = 96;
+    ) : ( cTime < 0.176471 ) ?
+    (
+      tempoLabel = "80";
+      cRate = 80;
+    ) : ( cTime < 0.196078 ) ?
+    (
+      tempoLabel = "64";
+      cRate = 64;
+    ) : ( cTime < 0.215686 ) ?
+    (
+      tempoLabel = "56";
+      cRate = 56;
+    ) : ( cTime < 0.235294 ) ?
+    (
+      tempoLabel = "48";
+      cRate = 48;
+    ) : ( cTime < 0.254902 ) ?
+    (
+      tempoLabel = "40";
+      cRate = 40;
+    ) : ( cTime < 0.27451 ) ?
+    (
+      tempoLabel = "32";
+      cRate = 32;
+    ) : ( cTime < 0.294118 ) ?
+    (
+      tempoLabel = "28";
+      cRate = 28;
+    ) : ( cTime < 0.313725 ) ?
+    (
+      tempoLabel = "24";
+      cRate = 24;
+    ) : ( cTime < 0.333333 ) ?
+    (
+      tempoLabel = "16";
+      cRate = 16;
+    ) : ( cTime < 0.352941 ) ?
+    (
+      tempoLabel = "8";
+      cRate = 8;
+    ) : ( cTime < 0.372549 ) ?
+    (
+      tempoLabel = "7";
+      cRate = 7;
+    ) : ( cTime < 0.392157 ) ?
+    (
+      tempoLabel = "6";
+      cRate = 6;
+    ) : ( cTime < 0.411765 ) ?
+    (
+      tempoLabel = "16/3";
+      cRate = 5.33333;
+    ) : ( cTime < 0.431373 ) ?
+    (
+      tempoLabel = "5";
+      cRate = 5;
+    ) : ( cTime < 0.45098 ) ?
+    (
+      tempoLabel = "4";
+      cRate = 4;
+    ) : ( cTime < 0.470588 ) ?
+    (
+      tempoLabel = "3";
+      cRate = 3;
+    ) : ( cTime < 0.490196 ) ?
+    (
+      tempoLabel = "8/3";
+      cRate = 2.66667;
+    ) : ( cTime < 0.509804 ) ?
+    (
+      tempoLabel = "4/3";
+      cRate = 1.33333;
+    ) : ( cTime < 0.529412 ) ?
+    (
+      tempoLabel = "7/6";
+      cRate = 1.16667;
+    ) : ( cTime < 0.54902 ) ?
+    (
+      tempoLabel = "1";
+      cRate = 1;
+    ) : ( cTime < 0.568627 ) ?
+    (
+      tempoLabel = "15/16";
+      cRate = 0.9375;
+    ) : ( cTime < 0.588235 ) ?
+    (
+      tempoLabel = "7/8";
+      cRate = 0.875;
+    ) : ( cTime < 0.607843 ) ?
+    (
+      tempoLabel = "5/6";
+      cRate = 0.833333;
+    ) : ( cTime < 0.627451 ) ?
+    (
+      tempoLabel = "13/16";
+      cRate = 0.8125;
+    ) : ( cTime < 0.647059 ) ?
+    (
+      tempoLabel = "3/4";
+      cRate = 0.75;
+    ) : ( cTime < 0.666667 ) ?
+    (
+      tempoLabel = "11/16";
+      cRate = 0.6875;
+    ) : ( cTime < 0.686275 ) ?
+    (
+      tempoLabel = "2/3";
+      cRate = 0.666667;
+    ) : ( cTime < 0.705882 ) ?
+    (
+      tempoLabel = "5/8";
+      cRate = 0.625;
+    ) : ( cTime < 0.72549 ) ?
+    (
+      tempoLabel = "9/16";
+      cRate = 0.5625;
+    ) : ( cTime < 0.745098 ) ?
+    (
+      tempoLabel = "1/2";
+      cRate = 0.5;
+    ) : ( cTime < 0.764706 ) ?
+    (
+      tempoLabel = "7/16";
+      cRate = 0.4375;
+    ) : ( cTime < 0.784314 ) ?
+    (
+      tempoLabel = "3/8";
+      cRate = 0.375;
+    ) : ( cTime < 0.803922 ) ?
+    (
+      tempoLabel = "1/3";
+      cRate = 0.333333;
+    ) : ( cTime < 0.823529 ) ?
+    (
+      tempoLabel = "5/16";
+      cRate = 0.3125;
+    ) : ( cTime < 0.843137 ) ?
+    (
+      tempoLabel = "1/4";
+      cRate = 0.25;
+    ) : ( cTime < 0.862745 ) ?
+    (
+      tempoLabel = "3/16";
+      cRate = 0.1875;
+    ) : ( cTime < 0.882353 ) ?
+    (
+      tempoLabel = "1/6";
+      cRate = 0.166667;
+    ) : ( cTime < 0.901961 ) ?
+    (
+      tempoLabel = "1/8";
+      cRate = 0.125;
+    ) : ( cTime < 0.921569 ) ?
+    (
+      tempoLabel = "1/12";
+      cRate = 0.0833333;
+    ) : ( cTime < 0.941176 ) ?
+    (
+      tempoLabel = "1/16";
+      cRate = 0.0625;
+    ) : ( cTime < 0.960784 ) ?
+    (
+      tempoLabel = "1/24";
+      cRate = 0.0416667;
+    ) : ( cTime < 0.980392 ) ?
+    (
+      tempoLabel = "1/32";
+      cRate = 0.03125;
+    ) : ( cTime < 1 ) ?
+    (
+      tempoLabel = "1/64";
+      cRate = 0.015625;
+    );
+    modulator.setModRate( .25 * (cTempo/60) / cRate );
+  );
+  
   overSampling.sliderWidget_setValue(slider54);
   inGain.sliderWidget_setValue(slider52);
   inGain.sliderWidget_setValue2_nn(slider51);
@@ -4187,8 +4415,9 @@ function updateSliders( hard )
   
   lfoFrequency.sliderWidget_setValue(slider37);
   modulationFactor.sliderWidget_setValue(slider39);
-  lfoResetButton.active = slider38==1 ? 1 : 0;
-
+  lfoResetButton.active = (slider38&1) ? 1 : 0;
+  tempoLFOButton.active = (slider38&2) ? 1 : 0;
+  
   dynamics = slider58;
   dynamicsEnabled = dynamics > 0;
   ( dynamicsEnabled ) ?
@@ -4381,10 +4610,11 @@ function setupGUI()
   lfoPanelY = 415 * retina_scaling;
   buttonHeight = 12 * retina_scaling;
   lfoPanel.groupWidget(lfoPanelX, lfoPanelY, sliderWidth, buttonHeight+sliderHeight*3+3*sliderPad, "LFO", wR, wG, wB, wA );
-  lfoSelect.combobox(lfoPanelX+sliderPad, lfoPanelY+sliderPad, .77*sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nLFO, 2, 1, 1, "Select LFO type" );
-  lfoResetButton.selectionButton(lfoPanelX+sliderPad+.77*sliderWidth, lfoPanelY+sliderPad, 43*retina_scaling, sliderHeight, "MIDI",  .3, .4, .8, .3, "Reset LFO phase on incoming MIDI note.");
-  lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 0, 0, 1, 0, "", 0, "LFO rate");
-  modulationFactor.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+3*sliderPad+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Modulation Range", wR, wG, wB, wA, 0, 0, 4, 1, "", 0, "Modulation range");
+  lfoSelect.combobox(lfoPanelX+sliderPad, lfoPanelY+sliderPad, .82*sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nLFO, 2, 1, 1, "Select LFO type" );
+  lfoResetButton.selectionButton(lfoPanelX+sliderPad+.8*sliderWidth, lfoPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight, "MIDI",  .3, .4, .8, .3, "Reset LFO phase on incoming MIDI note.");
+  modulationFactor.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Modulation Range", wR, wG, wB, wA, 0, 0, 4, 1, "", 0, "Modulation range");
+  lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+3*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 0, 0, 1, 0, "", 0, "LFO rate");
+  tempoLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+3*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Tempo",  .3, .4, .8, .3, "Synchronize to tempo");
 
   updateSliders(1);
   updateActiveFilters(1);
@@ -5975,6 +6205,7 @@ updateSliders();
 updateActiveFilters(1);
 
 @block
+  cTempo        = tempo;
   nextCutoff    = slider48;
   nextReso      = slider49;
   (samplesblock > 0) && ( samplesblock < 44100 ) && (slider50 == 1) ? (
@@ -6359,6 +6590,7 @@ updateActiveFilters(1);
     outClip.selectionButton_draw();
     firButton.selectionButton_draw();
     overSampling.sliderWidget_draw();
+    tempoLFOButton.selectionButton_draw();
     
     lfoFrequency.sliderWidget_draw();
     modulationFactor.sliderWidget_draw();
@@ -6387,6 +6619,15 @@ updateActiveFilters(1);
     cutoffSlider.sliderWidget_draw();
     resonanceSlider.sliderWidget_draw();
     
+    lfoFrequency.overridevalue = modulator.modrate;
+    (slider38&2) == 0 ? (
+      lfoFrequency.overridevalue = ((1+2*slider37)^4 - 1);
+      lfoFrequency.overrideunit = "Hz";
+    ) : (
+      lfoFrequency.overridevalue = -1000;
+      lfoFrequency.overrideunit = tempoLabel;
+    );
+     
     // Combobox should be the last to draw
     lfoSelect.combobox_draw();  
     modeSelect.combobox_draw();
@@ -6429,8 +6670,11 @@ updateActiveFilters(1);
           ( slider57 != newMultiplierMode ) ? ( slider_automate( slider57=newMultiplierMode; ); forceUpdate = 1; );
           
           lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=lookAheadButton.active; ); forceUpdate = 1; );
-          lfoResetButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)  ? ( slider_automate( slider38=lfoResetButton.active; ); forceUpdate = 1; );
           dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active; ); forceUpdate = 1; );
+          lfoResetButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+          tempoLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+          newLFOMode = lfoResetButton.active + 2*tempoLFOButton.active;
+          ( slider38 != newLFOMode ) ? ( slider_automate( slider38=newLFOMode ); forceUpdate = 1; );
           
           lfoFrequency.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( slider_automate( slider37=lfoFrequency.sliderWidget_getValue(); ); forceUpdate = 1; );
           modulationFactor.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap) ? ( slider_automate( slider39=modulationFactor.sliderWidget_getValue(); ); forceUpdate = 1; );
