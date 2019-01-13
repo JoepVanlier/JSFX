@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.41
+version: 1.42
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation, display modulation range (to avoid confusion), added option to change modulation amnt, added filter frequency in Hz where sensible, made default tooltip wait time a bit longer and added a toggle to turn them off (T key), extra optimization wasp, made gui sizing / hide persistent. Added linux mode for font (L key). Minor bugfix vowel filter display. Add minimum oversampling. Made sliders draggable. Added tempo synced modulation option. Fix for RMS mode (x4's should be ignored). Added MIDI modes for dynamics control. Solve issue that could accidentally kill one too many nodes. Fixed bug that allowed last spline node to be deleted. Hide dynamics slider.
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation, display modulation range (to avoid confusion), added option to change modulation amnt, added filter frequency in Hz where sensible, made default tooltip wait time a bit longer and added a toggle to turn them off (T key), extra optimization wasp, made gui sizing / hide persistent. Added linux mode for font (L key). Minor bugfix vowel filter display. Add minimum oversampling. Made sliders draggable. Added tempo synced modulation option. Fix for RMS mode (x4's should be ignored). Added MIDI modes for dynamics control. Solve issue that could accidentally kill one too many nodes. Fixed bug that allowed last spline node to be deleted. Hide dynamics slider. Increase precision MIDI events.
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -95,7 +95,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.41";
+plugname = "FILTHER 1.42";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -2014,7 +2014,8 @@ function updateActiveFilters( force )
     sliderCutoff  = sliderCutoff + dCutoff;
     sliderReso    = sliderReso + dReso;
     
-    modval = filterDynamics * dynval + modulator.modvalue * slider39;
+    dv = 0.01 * dynval + 0.99 * dv; // Avoid too steep transitions.
+    modval = filterDynamics * dv + modulator.modvalue * slider39;
     filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * modval ) );
     filterReso = max( 0, min( 1, sliderReso + dyn_mod_reso * modval ) );
     updateFiltersNow = ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) || force;
@@ -4143,6 +4144,7 @@ sinc_flt3       = 930000; // Downsamplers
 sinc_flt4       = 940000;
 sinc_hist1      = 950000; // Downsampler history
 sinc_hist2      = 960000;
+note_mem        = 970000;
 
 // Global storage for variables
 negative_xloc   = 100;
@@ -6276,25 +6278,59 @@ updateActiveFilters(1);
     pdc_delay = pdcDelay;
   );
   
+  handlesMIDI = modulator.reset == 1 || slider45 > 1;
+  notePtr = note_mem;
   while (midirecv(offset,msg1,msg2,msg3)) (
-     msg1==$x90 && msg3!=0 ? (
-      modulator.reset=1; // note-on!
-      notesOn = notesOn + 1;
-      
-      (slider45 == 2) ? ( tDynamic = 0; dynval = 0; );
+      msg1==$x90 && msg3!=0 ? (
+      notePtr[] = offset;
+      notePtr += 1;
+      notePtr[] = 1;
+      notePtr += 1;
+    ) : ( msg1==$x80 ) ? (
+      notePtr[] = offset;
+      notePtr += 1;
+      notePtr[] = 2;
+      notePtr += 1;
     );
-    msg1==$x80 ? notesOn = notesOn - 1;
-    notesOn = max(0, notesOn);
     
     midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
   );
-  
-@sample
-  sl      = spl0 * pregain;
-  sr      = spl1 * pregain;
+  notePtr[]     = -1;       // Signal end of note buffer
+  notePtr       = note_mem;
+  curSample     = 0;        // Keeps track of the offset
+  notes_remain  = 1;        // End of the note buffer?
+  note_next     = notePtr[];
  
-  modulator.updateModulator();
+@sample
+  sl        = spl0 * pregain;
+  sr        = spl1 * pregain;
+  curSample += 1;
   
+  modulator.updateModulator();  
+  
+  // Does this plugin respond to MIDI signals?
+  // Take notes from the stack until we hit the end marker -1
+  (handlesMIDI && notes_remain) ? (
+    while( note_next == curSample ) (
+      notePtr += 1; 
+      (notePtr[] == 1) ? ( // note-on
+        modulator.reset=1;
+        notesOn = notesOn + 1;
+        
+        (slider45 == 2) ? ( tDynamic = 0; dynval = 0; );
+      ) : (notePtr[] == 2) ? ( // note-off
+        notesOn = notesOn - 1;
+        notesOn = max(0, notesOn);
+      );
+      notePtr += 1;
+      
+      // Avoid constantly dereferencing by picking up the next one
+      note_next = notePtr[];
+      notes_remain = note_next != -1;
+    );
+  );
+  
+  notePtrAtEnd=note_next;
   // Dynamics
   // Optional input clipping
   // Note that this input clipping is just for the dynamics and that the real clipping
