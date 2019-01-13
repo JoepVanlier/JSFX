@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 1.38
+version: 1.39
 author: Joep Vanlier
-changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation, display modulation range (to avoid confusion), added option to change modulation amnt, added filter frequency in Hz where sensible, made default tooltip wait time a bit longer and added a toggle to turn them off (T key), extra optimization wasp, made gui sizing / hide persistent. Added linux mode for font (L key). Minor bugfix vowel filter display. Add minimum oversampling. Made sliders draggable. Added tempo synced modulation option. Fix for RMS mode (x4's should be ignored).
+changelog: Potatoes, improved kr0g filters, added pregain automation, fixed minor issues, added 5 more filters, widened combobox, added a bunch of FM filters and sine wave distortion, added optional input/output clipping, improved usability (bigger sliders, mouse wheel for precise motion, black background for threshold slider), presets, attempt 2, attempt 3, fix for LFO (disabled when turned off), added RMS mode for dynamics, removed secondary slider range for sliders which do not support it, added wasp filter, added retina scaling, added keyboard handling, added attack and decay multiplier options, fixed threshold going out of bounds,fix thresh jitter,major bugfix extrapolation,fix issue with RMS acquiring DC and not losing it, attempted to automate retina support, initialize spline immediately to avoid flicker, fixed update bug, enhanced stability saike's waveshaped filters (feedback clipper), added logo, fixed mouse wheel behaviour, fixed incorrect spline loading behavior, fix for RMS detection, fontsize fix for mac (hopefully), added drawing dynamics of the shaper when activated to make this more clear, added a few comb filters, added scaling for non windows machines, bugfix modulation, bugfix refreshing of dynamic mode labels, bugfix filter selection, fix rms clipping behavior, added FIR option for up/downsampling, fix pdc_delay, increase scale when double clicking logo, added usage hints, improved some hint descriptions, hotfix lfo, perf improvements wasp, fixed issue with filters modes leaking output to eachother when switching, more rigorous buffer clearing, added cutoff/reso interpolation, display modulation range (to avoid confusion), added option to change modulation amnt, added filter frequency in Hz where sensible, made default tooltip wait time a bit longer and added a toggle to turn them off (T key), extra optimization wasp, made gui sizing / hide persistent. Added linux mode for font (L key). Minor bugfix vowel filter display. Add minimum oversampling. Made sliders draggable. Added tempo synced modulation option. Fix for RMS mode (x4's should be ignored). Added MIDI modes for dynamics control.
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -56,7 +56,7 @@ slider38:0<0,3,1>-Reset LFO
 slider39:1<0,4,.00001>-Modulation range
 slider40:0<0,1,1>-FIR resampling
 
-slider45:0<0,1,1>-Dynamics RMS mode
+slider45:0<0,3,1{Dynamic RMS,Direct RMS,MIDI poly,MIDI legato>Dynamics mode
 slider46:<0,6,1>-Filter Operation Mode
 slider47:<0,30,1{OFF, LP RC-C,LP Diode Ladder (303/Non-Linear Dominique Wurtz),Vowel,LP Karlsen Fast Ladder III,LP Karlsen Fast Ladder III (sat),Saike`s Waveshaped Resonance (LP),Saike`s Waveshaped Resonance (HP),Saike`s Waveshaped Resonance (BP),Expensive Moog,Less Expensive Moog (DANGEROUS),Notch filter,Narsty,Modulator,Phaser (OTA),Phaser (FET),Delay Feedbok,Mangler,,MS-20 linear LP, MS-20 linear BP, MS-20 linear HP, MS-20 nonlinear LP, MS-20 nonlinear BP, MS-20 nonlinear HP}>-Filter Type
 slider48:<0,1,.001>-Cutoff
@@ -95,7 +95,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.38";
+plugname = "FILTHER 1.39";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -108,6 +108,9 @@ lastpdcDelay = -1000;
 lastIntegrationTime = -1000;
 nTapSinc = slider54 < 5 ? 16 : slider54*4;
 modulator.t = 0;
+notesOn = 0;
+israte = 1/srate;
+log2 = log(2);
 
 function comboStrings(stridx, curitem)
   local(str)
@@ -3697,9 +3700,9 @@ function gen_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, 
   );
   
 function gen_dynamics(xp, yp, wp, hp)
-  instance(x, y, w, h, yref, sc, cap_mode, inLight, outLight, dynLight, lastleft)
-  global(inLight.toggleLight, retina_scaling)
-  local(bw, bh, ych, xoff, yoff)
+  instance(x, y, w, h, yref, sc, cap_mode, inLight, outLight, dynLight, lastleft, RMSButton, MIDIButton)
+  global(inLight.toggleLight, retina_scaling,RMSButton.selectionButton,MIDIButton.selectionButton)
+  local(hy, bw, bh, ych, xoff, yoff)
   (
     x = xp;
     y = yp;
@@ -3707,7 +3710,7 @@ function gen_dynamics(xp, yp, wp, hp)
     h = hp;
     cap_mode = 0; 
     lastleft = 0;
-    
+        
     bw = 10*retina_scaling;
     bh = 10*retina_scaling;
     ych = 2*bh;
@@ -3716,6 +3719,12 @@ function gen_dynamics(xp, yp, wp, hp)
     inLight.toggleLight(xoff, yoff, bw, bh, "In", 1, 1, .3, .3, .3, 1);
     outLight.toggleLight(xoff, yoff+ych, bw, bh, "Out", 1, .6, .3, 1, .9, 1);
     dynLight.toggleLight(xoff, yoff+2*ych, bw, bh, "Dynamics", 1, .8, .8, .2, .3, 1);    
+    
+    hy = 15*retina_scaling;
+    bw = 55*retina_scaling;
+    bh = 10*retina_scaling;
+    RMSButton.selectionButton(x+5, y+4, bw, bh, "RMS",  .3, .4, .8, .3, "RMS trigger\n\nSelecting this mode bases dynamics on RMS value of incoming signal.");
+    MIDIButton.selectionButton(x+5, y+4+hy, bw, bh, "MIDI",  .3, .4, .8, .3, "Note trigger\n\nSelecting this mode bases dynamics on MIDI note triggers.");
     
     sc = h;
   );
@@ -3924,92 +3933,108 @@ function draw_buffer(scopeptr, scopebuffer, scopebuffermax, mul)
   );  
 
 function draw_dynamics(thresh)
-  instance(x, y, w, h, yref, sc, cap_mode, highlight, inLight, outLight, dynLight)
-  globals(gfx_r, gfx_g, gfx_b, gfx_x, gfx_y, inLight.toggleLight_draw)
+  instance(x, y, w, h, yref, sc, cap_mode, highlight, inLight, outLight, dynLight, RMSButton, MIDIButton)
+  globals(slider45, gfx_r, gfx_g, gfx_b, gfx_x, gfx_y, inLight.toggleLight_draw, RMSButton.selectionButton_draw, MIDIButton.selectionButton_draw)
   local(texloc, lineloc)
   (
     yref = y+h;
     this.draw_grid(10, 10*sc/h);
     gfx_set( 0.0, 0.0, 0.0, 1.0 );
-    gfx_x = x;
-    texloc = yref-sc*thresh-9;
-    ( texloc > y ) ? (
-      gfx_y = texloc;
-      gfx_printf( "Thresh" );
-    );
-    lineloc = yref - sc*thresh+1;
-    ( lineloc > y ) ? gfx_line( x, lineloc, x + w, yref -sc * thresh + 1 );
     
-    gfx_set( 0.9, 0.3, 0.3, 1.0 );
-    gfx_x = x+2;
-    ( texloc > y ) ? (
-      gfx_y = texloc-1;
-      gfx_printf( "Thresh" );
-    );
+    slider45 < 2 ? (
+      gfx_x = x;
+      texloc = yref-sc*thresh-9;
+      ( texloc > y ) ? (
+        gfx_y = texloc;
+        gfx_printf( "Thresh" );
+      );
+      lineloc = yref - sc*thresh+1;
+      ( lineloc > y ) ? gfx_line( x, lineloc, x + w, yref -sc * thresh + 1 );
     
-    ( lineloc > y ) ? (
-      gfx_line( x, yref - sc*thresh, x + w, yref -sc*thresh );
-      ( highlight == 1 ) ? gfx_rect( x, yref - sc*thresh-1, w, 2 );
+      gfx_set( 0.9, 0.3, 0.3, 1.0 );
+      gfx_x = x+2;
+      ( texloc > y ) ? (
+        gfx_y = texloc-1;
+        gfx_printf( "Thresh" );
+      );
+    
+      ( lineloc > y ) ? (
+        gfx_line( x, yref - sc*thresh, x + w, yref -sc*thresh );
+        ( highlight == 1 ) ? gfx_rect( x, yref - sc*thresh-1, w, 2 );
+      );
     );
     
     inLight.toggleLight_draw();
     outLight.toggleLight_draw();
     dynLight.toggleLight_draw();
+    
+    RMSButton.selectionButton_draw();
+    MIDIButton.selectionButton_draw();
   );
   
 function processMouseDynamics(xx, yy, dx, dy, mc, thresh)
-  instance(x, y, w, h, yref, sc, cap_mode, highlight, inLight, outLight, dynLight, lastleft)
-  local(left, right)
-  global(forceUpdate, gfx_x, gfx_y, mouse_wheel, slider59, inLight.toggleLight_processMouse, outLight.toggleLight_processMouse, dynLight.toggleLight_processMouse)
+  instance(x, y, w, h, yref, sc, cap_mode, highlight, inLight, outLight, dynLight, lastleft, RMSButton, MIDIButton)
+  local(left, right, buttonClicked)
+  global(slider45, forceUpdate, gfx_x, gfx_y, mouse_wheel, slider59, inLight.toggleLight_processMouse, outLight.toggleLight_processMouse, dynLight.toggleLight_processMouse, RMSButton.selectionButton_setActive, MIDIButton.selectionButton_setActive, RMSButton.selectionButton_processMouse, MIDIButton.selectionButton_processMouse)
   (
     left  = mc & 1;
-    right = mc & 2;
+    right = mc & 2;   
     
     inLight.toggleLight_processMouse(xx, yy, mc);
     outLight.toggleLight_processMouse(xx, yy, mc);
     dynLight.toggleLight_processMouse(xx, yy, mc);    
     
-    highlight = 0;
-    ( (mouse_wheel ~= 0) && xx > x && yy > y && xx < (x+w) && yy < (y+h) ) ?
-    (
-      sc += .5*mouse_wheel;
-      mouse_wheel = 0;
-      ( sc < 0 ) ? sc = 0.01;
-    );
+    buttonClicked = 0;
+    RMSButton.selectionButton_processMouse(xx, yy, mc)  ? ( slider45 = slider45 & 1;       slider_automate(slider45); buttonClicked = 1; );
+    MIDIButton.selectionButton_processMouse(xx, yy, mc) ? ( slider45 = 2 + (slider45 & 1); slider_automate(slider45); buttonClicked = 1; );
+
+    RMSButton.selectionButton_setActive(slider45<2);
+    MIDIButton.selectionButton_setActive(slider45>1);
     
-    ( left ) ?
+    ( buttonClicked == 0 ) ?
     (
-      ( cap_mode == 0 ) ? 
+      highlight = 0;
+      ( (mouse_wheel ~= 0) && xx > x && yy > y && xx < (x+w) && yy < (y+h) ) ?
       (
-        ( xx > x && yy > y && xx < (x+w) && yy < (y+h) && lastleft == 0 ) ?
-        (
-          ( yy > (yref - sc*thresh - 8) ) && ( yy < (yref - sc*thresh + 8) ) ?
-          (
-            cap_mode = 2;
-          ) : (
-            cap_mode = 1;
-          );
-        );
-      ) : ( cap_mode == 1 ) ? (
-        sc += 15 * dy;
-       ( sc < 100 ) ? sc = 100;
-       ( sc > 5000 ) ? sc = 5000;
-      ) : (
-        thresh += dy/h/(sc/h);
-        ( thresh < 0 ) ? thresh = 0;
-        ( thresh > h/sc ) ? thresh = h/sc;
-        ( thresh > 1 ) ? thresh = 1;        
-        slider59 = thresh;
-        slider_automate(slider59);
-        forceUpdate = 1;
+        sc += .5*mouse_wheel;
+        mouse_wheel = 0;
+        ( sc < 0 ) ? sc = 0.01;
       );
-    ) : (
-      cap_mode = 0;
-      ( xx > 0 && yy > 0 && xx < (x+w) && yy < (y+h) ) ?
+      
+      ( left ) ?
       (
-        ( yy > (yref - sc*thresh-10) ) && ( yy < (yref - sc*thresh+10) ) ?
+        ( cap_mode == 0 ) ? 
         (
-          highlight = 1;
+          ( xx > x && yy > y && xx < (x+w) && yy < (y+h) && lastleft == 0 ) ?
+          (
+            ( yy > (yref - sc*thresh - 8) ) && ( yy < (yref - sc*thresh + 8) ) ?
+            (
+              cap_mode = 2;
+            ) : (
+              cap_mode = 1;
+            );
+          );
+        ) : ( cap_mode == 1 ) ? (
+          sc += 15 * dy;
+         ( sc < 100 ) ? sc = 100;
+         ( sc > 5000 ) ? sc = 5000;
+        ) : (
+          thresh += dy/h/(sc/h);
+          ( thresh < 0 ) ? thresh = 0;
+          ( thresh > h/sc ) ? thresh = h/sc;
+          ( thresh > 1 ) ? thresh = 1;        
+          slider59 = thresh;
+          slider_automate(slider59);
+          forceUpdate = 1;
+        );
+      ) : (
+        cap_mode = 0;
+        ( xx > 0 && yy > 0 && xx < (x+w) && yy < (y+h) ) ?
+        (
+          ( yy > (yref - sc*thresh-10) ) && ( yy < (yref - sc*thresh+10) ) ?
+          (
+            highlight = 1;
+          );
         );
       );
     );
@@ -4403,7 +4428,7 @@ function updateSliders( hard )
   lookAheadButton.active          = slider35==1 ? 1 : 0;
   inClip.active                   = slider55 & 1 ? 1 : 0;
   outClip.active                  = slider55 & 2 ? 1 : 0;
-  dynButton.active                = slider45==1 ? 1 : 0;
+  dynButton.active                = slider45 & 1 ? 1 : 0;
 
   atk_x4_1.active                 = slider57 & 1 ? 1 : 0;
   atk_x4_2.active                 = slider57 & 2 ? 1 : 0;
@@ -4422,16 +4447,22 @@ function updateSliders( hard )
   dynamicsEnabled = dynamics > 0;
   ( dynamicsEnabled ) ?
   (
-    atkmul        = ( 1 + 3*atk_x4_1.active ) * ( 1 + 3*atk_x4_2.active );
-    
-    dyn_thresh    = slider59;
-    ( slider45 == 0 ) ? (
-      decaymul      = ( 1 + 3*decay_x4_1.active ) * ( 1 + 3*decay_x4_2.active );
-      dyn_atk     = 1 / ( atkmul * slider60 * srate / 100 + 0.0001 );
-      dyn_decay   = 1 / ( log(2) * max(.05, decaymul * slider61) * srate / 100 + 0.0001 );      
+    atkmul          = ( 1 + 3*atk_x4_1.active ) * ( 1 + 3*atk_x4_2.active );
+    dyn_thresh      = slider59;
+    ( slider45 == 1 ) ? (
+      dyn_atk       = (2^(2*(atkmul * slider60-25)/25));
+      dyn_decay     = slider61/50;
     ) : (
-      dyn_atk     = (2^(2*(atkmul * slider60-25)/25));
-      dyn_decay   = slider61/50;
+      decaymul       = ( 1 + 3*decay_x4_1.active ) * ( 1 + 3*decay_x4_2.active );
+      dyn_atk_time   = max(5,atkmul * slider60 * srate / 100);
+      dyn_atk        = 1 / dyn_atk_time;
+      dyn_decay_time = log2 * max(.05, decaymul * slider61) * srate / 100 + 0.0001;
+      dyn_decay      = 1 / dyn_decay_time;
+ 
+      ( slider45 == 2 ) ? (
+        dyn_hold_time = max(5, slider59 * srate);
+        dyn_hold_end  = dyn_hold_time + dyn_atk_time;
+      )
     );
   );
   
@@ -6243,11 +6274,19 @@ updateActiveFilters(1);
     pdc_bot_ch=0; 
     pdc_top_ch=2;
     pdc_delay = pdcDelay;
-  );  
+  );
   
   while (midirecv(offset,msg1,msg2,msg3)) (
-     msg1==$x90 && msg3!=0 ? modulator.reset=1; // note-on!
-     midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
+     msg1==$x90 && msg3!=0 ? (
+      modulator.reset=1; // note-on!
+      notesOn = notesOn + 1;
+      
+      (slider45 == 2) ? ( tDynamic = 0; dynval = 0; );
+    );
+    msg1==$x80 ? notesOn = notesOn - 1;
+    notesOn = max(0, notesOn);
+    
+    midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
   );
   
 @sample
@@ -6269,22 +6308,40 @@ updateActiveFilters(1);
     sbr = sr;
   );
   
+  // Calculation of the dynamic variable
   inV = inVol.updateBuffer( RMS1.updateRMS(sbl, sbr) );
-  ( dynamicsEnabled ) ?
+ ( dynamicsEnabled ) ?
   (
-    // Regular threshold mode
     ( slider45 == 0 ) ?
     (
+      // Regular threshold mode
       ( inV > dyn_thresh ) ? (
         dynval = dynval + dyn_atk;
         dynval = min(1, dynval);
       ) : (
         dynval = dynval - dyn_decay * dynval;
       );
-    ) : (
-      // RMS based mode
-      dynval = min(1, (inV/dyn_thresh)^dyn_atk);
+    ) : ( slider45 == 1 ) ? (
+      // Direct RMS based mode
+      dynval = min(1, (abs(inV)/dyn_thresh)^dyn_atk);
       dynval = (1 - dyn_decay) * dynval + dyn_decay * (1-dynval);
+    ) : ( slider45 == 2 ) ? (
+      // Fixed envelope that plays on note on
+      tDynamic = tDynamic + 1;
+      (tDynamic < dyn_atk_time) ? (
+        dynval = dynval + dyn_atk;
+      ) : ( tDynamic > dyn_hold_end ) ? (
+        dynval = dynval - dyn_decay * dynval;
+      );
+      dynval = min(1, dynval);
+    ) : ( slider45 == 3 ) ? (
+      // Note mode (Legato)
+      ( notesOn > 0 ) ? (
+        dynval = dynval + dyn_atk * ( 1-dyn_thresh ) + 3*dyn_thresh * dyn_atk*(1-dynval);
+        dynval = min(1, dynval);
+      ) : (
+        dynval = dynval - dyn_decay * dynval;
+      );
     );
     
     dynBuf.updateBuffer(dynval);
@@ -6567,7 +6624,8 @@ updateActiveFilters(1);
     window3.draw_dynamics(dyn_thresh);
     
     retina_scaling > 1 ? gfx_setfont(1, fontface, 10*retina_scaling) : gfx_setfont(0);
-    window3.draw_text("Dynamics", .025, .025);
+    //window3.draw_text("Dynamics", .025, .025);
+    
     window3.ylabel("RMS / Level");
     window3.xlabel("Time");
     window1.draw_window(movAvgLN, movAvgRN, movavgOLN, movavgORN);
@@ -6670,7 +6728,7 @@ updateActiveFilters(1);
           ( slider57 != newMultiplierMode ) ? ( slider_automate( slider57=newMultiplierMode; ); forceUpdate = 1; );
           
           lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=lookAheadButton.active; ); forceUpdate = 1; );
-          dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active; ); forceUpdate = 1; );
+          dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active + (slider45 & 2); ); forceUpdate = 1; );
           lfoResetButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
           tempoLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
           newLFOMode = lfoResetButton.active + 2*tempoLFOButton.active;
@@ -6712,21 +6770,81 @@ updateActiveFilters(1);
         threshSlider.setLabel("Threshold");
         attackSlider.setLabel("Attack");
         decaySlider.setLabel("Decay");
-        
+        dynButton.setLabel("RMS Mode");
+
+        dynButton.hint = "Use threshold or modulate directly by RMS.\n\nThe dynamic variable (shown with the yellow curve) changes based\non one of two mechanisms. Either it changes based on an attack/decay\nmechanism based on thresholding the input RMS value (RMS mode off),\nor it is directly set (without transient) to a function of the RMS \nvalue (RMS mode on).";
         threshSlider.hint = "Threshold value.\nWhen input RMS exceeds this value,\nthe dynamic variable begins to accumulate.\n";
         attackSlider.hint = "Attack\nHow long does the dynamic variable take to change\nto its maximal value once over the threshold..";
-        decaySlider.hint  = "Decay\nHow long does the dynamic variable take to\ndecay when below the threshold"; 
-      ) : ( 
+        decaySlider.hint  = "Decay\nHow long does the dynamic variable take to\ndecay when below the threshold";        
+      ) : ( slider45 == 1 ) ?
+      (
         threshSlider.setLabel("Maximum");
         attackSlider.setLabel("Curve / Attack");
         decaySlider.setLabel("Inversion");
+        dynButton.setLabel("RMS Mode");
         
+        dynButton.hint = "Use threshold or modulate directly by RMS.\n\nThe dynamic variable (shown with the yellow curve) changes based\non one of two mechanisms. Either it changes based on an attack/decay\nmechanism based on thresholding the input RMS value (RMS mode off),\nor it is directly set (without transient) to a function of the RMS \nvalue (RMS mode on).";
         threshSlider.hint = "Maximum\nAt which RMS signal value should\nthe dynamic modulation be 1.\n";
         attackSlider.hint = "Curve\nSets how steep the non-linearity between\nRMS value and dynamic variable is.";
         decaySlider.hint  = "Inversion\nChange polarity. 25 results in no dynamic modulation."; 
+      ) : ( slider45 == 2 ) ?
+      (
+        threshSlider.setLabel("Hold");
+        attackSlider.setLabel("Attack");
+        decaySlider.setLabel("Decay");
+        dynButton.setLabel("Legato");
+        
+        dynButton.hint = "Play fixed envelope and restart envelope\nupon each MIDI note or play legato style.";
+        threshSlider.hint = "Shape.\nShape of the envelope (0.5 = linear).\n";
+        attackSlider.hint = "Attack\nHow long does the dynamic variable take to change\nto its maximal value once over the threshold..";
+        decaySlider.hint  = "Decay\nHow long does the dynamic variable take to\ndecay when below the threshold"; 
+      ) : ( slider45 == 3 ) ?
+      (
+        threshSlider.setLabel("Shape");
+        attackSlider.setLabel("Attack");
+        decaySlider.setLabel("Decay");
+        dynButton.setLabel("Legato");
+        
+        dynButton.hint = "Play fixed envelope and restart envelope\nupon each MIDI note or play legato style.";
+        threshSlider.hint = "Shape.\nShape of the envelope (0.5 = linear).\n";
+        attackSlider.hint = "Attack\nHow long does the dynamic variable take to change\nto its maximal value once over the threshold..";
+        decaySlider.hint  = "Decay\nHow long does the dynamic variable take to\ndecay when below the threshold"; 
       );
-      
+            
+      updateSliders(1);
       refreshDynMode = slider45;
+    );
+    
+    ( slider45 == 0 ) ?
+    (
+      threshSlider.overridevalue = 0;
+      threshSlider.unit = " V";
+      attackSlider.overridevalue = dyn_atk_time / srate;
+      attackSlider.overrideunit = "s";
+      decaySlider.overridevalue = dyn_decay_time / srate;
+      decaySlider.overrideunit = "s";
+    ) : ( slider45 == 1 ) ? 
+    (
+      threshSlider.overridevalue = 0;
+      threshSlider.unit = " V";
+      attackSlider.overridevalue = 0;
+      decaySlider.overridevalue = 0;
+    ) : ( slider45 == 2 ) ?
+    (
+      threshSlider.overridevalue = dyn_hold_time / srate;
+      threshSlider.overrideunit = "s";
+      attackSlider.overridevalue = dyn_atk_time / srate;
+      attackSlider.overrideunit = "s";
+      decaySlider.overridevalue = 2*dyn_decay_time / srate;
+      decaySlider.overrideunit = "s";
+    ) : ( slider45 == 3 ) ?
+    (
+      threshSlider.overridevalue = 0;
+      threshSlider.unit = "-";
+      attackSlider.overridevalue = dyn_atk_time / srate;
+      attackSlider.overrideunit = "s";
+      decaySlider.overridevalue = 2*dyn_decay_time / srate;
+      decaySlider.overrideunit = "s";
     );
     
     globalTime = time_precise();
