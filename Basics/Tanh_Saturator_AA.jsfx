@@ -1,0 +1,107 @@
+﻿desc:Anti-aliased Tanh Saturation
+tags: saturation distortion anti-aliased
+version: 1.00
+author: Joep Vanlier
+license: MIT
+
+Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
+Proceedings of the 19th International Conference on Digital Audio Effects (DAFx-16), Brno, Czech Republic, September 5–9, 2016
+I have only implemented the rect version, since the linear one depends on Li2 and LUTs aren't so fast in JSFX.
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+slider1:0<-6,24,1>Gain (dB)
+slider2:0<-18,0,1>Ceiling (dB)
+slider3:1<0,1,1>Antialias?
+slider4:0<0,1,1>Fix DC?
+
+@init
+bpos=0;
+
+@slider
+preamp      = 10^(slider1/20);
+ceiling     = 10^(-slider2/20);
+inv_ceiling = 10^(slider2/20);
+
+@block
+blah+=samplesblock;
+
+@sample
+spl0=spl0;
+spl1=spl1;
+
+@sample 
+  function F0(x, em2x)
+  local()
+  global()
+  instance()
+  (
+    x - log(2/(1 + em2x))
+  );
+  
+  function atanh_prec(x, em2x)
+  local() 
+  global()
+  instance()
+  (
+    (2/(1+em2x))-1
+  );
+  
+  function atanh(x)
+  local()
+  global()
+  instance()
+  (
+    (2/(1+exp(-2*x)))-1
+  );
+  
+  function antialiased_atanh_rect(x)
+  local(diff, em2x, F0_xn)
+  global(slider4)
+  instance(antialias, F0_xnm1, xnm1)
+  (
+    em2x      = exp(-2*x);
+    F0_xn     = F0(x, em2x);
+    
+    diff      = ( x - xnm1 );
+    antialias = (abs(diff) > 0.000001) ? ( F0_xn - F0_xnm1 ) / diff : .5 * atanh_prec(.5*(x+xnm1), em2x);
+    F0_xnm1   = F0_xn;
+    xnm1      = x;
+
+    antialias
+  );  
+
+  function fix_dc(x)
+  local()
+  global()
+  instance(DC_fixed, prev)
+  (
+    DC_fixed=0.999*DC_fixed + x - prev;
+    prev=x;
+    DC_fixed
+  );
+
+  spl0 *= preamp;
+  spl1 *= preamp;
+  
+  spl0 *= ceiling;
+  spl1 *= ceiling;
+  
+  slider3 ? (
+    spl0 = ch0.antialiased_atanh_rect(spl0);
+    spl1 = ch1.antialiased_atanh_rect(spl1);
+  ) : (
+    spl0 = atanh(spl0);
+    spl1 = atanh(spl1);
+  );
+  
+  slider4 ? (
+    spl0 = dc0.fix_dc(spl0);
+    spl1 = dc1.fix_dc(spl1);
+  );
+  
+  spl0 *= inv_ceiling;
+  spl1 *= inv_ceiling;
