@@ -1,0 +1,712 @@
+desc:MS-20 emulation
+tags: filter non-linear
+version: 1.00
+author: Joep Vanlier
+changelog: 
+  + First commit
+license: MIT
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+slider1:4<-6,24,1>Drive (dB)
+slider2:0<-6,24,1>Post Boost (dB)
+slider13:1<0,1,.0001>Cutoff
+slider14:0<0,1,.0001>Resonance
+slider5:0<0,2,{LP,BP,HP}>Type
+slider6:1<0,1,1<{Off,On}>Inertia
+slider7:0<0,1,1<{tanh,atan}>Non-linearity integrator saturation (OTA)
+slider8:0<0,1,1<{clip,soft}>Non-linearity diode clipper
+slider60:2<1,8,1>Oversampling
+
+@init
+  function tanh(s)
+  local(c)
+  global(slider7)
+  instance()
+  (
+    c = exp(8*s);
+    0.25*(c - 1) / (c + 1)
+  );
+  
+  function f_g(s)
+  local()
+  global(slider8)
+  instance()
+  (
+    ( slider8 == 0 ) ? max(-1,min(1,s)) : abs(s) > 1 ? s - .75*sign(s)*(abs(s)-1) : s;
+  );
+  
+  function f_dg(s)
+  local()
+  global(slider8)
+  instance()
+  (
+    ( slider8 == 0 ) ? 1 - 1 * (abs(s)>1) : abs(s) > 1 ? .25 : 1;
+  );
+
+  function prepLerp(slideridx_in, memloc_in, currentValue, linear)
+    instance(slideridx, ptr, memloc, cur_x, cur_y, next, delta, nextVal, prevVal)
+    local(next_x, next_y, dx)
+    global(samplesblock)
+    (
+      ( linear ) ? (
+        slideridx = slideridx_in;
+        memloc = memloc_in;
+      
+        nextVal = currentValue;
+        (samplesblock > 0) && ( samplesblock < 44100 ) ? (
+          delta = (nextVal - prevVal) / (samplesblock);
+          cur_y = prevVal;
+        ) : (
+          delta = 0;
+          cur_y = nextVal;
+        );
+        
+        // This ensures we never change delta (curSample is never negative)
+        next = -10000;
+        prevVal = nextVal;
+      ) : (
+        slideridx = slideridx_in;
+        memloc = memloc_in;
+        
+        cur_x = 0;
+        cur_y = currentValue;
+        
+        // Fetch the points
+        ptr = memloc;
+        while( (next_x = slider_next_chg(slideridx, next_y)) > -1 )
+        (
+          ptr[] = cur_x;
+          ptr += 1;
+          ptr[] = (next_y - cur_y) / (next_x - cur_x);
+          ptr += 1;
+          
+          cur_x = next_x;
+          cur_y = next_y;
+        );
+        ptr[]  = samplesblock;
+        ptr[1] = 0;
+        ptr[2] = -100;
+              
+        ptr = memloc;
+        cur_y = currentValue;
+        delta = 0;
+        
+        next = ptr[];
+        prevVal = cur_y;
+      );
+    );
+
+  function lerpSample()
+    instance(slideridx, ptr, memloc, cur_x, cur_y, delta, next)
+    global(curSample, potato)
+    local()
+    (
+      ( next == curSample ) ? (
+        ptr += 1;
+        delta = ptr[];
+        ptr += 1;
+        next = ptr[];
+      );
+      
+      cur_y += delta
+    );
+
+  function init_MS20(freq, reso)
+    global(slider60)
+    local()
+    instance(y1, y2, d1, d2, h, hh, k, f)
+    (
+      f = .5 * (pow(10, freq)-1)/9 * $pi;
+      h  = f / slider60;
+      hh = 0.5 * h;
+      k  = 2*reso;// - 0.2*reso*freq;
+    );
+   
+  function eval_MS20_nonlin_atan(x)
+    global()
+    local(norm, hk, sig1, sig2, a, b, c, d,  f1, f2, gkd2, gky2, dgky2, sfunsq, sub3, sub3i, sub4sq, sub5, atanterm1, atanterm2)
+    instance(i, y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gkd2  = k*d2;
+      gkd2  = f_g(gkd2);
+      hk    = h*k;
+      
+      atanterm1 = atan(d1 -  x + gkd2);
+      atanterm2 = atan(d1 - d2 + gkd2);
+
+      //y1 = 0.5; y2 = 0.5;
+      loop(4,
+        gky2    = k*y2;
+        
+        dgky2   = f_dg(gky2);
+        gky2    = f_g(gky2);
+      
+        sig1    = y1 - y2 + gky2;
+        sig2    = y1 - x +  gky2;
+        f1      = y1 - d1 + hh*(atanterm1 + atan(sig2));
+        f2      = y2 - d2 - hh*(atanterm2 + atan(sig1));
+        
+        sfunsq  = sig2 * sig2;
+        sub3    = 2*(sfunsq + 1);
+        sub3i   = 1 / sub3;
+        sub4sq  = sig1*sig1;
+        sub5    = 1/(2*(sub4sq + 1));      
+        
+        a       = h*sub3i + 1;
+        b       = hk*dgky2*sub3i;
+        c       = -h*sub5;
+        d       = 1 - (hk*dgky2 - h)*sub5;        
+ 
+        norm    = 1 / ( a*d - b*c );
+        y1      = y1 - ( d*f1 - b*f2 ) * norm;
+        y2      = y2 - ( a*f2 - c*f1 ) * norm;
+      );
+      
+      d1 = y1;
+      d2 = y2;
+    );
+    
+  function eval_MS20_nonlinBP_atan(x)
+    global()
+    local(hk, sig1, sig2, a, b, c, d, norm, f1, f2, gkd2, gky2, dgky2, sfunsq, sub3, sub3i, sub4sq, sub5, atanterm1, atanterm2)
+    instance(y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gkd2  = k*d2;
+      gkd2  = f_g(gkd2);
+       
+      atanterm1 = atan(d1 +  x + gkd2);
+      atanterm2 = atan(d1 - d2 + x + gkd2);
+      hk    = h * k;
+      
+      loop(4,
+        gky2    = k*y2;
+        dgky2   = f_dg(gky2);
+        gky2    = f_g(gky2);
+        
+        sig1    = y1 + x + gky2;
+        sig2    = x + y1 - y2 + gky2;
+        f1      = y1 - d1 + hh*(atanterm1 + atan(sig1));
+        f2      = y2 - d2 - hh*(atanterm2 + atan(sig2));
+             
+        sfunsq  = sig1*sig1;
+        sub3    = (2*(sfunsq + 1));
+        sub3i   = 1/sub3;
+        
+        sub4sq  = sig2*sig2;
+        sub5    = 1 / (2*(sub4sq + 1));
+        a       = h*sub3i + 1;
+        b       = hk*dgky2*sub3i;
+        c       = -h*sub5;
+        d       = 1 - (hk*dgky2 - h)*sub5;
+          
+        norm    = 1.0 / ( a*d - b*c );
+        
+        y1      = y1 - ( d*f1 - b*f2 ) * norm;
+        y2      = y2 - ( a*f2 - c*f1 ) * norm;
+      );
+      
+      d1 = y1;
+      d2 = y2;
+    );  
+    
+  function eval_MS20_nonlinHP_atan(x)
+    global()
+    local(change, hk, sig1, sig2, a, b, c, d, norm, f1, f2, gkd2px, gky2px, dgky2px, sub1sq, sub1i sub4sq, sub4i, atanterm1, atanterm2)
+    instance(y2, d2, h, hh, k, obs, lastchange)
+    (
+      gkd2px  = k*(d2 + x);
+      gkd2px  = f_g(gkd2px);
+      hk      = h * k;
+      
+      atanterm1 = atan(gkd2px);
+      atanterm2 = atan(- d2 - x + gkd2px);
+ 
+      loop(4,
+        gky2px  = k*(x + y2);
+  
+        gky2px  = f_g(gky2px);
+        dgky2px = f_dg(gky2px); 
+          
+        sig1    = gky2px;
+        sig2    = x + y2 - sig1;
+        f1      = hh*(atanterm1 + atan(sig1));
+        f2      = y2 - d2 - hh*(atanterm2 - atan(sig2));
+        
+        sub1sq  = sig1*sig1;
+        sub1i   = 1/(2*(sub1sq + 1));
+        sub4sq  = sig2*sig2;
+        sub4i   = 1/(2*(sub4sq + 1));
+        
+        a       = h*sub1i + 1;
+        b       = hk*dgky2px*sub1i;
+        c       = -h*sub4i;
+        d       = 1 - (hk*dgky2px - h)*sub4i;
+
+        norm    = 1.0 / ( a*d - b*c );
+        change  = ( a*f2 - c*f1 ) * norm;
+        y2      = y2 - change;
+      );
+      
+      d2 = y2;
+      
+      y2 + x
+    );
+
+
+  function eval_MS20_nonlin_tanh(x)
+    global()
+    local(gd2k, ky2, gky2, dgky2,
+          f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+    instance(i, y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gd2k = f_g(d2*k);
+      tanhterm1 = tanh(-d1 + x - gd2k);
+      tanhterm2 = tanh(d1 - d2 + gd2k);
+      
+      loop(4,
+        ky2 = k*y2;
+        gky2 = f_g(ky2);
+        dgky2 = f_dg(ky2);
+      
+        sig1 = x - y1 - gky2;
+        thsig1 = tanh(sig1);
+        thsig1sq = thsig1 * thsig1;
+      
+        sig2 = y1 - y2 + gky2;
+        thsig2 = tanh(sig2);
+        thsig2sq = thsig2 * thsig2;
+        hhthsig1sqm1 = hh*(thsig1sq - 1);
+        hhthsig2sqm1 = hh*(thsig2sq - 1);
+      
+        f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+        f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+        a = -hhthsig1sqm1 + 1;
+        b = -k*hhthsig1sqm1*dgky2;
+        c = hhthsig2sqm1;
+        d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+        
+        norm = 1 / ( a*d - b*c );
+        y1 = y1 - ( d*f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      );
+      
+      d1 = y1;
+      d2 = y2;
+    ); 
+
+
+  function eval_MS20_nonlinBP_tanh(x)
+    global()
+    local(gd2k, ky2, gky2, dgky2,
+          f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+    instance(i, y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gd2k = f_g(d2*k);
+      tanhterm1 = tanh(-d1 - x - gd2k);
+      tanhterm2 = tanh(d1 - d2 + x + gd2k);
+      
+      loop(4, 
+        ky2 = k*y2;
+        gky2 = f_g(ky2);
+        dgky2 = f_dg(ky2);
+      
+        sig1 = -x - y1 - gky2;
+        thsig1 = tanh(sig1);
+        thsig1sq = thsig1 * thsig1;
+      
+        sig2 = x + y1 - y2 + gky2;
+        thsig2 = tanh(sig2);
+        thsig2sq = thsig2 * thsig2;
+      
+        hhthsig1sqm1 = hh*(thsig1sq - 1);
+        hhthsig2sqm1 = hh*(thsig2sq - 1);
+      
+        f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+        f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+        a = 1 - hhthsig1sqm1;
+        b = -k*hhthsig1sqm1*dgky2;
+        c = hhthsig2sqm1;
+        d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+      
+        norm = 1 / ( a*d - b*c );
+        y1 = y1 - ( d*f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      );
+      
+      d1 = y1;
+      d2 = y2;
+    ); 
+    
+    function eval_MS20_nonlinHP_tanh(x)
+      global()
+      local(gkd2px, kxpy2, gkxpy2, dgky2px,
+            f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+      instance(i, y1, y2, d1, d2, h, hh, k, obs)
+      (
+        gkd2px = f_g(k*(d2 + x));
+        tanhterm1 = tanh(-d1 - gkd2px);
+        tanhterm2 = tanh(d1 - d2 - x + gkd2px);
+        
+        loop(4,
+          kxpy2 = k*(x + y2);
+          gkxpy2 = f_g(kxpy2);
+          dgky2px = f_dg(kxpy2);
+        
+          sig1 = -y1 - gkxpy2;
+          thsig1 = tanh(sig1);
+          thsig2sq = thsig2 * thsig2;
+        
+          sig2 = -x + y1 - y2 + gkxpy2;
+          thsig2 = tanh(sig2);
+          thsig2sq = thsig2 * thsig2;
+        
+          hhthsig1sqm1 = (thsig1sq - 1);
+          hhthsig2sqm1 = (thsig2sq - 1);
+        
+          f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+          f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+          a = -hhthsig1sqm1 + 1;
+          b = -k*hhthsig1sqm1*dgky2px;
+          c = hhthsig2sqm1;
+          d = (k*dgky2px - 1)*hhthsig2sqm1 + 1;
+          
+          norm = 1 / ( a*d - b*c );
+          y1 = y1 - ( d*f1 - b*f2 ) * norm;
+          y2 = y2 - ( a*f2 - c*f1 ) * norm;
+        );
+          
+        d1 = y1;
+        d2 = y2;
+      ); 
+
+  // UP / DOWNSAMPLING
+  // Generate windowed sinc filter at memory location FIR
+  // Inputs are:
+  //    fir   - Memory location to store windowed sinc
+  //    nt    - Number of taps
+  //    bw    - Fractional bandwidth
+  //     g    - Gain
+  function sinc(fir, nt, bw, g)
+    local(a, ys, yg, yw, i, pibw2, pifc2, pidnt2, hnt)
+    global()
+    (
+      pibw2   = 2.0*$pi*bw;
+      pidnt2  = 2.0*$pi/nt;
+      hnt     = 0.5*nt;
+      i       = 1;
+          
+      loop(nt-1,
+        // Sinc width
+        a  = (i - hnt) * pibw2;
+          
+        // Sinc
+        ys = (a != 0) ? sin(a)/a : 1.0;
+   
+        // Window gain
+        yg = g * (4.0 * bw);
+          
+        // Hamming window (could be replaced with Kaiser in the future)
+        yw = 0.54 - 0.46 * cos(i * pidnt2);
+           
+        // Calc FIR coeffs
+        fir[i-1] = yw * yg * ys;
+        
+        i += 1;
+      );
+    );
+  
+  // Generate sinc filters for a specific upsampling ratio
+  //
+  // Upsampling leads to a sample followed by N-1 zeroes. Hence 
+  // to compute each subsample, we only need 1/Nth of the taps.
+  // This is why we set up a specific filter for each subsample.
+  // i.e. for N=4, you get something like f1*Zn + f5*Zn-1 + ...
+  //
+  // Inputs:
+  //    N_in            - oversampling factor
+  //    tapsPerFilter   - Taps per subfilter (should be 8 in this implementation)
+  //    targetmem       - Location to store the coefficients
+  //    tmp             - Working memory
+  function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
+    local(nHist, iFilt, nTaps)
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta)
+    global()
+    (
+      N       = N_in;
+      nHist   = tapsPerFilter;
+      loc     = 0;
+      coeffs  = targetmem;
+      nTaps   = N*nHist;
+      
+      // Memory being set is conservatively large.
+      memset(coeffs,0,10000);
+      memset(tmp,0,10000);
+      
+      sinc(tmp, nTaps, .5/N, .5*N);
+      
+      // Divide sinc over the different filters
+      iFilt = 0; // Filter idx for which subsample this filter is
+      delta = 0; // Sample idx
+      loop(nTaps,
+        coeffs[delta + iFilt*100] = tmp[];
+        iFilt += 1;
+        iFilt == N ? ( iFilt = 0; delta += 1 );
+        tmp += 1;
+      );
+    );
+  
+  // Generate downsample filter
+  // Here, the full N*nHist tap filter has to be evaluated for every sample, 
+  // but only every Nth sample has to be evaluated.
+  function updateSincDownsampleFilter(N_in, nTaps_in, histmem, coeffmem)
+    global()
+    instance(hist, hend, hptr, coeffs, loc, N, delta, nTaps)
+    local()
+    (
+      N       = N_in;
+      hist    = histmem;
+      coeffs  = coeffmem;
+      nTaps   = nTaps_in;
+      hptr    = hist;
+      hend    = hist + nTaps;
+      
+      memset(coeffs,0,10000);
+      sinc(coeffs, nTaps, .5/N, .5);
+    );
+    
+  function advanceHist(sample)
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, nTaps)
+    (
+      hptr += 1;
+      ( hptr == hend ) ? hptr = hist;
+      hptr[] = sample;
+    );
+  
+  function sincDownSample()
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, hm1, hptr2, out, cfptr)
+    (
+      hm1   = hist-1;
+      hptr2 = hptr;
+      cfptr = coeffs;
+      out   = 0;
+      
+      loop(nTaps,
+        out = out + hptr2[] * cfptr[];
+        
+        cfptr += 1;
+        hptr2 -= 1;
+        ( hptr2 == hm1 ) ? hptr2 = hend-1;
+      );
+      
+      out
+    );
+  
+  function resetSincDown()
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, hm1, hptr2)
+    (
+      hm1   = hist-1;
+      hptr2 = hptr;
+      
+      loop(nTaps,
+        hptr2[] = 0;
+        
+        hptr2 -= 1;
+        ( hptr2 == hm1 ) ? hptr2 = hend-1;
+      );
+    );
+  
+  // Maintain input sample history. Hardcoded for speed.
+  // Note h7 is omitted because for integer upsampling it is always zero!
+  function advanceSinc(sample)
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt)
+    (
+      h6 = h5;
+      h5 = h4;
+      h4 = h3;
+      h3 = h2;
+      h2 = h1;
+      h1 = h0;
+      h0 = sample;
+      loc = 0;
+    );
+  
+  function resetSincUp()
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt)
+    (
+      h0 = h1 = h2 = h3 = h4 = h5 = h6 = 0;
+    );
+  
+  // Note h7 is omitted because for integer upsampling it is always zero!
+  function getSubSample()
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt, out)
+    (
+      filt = coeffs + loc;
+      out =  filt[] * h0 + filt[1] * h1 + filt[2] * h2 + filt[3] * h3 + filt[4] * h4 + filt[5] * h5 + filt[6] * h6;
+  
+      loc += 100;
+      out
+    );
+
+
+  function inputFilter(sample)
+    instance(len, d1, d2, d3, d4, o1, o2, o3, o4, a1, a2, b0, b1, b2)
+    local (out)
+    global ()
+    (
+      out  = sample*b0 + d1*b1 + d2*b2 - d3*a1 - d4*a2;
+      d2   = d1;
+      d1   = sample;
+      d4   = d3;
+      d3   = out;
+    );
+  
+  function outputFilter(sample)
+    instance(len, d1, d2, d3, d4, o1, o2, o3, o4, a1, a2, b0, b1, b2)
+    local (out)
+    global ()
+    (
+      out = sample*b0 + o1*b1 + o2*b2 - o3*a1 - o4*a2;
+      o2  = o1;
+      o1  = sample;
+      o4  = o3;
+      o3  = out;
+    );
+
+bpos=0;
+
+cutoff_mem  = 0;
+reso_mem    = 10000;
+sinc_hist1  = 20000;
+sinc_hist2  = 30000;
+sinc_flt    = 40000;
+sinc_flt2   = 50000;
+sinc_flt3   = 60000;
+sinc_flt4   = 70000;
+sinc_tmp    = 80000;
+
+@slider
+preamp      = 10^(slider1/20);
+inv_preamp  = 10^(-slider1/20)*10^(slider2/20);
+
+@block
+  function inertiaSmoothing(newval)
+    instance(prev, val, boost)
+    global()
+    local(error, diff)
+    (
+      error   = (val - newval);
+      diff    = val - prev;
+      prev    = val;
+      boost   = min(1, max(0, 15*abs(diff)-.1));
+      val     = val - .3 * error - .7 * error * boost;
+    );
+    
+  // Sample accurate lerp or inertial based?
+  slider6 ?
+  (
+    cutoffLerp.prepLerp(13, cutoff_mem, inertia_cutoff.inertiaSmoothing( slider13 ), 1);
+    resoLerp.prepLerp(14, reso_mem, inertia_reso.inertiaSmoothing( slider14 ), 1);
+  ) :
+  (
+    cutoffLerp.prepLerp(13, cutoff_mem, slider13, 0);
+    resoLerp.prepLerp(14, reso_mem, slider14, 0);
+  );
+
+   // Update the oversampling filters when needed.
+   ( slider60 != lastOversample ) ? 
+   (
+     lastOversample = slider60;   
+  
+     // Memory for the sincs is located at sinc_tmp, sinc_flt, sinc_flt2, sinc_flt3 and sinc_flt4
+     sincFilterL.updateSincFilter(slider60, 8, sinc_flt,  sinc_tmp);
+     sincFilterR.updateSincFilter(slider60, 8, sinc_flt2, sinc_tmp);
+     nTapSinc = slider60 < 5 ? 16 : slider60*4;
+     sincDownL.updateSincDownsampleFilter(slider60, nTapSinc, sinc_hist1, sinc_flt3);
+     sincDownR.updateSincDownsampleFilter(slider60, nTapSinc, sinc_hist2, sinc_flt4);  
+  );
+
+@sample 
+  function processSample_atan(s)
+  (
+    (slider5 == 0) ?
+    (
+      s = this.eval_MS20_nonlin_atan(s)
+    ) : (slider5 == 1) ? (
+      s = this.eval_MS20_nonlinBP_atan(s)  
+    ) : (
+      s = this.eval_MS20_nonlinHP_atan(s)
+    );
+  );
+  
+  function processSample_tanh(s)
+  (
+    (slider5 == 0) ?
+    (
+      s = this.eval_MS20_nonlin_tanh(s)
+    ) : (slider5 == 1) ? (
+      s = this.eval_MS20_nonlinBP_tanh(s)  
+    ) : (
+      s = this.eval_MS20_nonlinHP_tanh(s)
+    );
+  );
+
+  spl0 *= preamp;
+  spl1 *= preamp;
+  
+  sliderCutoff  = cutoffLerp.lerpSample();
+  sliderReso    = resoLerp.lerpSample();
+  
+  L_filter.init_MS20(sliderCutoff, sliderReso);
+  R_filter.init_MS20(sliderCutoff, sliderReso);
+
+  // MS-20
+  ( slider60 > 1 ) ? (
+    sincFilterL.advanceSinc(spl0);
+    sincFilterR.advanceSinc(spl1);
+    
+    loop( slider60,
+      ssl = sincFilterL.getSubSample();
+      ssr = sincFilterR.getSubSample();
+      
+      ( slider7 == 0 ) ? (
+        ssl = L_filter.processSample_tanh(ssl);
+        ssr = R_filter.processSample_tanh(ssr);
+      ) : (
+        ssl = L_filter.processSample_atan(ssl);
+        ssr = R_filter.processSample_atan(ssr);
+      );
+      
+      sincDownL.advanceHist(ssl);
+      sincDownR.advanceHist(ssr);
+    );
+    
+    spl0 = sincDownL.sincDownSample();
+    spl1 = sincDownR.sincDownSample();
+  ) : (
+    ( slider7 == 0 ) ? (
+      spl0 = L_filter.processSample_tanh(spl0);
+      spl1 = R_filter.processSample_tanh(spl1);
+    ) : (
+      spl0 = L_filter.processSample_atan(spl0);
+      spl1 = R_filter.processSample_atan(spl1);
+    );
+  );
+  
+  spl0 *= inv_preamp;
+  spl1 *= inv_preamp;
