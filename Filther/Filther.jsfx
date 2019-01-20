@@ -1,8 +1,13 @@
 desc:Filther
 tags: Filther
-version: 1.62
+version: 1.63
 author: Joep Vanlier
 changelog: 
+  + Attempt to stabilize waveshaped filters.
+  + Modified "expensive" moog quite a bit to make it more stable. Sorry about the changes. If anyone needs the old one back, let me know.
+  + Shrunk cutoff range 'expensive moog'
+  + Fixed bad scaling issue in the SSM filter and new Kr0g versions
+  + Handwavily optimized BP version of WASP
   + Added a few more ms-20 models (better saturation model)
   + Derivative fix ms-20
   + Forgot to hide slider again X_X
@@ -186,7 +191,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.61";
+plugname = "FILTHER 1.63";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -429,10 +434,10 @@ local(fx, fy, wx, wx2, wy)
     gfx_wrapprint("This is a waveshaped bandpass filter. Sort of. The difference in filter outputs is distorted through the waveshaper and fed back to give a resonant peak. The output is then subsequently distorted again. Stability can be enhanced by oversampling. Note that this filter forces oversampling to be at least 2x.", wx2);
   ) : ( filteridx == 9 ) ? (
     gfx_printf("Filter: Model of a Moog filter (not unconditionally stable)\n\n"); gfx_x = fx+5;
-    gfx_wrapprint("This filter is based on the paper Modeling and measuring a Moog voltage-cont\rolled filter by Paschou et al. Note that at a minimum, this filter requires 2x upsampling to remain stable. Higher values will bring in higher quality as the non-linearity makes it sensitive to aliasing problems. This version is more stable than the cheap version, but still be careful. Extemely high gain with high resonance can turn this baby into a glitching mess! Best used with the fast tanh because of performance considerations.", wx2);
+    gfx_wrapprint("This filter is based on the paper Modeling and measuring a Moog voltage-cont\rolled filter by Paschou et al. Note that at a minimum, this filter requires 2x upsampling to remain stable. Higher values will bring in higher quality as the non-linearity makes it sensitive to aliasing problems. This version is more stable than the cheap version, but still be careful. Extemely high gain with high resonance can turn this baby into a glitching mess!", wx2);
   ) : ( filteridx == 10 ) ? (
     gfx_printf("Filter: Approximate model of a Moog filter (not unconditionally stable)\n\n"); gfx_x = fx+5;
-    gfx_wrapprint("This filter is based on the paper Modeling and measuring a Moog voltage-controlled filter by Paschou et al. Note that at a minimum, this filter requires 2x upsampling to remain stable. Higher values will bring in higher quality as the non-linearity makes it sensitive to aliasing problems. This version does not correctly compute the Jacobian. This is fine for low cutoffs and/or tanh waveshaper. Be careful though, because it can seriously blow up in your face!", wx2);
+    gfx_wrapprint("This filter is based on the paper Modeling and measuring a Moog voltage-controlled filter by Paschou et al. Note that at a minimum, this filter requires 2x upsampling to remain stable. Higher values will bring in higher quality as the non-linearity makes it sensitive to aliasing problems. This version does not correctly compute the Jacobian. This is fine for low cutoffs. Be careful though!", wx2);
   ) : ( filteridx == 11 ) ? (
     gfx_printf("Filter: Basic notch filter\n\n"); gfx_x = fx+5;
   ) : ( filteridx == 12 ) ? (
@@ -626,6 +631,15 @@ instance()
   s = 0.25*(c - 1) / (c + 1);
 );
 
+function actual_tanh(x)
+local(em2x)
+global()
+instance()
+(
+  em2x = exp(-2*x);
+  (2/(1+em2x))-1
+);
+
 function fasttanh(x)
 local()
 global()
@@ -784,6 +798,7 @@ function initdualfilt(freq, res)
     
     //set feedback amount given f and q between 0 and 1
     fb = q + q/(1.0 - f);
+    fb = max(0, min(4, fb));
   );
   
 function resetdualfilt()
@@ -818,7 +833,7 @@ function initfancymoog(freq, q)
     wc      = 4*$pi*ftarget*srate;
     wcT     = wc*T;
     g       = wcT*hA;
-    k       = q*4; // [0..4]
+    k       = 1.1*q*4; // [0..4]
   );
 
 function resetfancymoog()
@@ -1379,6 +1394,17 @@ function init_MS20_nonlin(freq, reso)
     hh = 0.5 * h;
     k  = 2*reso;
   );
+  
+function init_MS20_nonlin_2(freq, reso)
+  global(slider54)
+  local()
+  instance(y1, y2, d1, d2, h, hh, k, f)
+  (
+    f = (pow(10, freq)-1)/9 * $pi;
+    h  = f / max(slider54,1);
+    hh = 0.5 * h;
+    k  = 2*reso;
+  );  
 
 function reset_MS20_nonlin()
   global()
@@ -1659,6 +1685,7 @@ function eval_wasp_nonlin_expensive(Vi)
     -V2;
   );  
   
+// Checked for effect of tanh vs true_tanh  
 function eval_wasp_nonlin(Vi)
   local(idet, Ja, Jb, Jc, tv1nl, tv2nl, ttd1nl, td1nl, td2nl, shrterm, fixterm, clterm, clterm2, V1, V2, f0, f1, resclamp)
   instance(nl, hah, hahnl, D2, D1, Di, r, offset)
@@ -1704,7 +1731,7 @@ function eval_wasp_nonlin(Vi)
     -V2;
   );    
   
-function eval_wasp_nonlin_BP(Vi)
+function eval_wasp_nonlin_BP_old(Vi)
   local(idet, Ja, Jb, Jc, tv1nl, tv2nl, ttd1nl, td1nl, td2nl, shrterm, fixterm, clterm, clterm2, V1, V2, f0, f1, resclamp)
   instance(nl, hah, hahnl, D2, D1, Di, r, offset)
   global()
@@ -1748,6 +1775,49 @@ function eval_wasp_nonlin_BP(Vi)
     
     -V1;
   );  
+  
+// Optimized based on coefficient magnitude
+// Checked for effect of tanh vs true_tanh
+function eval_wasp_nonlin_BP(Vi)
+  local(idet, tv1nl, tv2nl, ttd1nl, td1nl, td2nl, fixterm, V1, V2, f0, f1, resclamp, shrterm, clterm, clterm2)
+  instance(nl, hah, hahnl, D2, D1, Di, r, offset, Jc)
+  global()
+  ( 
+    Vi      = clamp(Vi);
+    tv1nl   = tanh(V1*nl+offset);
+    tv2nl   = tanh(V2*nl+offset);
+    td1nl   = fasttanh(D1*nl+offset);
+    td2nl   = fasttanh(D2*nl+offset);    
+    ttd1nl  = tanh(td1nl);
+    fixterm = fasttanh(fasttanh(nl*(Di + clamp(-r*td1nl) - td2nl)));
+    
+    loop(3,
+      resclamp= clamp(-r*tv1nl);
+      
+      clterm  = fasttanh(nl*(Vi + resclamp - tv2nl));
+      clterm2 = fasttanh(clterm);
+      f0      = -D1 + V1 - hah*(fixterm + clterm2);
+      f1      = -D2 + V2 - hah*(ttd1nl + fasttanh(tv1nl));
+      Jc      = -hahnl*(1-tv1nl*tv1nl)*(1-tv1nl*tv1nl);
+      
+      idet    = 1.0 / (1.0 - Jc);
+      V1      = V1 - f0*idet;
+      V2      = V2 - (f1 - Jc*f0)*idet;
+      
+      tv1nl   = fasttanh(V1*nl);
+      tv2nl   = tanh(V2*nl);
+    );
+    
+    // Forced to do this to keep things stable :(
+    V1        = clamp(V1);
+    V2        = clamp(V2);
+    
+    Di = Vi;
+    D1 = V1;
+    D2 = V2;
+    
+    -V1;
+  );    
   
 function init_wasplin(freq, res)
   global(srate, slider54)
@@ -2289,11 +2359,11 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
         slider_automate(slider54);
         forceUpdate = 1;
         );
-      ( slider56 == 0 || slider56 == 4 ) ? (
+      /*( slider56 == 0 || slider56 == 4 ) ? (
         slider56 = 3;
         slider_automate(slider56);
         forceUpdate = 1;
-      );
+      );*/
       this.filter_fancymoog.initfancymoog(filterFreq, filterReso);
     ) : ( sliderValue == 11 ) ? (
       this.filter_notch.initnotch(filterFreq, filterReso);
@@ -2412,11 +2482,11 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.filter_SVF_nores.init_linearSVF( filterFreq, 0 );
       this.filter_SVF.init_linearSVF( filterFreq, filterReso );
     ) : ( sliderValue == 51 ) ? (
-      this.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      this.filter_ms20.init_MS20_nonlin_2(filterFreq, filterReso);
     ) : ( sliderValue == 52 ) ? (
-      this.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      this.filter_ms20.init_MS20_nonlin_2(filterFreq, filterReso);
     ) : ( sliderValue == 53 ) ? (
-      this.filter_ms20.init_MS20_nonlin(filterFreq, filterReso);
+      this.filter_ms20.init_MS20_nonlin_2(filterFreq, filterReso);
     );
   );     
     
@@ -5058,7 +5128,7 @@ function evalfancymoog(y0)
         A0_2_0, A0_2_1, A0_2_2, A0_2_3,
         A0_3_0, A0_3_1, A0_3_2, A0_3_3                    
         )
-  global(distort, distortderivt, tanh)
+  global(distort, distortderivt)
   instance(A, k, omega, hA, g, wc, wcT, T, y0, y1, y2, y3, y4, d0, d1, d2, d3, d4, S1)
   (
     loop(3,
@@ -5070,7 +5140,7 @@ function evalfancymoog(y0)
       
       // Do not separate these, the index found during binary search for the original waveshaping
       // is used again in the derivate function.
-      WS0 = distort(S0);
+      /*WS0 = distort(S0);
       gJ0 = g*distortderiv(S0);
 
       WS1 = distort(S1);
@@ -5083,8 +5153,22 @@ function evalfancymoog(y0)
       gJ3 = g*distortderiv(S3);
       
       WS4 = distort(S4);
-      gJ4 = g*distortderiv(S4);      
-  
+      gJ4 = g*distortderiv(S4);*/
+      WS0 = actual_tanh(S0);
+      gJ0 = g*(1-WS0*WS0);
+      
+      WS1 = actual_tanh(S1);
+      gJ1 = g*(1-WS1*WS1);
+      
+      WS2 = actual_tanh(S2);
+      gJ2 = g*(1-WS2*WS2);
+      
+      WS3 = actual_tanh(S3);
+      gJ3 = g*(1-WS3*WS3);
+      
+      WS4 = actual_tanh(S4);
+      gJ4 = g*(1-WS4*WS4);
+       
       F1 = y1 - d1 + wcT * ( WS1 + WS0 );
       F2 = y2 - d2 - wcT * ( WS1 - WS2 );
       F3 = y3 - d3 - wcT * ( WS2 - WS3 );
@@ -5128,14 +5212,14 @@ function evalfancymoog(y0)
       A0_3_3 = t15*t16*t17*t18;
       
       // Newton Raphson update
-      y1 = y1 - ( A0_0_0 * F1 + A0_1_0 * F2 + A0_2_0 * F3 + A0_3_0 * F4 );
-      y2 = y2 - ( A0_0_1 * F1 + A0_1_1 * F2 + A0_2_1 * F3 + A0_3_1 * F4 );
-      y3 = y3 - ( A0_0_2 * F1 + A0_1_2 * F2 + A0_2_2 * F3 + A0_3_2 * F4 );
-      y4 = y4 - ( A0_0_3 * F1 + A0_1_3 * F2 + A0_2_3 * F3 + A0_3_3 * F4 );
-      //y1 = y1 - ( A0_0_0 * F1 + A0_0_1 * F2 + A0_0_2 * F3 + A0_0_3 * F4 );
-      //y2 = y2 - ( A0_1_0 * F1 + A0_1_1 * F2 + A0_1_2 * F3 + A0_1_3 * F4 );
-      //y3 = y3 - ( A0_2_0 * F1 + A0_2_1 * F2 + A0_2_2 * F3 + A0_2_3 * F4 );
-      //y4 = y4 - ( A0_3_0 * F1 + A0_3_1 * F2 + A0_3_2 * F3 + A0_3_3 * F4 );
+      //y1 = y1 - ( A0_0_0 * F1 + A0_1_0 * F2 + A0_2_0 * F3 + A0_3_0 * F4 );
+      //y2 = y2 - ( A0_0_1 * F1 + A0_1_1 * F2 + A0_2_1 * F3 + A0_3_1 * F4 );
+      //y3 = y3 - ( A0_0_2 * F1 + A0_1_2 * F2 + A0_2_2 * F3 + A0_3_2 * F4 );
+      //y4 = y4 - ( A0_0_3 * F1 + A0_1_3 * F2 + A0_2_3 * F3 + A0_3_3 * F4 );
+      y1 = y1 - ( A0_0_0 * F1 + A0_0_1 * F2 + A0_0_2 * F3 + A0_0_3 * F4 );
+      y2 = y2 - ( A0_1_0 * F1 + A0_1_1 * F2 + A0_1_2 * F3 + A0_1_3 * F4 );
+      y3 = y3 - ( A0_2_0 * F1 + A0_2_1 * F2 + A0_2_2 * F3 + A0_2_3 * F4 );
+      y4 = y4 - ( A0_3_0 * F1 + A0_3_1 * F2 + A0_3_2 * F3 + A0_3_3 * F4 );
     );
 
     // Update history
@@ -5160,13 +5244,11 @@ function evalfancymoog_noJac(y0)
       S3 = hA * (y3 + d3);
       S4 = hA * (y4 + d4);
       
-      // Do not separate these, the index found during binary search for the original waveshaping
-      // is used again in the derivate function.
-      WS0 = distort(S0);
-      WS1 = distort(S1);
-      WS2 = distort(S2);
-      WS3 = distort(S3);
-      WS4 = distort(S4);
+      WS0 = actual_tanh(S0);
+      WS1 = actual_tanh(S1);
+      WS2 = actual_tanh(S2);
+      WS3 = actual_tanh(S3);
+      WS4 = actual_tanh(S4);
   
       F1 = y1 - d1 + wcT * ( WS1 + WS0 );
       F2 = y2 - d2 - wcT * ( WS1 - WS2 );
@@ -5652,6 +5734,7 @@ function eval_MS20_nonlinHP(x)
     distort(y2+x)
   );    
 
+// Checked for effect of tanh vs true_tanh
 function eval_ssm_nonlin_cheap(Ui)
   global()
   local(a, b, c, d, e, f, g, h, f0, f1, f2, f3, bias, idet, 
@@ -5731,17 +5814,17 @@ function eval_ssm_nonlin(Ui)
         ddistu0uifb, ddistu0u1, ddistu1u2, ddistu2u3, dfbterm)
   instance(hh, itau, K2, hhitau, U0, U1, U2, U3, D0, D1, D2, D3, Di, Kout)
   (
-    distd0d1    = tanh(D0 + D1);
-    distd1d2    = tanh(D1 + D2);
-    distd2d3    = tanh(D2 + D3);
-    distd0difb  = tanh(D0 + Di - tanh(K2*D3));
+    distd0d1    = actual_tanh(D0 + D1);
+    distd1d2    = actual_tanh(D1 + D2);
+    distd2d3    = actual_tanh(D2 + D3);
+    distd0difb  = actual_tanh(D0 + Di - actual_tanh(K2*D3));
     
     loop(3,
-      distu0u1    = tanh(U0 + U1);
-      distu1u2    = tanh(U1 + U2);
-      distu2u3    = tanh(U2 + U3);
-      fbterm      = tanh(K2 * U3);
-      distu0uifb  = tanh(U0 + Ui - fbterm);
+      distu0u1    = actual_tanh(U0 + U1);
+      distu1u2    = actual_tanh(U1 + U2);
+      distu2u3    = actual_tanh(U2 + U3);
+      fbterm      = actual_tanh(K2 * U3);
+      distu0uifb  = actual_tanh(U0 + Ui - fbterm);
     
       ddistu0uifb = 1 - distu0uifb*distu0uifb;
       ddistu0u1   = 1 - distu0u1*distu0u1;
@@ -6006,7 +6089,7 @@ function eval_wasp_nonlin2(Ui)
     Kout * U3
   );
   
-
+// Checked for effect of tanh vs true_tanh
 function eval_cem_nonlin(Ui)
   global(slider54, srate)
   local(a, b, c, d, e, f, g, h, f0, f1, f2, f3, bias, idet, 
@@ -6027,12 +6110,15 @@ function eval_cem_nonlin(Ui)
       distu2u3    = tanh(U2 + U3);
       fbterm      = tanh(K2 * U3 - Ui * ifdbk);
       distu0uifb  = tanh(U0 + Ui - fbterm);
-          
-      ddistu0uifb = 1 - distu0uifb*distu0uifb;
-      ddistu0u1   = 1 - distu0u1*distu0u1;
-      ddistu1u2   = 1 - distu1u2*distu1u2;
-      ddistu2u3   = 1 - distu2u3*distu2u3;
-      dfbterm     = 1 - fbterm*fbterm;
+      
+      // The factor 16 is to correct for the fact that tanh actually computes 0.25 tanh(4*x).
+      // This leads to a derivative given by 1-tanh(4*x)^2, but given that we have stored a term that 
+      // has this 0.25, we have to add this factor 4 back and square it.
+      ddistu0uifb = 1 - 16*distu0uifb*distu0uifb;
+      ddistu0u1   = 1 - 16*distu0u1*distu0u1;
+      ddistu1u2   = 1 - 16*distu1u2*distu1u2;
+      ddistu2u3   = 1 - 16*distu2u3*distu2u3;
+      dfbterm     = 1 - 16*fbterm*fbterm;
     
       f0 = -D0 + U0 + hhitau  * (distd0difb + distu0uifb);
       f1 = -D1 + U1 + hhitau  * (distd0d1   + distu0u1);
@@ -6242,8 +6328,8 @@ function eval_MS20_nonlin_tanh(x)
   instance(i, y1, y2, d1, d2, h, hh, k, obs)
   (
     gd2k = f_g(d2*k);
-    tanhterm1 = tanh(-d1 + x - gd2k);
-    tanhterm2 = tanh(d1 - d2 + gd2k);
+    tanhterm1 = actual_tanh((-d1 + x - gd2k));
+    tanhterm2 = actual_tanh((d1 - d2 + gd2k));
     
     loop(4,
       ky2 = k*y2;
@@ -6251,11 +6337,11 @@ function eval_MS20_nonlin_tanh(x)
       dgky2 = f_dg(ky2);
       
       sig1 = x - y1 - gky2;
-      thsig1 = tanh(sig1);
+      thsig1 = actual_tanh(sig1);
       thsig1sq = thsig1 * thsig1;
       
       sig2 = y1 - y2 + gky2;
-      thsig2 = tanh(sig2);
+      thsig2 = actual_tanh(sig2);
       thsig2sq = thsig2 * thsig2;
       hhthsig1sqm1 = hh*(thsig1sq - 1);
       hhthsig2sqm1 = hh*(thsig2sq - 1);
@@ -6284,8 +6370,8 @@ function eval_MS20_nonlinBP_tanh(x)
   instance(i, y1, y2, d1, d2, h, hh, k, obs)
   (
     gd2k = f_g(d2*k);
-    tanhterm1 = tanh(-d1 - x - gd2k);
-    tanhterm2 = tanh(d1 - d2 + x + gd2k);
+    tanhterm1 = actual_tanh(-d1 - x - gd2k);
+    tanhterm2 = actual_tanh(d1 - d2 + x + gd2k);
     
     loop(4, 
       ky2 = k*y2;
@@ -6293,11 +6379,11 @@ function eval_MS20_nonlinBP_tanh(x)
       dgky2 = f_dg(ky2);
       
       sig1 = -x - y1 - gky2;
-      thsig1 = tanh(sig1);
+      thsig1 = actual_tanh(sig1);
       thsig1sq = thsig1 * thsig1;
       
       sig2 = x + y1 - y2 + gky2;
-      thsig2 = tanh(sig2);
+      thsig2 = actual_tanh(sig2);
       thsig2sq = thsig2 * thsig2;
       
       hhthsig1sqm1 = hh*(thsig1sq - 1);
@@ -6326,8 +6412,8 @@ function eval_MS20_nonlinHP_tanh(x)
   instance(i, y1, y2, d1, d2, h, hh, k, obs)
   (
   gkd2px = f_g(k*(d2 + x));
-  tanhterm1 = tanh(-d1 - gkd2px);
-  tanhterm2 = tanh(d1 - d2 - x + gkd2px);
+  tanhterm1 = actual_tanh(-d1 - gkd2px);
+  tanhterm2 = actual_tanh(d1 - d2 - x + gkd2px);
   
   loop(4,
     kxpy2 = k*(x + y2);
@@ -6335,11 +6421,11 @@ function eval_MS20_nonlinHP_tanh(x)
     dgky2px = f_dg(kxpy2);
   
     sig1 = -y1 - gkxpy2;
-    thsig1 = tanh(sig1);
+    thsig1 = actual_tanh(sig1);
     thsig2sq = thsig2 * thsig2;
   
     sig2 = -x + y1 - y2 + gkxpy2;
-    thsig2 = tanh(sig2);
+    thsig2 = actual_tanh(sig2);
     thsig2sq = thsig2 * thsig2;
   
     hhthsig1sqm1 = (thsig1sq - 1);
@@ -6400,8 +6486,10 @@ function process(sample, dist)
       sample = this.filter_dualfiltBP.evaldualfiltBP(sample);
     ) : ( this.filtertype == 9 ) ? (
       sample = gaincompensation * this.filter_fancymoog.evalfancymoog(40*sample)/40;
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 10 ) ? (
       sample = gaincompensation * this.filter_fancymoog.evalfancymoog_noJac(40*sample)/40;
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 11 ) ? (
       sample = this.filter_notch.evalrbj(sample);
       dist ? sample = distort(sample);
