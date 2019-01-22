@@ -1,8 +1,10 @@
 desc:Filther
 tags: Filther
-version: 1.66
+version: 1.67
 author: Joep Vanlier
 changelog: 
+  + Fixed issue with modulation not resetting at proper points when using lookahead feature.
+  + Added inverse link for input/output gain
   + Added velocity sensitive MIDI mode.
   + Stabilized Phaser 1.
   + Force refresh when filter changed
@@ -194,7 +196,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.66";
+plugname = "FILTHER 1.67";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -3483,6 +3485,32 @@ function selectionButton_draw()
     gfx_printf( label );
   );
 
+
+function selectionButton_linkbutton()
+  local(jnk, siz, hln)
+  global(gfx_x, gfx_y, buttonFontSize, retina_scaling, fontface)
+  instance(x, y, w, h, r, g, b, a, active, label, lastleft, htime)
+  (
+    retina_scaling > 1 ? gfx_setfont(1, fontface, buttonFontSize*retina_scaling);
+    gfx_measurestr(label, siz, jnk);
+    gfx_x = x + .5 * (w-siz);
+    gfx_y = y - .5*(jnk-h) + 1;
+    
+    //gfx_set( .3, .3, .3, 1 );
+    //gfx_roundrect( floor(x+.35*w)+2, floor(y + .33*h)+1,  ceil(.55*w), floor(.2*h), 4);
+    //gfx_roundrect( floor(x+.35*w)+2, floor(y + .47*h)+1,  ceil(.55*w), floor(.2*h), 4);
+    
+    active ? gfx_set( .8, .8, .8, 1 ) : gfx_set( min(1,.4 + hln), min(1,.4 + hln), min(1,.4 + hln), 1 );
+    gfx_arc( floor(x), floor(y + w+.05*h), floor(.6*w), 0*$pi, .5*$pi, 1);
+    gfx_arc( floor(x), floor(y + w+.55*h), floor(.6*w), .5*$pi, $pi, 1);
+    
+    gfx_roundrect( floor(x+.35*w), floor(y + .33*h),  ceil(.55*w), floor(.2*h), 4);
+    gfx_roundrect( floor(x+.35*w), floor(y + .47*h),  ceil(.55*w), floor(.2*h), 4);
+    
+    //gfx_arc( x+.8*w, y + 5*h,  .35*w, 0, 2*$pi, 1);
+    //gfx_arc( x+.8*w, y + .5*h, .35*w, 0, 2*$pi, 1);
+  );
+
 function highlightNow()
   global()
   local()
@@ -4358,6 +4386,7 @@ function updateIntegrationTime()
       ndelay = ndelay * 0.5;
       preBufferL.initBuffer(300000, 300000 + ndelay);
       preBufferR.initBuffer(400000, 400000 + ndelay);
+      preBufferMod.initBuffer(mod_buffer, mod_buffer + ndelay);
       
       /*cutoffBuffer.initBuffer(cutoff_buffer, cutoff_buffer+ndelay);
       resoBuffer.initBuffer(reso_buffer, reso_buffer+ndelay);*/
@@ -4395,6 +4424,7 @@ cutoff_mem2     = 1000000;
 reso_mem2       = 1010000;
 cutoff_buffer   = 2000000;
 reso_buffer     = 2100000;
+mod_buffer      = 2200000;
 
 // Global storage for variables
 negative_xloc   = 100;
@@ -4865,13 +4895,14 @@ function setupGUI()
   sliderHeight= 20 * retina_scaling;
   sliderPad   = 5 * retina_scaling;
   masterPanel.groupWidget(masterPanelX, masterPanelY, sliderWidth, sliderHeight*3+5*sliderPad, "MASTER", wR, wG, wB, wA );
-  inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .82*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 1, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
+  inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 1, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
   inClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3, "Toggle input clipping");
-  outGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+2*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Post-Gain", wR, wG, wB, wA, 0, -40, 40, 0, " dB", 0, "Output gain");
+  outGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+2*sliderPad+sliderHeight, .78*sliderWidth-2*sliderPad, sliderHeight, "Post-Gain", wR, wG, wB, wA, 0, -40, 40, 0, " dB", 0, "Output gain");
   outClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+2*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3, "Toggle output clipping");
   overSampling.sliderWidget(masterPanelX+sliderPad, masterPanelY+3*sliderPad+2*sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Oversampling", wR, wG, wB, wA, 0, 1, 8, 1, "x", 1, "Oversampling factor\nOversampling reduces aliasing that occurs when distorting heavily\nand is required for the stability of a few filters.\nUse FIR version if phase is important (stabby sounds).\n");
   firButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+3*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "FIR",  .3, .4, .8, .3, "Enable FIR up/downsampling\n(preserves phase but expensive)");
-  
+  linkButton.selectionButton(masterPanelX+sliderPad + .745*sliderWidth, masterPanelY+sliderPad+1, .028*sliderWidth, sliderHeight+3*sliderPad+2, "",  .3, .4, .8, .3, "Link");
+
   filterPanelX = masterPanelX;
   filterPanelY = 140 * retina_scaling;
   filterPanel.groupWidget(filterPanelX, filterPanelY, sliderWidth, sliderHeight*4+7*sliderPad, "FILTER", wR, wG, wB, wA );
@@ -6873,12 +6904,8 @@ updateActiveFilters(1);
     sbr = sr;
   );
   
-  //( slider45 < 2 ) ? (
-    inV = inVol.updateBuffer( RMS1.updateRMS(sbl, sbr) );
-  //) : (
-  //  inV = inVol.updateBuffer( notesOn );
-  //);
-  
+  inV = inVol.updateBuffer( RMS1.updateRMS(sbl, sbr) );
+ 
   // Calculation of the dynamic variable  
  ( dynamicsEnabled ) ?
   (
@@ -6926,10 +6953,13 @@ updateActiveFilters(1);
   (
     oldl = preBufferL.getBuffer();
     oldr = preBufferR.getBuffer();
+    oldreset = preBufferMod.getBuffer();
     preBufferL.updateBuffer( sl );
     preBufferR.updateBuffer( sr );
+    preBufferMod.updateBuffer( modulator.reset );
     sl = oldl;
     sr = oldr;
+    modulator.reset = oldreset;
   );
   
   alpha = .9999;
@@ -7182,6 +7212,7 @@ updateActiveFilters(1);
   
     inGain.sliderWidget_draw();
     inClip.selectionButton_draw();
+    linkButton.selectionButton_linkbutton();
     outGain.sliderWidget_draw();
     outClip.selectionButton_draw();
     inertia.selectionButton_draw();
@@ -7248,8 +7279,20 @@ updateActiveFilters(1);
         ( filterSelect2.hasFocus == 0 ) ? (
           ( lfoSelect.hasFocus == 0 ) ? (
             change = inGain.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
-            change == 1 ? ( slider_automate( slider51=inGain.sliderWidget_getValue2_nn(); ); slider_automate( slider52=inGain.sliderWidget_getValue(); ); forceUpdate = 1; );
+            change == 1 ? ( 
+              slider_automate( slider51=inGain.sliderWidget_getValue2_nn(); ); 
+              preChange = slider52;
+              slider_automate( slider52=inGain.sliderWidget_getValue(); ); 
+              linkButton.active == 1 ? slider_automate( slider53=slider53 - (slider52 - preChange); ); 
+              forceUpdate = 1; );
             change == 2 ? ( slider_automate( slider52=inGain.sliderWidget_getValue(); ); slider_automate( slider51=inGain.sliderWidget_getValue2_nn(); ); forceUpdate = 1; );
+            
+            outGain.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap) ? ( 
+              preChange = slider53;
+              slider_automate( slider53=outGain.sliderWidget_getValue(); );
+              linkButton.active == 1 ? slider_automate( slider52=slider52 - (slider53 - preChange); ); 
+              forceUpdate = 1; );
+            
             
             change = cutoffSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
             change == 1 ? ( slider_automate( slider62=cutoffSlider.sliderWidget_getValue2_nn(); ); slider_automate( slider48=cutoffSlider.sliderWidget_getValue(); ); interpCutoff = 1; forceUpdate = 1; ) : ( interpCutoff = 0 );
@@ -7267,13 +7310,14 @@ updateActiveFilters(1);
             change == 1 ? ( slider_automate( slider44=resonanceSlider2.sliderWidget_getValue2_nn() ); slider_automate( slider42=resonanceSlider2.sliderWidget_getValue(); ); interpReso2 = 1; forceUpdate = 1; ) : ( interpReso2 = 0 );
             change == 2 ? ( slider_automate( slider42=resonanceSlider2.sliderWidget_getValue(); ); slider_automate( slider44=resonanceSlider2.sliderWidget_getValue2_nn() ); interpReso2 = 1; forceUpdate = 1; ) : ( interpReso2 = 0 );            
 
-            outGain.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)          ? ( slider_automate( slider53=outGain.sliderWidget_getValue(); ); forceUpdate = 1; );
             overSampling.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( slider_automate( slider54=overSampling.sliderWidget_getValue(); ); forceUpdate = 1; );
           
             threshSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( slider_automate( slider59=threshSlider.sliderWidget_getValue(); ); forceUpdate = 1; );
             attackSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( slider_automate( slider60=attackSlider.sliderWidget_getValue(); ); forceUpdate = 1; );
             decaySlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)      ? ( slider_automate( slider61=decaySlider.sliderWidget_getValue(); ); forceUpdate = 1; );
             rmsSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)        ? ( slider_automate( slider64=rmsSlider.sliderWidget_getValue(); ); forceUpdate = 1; );
+            
+            linkButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             
             inClip.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             outClip.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
