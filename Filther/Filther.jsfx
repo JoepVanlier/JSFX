@@ -1,8 +1,15 @@
 desc:Filther
 tags: Filther
-version: 1.68
+version: 1.69
 author: Joep Vanlier
 changelog: 
+  + Move spline memory to location where it is less likely to get clobbered if there is an initialization issue.
+  + Properly initialize reso, midi and cutoff memory.
+  + Increase size tooltips
+  + Display cutoff (when available for that filter) on second filter as well.
+  + Bugfix combobox
+  + Removed no_denorm to hopefully prevent CPU spikes.
+  + Make sure that nodes actually have to be clicked to be selected.
   + Added ability to activate dynamics and lfo for specific filters separately.
   + Added a few afterimage lines to the plot.
   + Optimized cem.
@@ -24,7 +31,7 @@ changelog:
   + Minor optimizations
   + Change size to accomodate additional block
   + Forgot to hide slider again
-  + Added dbl rightclick for setting dynamic variable to zero.
+  + Added dbl rightcl ick for setting dynamic variable to zero.
   + Added option for centered LFOs
   + Made sure that change parameter actually reflects what's being changed in case of sliders with 'dynamics' slider.
   + Hotfix for gain issue before UI is opened.
@@ -199,7 +206,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.68";
+plugname = "FILTHER 1.69";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -3280,17 +3287,19 @@ function addNode(x, y)
   );
 
 //NODE_PROXIMITY = 5;
-function processMouse(x, y, dx, dy, mc)
+function processMouse(x, y, dx, dy, mc, lmc)
   instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(left, right, i)
+  local(left, right, lastleft, lastright, i)
   global(manipulateXYSliders, gfx_x, gfx_y)
   (
-    left  = mc & 1;
-    right = mc & 2;
+    left      = mc & 1;
+    right     = mc & 2;
+    lastleft  = lmc & 1;
+    lastright = lmc & 2;
   
     ( left ) ? 
     (
-      ( cap_mode == 0 ) ?
+      ( cap_mode == 0 && !lastleft ) ?
       (
         this.findNearest(x, y);
         ( drag_node > -1 ) ? ( drag_node = indices[drag_node]; cap_mode = 1; )
@@ -3301,7 +3310,7 @@ function processMouse(x, y, dx, dy, mc)
         manipulateXYSliders(splineIdx, drag_node, x, (1-y));
       );
     ) : (
-      ( right ) ?
+      ( right && !lastright ) ?
       (
         ( cap_mode == 0 ) ?
         (
@@ -3495,16 +3504,18 @@ function setLabel( _label )
   );
 
 function drawHint_draw()
-  global(gfx_x, gfx_y, gfx_w, mouse_x, mouse_y, hintTime, currentHint)
+  global(gfx_x, gfx_y, gfx_w, gfx_h, mouse_x, mouse_y, hintTime, currentHint, retina_scaling, fontface)
   local(w, h)
   global()
   (
     ( hintTime > .99 ) ? (
+      gfx_setfont(1, fontface, 14*retina_scaling);
       gfx_measurestr(currentHint,w,h);
       
-      gfx_x = mouse_x+20;
-      gfx_y = mouse_y+20;
-      ( gfx_x > 0.5*gfx_w ) ? gfx_x = gfx_x - w-8;
+      gfx_x = mouse_x+15;
+      gfx_y = mouse_y+15;
+      ( gfx_x > 0.5*gfx_w ) ? gfx_x = mouse_x - w - 8;
+      ( gfx_y > 0.5*gfx_h ) ? gfx_y = mouse_y - h - 8;
       
       gfx_set( 0.05, 0.05, 0.1, .8 );
       gfx_rect(gfx_x-2, gfx_y-2, w+4, h+4);
@@ -3631,7 +3642,7 @@ function combobox(x_in, y_in, w_in, h_in, r_in, g_in, b_in, a_in, nitems_in, str
       x             = x_in;
       y             = y_in+1;
       w             = w_in;
-      h             = h_in-2;
+      h             = ceil(h_in-2);
       r             = r_in;
       g             = g_in;
       b             = b_in;
@@ -3695,27 +3706,28 @@ function combobox_draw()
   );
   
 function combobox_draw_top()
-  local(i, j, xtxt, x1, x2, x3, y1, y2, y3, pad, wi, delta)
+  local(i, j, xtxt, x1, x2, x3, y1, y2, y3, pad, wi, delta, ny)
   global(gfx_x, gfx_y)
   instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols)
   (    
     xtxt = x+3;
-    delta = goup ? (nitems+1)*h : 0;
+    delta = goup ? (nitems/cols+1)*h : 0;
     gfx_x = xtxt;
     gfx_y = y + 4 - delta;
+    ny = ceil(nitems/cols);
     
     open ?
     (
       gfx_set( r*.3, g*.3, b*.3, 1 );
-      gfx_rect( x - (cols-1)*w-1, y-delta+h-1, cols*w+2, h * nitems/cols+2 );
+      gfx_rect( x - (cols-1)*w, y-delta+h-1, cols*w+2, h * ny + 2 );
           
       gfx_set( r*.1, g*.1, b*.1, 1 );
-      gfx_rect( x - (cols-1)*w, y-delta+h, cols*w, h * nitems/cols );
+      gfx_rect( x - (cols-1)*w+1, y-delta+h, cols*w, h * ny );
       i = 0; j = 0;
       gfx_set( r, g, b, a, 0.95 );
       loop( cols, 
-        loop( nitems/cols,
-          gfx_x = xtxt - (cols-1-j)*w;
+        loop( ny,
+          gfx_x = xtxt - (cols-1-j)*w + 1;
           gfx_y += h;
           hover == i ? gfx_rect( gfx_x-3, gfx_y - 3, w, h );
           gfx_printf(comboStrings(stridx, i));
@@ -3729,18 +3741,21 @@ function combobox_draw_top()
   );
 
 function combobox_processMouse(xx, yy, mc)
-  local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl)
+  local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny)
   global(gfx_x, gfx_y, lastUI, lastChar)
   instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, hasfocus, goup, cols, thisUI, htime, hint)  
   (
-    delta = goup ? (nitems+1)*h : 0;
+    delta = goup ? (nitems/cols+1)*h : 0;
     change = 0;
     left = mc & 1;
     
     xmin = x - (cols-1)*w;
     ymin = y + h - delta;
     xmax = x + w;
-    ymax = ( y+((nitems)/cols+1)*h-delta );
+    ny   = ceil(nitems/cols);
+    ymax = ymin + ny*h;
+    
+//    ( y+((nitems)/cols+1)*h-delta );
     
     ( lastUI == thisUI ) ?
     (
@@ -3766,7 +3781,10 @@ function combobox_processMouse(xx, yy, mc)
     open ? 
     (
       xl = min( max( 0, floor((xx - xmin)/w)), cols-1 );
-      hover = min( nitems-1, max( 0, xl * floor(nitems/cols) + floor((max(ymin,min(ymax-h,yy)) - (y-delta))/h) - 1 ) );
+      yl = floor((yy-ymin)/h);
+//      hover = min( nitems-1, max( 0, xl * floor(nitems/cols) + floor((max(ymin,min(ymax-h,yy)) - (y-delta))/h) - 1 ) );
+      
+      hover = min( nitems-1, max( 0, xl * ny + max(0, min(ny-1, yl)) ) );
       
       !lastleft && left ? (
         open = 0;
@@ -4088,7 +4106,7 @@ function gen_dynamics(xp, yp, wp, hp)
     sc = h;
   );
 
-function processMouse(mx, my, dx, dy, mc)
+function processMouse(mx, my, dx, dy, mc, lmc)
   instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline, buttonSine)
   global(slider56, buttonOff.selectionButton_processMouse, buttonOff.selectionButton_setActive)
   local()  
@@ -4112,7 +4130,7 @@ function processMouse(mx, my, dx, dy, mc)
       ) : ( slider56 == 4 ) ? ( buttonSine.selectionButton_setActive(1);
     );
     
-    spline.processMouse((mx-x)/w, (my-y)/h, dx/w, dy/h, mc);
+    spline.processMouse((mx-x)/w, (my-y)/h, dx/w, dy/h, mc, lmc);
   );
 
 function sort_spline()
@@ -4458,7 +4476,7 @@ function updateIntegrationTime()
       ndelay = ndelay * 0.5;
       preBufferL.initBuffer(300000, 300000 + ndelay);
       preBufferR.initBuffer(400000, 400000 + ndelay);
-      preBufferMod.initBuffer(mod_buffer, mod_buffer + ndelay);
+      preBufferMod.initBuffer(1600000, mod_buffer + ndelay);
       
       /*cutoffBuffer.initBuffer(cutoff_buffer, cutoff_buffer+ndelay);
       resoBuffer.initBuffer(reso_buffer, reso_buffer+ndelay);*/
@@ -4477,6 +4495,11 @@ function updateIntegrationTime()
 //////////////////////////////////////////////////////////
 // Memory layout
 //////////////////////////////////////////////////////////
+//RMS1          = 100000;
+//RMS2          = 200000;
+//preBufferL    = 300000;
+//preBufferR    = 400000;
+
 delay_buf1      = 500000;
 delay_buf2      = 600000;
 delay_buf3      = 700000;
@@ -4490,45 +4513,54 @@ sinc_flt4       = 940000;
 sinc_hist1      = 950000; // Downsampler history
 sinc_hist2      = 960000;
 note_mem        = 970000;
-cutoff_mem      = 980000;
-reso_mem        = 990000;
-cutoff_mem2     = 1000000;
-reso_mem2       = 1010000;
-cutoff_buffer   = 2000000;
-reso_buffer     = 2100000;
-mod_buffer      = 2200000;
+memset(note_mem, -1337, 10000);
 
-// Global storage for variables
-negative_xloc   = 100;
-negative_yloc   = 200;
-positive_xloc   = 300;
-positive_yloc   = 400;
-negative_xloc2  = 500;
-negative_yloc2  = 600;
-positive_xloc2  = 700;
-positive_yloc2  = 800;
-temp_xloc       = 900;
-temp_yloc       = 1000;
-pos_c1s         = 1100;
-pos_c2s         = 1200;
-pos_c3s         = 1300;
-neg_c1s         = 1400;
-neg_c2s         = 1500;
-neg_c3s         = 1600;
-pos_c1s2        = 1700;
-pos_c2s2        = 1800;
-pos_c3s2        = 1900;
-neg_c1s2        = 2000;
-neg_c2s2        = 2100;
-neg_c3s2        = 2200;
-temp_indices    = 2300;
-pos_indices     = 2400;
-neg_indices     = 2500;
-vowel_A         = 2600;
-vowel_E         = 2650;
-vowel_I         = 2700;
-vowel_O         = 2750;
-vowel_U         = 2800;
+cutoff_mem      = 1000000;
+reso_mem        = 1100000;
+cutoff_mem2     = 1200000;
+reso_mem2       = 1300000;
+
+memset(cutoff_mem,  -1337, 10000);
+memset(reso_mem,    -1337, 10000);
+memset(cutoff_mem2, -1337, 10000);
+memset(reso_mem2,   -1337, 10000);
+
+cutoff_buffer   = 1400000;
+reso_buffer     = 1500000;
+//mod_buffer      = 1600000;
+
+// Keep this stuff away from clobber risks (0)
+splineOffset    = 2097152;
+negative_xloc   = 100 + splineOffset;
+negative_yloc   = 200 + splineOffset;
+positive_xloc   = 300 + splineOffset;
+positive_yloc   = 400 + splineOffset;
+negative_xloc2  = 500 + splineOffset;
+negative_yloc2  = 600 + splineOffset;
+positive_xloc2  = 700 + splineOffset;
+positive_yloc2  = 800 + splineOffset;
+temp_xloc       = 900 + splineOffset;
+temp_yloc       = 1000 + splineOffset;
+pos_c1s         = 1100 + splineOffset;
+pos_c2s         = 1200 + splineOffset;
+pos_c3s         = 1300 + splineOffset;
+neg_c1s         = 1400 + splineOffset;
+neg_c2s         = 1500 + splineOffset;
+neg_c3s         = 1600 + splineOffset;
+pos_c1s2        = 1700 + splineOffset;
+pos_c2s2        = 1800 + splineOffset;
+pos_c3s2        = 1900 + splineOffset;
+neg_c1s2        = 2000 + splineOffset;
+neg_c2s2        = 2100 + splineOffset;
+neg_c3s2        = 2200 + splineOffset;
+temp_indices    = 2300 + splineOffset;
+pos_indices     = 2400 + splineOffset;
+neg_indices     = 2500 + splineOffset;
+vowel_A         = 2600 + splineOffset;
+vowel_E         = 2650 + splineOffset;
+vowel_I         = 2700 + splineOffset;
+vowel_O         = 2750 + splineOffset;
+vowel_U         = 2800 + splineOffset;
 Nbuf            = 20000;
 
 inVol.initBuffer(20000, 20000+Nbuf-1);
@@ -6877,7 +6909,7 @@ function processSamples()
     );
   );
 
-ext_nodenorm    = 1; 
+//ext_nodenorm    = 1; 
 gfx_clear       = -1;
 updateSliders();
 
@@ -7372,7 +7404,7 @@ updateActiveFilters(1);
     resonanceSlider2.hasFilterDynamics = dynamicFilterButton2.active;
     resonanceSlider2.hasModulatorDynamics = lfoFilterButton2.active;
     
-    hz = getHz(slider43, cutoffSlider2.sliderWidget_getValue());
+    hz = getHz(slider40, cutoffSlider2.sliderWidget_getValue());
     cutoffSlider2.overridevalue = hz;
     cutoffSlider2.overrideunit = "Hz";
     cutoffSlider2.sliderWidget_draw();
@@ -7485,8 +7517,8 @@ updateActiveFilters(1);
               forceUpdate = 1;
             );
             
-            window1.processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
-            window2.processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
+            window1.processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap, last_mouse_cap);
+            window2.processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap, last_mouse_cap);
             dyn_thresh = window3.processMouseDynamics(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap, dyn_thresh);
           );
         );
@@ -7621,6 +7653,8 @@ updateActiveFilters(1);
     
     ( lastChar == 116 ) ? hideToolTips = 1 - hideToolTips;
     ( lastChar == 108 ) ? ( linuxMode = 1 - linuxMode; setupGUI(); );
+    
+    last_mouse_cap = mouse_cap;
     
     updating = 0;
   );
