@@ -1,8 +1,9 @@
 desc:Filther
 tags: Filther
-version: 1.70
+version: 1.71
 author: Joep Vanlier
 changelog: 
+  + Add ability to automate post gain. Add ability to toggle DYN / LFO for them.
   + Bugfix LFO random.
   + Bugfix hold mechanism MIDI2.
   + Move spline memory to location where it is less likely to get clobbered if there is an initialization issue.
@@ -137,7 +138,7 @@ slider13:0.7<0,1,.01>-Pos6x
 slider14:0.7<0,1,.01>-Pos6y
 slider15:0.8<0,1,.01>-Pos7x
 slider16:0.8<0,1,.01>-Pos7y
-slider17:0.9<0,1,.01>-Pos8x
+slider17:0<-1,1,.01>-Pre-Gain Mod %
 slider18:0.9<0,1,.01>-Pos8y
 
 slider19:0.15<0,1,.01>-Neg1x
@@ -156,7 +157,8 @@ slider31:0.8<0,1,.01>-Neg7x
 slider32:0.8<0,1,.01>-Neg7y
 slider33:0.9<0,1,.01>-Neg8x
 slider34:0.9<0,1,.01>-Neg8y
-slider35:1<0,1,1{Off, On}>-Lookahead
+// This one secretly has the information folded in whether pre-gain modulation is being used.
+slider35:0<0,3,1{Off,On,Off NGM,On NGM}>-Lookahead
 slider36:0<0,16,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,7,1{No reset,Reset,No reset + temposync,Reset + temposync,No reset + centered,Reset + centered,No reset + temposync + centered,Reset + temposync + centered>-Reset LFO
@@ -208,7 +210,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.70";
+plugname = "FILTHER 1.71";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -2511,8 +2513,10 @@ function updateActiveFilters( force )
   (
     filteredDynval = 0.1 * dynval + 0.9 * filteredDynval; // Avoid too steep transitions.
     
+    modval = gainDynamics * filteredDynval + gainLFO * modulator.modvalue * slider39;   
     pregain  = 2^((slider52 + 40 * dyn_mod_gain * modval)/6);
-    postgain = 2^(slider53/6);
+    postgain = 2^((slider53 + 40 * dyn_mod_outgain * modval)/6);
+    
     gaincompensation = 1/pregain;  
   
     ( slider47 > 0 ) ? (
@@ -2729,7 +2733,7 @@ function manipulateXYSliders(S, i, x, y)
     :(i==5) ? ( slider11=x; slider_automate(slider11); slider12=y; slider_automate(slider12); )
     :(i==6) ? ( slider13=x; slider_automate(slider13); slider14=y; slider_automate(slider14); )
     :(i==7) ? ( slider15=x; slider_automate(slider15); slider16=y; slider_automate(slider16); )
-    :(i==8) ? ( slider17=x; slider_automate(slider17); slider18=y; slider_automate(slider18); )
+    :(i==8) ? ( slider18=y; slider_automate(slider18); )
   )
   : ( S==1 ) ? (
      (i==1) ? ( slider19=x; slider_automate(slider19); slider20=y; slider_automate(slider20); )
@@ -2739,7 +2743,7 @@ function manipulateXYSliders(S, i, x, y)
     :(i==5) ? ( slider27=x; slider_automate(slider27); slider28=y; slider_automate(slider28); )
     :(i==6) ? ( slider29=x; slider_automate(slider29); slider30=y; slider_automate(slider30); )
     :(i==7) ? ( slider31=x; slider_automate(slider31); slider32=y; slider_automate(slider32); )
-    :(i==8) ? ( slider33=x; slider_automate(slider33); slider34=y; slider_automate(slider34); )
+    :(i==8) ? ( slider34=y; slider_automate(slider34); )
   );
   
   forceUpdate = 1;
@@ -3826,7 +3830,7 @@ function sliderWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, 
       value2        = 0;
       yslidercenter = y + 0.3 * h;
       cap           = 0;
-      twoval        = two_values;
+      twoval        = two_values; /* Do we have two values? */
       minval        = minval_in;
       maxval        = maxval_in;
       default       = ( default_in - minval ) / ( maxval - minval );
@@ -4466,10 +4470,10 @@ function updateRMS(sr, sl)
 function updateIntegrationTime()
   (
     integrationTime = ( 1 + 7*rms_x4_1.active ) * ( 1 + 3*rms_x4_2.active ) * slider64;
-    ( (lastIntegrationTime != integrationTime) || (slider35 != lookAhead) ) ? 
+    ( (lastIntegrationTime != integrationTime) || (slider35 & 1 != lookAhead) ) ? 
     (
       lastIntegrationTime = integrationTime;      
-      lookAhead           = slider35;
+      lookAhead           = slider35 & 1;
     
       ndelay = ceil(srate*lastIntegrationTime/1000);
       RMS1.initRMS(ndelay, 100000);
@@ -4802,6 +4806,7 @@ function updateSliders( hard )
   inGain.sliderWidget_setValue(slider52);
   inGain.sliderWidget_setValue2_nn(slider51);
   outGain.sliderWidget_setValue(slider53);
+  slider35 & 2 == 0 ? outGain.sliderWidget_setValue2_nn(0) : outGain.sliderWidget_setValue2_nn(slider17);
   
   // Filter 1
   filterSelect.combobox_setcuritem(slider47);
@@ -4824,7 +4829,7 @@ function updateSliders( hard )
   decaySlider.sliderWidget_setValue(slider61);
   rmsSlider.sliderWidget_setValue(slider64);
   
-  lookAheadButton.active          = slider35==1 ? 1 : 0;
+  lookAheadButton.active          = slider35 & 1 ? 1 : 0;
   inClip.active                   = slider55 & 1 ? 1 : 0;
   outClip.active                  = slider55 & 2 ? 1 : 0;
   inertia.active                  = slider55 & 4 ? 1 : 0;
@@ -4867,11 +4872,12 @@ function updateSliders( hard )
     );
   );
   
-  dyn_mod_filt   = cutoffSlider.sliderWidget_getValue2();
-  dyn_mod_reso   = resonanceSlider.sliderWidget_getValue2();
-  dyn_mod_filt2  = cutoffSlider2.sliderWidget_getValue2();
-  dyn_mod_reso2  = resonanceSlider2.sliderWidget_getValue2();
-  dyn_mod_gain   = inGain.sliderWidget_getValue2();  
+  dyn_mod_filt    = cutoffSlider.sliderWidget_getValue2();
+  dyn_mod_reso    = resonanceSlider.sliderWidget_getValue2();
+  dyn_mod_filt2   = cutoffSlider2.sliderWidget_getValue2();
+  dyn_mod_reso2   = resonanceSlider2.sliderWidget_getValue2();
+  dyn_mod_gain    = inGain.sliderWidget_getValue2();
+  dyn_mod_outgain = outGain.sliderWidget_getValue2_nn();
  
   filterDynamics1     = 0;
   filterDynamics2     = 0;
@@ -4880,16 +4886,20 @@ function updateSliders( hard )
   filterLFO1          = dynamics & 8 > 0;
   filterDynamics2     = dynamics & 16 > 0;
   filterLFO2          = dynamics & 32 > 0;
- 
+  gainDynamics        = dynamics & 64 > 0;
+  gainLFO             = dynamics & 128 > 0;
+  
   // For legacy purposes (there used to be only filters on/off)
-  ( dynamics & 1 ) ? ( filterDynamics1 = filterDynamics2 = filterLFO1 = filterLFO2 = 1; );
+  ( dynamics & 1 ) ? ( filterDynamics1 = filterDynamics2 = filterLFO1 = filterLFO2 = gainDynamics = gainLFO = 1;);
   
   dynamicFilterButton.active      = filterDynamics1;
   dynamicFilterButton2.active     = filterDynamics2;
   lfoFilterButton.active          = filterLFO1;
   lfoFilterButton2.active         = filterLFO2;
-  dynamicWaveShapingButton.active = distortionDynamics;  
-
+  dynamicWaveShapingButton.active = distortionDynamics; 
+  dynamicGainButton.active        = gainDynamics;
+  lfoGainButton.active            = gainLFO;
+   
   setter = window2.spline.xloc_write;
   setter[] = 0; setter += 1;
   setter[] = slider3; setter += 1;
@@ -4899,7 +4909,7 @@ function updateSliders( hard )
   setter[] = slider11; setter += 1;
   setter[] = slider13; setter += 1;
   setter[] = slider15; setter += 1;
-  setter[] = slider17; setter += 1;
+  setter[] = 1; setter += 1;
   setter[] = 1; setter += 1;
   
   setter = window2.spline.yloc_write;
@@ -5013,12 +5023,14 @@ function setupGUI()
   sliderHeight= 20 * retina_scaling;
   sliderPad   = 5 * retina_scaling;
   masterPanel.groupWidget(masterPanelX, masterPanelY, sliderWidth, sliderHeight*3+5*sliderPad, "MASTER", wR, wG, wB, wA );
-  inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 1, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
-  inClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3, "Toggle input clipping");
-  outGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+2*sliderPad+sliderHeight, .78*sliderWidth-2*sliderPad, sliderHeight, "Post-Gain", wR, wG, wB, wA, 0, -40, 40, 0, " dB", 0, "Output gain");
-  outClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+2*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3, "Toggle output clipping");
+  lfoGainButton.selectionButton(masterPanelX + .82*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  .3, .4, .8, .3, "Enable dynamic filter manipulation.\n\nWhen activated, the gain responds to changes in the LFO.");
+  dynamicGainButton.selectionButton(masterPanelX + .82*sliderWidth - .185*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  .3, .4, .8, .3, "Enable dynamic gain manipulation.\n\nWhen activated, the gain responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 40, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
+  inClip.selectionButton(masterPanelX+sliderPad+ + .8*sliderWidth, 3+masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3, "Toggle input clipping");
+  outGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+2*sliderPad+sliderHeight, .78*sliderWidth-2*sliderPad, sliderHeight, "Post-Gain", wR, wG, wB, wA, 40, -40, 40, 0, " dB", 0, "Output gain");
+  outClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+2*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  .3, .4, .8, .3, "Toggle output clipping");
   overSampling.sliderWidget(masterPanelX+sliderPad, masterPanelY+3*sliderPad+2*sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Oversampling", wR, wG, wB, wA, 0, 1, 8, 1, "x", 1, "Oversampling factor\nOversampling reduces aliasing that occurs when distorting heavily\nand is required for the stability of a few filters.\nUse FIR version if phase is important (stabby sounds).\n");
-  firButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, masterPanelY+3*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "FIR",  .3, .4, .8, .3, "Enable FIR up/downsampling\n(preserves phase but expensive)");
+  firButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+3*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "FIR",  .3, .4, .8, .3, "Enable FIR up/downsampling\n(preserves phase but expensive)");
   linkButton.selectionButton(masterPanelX+sliderPad + .745*sliderWidth, masterPanelY+sliderPad+1, .028*sliderWidth, sliderHeight+3*sliderPad+2, "",  .3, .4, .8, .3, "Link");
 
   filterPanelX = masterPanelX;
@@ -5041,6 +5053,8 @@ function setupGUI()
   cutoffSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+3*sliderPad+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Filter button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
   resonanceSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Shaper button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");  
   
+  dynamicGainButton.style = 2;
+  lfoGainButton.style = 2;
   dynamicFilterButton.style = 2;
   lfoFilterButton.style = 2;
   dynamicFilterButton2.style = 2;
@@ -5558,6 +5572,7 @@ function evalphaserFET(sample)
     );
     
     w = dw + C1 * ( C2 * u + I_ds );
+    w = min(3, max(-3, w));
     
     out = sample - w - dw;
     dw = w;
@@ -6721,7 +6736,7 @@ function process(sample, dist)
     ) : ( this.filtertype == 23 ) ? (
       sample = this.filter_ms20.eval_MS20_nonlinHP(sample);      
     ) : ( this.filtertype == 24 ) ? (
-      sample += 0.8 * this.filter_phaser.evalphaserFET(this.filter_delay.getBuffer());    
+      sample += 0.8 * this.filter_phaser.evalphaserFET(this.filter_delay.getBuffer());
       flt = this.filter_ms20.eval_MS20_nonlin(sample);
       flt = this.filter_phaser2.evalphaserFET(flt);  
       this.filter_delay.updateBuffer(distort(flt-.7*sample));
@@ -7372,6 +7387,8 @@ updateActiveFilters(1);
     dynamicFilterButton2.selectionButton_draw();
     lfoFilterButton.selectionButton_draw();
     lfoFilterButton2.selectionButton_draw();
+    dynamicGainButton.selectionButton_draw();
+    lfoGainButton.selectionButton_draw();
     
     dynamicWaveShapingButton.selectionButton_draw();
     lookaheadButton.selectionButton_draw();
@@ -7390,11 +7407,17 @@ updateActiveFilters(1);
     decaySlider.sliderWidget_draw();
     rmsSlider.sliderWidget_draw();
     
-    cutoffSlider.hasFilterDynamics = dynamicFilterButton.active;
-    cutoffSlider.hasModulatorDynamics = lfoFilterButton.active;
-    resonanceSlider.hasFilterDynamics = dynamicFilterButton.active;
+    /* These flags determine whether these values have an animated slider and mod range on top or not */
+    inGain.hasFilterDynamics             = dynamicGainButton.active;
+    inGain.hasModulatorDynamics          = lfoGainButton.active;
+    outGain.hasFilterDynamics            = dynamicGainButton.active;
+    outGain.hasModulatorDynamics         = lfoGainButton.active;
+    cutoffSlider.hasFilterDynamics       = dynamicFilterButton.active;
+    cutoffSlider.hasModulatorDynamics    = lfoFilterButton.active;
+    resonanceSlider.hasFilterDynamics    = dynamicFilterButton.active;
     resonanceSlider.hasModulatorDynamics = lfoFilterButton.active;
  
+    /* Display appropriate Hertzage for the cutoff sliders */
     hz = getHz(slider47, cutoffSlider.sliderWidget_getValue());
     cutoffSlider.overridevalue = hz;
     cutoffSlider.overrideunit = "Hz";
@@ -7442,15 +7465,28 @@ updateActiveFilters(1);
               preChange = slider52;
               slider_automate( slider52=inGain.sliderWidget_getValue(); ); 
               linkButton.active == 1 ? slider_automate( slider53=slider53 - (slider52 - preChange); ); 
-              forceUpdate = 1; );
-            change == 2 ? ( slider_automate( slider52=inGain.sliderWidget_getValue(); ); slider_automate( slider51=inGain.sliderWidget_getValue2_nn(); ); forceUpdate = 1; );
+              forceUpdate = 1; ) :
+            change == 2 ? ( 
+              slider_automate( slider52=inGain.sliderWidget_getValue(); );
+              slider_automate( slider51=inGain.sliderWidget_getValue2_nn(); );
+              forceUpdate = 1;
+            );
             
-            outGain.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap) ? ( 
+            change = outGain.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
+            change == 1 ? (
+              slider_automate( slider17=outGain.sliderWidget_getValue2_nn(); ); 
               preChange = slider53;
               slider_automate( slider53=outGain.sliderWidget_getValue(); );
               linkButton.active == 1 ? slider_automate( slider52=slider52 - (slider53 - preChange); ); 
-              forceUpdate = 1; );
-            
+              forceUpdate = 1; ) :
+            change == 2 ? (
+              preChange = slider53;
+              slider_automate( slider53=outGain.sliderWidget_getValue(); );
+              linkButton.active == 1 ? slider_automate( slider52=slider52 - (slider53 - preChange); ); 
+              forceUpdate = 1;
+              slider_automate( slider35=slider35-(slider35&2)+2 ); /* Signal that we did this and it wasn't an old preset */
+              slider_automate( slider17=outGain.sliderWidget_getValue2_nn(); );
+            );
             
             change = cutoffSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
             change == 1 ? ( slider_automate( slider62=cutoffSlider.sliderWidget_getValue2_nn(); ); slider_automate( slider48=cutoffSlider.sliderWidget_getValue(); ); interpCutoff = 1; forceUpdate = 1; ) : ( interpCutoff = 0 );
@@ -7495,7 +7531,7 @@ updateActiveFilters(1);
             newMultiplierMode = atk_x4_1.active + 2*atk_x4_2.active + 4 * decay_x4_1.active + 8 * decay_x4_2.active + 16 * rms_x4_1.active + 32 * rms_x4_2.active;
             ( slider57 != newMultiplierMode ) ? ( slider_automate( slider57=newMultiplierMode; ); forceUpdate = 1; );
             
-            lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=lookAheadButton.active; ); forceUpdate = 1; );
+            lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&1))+lookAheadButton.active; ); forceUpdate = 1; );
             dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active + (slider45 & 2) + ( slider45 & 4 ); ); forceUpdate = 1; );
             lfoResetButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             tempoLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
@@ -7511,10 +7547,13 @@ updateActiveFilters(1);
             dynamicFilterButton2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
             lfoFilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
             lfoFilterButton2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
-            dynamicWaveShapingButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+            dynamicWaveShapingButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            dynamicGainButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            lfoGainButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
               slider58 = 2 * dynamicWaveShapingButton.active + 4 * dynamicFilterButton.active +
                          8 * lfoFilterButton.active + 16 * dynamicFilterButton2.active +
-                         32 * lfoFilterButton2.active;
+                         32 * lfoFilterButton2.active + 64 * dynamicGainButton.active + 
+                         128 * lfoGainButton.active;
               slider_automate(slider58);
               forceUpdate = 1;
             );
