@@ -1,10 +1,9 @@
 desc:Filther
 tags: Filther
-version: 1.73
+version: 1.75
 author: Joep Vanlier
 changelog: 
-  + Added option to set keyfollow amount.
-  + Use C-2 as note base for keyfollow rather than A-4.
+  + Added option to link filters in parallel.
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -52,7 +51,7 @@ slider32:0.8<0,1,.01>-Neg7y
 slider33:1.0<0,2,.01>-Key follow amount
 slider34:0.9<0,1,.01>-Neg8y
 // This one secretly has the information folded in whether pre-gain modulation is being used.
-slider35:0<0,3,1{Off,On,Off NGM,On NGM}>-Lookahead
+slider35:0<0,3,1{Lookahead Off,Lookahead On,Lookahead Off NGM,Lookahead On NGM}>-Toggles
 slider36:0<0,16,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,7,1{No reset,Reset,No reset + temposync,Reset + temposync,No reset + centered,Reset + centered,No reset + temposync + centered,Reset + temposync + centered>-Reset LFO
@@ -69,7 +68,7 @@ slider46:<0,6,1>-Filter Operation Mode
 slider47:<0,54,1{OFF,LP RC-C,Diode Ladder,Vowel,Karlsen,Karlsen S,WS LP,WS HP,WS BP,Moog (ZDF),Ch. Moog (unstable),Notch,Narsty,Modulator,Phaser (OTA),Phaser (FET),Delay Feedbok,Phase Mangler,MS20 LP lin (ZDF),MS20 BP lin(ZDF),MS20 HP lin (ZDF),MS20 LP NL (ZDF),MS20 BP NL (ZDF),MS20 HP NL (ZDF),Experimental,Rezzy (ZDF),SSM LP NL (ZDF),ch. SSM LP NL (Approx),CEM LP NL (ZDF),SSM LP lin (ZDF),CEM LP lin (ZDF),Sine,FM FB,FM-ish,Broken conn,Broken FB (ZDF),Waspey Lin (ZDF),Waspey LP NL(ZDF),Waspey BP NL (ZDF),SVF LP (ZDF),SVF BP (ZDF),SVF HP (ZDF),SVF Notch (ZDF),SVF Peak (ZDF),Saw (ZDF),SVF w/WS Res (ZDF),Voodoo,Junk (ZDF),Comb,Combres (LP),Combedres (BP),MS-20 LP2,MS-20 BP2,MS-20 HP2}>-Filter Type
 slider48:<0,1,.001>-Cutoff
 slider49:<0,1,.001>-Reso
-slider50:0<0,1,1>-FIR resampling
+slider50:0<0,3,1{FIR off,FIR on,FIR off parallel,FIR on parallel>-FIR resampling and linking mode
 //slider50:1<0,2,1{Sample & Hold per block,Good,Linear per block}>-Parameter Interpolation
 
 slider51:0<-1,1,.01>-Pre-Gain/Drive Mod %
@@ -104,13 +103,14 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.73";
+plugname = "FILTHER 1.75";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
 nFilters = 54;
 nModes = 7;
+nModes2 = 2;
 nLFO = 14;
 lastOversample = 0;
 lastpdcDelay = -1000;
@@ -212,6 +212,11 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 13 ) ? ( str = "Single Exp"
       ) : ( curitem == 14 ) ? ( str = "Single Exp + Atk"      
       )
+    ) : (stridx == 3) ?
+    (
+      ( curitem == 0 ) ? ( str = "Serial"
+      ) : ( curitem == 1 ) ? ( str = "Parallel"
+      );
     );
     
     str;
@@ -4764,6 +4769,7 @@ function updateSliders( hard )
   
   // Filter 2
   filterSelect2.combobox_setcuritem(slider40);
+  modeSelect2.combobox_setcuritem(floor(slider50*.5));
   cutoffSlider2.sliderWidget_setValue(slider41);
   resonanceSlider2.sliderWidget_setValue(slider42); 
   cutoffSlider2.sliderWidget_setValue2_nn(slider43);
@@ -4786,7 +4792,7 @@ function updateSliders( hard )
   decay_x4_2.active               = slider57 & 8 ? 1 : 0;
   rms_x4_1.active                 = slider57 & 16 ? 1 : 0;
   rms_x4_2.active                 = slider57 & 32 ? 1 : 0;
-  firButton.active                = slider50==1 ? 1 : 0;
+  firButton.active                = slider50&1 ? 1 : 0;
   
   lfoResetButton.active           = (slider38&1) ? 1 : 0;
   tempoLFOButton.active           = (slider38&2) ? 1 : 0;
@@ -4926,8 +4932,8 @@ function updateSliders( hard )
   
   // Calculate group delay incurred by sincs
   iN = 1.0 / slider54;
-  cDelay  = ( slider50 == 0 ) ? 0 : iN * (.5 * 7 * slider54 - 1);
-  cDelay += ( slider50 == 0 ) ? 0 : iN * (.5 * nTapSinc - 1);
+  cDelay  = (slider50 & 1) ? iN * (.5 * 7 * slider54 - 1) : 0;
+  cDelay += (slider50 & 1) ? iN * (.5 * nTapSinc - 1) : 0;
   updateIntegrationTime(); // updates lookAheadDelay
   cDelay += lookAheadDelay;  
  
@@ -4999,14 +5005,15 @@ function setupGUI()
   
   filterPanelX = masterPanelX;
   filterPanelY = filterPanelY + filterPanelH + sliderHeight;  
-  filterPanelH = sliderHeight*3+6*sliderPad;
+  filterPanelH = sliderHeight*4+7*sliderPad;
   filterPanel2.groupWidget(filterPanelX, filterPanelY, sliderWidth, filterPanelH, "FILTER ][ (BETA)", wR, wG, wB, wA );
   keyFollow2.selectionButton(filterPanelX + .82*sliderWidth - .370*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "KEY",  .3, .4, .8, .3, "Enable keyfollow for this filter.\n\nWhen activated, the filter follows the note pitch\nof the last note sent to it over MIDI.");
   dynamicFilterButton2.selectionButton(filterPanelX + .82*sliderWidth - .185*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  .3, .4, .8, .3, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
   lfoFilterButton2.selectionButton(filterPanelX + .82*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  .3, .4, .8, .3, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
   filterSelect2.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 3, "Filter selection.\nNon-linear (NL) filters are more expensive and benefit more from oversampling.\nTheir character comes out when driven (increase the pre-gain without enabling clipping).\nZero Delay Feedback (ZDF) filters behave better with rapid modulation.\nAll filters are IIR filters, meaning they do not preserve linear phase.\n\nWARNING: Not all filters are stable under rapid modulation!\nRemember to read the filter description to avoid being hit by instability.\nInstability manifests itself as there suddenly being a spike and then no sound." );
-  cutoffSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+3*sliderPad+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Filter button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
-  resonanceSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Shaper button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");  
+  modeSelect2.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad*2+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes2, 3, 0, 1, "Filter mode selection." );
+  cutoffSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Filter button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
+  resonanceSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+5*sliderPad+3*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Shaper button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");  
   
   dynamicGainButton.style = 2;
   lfoGainButton.style = 2;
@@ -6823,6 +6830,9 @@ function process(sample, dist)
 
 function processSamples()
   (
+    sl_in = ssl;
+    sr_in = ssr;
+  
     ( slider47 > 0 ) ? 
     (
       ( slider46 == 0 ) ?
@@ -6879,8 +6889,15 @@ function processSamples()
     );
     
     (slider40 > 0)? (
-      ssl = L2.process(ssl, 0);
-      ssr = R2.process(ssr, 0);
+      ( slider50 & 2 ) ? (
+        // Parallel
+        ssl = ssl + L2.process(sl_in, 0);
+        ssr = ssr + R2.process(sr_in, 0);
+      ) : (
+        // Serial      
+        ssl = L2.process(ssl, 0);
+        ssr = R2.process(ssr, 0);
+      );
     );
   );
 
@@ -7112,24 +7129,27 @@ updateActiveFilters(1);
     // N>1 oversampling
     sli = sl;
     sri = sr;
-    ( slider50 == 1 ) ? (
+    ( slider50 & 1 ) ? (
       sincFilterL.advanceSinc(sli);
       sincFilterR.advanceSinc(sri);
     );
     loop( slider54,
       // Upsampling
-      ( slider50 == 0 ) ? (
-        ssl = filterL.inputFilter(sli);
-        ssr = filterR.inputFilter(sri);
-      ) : (
+      ( slider50 & 1 ) ? (
         ssl = sincFilterL.getSubSample();
         ssr = sincFilterR.getSubSample();
+      ) : (
+        ssl = filterL.inputFilter(sli);
+        ssr = filterR.inputFilter(sri);
       );
       
       processSamples();
       
       // IIR downsampling?
-      ( slider50 == 0 ) ? (      
+      ( slider50 & 1 ) ? (
+        sincDownL.advanceHist(ssl);
+        sincDownR.advanceHist(ssr);  
+      ) : (
         (q += 1)==1 ? (
           sl = filterL.outputFilter(ssl);
           sr = filterR.outputFilter(ssr);
@@ -7137,14 +7157,11 @@ updateActiveFilters(1);
           filterL.outputFilter(ssl);
           filterR.outputFilter(ssr);
         );
-      ) : (
-        sincDownL.advanceHist(ssl);
-        sincDownR.advanceHist(ssr);
       );
     );
     
     // FIR downsampling?
-    ( slider50 == 1 ) ?
+    ( slider50 & 1 ) ?
     (
       sl = sincDownL.sincDownSample();
       sr = sincDownR.sincDownSample();
@@ -7179,7 +7196,7 @@ updateActiveFilters(1);
 
   curSample += 1;
 
-@gfx 1135 648
+@gfx 1135 680
   function angle_line(x, y, d1, d2, angle)
   local(ca, cb)
   (
@@ -7415,16 +7432,18 @@ updateActiveFilters(1);
     // Combobox should be the last to draw
     lfoSelect.combobox_draw();  
     modeSelect.combobox_draw();
+    modeSelect2.combobox_draw();
     filterSelect.combobox_draw();
     filterSelect2.combobox_draw();
     
     lfoSelect.combobox_draw_top();  
     modeSelect.combobox_draw_top();
+    modeSelect2.combobox_draw_top();
     filterSelect.combobox_draw_top();
     filterSelect2.combobox_draw_top();
     
     (filterSelect.hasfocus == 0) ? (
-      ( modeSelect.hasFocus == 0 ) ? (
+      ( modeSelect.hasFocus == 0 && modeSelect2.hasFocus == 0 ) ? (
         ( filterSelect2.hasFocus == 0 ) ? (
           ( lfoSelect.hasFocus == 0 ) ? (
             change = inGain.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);
@@ -7490,7 +7509,7 @@ updateActiveFilters(1);
             ( slider55 != newClipMode ) ? ( slider_automate( slider55=newClipMode; ); forceUpdate = 1; );
             
             firButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
-            ( slider50 != firButton.active ) ? ( slider_automate( slider50=firButton.active; ); forceUpdate = 1; );
+            ( slider50 & 1 != firButton.active ) ? ( slider_automate( slider50=slider50 - (slider50&1) + firButton.active; ); forceUpdate = 1; );
                 
             atk_x4_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             atk_x4_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
@@ -7539,16 +7558,19 @@ updateActiveFilters(1);
       );
     );
   
-   ( filterSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
+    ( modeSelect2.hasFocus == 0 && filterSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
       modeSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider46=modeSelect.curitem; ); );
   
-    ( modeSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
+    ( modeSelect.hasFocus == 0 && filterSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
+      modeSelect2.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider50=((slider50&1) + modeSelect2.curitem*2); ); );
+  
+    ( modeSelect2.hasFocus == 0 && modeSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
       filterSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider47=filterSelect.curitem; ); forceUpdate = 1; );
   
-    ( modeSelect.hasFocus == 0 && filterSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
+    ( modeSelect2.hasFocus == 0 && modeSelect.hasFocus == 0 && filterSelect.hasFocus == 0 && filterSelect2.hasFocus == 0 ) ?
       lfoSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider36=lfoSelect.curitem; ); forceUpdate = 1; );
   
-    ( modeSelect.hasFocus == 0 && filterSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 ) ?
+    ( modeSelect2.hasFocus == 0 && modeSelect.hasFocus == 0 && filterSelect.hasFocus == 0 && lfoSelect.hasFocus == 0 ) ?
       filterSelect2.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider40=filterSelect2.curitem; ); forceUpdate = 1; );
   
     lx = mouse_x;
