@@ -1,10 +1,12 @@
 desc:Filther
 tags: Filther
-version: 1.78
+version: 1.79
 author: Joep Vanlier
 changelog: 
-  + Better tooltip for second filtermode.
-  + Added randomize button (SHIFT + R)
++ Added weeping demon wahwah filter.
++ Added PWM emulation filters
++ Added bit crusher (try the resonance!)
++ Added muck filter (noise basically).
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -14,6 +16,7 @@ LP Diode Ladder (MIT Licensed)
 Copyright (c) 2012 Dominique Wurtz (www.blaukraut.info)
 Karlsen Fast Ladder III
 Copyright (c) Ove Hy Karlsen
+Weeping Demon emulation by Chet Gnegy
 
 slider1:2<2,9,1>-Nodes negative
 slider2:2<2,9,1>-Nodes positive
@@ -104,12 +107,12 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.78";
+plugname = "FILTHER 1.79";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
-nFilters = 54;
+nFilters = 59;
 nModes = 7;
 nModes2 = 4;
 nLFO = 14;
@@ -184,6 +187,11 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 51 ) ? ( str = "Kr0g MS-20 nonlin LP MK ][ (ZDF)"
       ) : ( curitem == 52 ) ? ( str = "Kr0g MS-20 nonlin BP MK ][ (ZDF)"
       ) : ( curitem == 53 ) ? ( str = "Kr0g MS-20 nonlin HP MK ][ (ZDF)"
+      ) : ( curitem == 54 ) ? ( str = "Weeping Demon"
+      ) : ( curitem == 55 ) ? ( str = "PWM Potatoes LP"
+      ) : ( curitem == 56 ) ? ( str = "PWM Potatoes BP"
+      ) : ( curitem == 57 ) ? ( str = "Bit reduction"      
+      ) : ( curitem == 58 ) ? ( str = "Muck"            
       );
     ) : (stridx == 1) ? 
     (
@@ -487,6 +495,21 @@ local(fx, fy, wx, wx2, wy)
   ) : ( filteridx == 53 ) ? (
     gfx_printf("Filter: MS-20 non-linear HP MK ][\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Zero delay feedback MS-20 emulation with non-linearity (tanh). This thing sounds great when overdriven, especially without waveshaper. The non-linear elements consist of arctans that saturate at each stage, and a nice diode clipper in the feedback. It can sound raw, yet clean, if that makes sense.", wx2); 
+  ) : ( filteridx == 54 ) ? ( 
+    gfx_printf("Filter: Weeping\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("This is a model of the weeping demon wah pedal, originally modelled by Chet Gnegy and used with permission. Cutoff controls the pre-highpass. Resonance controls the wah level.", wx2);
+  ) : ( filteridx == 55 ) ? ( 
+    gfx_printf("Filter: PWM Potatoes LP\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Emulation of PWM modulation. Can be used to make scrunchy sounds. Cutoff controls cutoff of the post-PWM filter, resonance controls the oversampling of the pulse generator.", wx2);
+  ) : ( filteridx == 56 ) ? ( 
+    gfx_printf("Filter: PWM Potatoes BP\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Emulation of PWM modulation. Can be used to make scrunchy sounds. Cutoff controls cutoff of the post-PWM filter, resonance controls the oversampling of the pulse generator.", wx2);
+  ) : ( filteridx == 57 ) ? (
+    gfx_printf("Filter: Bit reduction\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Bitdepth reduction. Cutoff slider reduces the bitdepth. A filter is run before the bitcrusher which splits off the bass, to add it back later after the bitcrusher. Setting the resonance to zero disables this filter. Note: This thing sounds nice paired with some tanh distortion.", wx2);  
+  ) : ( filteridx == 58 ) ? (
+    gfx_printf("Filter: Muck\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Muck (tiny bit of multiplicative noise).", wx2);  
   );
 );
 
@@ -1760,6 +1783,168 @@ function init_wasplin(freq, res)
     i1 = 1.0/(x2 + x3 + 1);
   );
   
+  
+  function pwm_init(freq, reso)
+    instance(len, ilen, c, svf)
+    local()
+    global(srate, slider54)
+    (
+      this.filter_SVF.init_linearSVF( freq, 0 );
+    
+      len = floor(8*reso)+2;//(1-freq)*(srate * max(slider54,1));
+      ilen = 1/len;
+   );
+   
+  function bit_init(freq, reso)
+    instance(depth, idepth, res)
+    local()
+    global()
+    (
+      depth = 2^(freq*freq*freq * 16);
+      idepth = 1/depth;
+      res = reso;
+      this.filter_SVF.init_linearSVF( reso, 0 );
+    );
+    
+    function muck_init(freq, reso)
+      instance(f, res)
+      local()
+      global()
+      (
+        f = freq;
+        res = reso;
+        this.filter_SVF.init_linearSVF( f, res );
+      );
+   
+function weeping_init(freq, res)
+instance( a_0, a_1, a_2, a_3, b_0, b_1, b_2, b_3, ia_0,
+          dx0, dx1, dx2, dx3, dy0, dy1, dy2, dy3 )
+local(          
+          x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19, x20, x21
+          A0, A1, A2, A3, B0, B1, B2,
+          bass, WAH, m_fudge, e_fudge,
+          f, f2, f3,
+          R108, R109, R110, R111, R113, R114, R115, R117, R120, R122, R123, C104, C105, C118, C119, VR6, VR7,
+          WAH_theta, LO, LEVEL, Q, RANGE )
+global(srate, slider54)
+(
+  bass = 0;
+
+  LEVEL     = 10000.0;
+  LO        = 100 + 99900 * freq;
+  WAH_theta = 5 + 12*res;
+  Q         = 100 + 249900*(.4*res+.25);
+  
+  RANGE   = 1.0;
+
+  R108 = 9790;   // 10e3; 
+  R109 = 21300;  // 22e3; 
+  R110 = 23900;  // 24e3; 
+  R111 = 46400;  // 47e3; 
+  R113 = 197000; // 200e3; 
+  R114 = 10970;  // 11e3; 
+  R115 = 982;    // 1e3; 
+  R117 = 14770;  // 15e3; 
+  R120 = 3520;   // 3.6e3; 
+  R122 = 4950;   // 5.1e3; 
+  R123 = 4650;   // 4.7e3; 
+  
+  C104 = .00000000276; // 2.7e-9;
+  C105 = .0000000103;  // 10e-9;
+  C118 = .0000000195;  // 18e-9; 
+  C119 = .0000000101;  // 10e-9; 
+  VR6  = 0;            // 20e3; 
+  VR7  = 449000;       // 500e3;
+
+  m_fudge = 1.1;
+  e_fudge = 0.95;
+  WAH = m_fudge * 16933367000 * pow(WAH_theta,(-4.45855*e_fudge));
+
+  bass ? (
+    x0 = LO + R122 + R123;
+    x1 = C105*R117*x0;
+    x2 = Q + R114;
+    x3 = R109 + R110;
+    x4 = R113 + VR7;
+    x5 = WAH + x4;
+    x6 = R108 + x2;
+    x7 = R115 + RANGE + VR6;
+    B2 = 0.0;
+    A3 = 0.0;
+    B1 = LEVEL*x1*x2*x3*x5;
+    B0 = R123*x2*x3*x5*(LEVEL + R120);
+    A2 = R109*R120*x1*x6*(C104 + C119)*(WAH*(x4 + x7) + x4*x7);
+    A1 = C105*R108*R117*R120*x0*x3*x5;
+    A0 = R110*R120*x0*x5*x6;
+
+  ) : (
+    x0 = LO + R122 + R123;
+    x1 = C105*R111*R117*x0;
+    x2 = Q + R114;
+    x3 = R109 + R110;
+    x4 = R113 + VR7;
+    x5 = WAH + x4;
+    x6 = x2*x3*x5;
+    x7 = C118*R111*R123;
+    x8 = C105*R117;
+    x9 = x0*x8;
+    x10 = R108 + x2;
+    x11 = R115 + RANGE + VR6;
+    x12 = WAH*(x11 + x4) + x11*x4;
+    x13 = R110*R111;
+    x14 = C118*R108*x5;
+    x15 = C104*x12;
+    x16 = R120*x0*x5;
+    x17 = R108 + R111;
+
+    B2 = C118*LEVEL*x1*x2*x3*x5;
+    B1 = x6*(LEVEL*(x7 + x9) + R120*x7);
+    B0 = R123*x6*(LEVEL + R120);
+    A3 = C104*C118*R109*R120*x1*x10*x12;
+    A2 = R120*x9*(R109*(R111*(x14 + x15) + x10*x15) + x13*x14);
+    A1 = x16*(C118*x10*x13 + x17*x3*x8);
+    A0 = R110*x16*(x17 + x2);
+  );
+    
+  //double az0,az1,az2,az3,bz0,bz1,bz2,bz3;
+  
+  f = srate * max(1, slider54);
+  f2 = f*f;
+  f3 = f2*f;
+
+  // Bilinear transform
+  a_0 = 8*A3*f3 + 4*A2*f2 + 2*A1*f + A0;
+  ia_0 = 1/a_0;
+  a_3 = (-8*A3*f3 + 4*A2*f2 - 2*A1*f + A0)*ia_0;
+  a_2 = (24*A3*f3 -4*A2*f2 - 2*A1*f + 3*A0)*ia_0;
+  a_1 = (-24*A3*f3 -4*A2*f2 +2*A1*f + 3*A0)*ia_0;
+  b_3 = (4*B2*f2 - 2*B1*f + B0)*ia_0;
+  b_2 = (-4*B2*f2 - 2*B1*f + 3*B0)*ia_0;
+  b_1 = (-4*B2*f2 +2*B1*f + 3*B0)*ia_0;
+  b_0 = (4*B2*f2 + 2*B1*f + B0)*ia_0;
+  a_0 = 1; 
+);
+
+function weeping_eval(sample)
+instance( a_0, a_1, a_2, a_3, b_0, b_1, b_2, b_3, ia_0,
+          dx0, dx1, dx2, dx3, dy0, dy1, dy2, dy3 )
+global(srate)
+(
+  dx3 = dx2;
+  dx2 = dx1;
+  dx1 = dx0;
+  dx0 = sample;
+  dy3 = dy2;
+  dy2 = dy1;
+  dy1 = dy0;
+  
+  //coefficient interpolation
+  dy0      = -a_1 * dy1 - a_2 * dy2 - a_3 * dy3 
+             + (b_0 * dx0 + b_1 * dx1 + b_2 * dx2 + b_3 * dx3 );
+  
+  dy0
+);
+ 
 function reset_wasplin()
   global()
   local()
@@ -2287,7 +2472,7 @@ function selectBuffer(isR, isFilt2)
   
 function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
   global(filter_delay1, filter_delay2, slider54, slider56, forceUpdate, selectBuffer
-        filter_delay1.initBufferNoReset, filter_delay2.initBufferNoReset)
+        filter_delay1.initBufferNoReset, filter_delay2.initBufferNoReset, srate)
   local(val, delayBuffer, delayBuffer2)
   instance()
  ( 
@@ -2453,6 +2638,20 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.filter_ms20.init_MS20_nonlin_2(filterFreq, filterReso);
     ) : ( sliderValue == 53 ) ? (
       this.filter_ms20.init_MS20_nonlin_2(filterFreq, filterReso);
+    ) : ( sliderValue == 54 ) ? (
+      this.weeping.weeping_init(filterFreq, filterReso);
+    ) : ( sliderValue == 55 ) ? (
+      //(this.wah.l_srate != srate) ? this.wah.dlop_init_srate();
+      //this.wah.dlop_init_cutoff(filterFreq, filterReso);
+      this.pwm.pwm_init(filterFreq, filterReso);
+      sliderValue=sliderValue;
+    ) : ( sliderValue == 56 ) ? (
+      this.pwm.pwm_init(filterFreq, filterReso);
+      sliderValue=sliderValue;      
+    ) : ( sliderValue == 57 ) ? (
+      this.bit.bit_init(filterFreq, filterReso);
+    ) : ( sliderValue == 58 ) ? (
+      this.muck.muck_init(filterFreq, filterReso);
     );
   );     
     
@@ -6394,7 +6593,7 @@ function eval_linearSVF_LP(v0)
     ic2eq = 2*v2 - ic2eq;    
     
     v2
-  );
+  );  
   
 function eval_linearSVF_BP(v0)
   global()
@@ -6409,6 +6608,68 @@ function eval_linearSVF_BP(v0)
     
     v1
   );
+  
+function pwm_eval(sample)
+   instance(len, ilen, c, out, spunk, gain)
+   local(s)
+   global()
+   (
+      sample = 8*sample;
+      out = this.filter_SVF.eval_linearSVF_LP(abs(sample) < (len-1)*ilen);
+      s = len-1;
+      loop(ilen-2,
+        s -= 1;
+        this.filter_SVF.eval_linearSVF_LP(abs(sample) < s*ilen);      
+      );
+      
+      out
+   );
+   
+function pwm_eval_BP(sample)
+   instance(len, ilen, c, out, spunk, gain)
+   local(s)
+   global()
+   (
+      sample = 8*sample;
+      out = this.filter_SVF.eval_linearSVF_BP(abs(sample) < (len-1)*ilen);
+      s = len-1;
+      loop(ilen-2,
+        s -= 1;
+        this.filter_SVF.eval_linearSVF_BP(abs(sample) < s*ilen);
+      );
+      
+      out
+   );  
+   
+function bit_eval(sample)
+  instance(depth, idepth, res)
+  local(s, bass)
+  global()
+  (
+    res > 0.01 ? 
+    (
+      bass = this.filter_SVF.eval_linearSVF_LP(sample);
+      sample = sample - bass;
+    );
+    sample = floor( sample * depth ) * idepth;
+    res > 0.01 ? sample = sample + bass;
+    
+    sample
+  );
+  
+function muck_eval(sample)
+  instance(f, res)
+  local(s, bass)
+  global()
+  (
+    bass = this.filter_SVF.eval_linearSVF_LP(sample);
+    sample = sample - bass;
+    bass = bass * (1+.1*res*rand()*rand()*rand());
+    sample = sample + bass;
+    
+    sample
+  );  
+   
   
 function eval_linearSVF_HP(v0)
   global()
@@ -6824,6 +7085,21 @@ function process(sample, dist)
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 53 ) ? (
       sample = this.filter_ms20.eval_MS20_nonlinHP_tanh(sample);
+      dist ? sample = distort(sample);
+    ) : ( this.filtertype == 54 ) ? (
+      sample = this.weeping.weeping_eval(sample);
+      dist ? sample = 4*distort(.25*sample);
+    ) : ( this.filtertype == 55 ) ? (
+      sample = this.pwm.pwm_eval(sample);
+      dist ? sample = distort(sample);
+    ) : ( this.filtertype == 56 ) ? (
+      sample = this.pwm.pwm_eval_BP(sample);
+      dist ? sample = distort(sample);
+    ) : ( this.filtertype == 57 ) ? (
+      sample = this.bit.bit_eval(sample);
+      dist ? sample = distort(sample);
+    ) : ( this.filtertype == 58 ) ? (
+      sample = this.muck.muck_eval(sample);
       dist ? sample = distort(sample);
     );
     
