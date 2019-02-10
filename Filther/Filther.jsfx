@@ -1,9 +1,11 @@
 desc:Filther
 tags: Filther
-version: 1.87
+version: 1.88
 author: Joep Vanlier
 changelog: 
- + Limit crybaby range.
+ + Display stereofield
+ + Rename Stereoize more appropriately to Stereo Boost
+ + Add actual stereoize filter mode (Haas effect)
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -65,7 +67,7 @@ slider43:.5<-1,1,.01>-Filter2 Cutoff Mod %
 slider44:0<-1,1,.01>-Filter2 Reso Mod %
 
 slider45:0<0,5,1{Dynamic RMS,Direct RMS,MIDI poly,MIDI legato,MIDI poly vel,MIDI legato vel>-Dynamics mode
-slider46:<0,6,1>-Filter Operation Mode
+slider46:<0,7,1>-Filter Operation Mode
 slider47:<0,54,1{OFF,LP RC-C,Diode Ladder,Vowel,Karlsen,Karlsen S,WS LP,WS HP,WS BP,Moog (ZDF),Ch. Moog (unstable),Notch,Narsty,Modulator,Phaser (OTA),Phaser (FET),Delay Feedbok,Phase Mangler,MS20 LP lin (ZDF),MS20 BP lin(ZDF),MS20 HP lin (ZDF),MS20 LP NL (ZDF),MS20 BP NL (ZDF),MS20 HP NL (ZDF),Experimental,Rezzy (ZDF),SSM LP NL (ZDF),ch. SSM LP NL (Approx),CEM LP NL (ZDF),SSM LP lin (ZDF),CEM LP lin (ZDF),Sine,FM FB,FM-ish,Broken conn,Broken FB (ZDF),Waspey Lin (ZDF),Waspey LP NL(ZDF),Waspey BP NL (ZDF),SVF LP (ZDF),SVF BP (ZDF),SVF HP (ZDF),SVF Notch (ZDF),SVF Peak (ZDF),Saw (ZDF),SVF w/WS Res (ZDF),Voodoo,Junk (ZDF),Comb,Combres (LP),Combedres (BP),MS-20 LP2,MS-20 BP2,MS-20 HP2}>-Filter Type
 slider48:<0,1,.001>-Cutoff
 slider49:<0,1,.001>-Reso
@@ -105,13 +107,13 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.87";
+plugname = "FILTHER 1.88";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
 nFilters = 63;
-nModes = 7;
+nModes = 8;
 nModes2 = 4;
 nLFO = 27;
 lastOversample = 0;
@@ -203,7 +205,8 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 3 ) ? ( str = "M2/S1"
       ) : ( curitem == 4 ) ? ( str = "Only side"
       ) : ( curitem == 5 ) ? ( str = "Only mid"
-      ) : ( curitem == 6 ) ? ( str = "Stereoize"
+      ) : ( curitem == 6 ) ? ( str = "Stereo Boost"
+      ) : ( curitem == 7 ) ? ( str = "Stereoize"
       );
     ) : (stridx == 2) ?
     (
@@ -3020,13 +3023,6 @@ function dlop_eval( Ui )
       xh3 = x_3_0;
       xh4 = x_4_0;
       xh5 = x_5_0;
-    
-      //xh0 = max(-.1, min(.1, xh0));
-      //xh1 = max(-5, min(5, xh1));
-      //xh2 = max(-.1, min(.1, xh2));
-      //xh3 = max(-1, min(1, xh3));
-      //xh4 = max(-1, min(1, xh4));
-      //xh5 = max(-.0001, min(.0001, xh5));
   
       output
   );
@@ -5897,7 +5893,7 @@ function calcFFT()
   );  
 
 
-function setSpectroLocation(_x, _y, _w, _h)
+function setWindowLocation(_x, _y, _w, _h)
   global()
   instance(x, y, w, h)
   local()
@@ -6025,7 +6021,77 @@ function initSpectrum(memoryOffset)
     
     this.initWindow(3)
   );  
+  
+function initGonioMeter(in, sampleCount)
+  global(sampleCount, srate)
+  instance(rStart, rEnd, recPtr, samples)
+  local()
+  (
+    samples = sampleCount;
+    rStart = in;
+    rEnd = in + sampleCount - 1;
+    recPtr = in;
+  );  
+  
+function feedGonio(l1, r1)
+  global()
+  instance(rStart, rEnd, recPtr)
+  local()
+  (
+    recPtr[] = l1;
+    (recPtr+=1)[] = r1;
+    recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
+  );
+  
+function drawGonioWindow(recPtr)  
+  global()
+  instance(x, y, w, h)
+  local()
+  (    
+    gfx_set( .2, .2, .3, .1 );
+    gfx_rect(x, y, w, h);
 
+    gfx_set( .3, .3, .6, .2 );
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y+h, x+w, y+h);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+  );
+  
+  function drawGonioMeter(cl)
+  global()
+  local(step, ptr, sign0, sign1, s0, s1, angle, vert, horiz, radius, xx, yy, cx, cy)
+  instance(x, y, w, h, recPtr, rStart, rEnd, samples)
+  (
+    ptr = recPtr+2;
+    
+    cx = x + 0.5*w;
+    cy = y + 0.5*h;
+    
+    cl == 1 ? gfx_set( 0.8, 0.8, 0.8, .4 ) : gfx_set( .23, .23, .23, .6 );
+
+    loop(samples,
+      s0 = ptr[];
+      s1 = (ptr+=1)[];
+      sign0 = sign( s0 );
+      sign1 = sign( s1 );
+      angle = atan( s0 / s1 );
+      (sign0 == 1 && sign1 == -1) || (sign0 == -1 && sign1 == -1) ? angle += 3.141592654;
+      (sign0 == -1 && sign1 == 1) ? angle += 6.283185307;
+      s1 == 0 ? s0 > 0 ? angle = 1.570796327 : angle = 4.71238898;
+      s0 == 0 ? s1 > 0 ? angle = 0 : angle = 3.141592654;
+      radius = sqrt( sqr(s0)+sqr(s1) ) ;
+      radius > 1 ? radius = 1;
+      angle -= .25*$pi;
+      xx = cx + .5*h*sin(angle)*radius;
+      yy = cy + .5*h*cos(angle)*radius;
+      gfx_circle(xx, yy, 1);
+      
+      ptr += 1;
+      ptr > rEnd ? ptr = rStart;
+    );
+  );  
+  
 //////////////////////////////////////////////////////////
 // Memory layout
 //////////////////////////////////////////////////////////
@@ -6101,8 +6167,12 @@ fftSize         = 32768;
 bufferDist      = 65536;
 audioBufIn      = 40*bufferDist;
 audioBufOut     = 42*bufferDist;
+gonioBuffer1    = 44*bufferDist;
+gonioBuffer2    = 46*bufferDist;
 spectrumIn.initSpectrum(audioBufIn);
 spectrumOut.initSpectrum(audioBufOut);
+gonioIn.initGonioMeter(gonioBuffer1, 1000);
+gonioOut.initGonioMeter(gonioBuffer2, 1000);
 
 fftSize         = 2*8192;
 inVol.initBuffer(20000, 20000+Nbuf-1);
@@ -6558,8 +6628,10 @@ function setupGUI()
   window2.gen_window(2*wndPad+wndX, wndPad, wndX, wndY, 10, 2, positive_xloc, positive_yloc, positive_xloc2, positive_yloc2, neg_indices, temp_xloc, temp_yloc, temp_indices, pos_c1s, pos_c2s, pos_c3s, pos_c1s2, pos_c2s2, pos_c3s2);
   window3.gen_dynamics(3*wndPad+2*wndX, wndPad, wndX, wndY );
   
-  spectrumIn.setSpectroLocation(wndPad, 2.4*wndPad + wndY, 2*wndX + wndPad, wndY * .9);
-  spectrumOut.setSpectroLocation(wndPad, 2.4*wndPad + wndY, 2*wndX + wndPad, wndY * .9);
+  spectrumIn.setWindowLocation(wndPad, 2.4*wndPad + wndY, 2*wndX + wndPad, wndY * .9);
+  spectrumOut.setWindowLocation(wndPad, 2.4*wndPad + wndY, 2*wndX + wndPad, wndY * .9);
+  gonioIn.setWindowLocation(3*wndPad+2*wndX, 2.4*wndPad + wndY, wndX, wndY * .9);
+  gonioOut.setWindowLocation(3*wndPad+2*wndX, 2.4*wndPad + wndY, wndX, wndY * .9);
   
   wR = wG = wA = 0.7; wB = 0.9;
   masterPanelX = 4*wndPad+3*wndX;
@@ -8565,6 +8637,20 @@ function processSamples()
         side = L.process(1.5*side, 1);
         ssl  = mid + side;
         ssr  = mid - side;
+      ) : ( slider46 == 7 ) ?
+      (
+        side = .5 * ( ssl - d4ssr );
+        mid  = .5 * ( ssl + ssr );
+        mid  = R.process(mid, 1);
+        side = L.process(4*side, 1);
+        
+        d4ssr = d3ssr;
+        d3ssr = d2ssr;
+        d2ssr = dssr;
+        dssr = ssr;        
+        
+        ssl  = mid + side;
+        ssr  = mid - side;
       );
     //);
     
@@ -8690,6 +8776,7 @@ updateActiveFilters(1);
   sr        = spl1 * pregain;
   
   spectrumIn.feedSample(sl+sr);
+  gonioIn.feedGonio(sl, sr);
   modulator.updateModulator();
     
   // Does this plugin respond to MIDI signals?
@@ -8878,6 +8965,7 @@ updateActiveFilters(1);
     spl1 = sr * postgain;
   
     spectrumOut.feedSample(spl0+spl1);
+    gonioOut.feedGonio(spl0, spl1);
   
     // Optional output clipping
     ( slider55 & 2  ) ? 
@@ -9140,9 +9228,13 @@ updateActiveFilters(1);
     
     spectrumIn.drawGrid();
     spectrumIn.drawFFT(1);
-    spectrumOut.drawFFT(0);
+    spectrumOut.drawFFT(0);    
     spectrumIn.ylabel("Level");
     spectrumIn.xlabel("Frequency");
+    
+    gonioIn.drawGonioWindow();
+    gonioIn.drawGonioMeter(0);
+    gonioOut.drawGonioMeter(1);
     
     window3.ylabel("RMS / Level");
     window3.xlabel("Time");
