@@ -1,26 +1,11 @@
 desc:Filther
 tags: Filther
-version: 1.89
+version: 1.90
 author: Joep Vanlier
 changelog: 
- + Added option to copy spline function over to other side.
- + Threshold = 1 default.
- + Fix bug not resetting random appropriately on init.
- + Smoothened goniometer dots a little bit.
- + Implemented more sensible minimum for all filters.
- + Added option to bypass filter.
- + Added shortcut SHIFT+S (swap filters).
- + Added shortcut SHIFT+F (randomize filters).
- + Added shortcut SHIFT+W (randomize waveshaper).
- + Added shortcut SHIFT+L (randomize LFO).
- + Fixed issue with vowel filter not resetting properly.
- + Fixed issue with experimental filter not resetting properly.
- + Added second vowel filter (more stable this one).
- + Added monstro filter.
- + Added subtle stereo mode.
- + Add smoothing for the spectrum.
- + Exposed colors in init section.
- + Fixed issue with spline end point jumping around
+ + Allow dragging noise floor FFT
+ + Allow changing zoom on goniometer with dragging
+ + Allow setting smoothing factor with scrollwheel
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -117,6 +102,9 @@ options:no_meter
 file_var(0,extraScale);
 file_var(0,hideToolTips);
 file_var(0,linuxMode);
+file_var(0,dnoisefloor_freq);
+file_var(0,dsteps_fft);
+file_var(0,dgonio_zoom);
 
 @init
 // Colors
@@ -204,7 +192,7 @@ MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.89";
+plugname = "FILTHER 1.90";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -6296,9 +6284,10 @@ function calcFFT()
 
 function setWindowLocation(_x, _y, _w, _h)
   global()
-  instance(x, y, w, h)
+  instance(x, y, w, h, cap)
   local()
   ( 
+    cap = 0;
     x = _x;
     y = _y;
     w = _w;
@@ -6376,11 +6365,39 @@ function drawLine(x1, y1, x2, y2)
       gfx_lineto(x2,y2,1); 
     );
   );
-   
+
+function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
+  instance(x, y, w, h, ly, lcap, cap)
+  global(dnoisefloor_freq, dsteps_fft, mouse_wheel)
+  local()
+  (
+    ( cap == 1 && mouse_cap & 1 == 1 ) ? (
+      dnoisefloor_freq -= .5*(mouse_y-ly);
+      dnoisefloor_freq > 35 ? dnoisefloor_freq = 35;
+      dnoisefloor_freq < -15 ? dnoisefloor_freq = -15;
+    ) : ( 
+      cap = 0;
+      ( mouse_cap & 1 == 1 && lcap & 1 == 0 && mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h) ) ? (
+        cap = 1;
+      );
+    );
+    
+    abs(floor(mouse_wheel/240)) > 0 && mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h) ?
+    (
+      dsteps_fft += floor(mouse_wheel/240);
+      dsteps_fft > 8 ? dsteps_fft = 8;
+      dsteps_fft < -6 ? dsteps_fft = -6;
+      mouse_wheel = 0;
+    );
+    
+    ly = mouse_y;
+    lcap = mouse_cap;
+  );
+
 function drawFFT(fill)
-  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate,
+  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, dnoisefloor_freq,
     fft_out_r, fft_out_g, fft_out_b, fft_out_a,
-    fft_in_r, fft_in_g, fft_in_b, fft_in_a
+    fft_in_r, fft_in_g, fft_in_b, fft_in_a, dsteps_fft
   )
   instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
   local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
@@ -6388,7 +6405,7 @@ function drawFFT(fill)
     this.initWindow(3);
     this.calcFFT();
  
-    floorLevel = 25;
+    floorLevel = 25 + dnoisefloor_freq;
     cum = -10000000;
     cumelem = 0;
     i = 0;
@@ -6397,7 +6414,7 @@ function drawFFT(fill)
     fill_slmin = y;
 
     buf = fftLoc + fftsize*0.5 - 2;
-    stepsize = floor(7*retina_scaling);
+    stepsize = floor((7+dsteps_fft)*retina_scaling);
     copyval = buf[];
     loop( stepsize*200,
       (buf+=1)[] = copyval;
@@ -6422,6 +6439,7 @@ function drawFFT(fill)
         gfx_b=fft_in_b;
         gfx_a=fft_in_a;
         
+        tx = min(tx, x+w);
         fill ? 
         (
           tx0=tx|0;
@@ -6507,9 +6525,30 @@ function drawGonioWindow(recPtr)
     gfx_line(x+w, y, x+w, y+h);
   );
   
-  function drawGonioMeter(cl)
+  
+function gonio_processMouse(mouse_x, mouse_y, mouse_cap)
+  instance(x, y, w, h, ly, lcap, cap)
+  local()
+  global(dgonio_zoom)
+  (
+    ( cap == 1 && mouse_cap & 1 == 1 ) ? (
+      dgonio_zoom -= .03*(mouse_y-ly);
+      dgonio_zoom < -.9 ? dgonio_zoom = -.9;
+      dgonio_zoom > 9   ? dgonio_zoom = 9;
+    ) : ( 
+      cap = 0;
+      ( mouse_cap & 1 == 1 && lcap & 1 == 0 && mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h) ) ? (
+        cap = 1;
+      );
+    );
+  
+    ly = mouse_y;
+    lcap = mouse_cap;
+  );  
+  
+function drawGonioMeter(cl)
   global( gonio_out_r, gonio_out_g, gonio_out_b, gonio_out_a, 
-          gonio_in_r, gonio_in_g, gonio_in_b, gonio_in_a)
+          gonio_in_r, gonio_in_g, gonio_in_b, gonio_in_a, dgonio_zoom )
   local(step, ptr, sign0, sign1, s0, s1, angle, vert, horiz, radius, xx, yy, cx, cy)
   instance(x, y, w, h, recPtr, rStart, rEnd, samples)
   (
@@ -6530,7 +6569,7 @@ function drawGonioWindow(recPtr)
       (sign0 == -1 && sign1 == 1) ? angle += 6.283185307;
       s1 == 0 ? s0 > 0 ? angle = 1.570796327 : angle = 4.71238898;
       s0 == 0 ? s1 > 0 ? angle = 0 : angle = 3.141592654;
-      radius = sqrt( sqr(s0)+sqr(s1) ) ;
+      radius = (1+dgonio_zoom) * sqrt( sqr(s0)+sqr(s1) ) ;
       radius > 1 ? radius = 1;
       angle -= .25*$pi;
       xx = cx + .5*h*sin(angle)*radius;
@@ -9860,12 +9899,14 @@ updateActiveFilters(1);
     spectrumIn.drawGrid();
     spectrumIn.drawFFT(1);
     spectrumOut.drawFFT(0);    
+    spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);
     spectrumIn.xlabel("Frequency");
     spectrumIn.ylabel("Level");
     
     gonioIn.drawGonioWindow();
     gonioIn.drawGonioMeter(0);
     gonioOut.drawGonioMeter(1);
+    gonioOut.gonio_processMouse(mouse_x, mouse_y, mouse_cap);
 
     window3.xlabel("Time");    
     window3.ylabel("RMS / Level");
