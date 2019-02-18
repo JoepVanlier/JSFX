@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 1.96
+version: 1.97
 author: Joep Vanlier
 changelog: 
- + Added automatic gain compensation (AGC)
+ + Tweaks in Automatic Gain Compensation (AGC)
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -193,7 +193,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 agc_corr = 1;
 
 gfx_ext_retina  = 1.0;
-plugname = "FILTHER 1.96";
+plugname = "FILTHER 1.97";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -7704,7 +7704,7 @@ function setupGUI()
   lfoGainButton.selectionButton(masterPanelX + .82*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the gain responds to changes in the LFO.");
   dynamicGainButton.selectionButton(masterPanelX + .82*sliderWidth - .185*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic gain manipulation.\n\nWhen activated, the gain responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
   
-  agcButton.selectionButton(postTextLoc + .015 * sliderWidth, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "AGC",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Automatic Gain Control.");
+  agcButton.selectionButton(postTextLoc + .015 * sliderWidth, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "AGC",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Automatic Gain Control (BETA)\n\nAdjusts the level between post-filter and post-gain in order\nto keep the RMS ratio between post-filter and post-drive fixed.\n\nThis setting is meant to protect your ears when tweaking filters,\nnot to be used in final production as it affects dynamics.\n");
 
   inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 40, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
   inClip.selectionButton(masterPanelX+sliderPad+ + .8*sliderWidth, 3+masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle input clipping");
@@ -10108,16 +10108,26 @@ updateActiveFilters(1);
   (
     agcControl == 1 ?
     (
-      alpha = 0.999;
+      alpha = 0.9999;
       agcpre = agcpre * alpha + sqrt(max(spl0*spl0, spl1*spl1)) * (1-alpha);
       agcpost = agcpost * alpha + sqrt(max(sl*sl, sr*sr)*agc_corr*agc_corr) * (1-alpha);
   
-      // AGC
+      // Automatic Gain Control
       // Decrease fast, increase slower (don't want wobble) with hysteresis
-      agcpost > 1.25*agcpre ? (
-        agc_corr = agc_corr * .9999;
-      ) : ( agcpost < 0.8*agcpre ) ? agc_corr = agc_corr * 1.0001;
+      // Direct dynamic solution with PID controller was attempted but ended up oscillating too much.
+      agcpost > 1.04*agcpre ? (
+        agc_corr = agc_corr * .99999;
+      ) : ( agcpost < 0.96*agcpre ) ? agc_corr = agc_corr * 1.00001;
   
+      // Faster attacks for nastier differences
+      agcpost > 3*agcpre ? (
+        agc_corr = agc_corr * .9999;
+      ) : ( agcpost < .33*agcpre ) ? agc_corr = agc_corr * 1.0001;
+    
+      agcpost > 10*agcpre ? (
+        agc_corr = agc_corr * .999;
+      );
+      
       sl *= agc_corr;
       sr *= agc_corr;
       
