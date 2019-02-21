@@ -1,9 +1,12 @@
 desc:Filther
 tags: Filther
-version: 2.01
+version: 2.02
 author: Joep Vanlier
 changelog: 
-+ Added an octaver
++ Added override activation of AGC post random setting
++ Attempt at fixing retina issues (at the cost of higher per frame overhead)
++ Change behaviour combobox (scrollwheel behaviour over combobox area rather than last selected)
++ Fix bug in lookahead code which adversely affected the modulator when lookahead was enabled
 provides: Filther.jsfx.rpl
 Copyright (C) 2018 Joep Vanlier
 License: MIT
@@ -192,8 +195,9 @@ filter_description_bg_a = 0.05;
 MAXOVERSAMPLING = 8;
 MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
-gfx_ext_retina  = 1.0;
-plugname = "FILTHER 2.01";
+!gfx_ext_retina ? gfx_ext_retina = 1;
+
+plugname = "FILTHER 2.02";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -719,7 +723,7 @@ local(fx, fy, wx, wx2, wy)
     gfx_printf("Modulon\nModulon works by modulating the signal with a set frequency and filtering the result.");
   ) : ( filteridx == 67 ) ? (
     gfx_printf("Octaver\n\n"); gfx_x = fx+5;
-    gfx_wrapprint("This chunky monkey can be used to add some deep bass to your sounds. Recommended for monophonic sounds only, this filter can add bass one and two octaves down. Cutoff transitions between dry and wet, while resonance switches between using only octave 1, octave 2, or mixing them both in at the halfpoint.", wx2);
+    gfx_wrapprint("This chunky monkey can be used to add some deep bass. Recommended for monophonic sounds only. This effect adds bass one and two octaves down. Cutoff transitions between dry and wet, while resonance switches between using octave 1 and octave 2. Note that this effect is best applied only on the mid channel (as left and right can easily go out of phase and create a fluctuating stereo image).", wx2);
   );
 );
 
@@ -2749,16 +2753,18 @@ function modulon_reset()
   );   
     
 function octaver_init(filterfreq, res)
-  local()
+  local(f_est)
   global()
   instance(flipflopState, flipflopState2, bal1, bal2)
   (
     bal1 = filterFreq;
     bal2 = res;
     
-//    this.svf3.init_linearSVF( .005, 0 );
+    f_est = .005;
+    this.svf.init_linearSVF_direct( f_est, 0 );
+    this.svf2.init_linearSVF_direct( .5*f_est, 0 );
     this.svf3.init_linearSVF( .0005, 0 );
-    this.svf4.init_linearSVF( .01, 0 );
+    this.svf4.init_linearSVF( .01, 0 ); //0.01
   ); 
   
 function octaver_reset()
@@ -5631,10 +5637,10 @@ function groupWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in)
   global(fontface, retina_scaling, widgetFontSize)
   instance(x, y, w, h, r, g, b, a, label)
   (
-    x       = x_in-2;
-    y       = y_in-6;
-    w       = w_in+4;
-    h       = h_in+4;
+    x       = x_in-2*retina_scaling;
+    y       = y_in-6*retina_scaling;
+    w       = w_in+4*retina_scaling;
+    h       = h_in+4*retina_scaling;
     r       = r_in;
     g       = g_in;
     b       = b_in;
@@ -5745,10 +5751,11 @@ function selectionButton(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_i
       g       = g_in;
       b       = b_in;
       a       = a_in;
-      htime   = 0;
       label   = label_in;
-      lastleft = 0;
       hint    = hint_in;
+      
+      //htime   = 0;
+      //lastleft = 0;
   );
   
 function setLabel( _label )
@@ -5905,7 +5912,7 @@ function combobox(x_in, y_in, w_in, h_in, r_in, g_in, b_in, a_in, nitems_in, str
   global(newUI)
   instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, hasfocus, goup, cols, thisUI, htime, hint)
   (
-      thisUI        = newUI+=1;
+      !thisUI ?     thisUI = newUI += 1;
       x             = x_in;
       y             = y_in+1;
       w             = w_in;
@@ -5915,17 +5922,17 @@ function combobox(x_in, y_in, w_in, h_in, r_in, g_in, b_in, a_in, nitems_in, str
       b             = b_in;
       a             = a_in;
       nitems        = nitems_in;
-      cap           = 0;
-      curitem       = 0;
-      hover         = 8;
-      open          = 0;
       stridx        = stridx_in;
-      lastleft      = 0;
-      hasfocus      = 0;
       goup          = goup_in;
       cols          = cols_in;
-      htime         = 0;
       hint          = hint_in;
+      //cap           = 0;
+      //curitem       = 0;
+      //open          = 0;
+      //lastleft      = 0;
+      //hasfocus      = 0;
+      //htime         = 0;
+      //hover         = 8;
   );
   
 function combobox_setcuritem( item )
@@ -6030,15 +6037,19 @@ function combobox_processMouse(xx, yy, mc)
     
 //    ( y+((nitems)/cols+1)*h-delta );
     
+    over = xx > x && xx < ( x+w ) && yy > y && yy < ( y + h );
+    
     ( lastUI == thisUI ) ?
     (
-      ( lastChar == 1685026670 || mouse_wheel < 0 ) ? ( 
+      ( lastChar == 1685026670 ) ? 
+      ( 
         curitem = curitem + 1;
         curitem > nitems - 1 ? curitem = 0;
         change = 1;
         mouse_wheel = 0;
       ) : (
-        ( lastChar == 30064 || mouse_wheel > 0 ) ? (
+        ( lastChar == 30064 ) ? 
+        (
           curitem = curitem - 1;
           curitem < 0 ? curitem = nitems-1;
           change = 1;
@@ -6047,7 +6058,25 @@ function combobox_processMouse(xx, yy, mc)
       );
     );
     
-    over = xx > x && xx < ( x+w ) && yy > y && yy < ( y + h );
+    ( over ) ?
+    (
+      ( mouse_wheel < 0 ) ? 
+      ( 
+        curitem = curitem + 1;
+        curitem > nitems - 1 ? curitem = 0;
+        change = 1;
+        mouse_wheel = 0;
+      ) : 
+      (
+        ( mouse_wheel > 0 ) ? 
+        (
+          curitem = curitem - 1;
+          curitem < 0 ? curitem = nitems-1;
+          change = 1;
+          mouse_wheel = 0;
+        );
+      );
+    );
     
     over ? (
       htime = updateHintTime(hint);
@@ -6092,23 +6121,25 @@ function sliderWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, 
       g             = g_in;
       b             = b_in;
       a             = a_in;
-      label         = label_in;
-      lastleft      = 0;
-      lastright     = 0;
-      value         = 0;
-      value2        = 0;
       yslidercenter = y + 0.3 * h;
-      cap           = 0;
+
+      label         = label_in;
       twoval        = two_values; /* Do we have two values? */
       minval        = minval_in;
       maxval        = maxval_in;
       default       = ( default_in - minval ) / ( maxval - minval );
-      lastclick     = 0;
       unit          = unit_in;
       isInteger     = isInteger_in;
-      htime         = 0;
       hint          = hint_in;
+      
+      /*htime         = 0;
       onmarker      = 0;
+      lastclick     = 0;
+      cap           = 0;
+      lastleft      = 0;
+      lastright     = 0;
+      value         = 0;
+      value2        = 0;*/
   );
   
 function sliderWidget_setValue(value_in)
@@ -6366,8 +6397,9 @@ function gen_dynamics(xp, yp, wp, hp)
     y = yp;
     w = wp;
     h = hp;
-    cap_mode = 0; 
-    lastleft = 0;
+    
+    //cap_mode = 0; 
+    //lastleft = 0;
         
     bw = 10*retina_scaling;
     bh = 10*retina_scaling;
@@ -6385,7 +6417,7 @@ function gen_dynamics(xp, yp, wp, hp)
     MIDIButton.selectionButton(x+5, y+4 + hy, bw, bh, "MIDI",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Note trigger\n\nSelecting this mode bases dynamics on MIDI note triggers.");
     MIDIButton2.selectionButton(x+5, y+4 + 2*hy, bw, bh, "MIDI2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Note trigger\n\nSelecting this mode bases dynamics on MIDI notes\nand uses the velocity information from the notes.");    
     
-    sc = h;
+    !sc ? sc = h;
   );
 
 function processMouse(mx, my, dx, dy, mc, lmc)
@@ -6773,7 +6805,7 @@ function updateIntegrationTime()
       ndelay = ndelay * 0.5;
       preBufferL.initBuffer(300000, 300000 + ndelay);
       preBufferR.initBuffer(400000, 400000 + ndelay);
-      preBufferMod.initBuffer(1600000, mod_buffer + ndelay);
+      preBufferMod.initBuffer(1600000, 1600000 + ndelay);
       
       lookAhead ? (
         // delays the first two channels (spl0/spl1).
@@ -6872,7 +6904,7 @@ function setWindowLocation(_x, _y, _w, _h)
   instance(x, y, w, h, cap)
   local()
   ( 
-    cap = 0;
+    //cap = 0;
     x = _x;
     y = _y;
     w = _w;
@@ -7186,6 +7218,7 @@ function drawGonioMeter(cl)
 //RMS2          = 200000;
 //preBufferL    = 300000;
 //preBufferR    = 400000;
+//mod_buffer    = 1600000
 
 delay_buf1      = 500000;
 delay_buf2      = 600000;
@@ -7704,7 +7737,7 @@ function initGUI()
 
 function setupGUI()
 (
-  UI_Loaded = 1;
+  UI_Loaded = 1; // gfx_ext_retina = 2; // GO HERE
   retina_scaling = gfx_ext_retina * (1+extraScale);
   widgetFontSize = 12 + linuxMode;
   buttonFontSize = 11;
@@ -7736,6 +7769,10 @@ function setupGUI()
   wG = widgetcolor_g;
   wB = widgetcolor_b;
   wA = widgetcolor_a;
+  
+  buttonHeight = 12 * retina_scaling;
+  buttonWidth = 70 * retina_scaling;
+  buttonPad = 6 * retina_scaling;
   
   masterPanelX = 4*wndPad+3*wndX;
   masterPanelY = (30 + 5) * retina_scaling;
@@ -7799,9 +7836,6 @@ function setupGUI()
   dynamicsPanelX = masterPanelX;
   dynamicsPanelY = filterPanelY + filterPanelH + sliderHeight;
   dynamicsPanelH = buttonHeight+sliderHeight*4+7*sliderPad;
-  buttonHeight = 12 * retina_scaling;
-  buttonWidth = 70 * retina_scaling;
-  buttonPad = 6 * retina_scaling;
   dynamicsPanel.groupWidget(dynamicsPanelX, dynamicsPanelY, sliderWidth, dynamicsPanelH, "DYNAMICS", wR, wG, wB, wA );
   
   //dynamicFilterButton.selectionButton(dynamicsPanelX+sliderPad, dynamicsPanelY+sliderPad+1, buttonWidth, buttonHeight, "DYN",  .3, .4, .8, .3, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
@@ -7834,9 +7868,6 @@ function setupGUI()
   lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+3*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 0, 0, 1, 0, "", 0, "LFO rate");
   tempoLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+3*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Tempo",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Synchronize to tempo");
   centeredLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+4*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Center",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Centered");
-
-  updateSliders(1);
-  updateActiveFilters(1);
 );
 
 // Initialize the splines
@@ -9334,16 +9365,19 @@ function octaver_eval(sample)
   instance(lpsample, flipflopState, flipflopState2, h1, cnt, bal1, bal2, f_est, sidx)
   (
     sidx += 1;
-    lpsample = this.svf4.eval_linearSVF_HP( this.svf3.eval_linearSVF_LP( sample ) );
-    (lpsample > 0 && h1 < 0) ? (
+    lpsample = this.svf3.eval_linearSVF_LP( this.svf4.eval_linearSVF_HP( sample ) );
+    (lpsample > 0 && h1 < 0 && sidx > 100) ? (
       cnt += 1;
       flipflopState = -flipflopState;
       flipflopState2 = -flipflopState2;
-      f_est = .5 * f_est + .5 * ( slider54 / sidx );
+      f_est = .7 * f_est + .3 * ( slider54 / sidx );
       sidx = 0;
-      f_est = .01;
-      this.svf.init_linearSVF_direct( .5*f_est, 0 );
-      this.svf2.init_linearSVF_direct( .5*f_est, 0 );
+      
+      /*
+      f_est = .005;
+      this.svf.init_linearSVF_direct( f_est, 0.2 );
+      this.svf2.init_linearSVF_direct( .5*f_est, 0.2 );
+      */
     );
     
     cnt > 1 ?
@@ -10187,7 +10221,7 @@ updateActiveFilters(1);
   
   postResetWaitSamples == 0 ? 
   (
-    agcControl == 1 ?
+    ( agcControl == 1 || agcOverride > 1 ) ?
     (
       alpha = 0.9999;
       agcpre = agcpre * alpha + sqrt(max(spl0*spl0, spl1*spl1)) * (1-alpha);
@@ -10211,6 +10245,19 @@ updateActiveFilters(1);
       
       sl *= agc_corr;
       sr *= agc_corr;
+      
+      agcOverride > 0 ? (
+        agcOverride -= .001;
+        agcOverride <= 0 ?
+        (
+          agcControl == 0 ? (
+            slider53 = slider53 + 6 * log(agc_corr) / log(2);
+            slider_automate( slider53 ); 
+            agc_corr = 1;
+            forceUpdate = 1;
+          );
+        )
+      );
       
       // Mitigate peaks
       // If after correction we are more than 2x higher than input, saturate the remnant with a smooth cap
@@ -10263,6 +10310,9 @@ updateActiveFilters(1);
 
   function randomize()
   (
+    agcOverride = 1;
+    agc_corr = .1;
+    
     // SPLINE
     slider1 = 2+floor(rand(7));
     slider2 = 2+floor(rand(7));
@@ -10390,6 +10440,9 @@ updateActiveFilters(1);
   
   function randomizeFilters()
   (
+    agcOverride = 1;
+    agc_corr = .1;
+  
     // Filter2
     slider40 = floor(rand(nFilters));
     slider41 = rand(1);
@@ -10419,6 +10472,9 @@ updateActiveFilters(1);
   
   function randomizeWaveshaper()
   (
+    agcOverride = 1;
+    agc_corr = .1;
+  
     // SPLINE
     slider1 = 2+floor(rand(7));
     slider2 = 2+floor(rand(7));
@@ -10546,15 +10602,14 @@ updateActiveFilters(1);
     gfx_printf(plugname)
   );
 
-  UI_Loaded == 0 ? SetupGUI();
+  UI_Loaded == 0 ? (
+    updateSliders(1);
+    updateActiveFilters(1);
+  );
+
+  /* UI_Loaded == 0 ? */ SetupGUI();
 
   lastChar = gfx_getchar();
-//gfx_ext_retina>1 ? gfx_setfont(1,"Arial",16*gfx_ext_retina,'b') : gfx_setfont(0);
-
-  //function draw_button(xp, yp, str) 
-  //  instance(w,h,x,y) 
-  //  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y,bgcolor) 
-  
   visible = gfx_getchar(65536) & 4 > 0;
   updating == 0 ? (
     gfx_clear = -1;
