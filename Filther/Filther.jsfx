@@ -1,11 +1,10 @@
 desc:Filther
 tags: Filther
-version: 2.09
+version: 2.10
 author: Joep Vanlier
 changelog: 
-+ Tweaks feedback
-+ Added option to monitor pre RMS or a side chain (channel 3 and 4)
-+ Fix bug with curves not disabling properly on the dynamic window.
++ Bugfix buffer system feedback
++ Display LFO on feedback slider
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -17,9 +16,9 @@ Karlsen Fast Ladder III
 Copyright (c) Ove Hy Karlsen
 Weeping Demon emulation by Chet Gnegy (https://ccrma.stanford.edu/~chet/)
 
-Special thanks goes out to everyone who has reported bugs to me:
+Special thanks goes out to everyone who has reported bugs and provided ideas to me:
 Eliseat, Bri1, FoxAsteria, EpicSounds, TonE, daxliniere, JamesPeters, kneipp123, 
-jrengmusic, mawi, vdubreeze.
+jrengmusic, mawi, vdubreeze, Sju.
 
 slider1:2<2,9,1>-Nodes negative
 slider2:2<2,9,1>-Nodes positive
@@ -201,7 +200,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.09";
+plugname = "FILTHER 2.10";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -763,6 +762,28 @@ function getBuffer()
   (
     scopeptr[];
   );
+  
+function setOffset(offset)
+  local()
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer)
+  (
+    readptr = scopeptr;
+    readptr -= offset;
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer);
+  );
+  
+function readBuffer()
+  local(c)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer)
+  (
+    c = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c
+  );
 
 function updateBuffer(M)
   local()
@@ -771,7 +792,7 @@ function updateBuffer(M)
   (
     scopeptr[] = M;
     scopeptr += 1;
-    scopeptr > scopebuffermax ? scopeptr = scopebuffer + (scopeptr-scopebuffermax-1);
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
     
     M
   );  
@@ -797,7 +818,7 @@ function initBufferNoReset(scopebuffer_in, scopebuffermax_in)
   (
     scopebuffer     = scopebuffer_in;
     scopebuffermax  = scopebuffermax_in;
-  );  
+  );
 
 function tanh(s)
 local(c)
@@ -7407,8 +7428,9 @@ stereo_delay_bufferR.initBuffer(delay_buf1, delay_buf1 + 1000);
 fb_buf1         = 48*bufferDist;
 fb_buf2         = 50*bufferDist;
 
-fb_bufferL.initBuffer(fb_buf1, fb_buf1+1000);
-fb_bufferR.initBuffer(fb_buf2, fb_buf2+1000);
+// Fixed feedback buffers
+fb_bufferL.initBufferNoReset(fb_buf1, fb_buf1+88200);
+fb_bufferR.initBufferNoReset(fb_buf2, fb_buf2+88200);
 
 dynval = 0;
 n_pos = 8;
@@ -7922,7 +7944,7 @@ function setupGUI()
   lfoFilterButton.selectionButton(filterPanelX + .82*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
   filterSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 4, "Filter selection.\nNon-linear (NL) filters are more expensive and benefit more from oversampling.\nTheir character comes out when driven (increase the pre-gain without enabling clipping).\nZero Delay Feedback (ZDF) filters behave better with rapid modulation.\nAll filters are IIR filters, meaning they do not preserve linear phase.\n\nWARNING: Not all filters are stable under rapid modulation!\nRemember to read the filter description to avoid being hit by instability.\nInstability manifests itself as there suddenly being a spike and then no sound." );
   inertia.selectionButton(filterPanelX+sliderPad + .8 * sliderWidth, filterPanelY+sliderPad*2+sliderHeight*1.05, .2*sliderWidth-2*sliderPad, .95*sliderHeight, "Inertia",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle cutoff and resonance inertia");
-  modeSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad*2+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes, 1, 0, 1, "Filter mode selection.\nStereo - Default mode. Process left and right independently.\nMono double - Interleave samples and process.\nM1/S2 - Process mid regularly, feed side samples to filter twice.\nM2/S1 - Feed mid to filter twice, process side regularly.\nOnly side - Only filter the side channel.\nOnly mid - Only filter the mid channel.\nStereoize - Filter both, but pre-amplify side channel." );
+  modeSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad*2+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes, 1, 0, 1, "Filter mode selection.\nStereo - Default mode. Process left and right independently.\nMono double - Interleave samples and process.\nM1/S2 - Process mid regularly, feed side samples to filter twice.\nM2/S1 - Feed mid to filter twice, process side regularly.\nOnly side - Only filter the side channel.\nOnly mid - Only filter the mid channel.\nStereo Boost - Filter both, but pre-amplify side channel.\nStereoize - M/S processing. Side is boosted and computed with a delayed right channel for extra width.\nSubtle Stereo - M/S processing. Side is computed with a slightly delayed right channel for extra width.\nInverted - Signal is run through the filter, but filtered signal is subtracted from original and then distorted." );
   cutoffSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+4*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Filter button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
   resonanceSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+5*sliderPad+3*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Shaper button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
 
@@ -10372,13 +10394,13 @@ updateActiveFilters(1);
     
     ( currentFbDelay != newFbDelay ) ?
     (
+      fb_bufferL.setOffset(newFbDelay);
+      fb_bufferR.setOffset(newFbDelay);      
       currentFbDelay = newFbDelay;
-      fb_bufferL.initBufferNoReset(fb_buf1, fb_buf1+currentFbDelay);
-      fb_bufferR.initBufferNoReset(fb_buf2, fb_buf2+currentFbDelay);
     );
   
-    sl = 1.25*actual_tanh(.8*(sl + newFbAmnt * fb_bufferL.getBuffer()));
-    sr = 1.25*actual_tanh(.8*(sr + newFbAmnt * fb_bufferR.getBuffer()));
+    sl = 1.25*actual_tanh(.8*(sl + newFbAmnt * fb_bufferL.readBuffer()));
+    sr = 1.25*actual_tanh(.8*(sr + newFbAmnt * fb_bufferR.readBuffer()));
   );
 
   ( slider54 < 1.5 ) ? (
@@ -11005,6 +11027,10 @@ updateActiveFilters(1);
     cutoffSlider.hasModulatorDynamics    = lfoFilterButton.active;
     resonanceSlider.hasFilterDynamics    = dynamicFilterButton.active;
     resonanceSlider.hasModulatorDynamics = lfoFilterButton.active;
+    feedbackAmount.hasFilterDynamics     = dynamicFeedback.active;
+    feedbackAmount.hasModulatorDynamics  = lfoFeedback.active;
+    feedbackDelay.hasFilterDynamics      = dynamicFeedback.active;
+    feedbackDelay.hasModulatorDynamics   = lfoFeedback.active;
 
     /* Display appropriate Hertzage for the cutoff sliders */
     hz = getHz(slider47, cutoffSlider.sliderWidget_getValue());
