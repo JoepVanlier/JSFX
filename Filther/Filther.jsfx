@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.15
+version: 2.16
 author: Joep Vanlier
 changelog: 
-+ Fix zero-delay issue comb filters
++ Fix issue with buffer not reinitializing when feedback module is activated (removed unnecessary 'optimization')
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -37,7 +37,7 @@ slider14:0.7<0,1,.01>-Pos6y
 slider15:0.8<0,1,.01>-Pos7x or FB amnt
 slider16:0.8<0,1,.01>-Pos7y or FB time
 slider17:0<-1,1,.01>-Pre-Gain Mod %
-slider18:0.9<0,1,.01>-Pos8y
+slider18:0.9<0,1,.01>-Pos8y or Morph value
 
 slider19:0.15<0,1,.01>-Neg1x
 slider20:1.0<0,1,.01>-Neg1y
@@ -56,8 +56,8 @@ slider32:0.8<0,1,.01>-Neg7y or FB time mod
 slider33:1.0<0,2,.01>-Key follow amount
 slider34:0.9<0,1,.01>-Neg8y
 // This one secretly has the information folded in whether pre-gain modulation is being used.
-// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8
-slider35:0<0,1023,1>-Toggles (DO NOT AUTOMATE)
+// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Morph mode enabled
+slider35:0<0,2047,1>-Toggles (DO NOT AUTOMATE)
 slider36:0<0,26,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,7,1{No reset,Reset,No reset + temposync,Reset + temposync,No reset + centered,Reset + centered,No reset + temposync + centered,Reset + temposync + centered>-Reset LFO
@@ -203,7 +203,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.15";
+plugname = "FILTHER 2.16";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -848,6 +848,17 @@ instance()
   
   em2x = exp(-2*x);
   (2/(1+em2x))-1
+);
+
+function speedy_tanh(x)
+local(x2, x3, em2x)
+global()
+instance()
+(
+  x2 = x*x;
+  x3 = x2*x;
+  em2x = x + 0.16489087 * x3 + 0.00985468 * x2*x3;
+  em2x * invsqrt(1 + em2x * em2x)
 );
 
 function fasttanh(x)
@@ -7622,7 +7633,6 @@ fb_buf1         = 48*bufferDist;
 fb_buf2         = 50*bufferDist;
 
 // Fixed feedback buffers
-currentFbDelay = -1;
 fb_bufferL.initBuffer(fb_buf1, fb_buf1+88200);
 fb_bufferR.initBuffer(fb_buf2, fb_buf2+88200);
 
@@ -10589,12 +10599,8 @@ updateActiveFilters(1);
     (slider35 & 256) ? newFbDelay *= 16;
     (slider35 & 512) ? newFbDelay *= 8;
     
-    ( currentFbDelay != newFbDelay ) ?
-    (
-      fb_bufferL.setOffset(floor(newFbDelay));
-      fb_bufferR.setOffset(floor(newFbDelay));
-      currentFbDelay = newFbDelay;
-    );
+    fb_bufferL.setOffset(floor(newFbDelay));
+    fb_bufferR.setOffset(floor(newFbDelay));
 
     sl = 1.25*actual_tanh(.8*(sl + newFbAmnt * fb_bufferL.readBuffer()));
     sr = 1.25*actual_tanh(.8*(sr + newFbAmnt * fb_bufferR.readBuffer()));
