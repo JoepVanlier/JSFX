@@ -1,9 +1,12 @@
 desc:Filther
 tags: Filther
-version: 2.18
+version: 2.20
 author: Joep Vanlier
 changelog: 
-+ Resized window
++ Allow dynamic modulation of LFO (BETA)
++ Refactored some LFO code
++ Minor fix how LFO is displayed when no dynmod present.
++ Add mono mode for quick mono testing
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -56,8 +59,8 @@ slider32:0.8<0,1,.01>-Neg7y or FB time mod
 slider33:1.0<0,2,.01>-Key follow amount
 slider34:0.9<0,1,.01>-Neg8y or Morph mod %
 // This one secretly has the information folded in whether pre-gain modulation is being used.
-// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Dyn Morph, 12 = LFO Morph
-slider35:0<0,4095,1>-Toggles (DO NOT AUTOMATE)
+// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Dyn Morph, 12 = LFO Morph, 13 = Dynamic LFO
+slider35:0<0,8191,1>-Toggles (DO NOT AUTOMATE)
 slider36:0<0,26,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,7,1{No reset,Reset,No reset + temposync,Reset + temposync,No reset + centered,Reset + centered,No reset + temposync + centered,Reset + temposync + centered>-Reset LFO
@@ -111,6 +114,9 @@ file_var(0,dgonio_zoom);
 file_var(0,agcControl);
 file_var(0,agc_corr);
 file_var(0,block_analyzers);
+file_var(0,mod_LFO_rate);
+file_var(0,mod_LFO_amount);
+file_var(0,force_mono_output);
 
 @init
 // Colors
@@ -207,7 +213,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.18";
+plugname = "FILTHER 2.20";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -375,34 +381,110 @@ function comboStrings(stridx, curitem)
 function modulator()
   global(srate)
   local()
-  instance( invpi2, twopi, invsrate, reset, modvalue, modrate, t, modmax )
+  instance( invpi2, twopi, invsrate, reset, modvalue, scaled_modvalue, modrate, t, modmax, scale )
   (
     modvalue = 0;
+    scaled_modvalue = 0;
+    scale = 0;
     reset = 1;
     modmax = 1;
     invsrate = 1.0/srate;
     invpi2 = .5/$pi;
     twopi = 2*$pi;
   );
-
-
-function setmodrate(val)
-  global()
-  local()
-  instance( invsrate, reset, modvalue, modrate, t )
-  (
-    modrate = val;
-  );
-  
+    
 modulator.modulator();
 
+function updateModRate(slidervalue)
+  local(cTime, cRate)
+  global(updatered, slider38, cTempo)
+  instance( invsrate, reset, modvalue, scaled_modvalue, modrate, t )
+  (
+    ((slider38&2) == 0) ? (
+      modrate = (1+2*slidervalue)^4 - 1;
+    ) : (
+      cTime = slidervalue;
+      cRate = ( cTime < 0.0196078 ) ? 256
+      : ( cTime < 0.0392157 ) ? 224
+      : ( cTime < 0.0588235 ) ? 192
+      : ( cTime < 0.0784314 ) ? 160
+      : ( cTime < 0.0980392 ) ? 144
+      : ( cTime < 0.117647 ) ? 128
+      : ( cTime < 0.137255 ) ? 112
+      : ( cTime < 0.156863 ) ? 96
+      : ( cTime < 0.176471 ) ? 80
+      : ( cTime < 0.196078 ) ? 64
+      : ( cTime < 0.215686 ) ? 56
+      : ( cTime < 0.235294 ) ? 48
+      : ( cTime < 0.254902 ) ? 40
+      : ( cTime < 0.27451 ) ? 32
+      : ( cTime < 0.294118 ) ? 28
+      : ( cTime < 0.313725 ) ? 24
+      : ( cTime < 0.333333 ) ? 16
+      : ( cTime < 0.352941 ) ? 8
+      : ( cTime < 0.372549 ) ? 7
+      : ( cTime < 0.392157 ) ? 6
+      : ( cTime < 0.411765 ) ? 5.33333
+      : ( cTime < 0.431373 ) ? 5
+      : ( cTime < 0.45098 ) ? 4
+      : ( cTime < 0.470588 ) ? 3
+      : ( cTime < 0.485196 ) ? 2.66667
+      : ( cTime < 0.495196 ) ? 2
+      : ( cTime < 0.509804 ) ? 1.33333
+      : ( cTime < 0.529412 ) ? 1.16667
+      : ( cTime < 0.54902 ) ? 1
+      : ( cTime < 0.568627 ) ? 0.9375
+      : ( cTime < 0.588235 ) ? 0.875
+      : ( cTime < 0.607843 ) ? 0.833333
+      : ( cTime < 0.627451 ) ? 0.8125
+      : ( cTime < 0.647059 ) ? 0.75
+      : ( cTime < 0.666667 ) ? 0.6875
+      : ( cTime < 0.686275 ) ? 0.666667
+      : ( cTime < 0.705882 ) ? 0.625
+      : ( cTime < 0.72549 ) ? 0.5625
+      : ( cTime < 0.745098 ) ? 0.5
+      : ( cTime < 0.764706 ) ? 0.4375
+      : ( cTime < 0.784314 ) ? 0.375
+      : ( cTime < 0.803922 ) ? 0.333333
+      : ( cTime < 0.823529 ) ? 0.3125
+      : ( cTime < 0.843137 ) ? 0.25
+      : ( cTime < 0.862745 ) ? 0.1875
+      : ( cTime < 0.882353 ) ? 0.166667
+      : ( cTime < 0.901961 ) ? 0.125
+      : ( cTime < 0.921569 ) ? 0.0833333
+      : ( cTime < 0.941176 ) ? 0.0625
+      : ( cTime < 0.960784 ) ? 0.0416667
+      : ( cTime < 0.980392 ) ? 0.03125
+      : 0.015625;
+      
+      modrate = .25 * (cTempo/60) / cRate;
+  );  
+);
+
+function updateScale(value)
+  instance(scale)
+  global()
+  local()
+  (
+    scale = value;
+  );
+
+function getScale()
+  instance(scale)
+  global()
+  local()
+  (
+    scale
+  );
+
 function updateModulator(alpha)
-  instance( invpi2, twopi, invsrate, reset, modvalue, modrate, t, lastt, lastrand )
-  global( slider38, slider39, slider36, modulatorDynamics, newmod)
+  instance( invpi2, twopi, invsrate, reset, modvalue, scaled_modvalue, modrate, t, lastt, lastrand, scale )
+  global( slider38, slider36, modulatorDynamics, newmod )
   local(ct, st)
   (
     slider36 > 0 ? (
       modulatorDynamics = 1;
+      
       t = t + modrate*invsrate;
       (slider38 & 1) && reset == 1 ? ( t = 0; reset = 0; lastt = -1; );
 
@@ -434,9 +516,10 @@ function updateModulator(alpha)
       : ( slider36==26 ) ? ( sin(twopi*t)*.2+.5 + sin(2*twopi*t)*.2 + sin(4*twopi*t)*.1 );
 
       slider38 & 4 ? newmod -= .5;     
-      modvalue = modvalue*alpha + (1-alpha) * newmod
+      modvalue = modvalue*alpha + (1-alpha) * newmod;
+      scaled_modvalue = modvalue * scale;
       
-    ) : ( modvalue = 0; modulatorDynamics = 0; );
+    ) : ( modvalue = 0; scaled_modvalue = 0; modulatorDynamics = 0; );
   );
 
 function getvalue( tval )
@@ -4940,7 +5023,7 @@ function updateActiveFilters( force )
   (  
     filteredDynval = 0.1 * dynval + 0.9 * filteredDynval; // Avoid too steep transitions.
   
-    modval = gainDynamics * filteredDynval + gainLFO * modulator.modvalue * slider39;   
+    modval = gainDynamics * filteredDynval + gainLFO * modulator.scaled_modvalue;   
     pregain  = 2^((slider52 + 40 * dyn_mod_gain * modval)/6);
     postgain = 2^((slider53 + 40 * dyn_mod_outgain * modval)/6);
     
@@ -4952,7 +5035,7 @@ function updateActiveFilters( force )
       sliderReso    = resoLerp.lerpSample();
       followKey1 ? sliderCutoff = sliderCutoff + approxNoteFrequencyFilter1 * slider33;
 
-      modval = filterDynamics1 * filteredDynval + filterLFO1 * modulator.modvalue * slider39;      
+      modval = filterDynamics1 * filteredDynval + filterLFO1 * modulator.scaled_modvalue;      
       filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * modval ) );
       filterReso = max( 0, min( .99, sliderReso + dyn_mod_reso * modval ) );
     );
@@ -4971,7 +5054,7 @@ function updateActiveFilters( force )
       sliderReso2   = resoLerp2.lerpSample();
       followKey2 ? sliderCutoff2  = sliderCutoff2 + approxNoteFrequencyFilter2 * slider33;
       
-      modval = filterDynamics2 * filteredDynval + filterLFO2 * modulator.modvalue * slider39;
+      modval = filterDynamics2 * filteredDynval + filterLFO2 * modulator.scaled_modvalue;
       filterFreq2 = max( 0, min( 1, sliderCutoff2 + dyn_mod_filt2 * modval ) );
       filterReso2 = max( 0, min( .99, sliderReso2 + dyn_mod_reso2 * modval ) );
     );
@@ -6499,10 +6582,10 @@ function sliderWidget_getValue()
   
 function sliderWidget_draw()
   local(jnk, siz, q, str, modmax, modmin, modoffset, tmp)
-  global(slider38, gfx_x, gfx_y, lastUI, retina_scaling,widgetFontSize, dynval, modulator.modvalue, mlevel, fontface, slider39, modulatorDynamics,
+  global(slider38, gfx_x, gfx_y, lastUI, retina_scaling,widgetFontSize, dynval, modulator.scaled_modvalue, mlevel, fontface, modulatorDynamics,
          font_color_r, font_color_g, font_color_b, font_color_a, slider_marker_r, slider_marker_g, slider_marker_b, slider_marker_a,
          highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a,
-         disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a )
+         disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a, modulator.getScale )
   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, unit, thisUI, htime, overridevalue, overrideunit, onmarker, hasFilterDynamics, hasModulatorDynamics, disabled)
   (
     gfx_setfont(1, fontface, widgetFontSize*retina_scaling);
@@ -6513,8 +6596,8 @@ function sliderWidget_draw()
         
       ( modulatorDynamics && hasModulatorDynamics == 1 ) ? (
         gfx_set( r, g, b, .4 );
-        modoffset = slider38 & 4 ? .5 * value2*w * slider39;
-        modmax = x + (1+slider39) * value2 * w + value*w - modoffset;
+        modoffset = slider38 & 4 ? .5 * value2*w * modulator.getScale();
+        modmax = x + (hasFilterDynamics+modulator.getScale()) * value2 * w + value*w - modoffset;
         modmin = x + value*w - modoffset;
         modmax < modmin ? 
         (
@@ -6549,7 +6632,7 @@ function sliderWidget_draw()
       value2 > 0 ? gfx_rect( x + value*w, yslidercenter - .1*h, value2*w+1, h*.3 ) : gfx_rect( x + (value+value2)*w, yslidercenter - .1*h, abs(value2)*w, h*.3 );
   
       gfx_set( slider_marker_r, slider_marker_g, slider_marker_b, slider_marker_a );
-      mlevel = hasModulatorDynamics*modulator.modvalue*slider39 + (hasFilterDynamics > 0 ? dynval : 0);
+      mlevel = hasModulatorDynamics*modulator.scaled_modvalue + (hasFilterDynamics > 0 ? dynval : 0);
       mlevel = x + (value+value2*mlevel)*w;
       mlevel = max( x, min( x+w, mlevel ) );
       gfx_rect( mlevel-1, yslidercenter - .2*h, 2, h*.4 );
@@ -7669,219 +7752,165 @@ function updateSliders( hard )
 (
   slider54 < 1 ? slider54 = 1;
   
-  (slider38&2) == 0 ? (
-    modulator.setModRate( (1+2*slider37)^4 - 1 );
-  ) : (
+  modulator.updateModRate(slider37);
+  modulator.updateScale(slider39);
+  ((slider38&2) == 2) ? (
     cTime = slider37;
-    ( cTime < 0.0196078 ) ?
-    (
+    ( cTime < 0.0196078 ) ? (
       tempoLabel = "256";
-      cRate = 256;
     ) : ( cTime < 0.0392157 ) ?
     (
       tempoLabel = "224";
-      cRate = 224;
     ) : ( cTime < 0.0588235 ) ?
     (
       tempoLabel = "192";
-      cRate = 192;
     ) : ( cTime < 0.0784314 ) ?
     (
       tempoLabel = "160";
-      cRate = 160;
     ) : ( cTime < 0.0980392 ) ?
     (
       tempoLabel = "144";
-      cRate = 144;
     ) : ( cTime < 0.117647 ) ?
     (
       tempoLabel = "128";
-      cRate = 128;
     ) : ( cTime < 0.137255 ) ?
     (
       tempoLabel = "112";
-      cRate = 112;
     ) : ( cTime < 0.156863 ) ?
     (
       tempoLabel = "96";
-      cRate = 96;
     ) : ( cTime < 0.176471 ) ?
     (
       tempoLabel = "80";
-      cRate = 80;
     ) : ( cTime < 0.196078 ) ?
     (
       tempoLabel = "64";
-      cRate = 64;
     ) : ( cTime < 0.215686 ) ?
     (
       tempoLabel = "56";
-      cRate = 56;
     ) : ( cTime < 0.235294 ) ?
     (
       tempoLabel = "48";
-      cRate = 48;
     ) : ( cTime < 0.254902 ) ?
     (
       tempoLabel = "40";
-      cRate = 40;
     ) : ( cTime < 0.27451 ) ?
     (
       tempoLabel = "32";
-      cRate = 32;
     ) : ( cTime < 0.294118 ) ?
     (
       tempoLabel = "28";
-      cRate = 28;
     ) : ( cTime < 0.313725 ) ?
     (
       tempoLabel = "24";
-      cRate = 24;
     ) : ( cTime < 0.333333 ) ?
     (
       tempoLabel = "16";
-      cRate = 16;
     ) : ( cTime < 0.352941 ) ?
     (
       tempoLabel = "8";
-      cRate = 8;
     ) : ( cTime < 0.372549 ) ?
     (
       tempoLabel = "7";
-      cRate = 7;
     ) : ( cTime < 0.392157 ) ?
     (
       tempoLabel = "6";
-      cRate = 6;
     ) : ( cTime < 0.411765 ) ?
     (
       tempoLabel = "16/3";
-      cRate = 5.33333;
     ) : ( cTime < 0.431373 ) ?
     (
       tempoLabel = "5";
-      cRate = 5;
     ) : ( cTime < 0.45098 ) ?
     (
       tempoLabel = "4";
-      cRate = 4;
     ) : ( cTime < 0.470588 ) ?
     (
       tempoLabel = "3";
-      cRate = 3;
     ) : ( cTime < 0.485196 ) ?
     (
       tempoLabel = "8/3";
-      cRate = 2.66667;
     ) : ( cTime < 0.495196 ) ?
     (
       tempoLabel = "2";
-      cRate = 2;
     ) : ( cTime < 0.509804 ) ?
     (
       tempoLabel = "4/3";
-      cRate = 1.33333;
     ) : ( cTime < 0.529412 ) ?
     (
       tempoLabel = "7/6";
-      cRate = 1.16667;
     ) : ( cTime < 0.54902 ) ?
     (
       tempoLabel = "1";
-      cRate = 1;
     ) : ( cTime < 0.568627 ) ?
     (
       tempoLabel = "15/16";
-      cRate = 0.9375;
     ) : ( cTime < 0.588235 ) ?
     (
       tempoLabel = "7/8";
-      cRate = 0.875;
     ) : ( cTime < 0.607843 ) ?
     (
       tempoLabel = "5/6";
-      cRate = 0.833333;
     ) : ( cTime < 0.627451 ) ?
     (
       tempoLabel = "13/16";
-      cRate = 0.8125;
     ) : ( cTime < 0.647059 ) ?
     (
       tempoLabel = "3/4";
-      cRate = 0.75;
     ) : ( cTime < 0.666667 ) ?
     (
       tempoLabel = "11/16";
-      cRate = 0.6875;
     ) : ( cTime < 0.686275 ) ?
     (
       tempoLabel = "2/3";
-      cRate = 0.666667;
     ) : ( cTime < 0.705882 ) ?
     (
       tempoLabel = "5/8";
-      cRate = 0.625;
     ) : ( cTime < 0.72549 ) ?
     (
       tempoLabel = "9/16";
-      cRate = 0.5625;
     ) : ( cTime < 0.745098 ) ?
     (
       tempoLabel = "1/2";
-      cRate = 0.5;
     ) : ( cTime < 0.764706 ) ?
     (
       tempoLabel = "7/16";
-      cRate = 0.4375;
     ) : ( cTime < 0.784314 ) ?
     (
       tempoLabel = "3/8";
-      cRate = 0.375;
     ) : ( cTime < 0.803922 ) ?
     (
       tempoLabel = "1/3";
-      cRate = 0.333333;
     ) : ( cTime < 0.823529 ) ?
     (
       tempoLabel = "5/16";
-      cRate = 0.3125;
     ) : ( cTime < 0.843137 ) ?
     (
       tempoLabel = "1/4";
-      cRate = 0.25;
     ) : ( cTime < 0.862745 ) ?
     (
       tempoLabel = "3/16";
-      cRate = 0.1875;
     ) : ( cTime < 0.882353 ) ?
     (
       tempoLabel = "1/6";
-      cRate = 0.166667;
     ) : ( cTime < 0.901961 ) ?
     (
       tempoLabel = "1/8";
-      cRate = 0.125;
     ) : ( cTime < 0.921569 ) ?
     (
       tempoLabel = "1/12";
-      cRate = 0.0833333;
     ) : ( cTime < 0.941176 ) ?
     (
       tempoLabel = "1/16";
-      cRate = 0.0625;
     ) : ( cTime < 0.960784 ) ?
     (
       tempoLabel = "1/24";
-      cRate = 0.0416667;
     ) : ( cTime < 0.980392 ) ?
     (
       tempoLabel = "1/32";
-      cRate = 0.03125;
     ) : (
       tempoLabel = "1/64";
-      cRate = 0.015625;
     );
-    modulator.setModRate( .25 * (cTempo/60) / cRate );
   );
   
   overSampling.sliderWidget_setValue(slider54);
@@ -7919,6 +7948,12 @@ function updateSliders( hard )
   feedbackAmount.sliderWidget_setValue2_nn(slider31);
   feedbackDelay.sliderWidget_setValue(slider16);
   feedbackDelay.sliderWidget_setValue2_nn(slider32);
+  
+  // LFO block
+  lfoFrequency.sliderWidget_setValue(slider37);
+  modulationFactor.sliderWidget_setValue(slider39);
+  lfoFrequency.sliderWidget_setValue2_nn(mod_LFO_rate);
+  modulationFactor.sliderWidget_setValue2_nn(mod_LFO_amount);
 
   // Morph
   morphSlider.sliderWidget_setValue(slider18);
@@ -7939,6 +7974,8 @@ function updateSliders( hard )
   feedbackDelay_x8_2.active       = slider35 & 512 ? 1 : 0;
   dynamicMorph.active             = slider35 & 1024 ? 1 : 0;
   lfoMorph.active                 = slider35 & 2048 ? 1 : 0;
+  dynamicLFOButton.active         = slider35 & 4096 ? 1 : 0;
+  force_mono.active               = force_mono_output;
 
   atk_x4_1.active                 = slider57 & 1 ? 1 : 0;
   atk_x4_2.active                 = slider57 & 2 ? 1 : 0;
@@ -7951,8 +7988,6 @@ function updateSliders( hard )
   lfoResetButton.active           = (slider38&1) ? 1 : 0;
   tempoLFOButton.active           = (slider38&2) ? 1 : 0;
   centeredLFOButton.active        = (slider38&4) ? 1 : 0;
-  lfoFrequency.sliderWidget_setValue(slider37);
-  modulationFactor.sliderWidget_setValue(slider39);
   
   // Remove 2 nodes if we're using feedback and are over the limit
   maxNodes = (9-max(2*(slider35&32>0),floor(slider50*.5)>3));
@@ -7960,7 +7995,7 @@ function updateSliders( hard )
   slider2 > maxNodes ? ( slider_automate( slider2 = maxNodes ); hard=1; );
   
   dynamics = slider58;
-  dynamicsEnabled = (dynamics > 0) || ((slider35 & 64) > 0) || (slider35 & 1024);
+  dynamicsEnabled = (dynamics > 0) || ((slider35 & 64) > 0) || (slider35 & 1024) || (slider35 & 4096);
   dyn_thresh = slider59;
   ( dynamicsEnabled ) ?
   (
@@ -8159,6 +8194,7 @@ function setupGUI()
   dynamicGainButton.selectionButton(masterPanelX + .82*sliderWidth - .185*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic gain manipulation.\n\nWhen activated, the gain responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
   
   agcButton.selectionButton(postTextLoc + .015 * sliderWidth, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "AGC",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Automatic Gain Control (BETA)\n\nAdjusts the level between post-filter and post-gain in order\nto keep the RMS ratio between post-filter and post-drive fixed.\n\nThis setting is meant to protect your ears when tweaking filters,\nnot to be used in final production as it affects dynamics.\n\n\nClicking this button with the outer mouse button transfers the \ngain correction estimated by AGC to the Post-Gain slider and\ndisables AGC.");
+  force_mono.selectionButton(postTextLoc + .015 * sliderWidth + .14*sliderWidth-1*sliderPad, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "M",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Force mono\n\nSums left and right output. Use this every now\nand then to spot any phase issues in the bass.\n");
 
   inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 40, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
   inClip.selectionButton(masterPanelX+sliderPad+ + .8*sliderWidth, 3+masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle input clipping");
@@ -8236,10 +8272,11 @@ function setupGUI()
   smoothsize = 0.03*sliderWidth;
   lfoSmoothButton.selectionButton(lfoPanelX+.62*sliderWidth+.2*sliderWidth-sliderPad-smoothsize, lfoPanelY+sliderPad+1, smoothsize, smoothsize, "",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Smoothen LFO.");
   lfoResetButton.selectionButton(lfoPanelX+sliderPad+.8*sliderWidth, lfoPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight, "MIDI",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Reset LFO phase on incoming MIDI note.");
-  modulationFactor.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+3.5*sliderPad+2*sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Modulation Range", wR, wG, wB, wA, 0, 0, 4, 1, "", 0, "Modulation range");
-  lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+2.5*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 0, 0, 1, 0, "", 0, "LFO rate");
+  modulationFactor.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+3.5*sliderPad+2*sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Modulation Range", wR, wG, wB, wA, 1, 0, 4, 1, "", 0, "Modulation range");
+  lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+2.5*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "LFO rate");
   tempoLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+2.5*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Tempo",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Synchronize to tempo");
   centeredLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+3.5*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Center",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Centered");
+  dynamicLFOButton.selectionButton(lfoPanelX + .82*sliderWidth, lfoPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic LFO manipulation.\n\nWhen activated, the gain responds to changes in the dynamic variable.");
   
   fbPanelX = masterPanelX;
   fbPanelY = lfoPanelY + lfoPanelH + sliderHeight - .5*sliderPad;
@@ -8265,8 +8302,10 @@ function setupGUI()
   bypassFilter1.style = 2;
   bypassFilter2.style = 2;
   agcButton.style = 2;
+  force_mono.style = 2;
   dynamicMorph.style = 2;
   lfoMorph.style = 2;
+  dynamicLFOButton.style = 2;
 );
 
 // Initialize the splines
@@ -10509,7 +10548,7 @@ updateActiveFilters(1);
     gonioIn.feedGonio(sl, sr);
   );
   modulator.updateModulator(slider35 & 16 == 16 ? 0.996 : 0);
-    
+  
   // Does this plugin respond to MIDI signals?
   // Take notes from the stack until we hit the end marker -1
   (handlesMIDI && notes_remain) ? (
@@ -10603,6 +10642,11 @@ updateActiveFilters(1);
   // Update active filter only if cutoff changed
   updateActiveFilters(0);
   
+  (slider35 & 4096) ? (
+    modulator.updateModRate(max(0,min(1,slider37 + mod_LFO_rate * filteredDynval)));
+    modulator.updateScale(max(0,min(4,slider39 + mod_LFO_amount * filteredDynval)));
+  ); 
+  
   ( lookAhead ) ?
   (
     oldl = preBufferL.getBuffer();
@@ -10624,7 +10668,7 @@ updateActiveFilters(1);
 
   morphSliderValue = slider18;
   slider35 & 1024 ? morphSliderValue += slider34 * filteredDynval;
-  slider35 & 2048 ? morphSliderValue += slider34 * modulator.modvalue;
+  slider35 & 2048 ? morphSliderValue += slider34 * modulator.scaled_modvalue;
   morphSliderValue = min(1, max(0, morphSliderValue));
 
   // FEEDBACK
@@ -10634,8 +10678,8 @@ updateActiveFilters(1);
     
     // Dynamic FB
     ((slider35 & 128) > 0) ? (
-      newFbAmnt   += slider31 * modulator.modvalue;
-      newFbDelay  += slider32 * modulator.modvalue;
+      newFbAmnt   += slider31 * modulator.scaled_modvalue;
+      newFbDelay  += slider32 * modulator.scaled_modvalue;
     );
     ((slider35 & 64) > 0) ? (
       newFbAmnt   += slider31 * filteredDynval;
@@ -10804,6 +10848,10 @@ updateActiveFilters(1);
 
   // Scope
   outVol.updateBuffer( RMS2.updateRMS(spl0, spl1) );
+
+  force_mono_output ? (
+    spl1 = spl0 = .5*(spl0+spl1);
+  );
 
   curSample += 1;
 
@@ -11241,6 +11289,7 @@ updateActiveFilters(1);
     bypassFilter2.selectionButton_draw();
     feedbackActive.selectionButton_draw();
     agcButton.selectionButton_draw();
+    force_mono.selectionButton_draw();
     dynamicFeedback.selectionButton_draw();
     lfoFeedback.selectionButton_draw();
     dynamicMorph.selectionButton_draw();
@@ -11250,6 +11299,7 @@ updateActiveFilters(1);
     lfoFilterButton2.selectionButton_draw();
     dynamicGainButton.selectionButton_draw();
     lfoGainButton.selectionButton_draw();
+    dynamicLFOButton.selectionButton_draw();
     
     dynamicWaveShapingButton.selectionButton_draw();
     lookaheadButton.selectionButton_draw();
@@ -11292,6 +11342,8 @@ updateActiveFilters(1);
     feedbackDelay.hasModulatorDynamics   = lfoFeedback.active;
     morphSlider.hasFilterDynamics        = dynamicMorph.active;
     morphSlider.hasModulatorDynamics     = lfoMorph.active;
+    lfoFrequency.hasFilterDynamics       = dynamicLFOButton.active;
+    modulationFactor.hasFilterDynamics   = dynamicLFOButton.active;
 
     (slider35 & 32) ? (
       feedbackAmount.disabled = 0;
@@ -11519,6 +11571,7 @@ updateActiveFilters(1);
             feedbackDelay_x8_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&512))+512*feedbackDelay_x8_2.active; ); forceUpdate = 1; );
             dynamicMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&1024))+1024*dynamicMorph.active; ); forceUpdate = 1; );
             lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&2048))+2048*lfoMorph.active; ); forceUpdate = 1; );            
+            dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&4096))+4096*dynamicLFOButton.active; ); forceUpdate = 1; );
           
             change = agcButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             ( change == 1 ) ? ( 
@@ -11531,6 +11584,8 @@ updateActiveFilters(1);
               forceUpdate = 1;
             );
             
+            force_mono.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? force_mono_output = force_mono.active;
+             
             dynButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider45 = dynButton.active + (slider45 & 2) + ( slider45 & 4 ) + ( slider45 & 8 ); ); forceUpdate = 1; );
             lfoResetButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);            
             tempoLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
@@ -11538,8 +11593,16 @@ updateActiveFilters(1);
             newLFOMode = lfoResetButton.active + 2*tempoLFOButton.active + 4 * centeredLFOButton.active;
             ( slider38 != newLFOMode ) ? ( slider_automate( slider38=newLFOMode ); forceUpdate = 1; );
             
-            lfoFrequency.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( slider_automate( slider37=lfoFrequency.sliderWidget_getValue(); ); forceUpdate = 1; );
-            modulationFactor.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap) ? ( slider_automate( slider39=modulationFactor.sliderWidget_getValue(); ); forceUpdate = 1; );
+            lfoFrequency.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap)     ? ( 
+              slider_automate( slider37=lfoFrequency.sliderWidget_getValue(); ); 
+              mod_LFO_rate = lfoFrequency.sliderWidget_getValue2_nn();
+              forceUpdate = 1; 
+            );
+            modulationFactor.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap) ? ( 
+              slider_automate( slider39=modulationFactor.sliderWidget_getValue(); ); 
+              mod_LFO_amount = modulationFactor.sliderWidget_getValue2_nn();
+              forceUpdate = 1;
+            );
             
             // Something changed w.r.t. dynamics
             dynamicFilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
