@@ -24,12 +24,12 @@ https://soundcloud.com/saike/fm-modes-filther/s-KXwEQ
 
 The more experimental filters (such as "Experimental" and "Phase Mangler") can be used on pads to make eerie soundscapes: https://soundcloud.com/saike/filter-ambience/s-UxdLO
 
-Here's a short tutorial on how to use it: [url]https://www.youtube.com/watch?v=jtc8kp57xpI[/url]
-Older tutorial: [url]https://www.youtube.com/watch?v=YlgsVy-C2yI[/url]
+Here's a short tutorial on how to use it: https://www.youtube.com/watch?v=jtc8kp57xpI
+Older tutorial: https://www.youtube.com/watch?v=YlgsVy-C2yI
 
 (You can also find the spectral analyzer in the repo).
 
-For more information, see the forum thread here: https://forum.cockos.com/showthread.php?t=213269
+For more information, or to contact the author, see the forum thread here: https://forum.cockos.com/showthread.php?t=213269
 
 ### Waveshaping
 Filther supports saturating soft clipping as well as drawing custom voltage curves using a spline. For the simpler filters, the distortion is simply applied before the filtering stage, but for some the filter is located in the filter scheme. In these cases, the distortion is either applied on the delayed or during solving the implicit equations for the supplied zero delay feedback filters (ZDF).
