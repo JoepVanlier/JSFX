@@ -1,12 +1,10 @@
 desc:Filther
 tags: Filther
-version: 2.20
+version: 2.21
 author: Joep Vanlier
 changelog: 
-+ Allow dynamic modulation of LFO (BETA)
-+ Refactored some LFO code
-+ Minor fix how LFO is displayed when no dynmod present.
-+ Add mono mode for quick mono testing
++ Added properly tuned version of the modulon
++ Added option to finetune
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -213,12 +211,12 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.20";
+plugname = "FILTHER 2.21";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
-nFilters = 72;
+nFilters = 74;
 nModes = 10;
 nModes2 = 6;
 nLFO = 27;
@@ -303,15 +301,17 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 60 ) ? ( str = "Crybaby"       
       ) : ( curitem == 61 ) ? ( str = "Crybaby (Circuit bent for higher pitch)" 
       ) : ( curitem == 62 ) ? ( str = "Crybaby (Circuit bent for lower pitch)" 
-      ) : ( curitem == 63 ) ? ( str = "Vowel SVF"
-      ) : ( curitem == 64 ) ? ( str = "Monstro"
+      ) : ( curitem == 63 ) ? ( str = "Vowel SVF (ZDF)"
+      ) : ( curitem == 64 ) ? ( str = "Monstro (ZDF)"
       ) : ( curitem == 65 ) ? ( str = "King of Tone"
-      ) : ( curitem == 66 ) ? ( str = "Modulon"
+      ) : ( curitem == 66 ) ? ( str = "Modulon (ZDF)"
       ) : ( curitem == 67 ) ? ( str = "Octaver (Down)"
       ) : ( curitem == 68 ) ? ( str = "Octaver (Up)"
       ) : ( curitem == 69 ) ? ( str = "Metallic"
       ) : ( curitem == 70 ) ? ( str = "Frazzle"
       ) : ( curitem == 71 ) ? ( str = "Phone"
+      ) : ( curitem == 72 ) ? ( str = "Tuned modulon (ZDF)"
+      ) : ( curitem == 73 ) ? ( str = "Modulatrix (ZDF)"
       );
     ) : (stridx == 1) ? 
     (
@@ -838,6 +838,10 @@ local(fx, fy, wx, wx2, wy)
   ) : ( filteridx == 71 ) ? (
     gfx_printf("Phone\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Cutoff regulates the level of non-linearity. Resonance regulates the downsampling. Note that this filter only works properly for no oversampling and x2 oversampling.", wx2);
+  ) : ( filteridx == 72 ) ? (
+    gfx_printf("Modulon (tuned)\nModulon works by modulating the signal with a set frequency and filtering the result.");
+  ) : ( filteridx == 73 ) ? (
+    gfx_printf("Modulatrix (tuned)\nModulatrix works by modulating the signal with a set frequency and filtering the result.");
   );
 );
 
@@ -1803,7 +1807,7 @@ function init_linearSVF(freq, res)
     a1 = 1/(1+g*(g+k));
     a2 = g*a1;
     a3 = g*a2;
-  );
+  ); 
   
 function init_linearSVF_direct(freq, res)
   global(srate, slider54)
@@ -2879,6 +2883,39 @@ function kot_reset()
     ic = 3.686/1000000000000000000000000;
   ); 
  
+function modulon_fixed_init(filterfreq, res)
+  local(f, fact)
+  global(srate, slider54)
+  instance(fs, dt, svf)
+  (
+    //this.svf.init_linearSVF( filterfreq, res );
+    fact = .5 * ( pow(10, filterfreq) - 1 ) / 9;
+    this.svf.init_linearSVF_direct( fact, res );
+    
+    fs = srate * max(1, slider54);
+    dt = 1/fs;
+    f = .25 * fact;
+    
+    dt = dt * 2*$pi*srate*f;
+  );
+  
+function modulatrix_init(filterfreq, res)
+  local(f, fact)
+  global(srate, slider54)
+  instance(fs, dt, svf, reso)
+  (
+    //this.svf.init_linearSVF( filterfreq, res );
+    fact = .125 * ( pow(10, filterfreq) - 1 ) / 9;
+    this.svf.init_linearSVF_direct( fact, res );
+    
+    fs = srate * max(1, slider54);
+    dt = 1/fs;
+    f = .5 * fact;
+    reso = res;
+    
+    dt = dt * 2*$pi*srate*f;
+  );  
+
 function modulon_init(filterfreq, res)
   local(f)
   global(srate, slider54)
@@ -2890,7 +2927,7 @@ function modulon_init(filterfreq, res)
     dt = 1/fs;
     f = .5 * (pow(10, filterfreq)-1)/9;
     
-    dt = dt * 2*$pi*f*srate;    
+    dt = dt * 2*$pi*srate*f;
   );
    
 function modulon_reset()
@@ -5016,6 +5053,10 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.frazzle.frazzle_init(filterFreq, filterReso);
     ) : ( sliderValue == 71 ) ? (
       this.phone.phone_init(filterFreq, filterReso);
+    ) : ( sliderValue == 72 ) ? (
+      this.modulon.modulon_fixed_init(max(filterFreq, 0.0075), filterReso);
+    ) : ( sliderValue == 73 ) ? (
+      this.modulon.modulatrix_init(max(filterFreq, 0.0075), filterReso);
     );
   );     
     
@@ -5225,8 +5266,12 @@ function resetActiveFilter(filterType)
     ) : ( filterType == 71 ) ? (
       this.phone.phone_reset();
       postResetWaitSamples = 8192;
+    ) : ( filterType == 72 ) ? (
+      this.modulon.modulon_reset();
+    ) : ( filterType == 73 ) ? (
+      this.modulon.modulon_reset();
     );
-  ); 
+  );
  
 function resetActiveFilters()
   (
@@ -9787,15 +9832,30 @@ function evalvowelSVF2(sample)
   );      
     
 function modulon_eval(sample)
-  local()
+  local(mterm)
   global(srate, slider54)
   instance(dt, t, svf, c)
   (
     t = t + dt;
-    sample = tanh(sample - tanh(sample*sin(t)*cos(.5*t)));
+    mterm = ( sin(1.5*t)+sin(.5*t) );
+    sample = tanh( sample - tanh( sample*( .5 * mterm ) ) );    
     c = this.svf.eval_linearSVF_LP(sample);
-    c
   );    
+  
+function modulatrix_eval(sample)
+  local(mterm)
+  global(srate, slider54)
+  instance(dt, t, svf, c, reso)
+  (
+    t = t + dt;
+//    sample = tanh(sample - tanh(sample*sin(t)*cos(.5*t)));
+    mterm = ( sin(1.5*t)+sin(.5*t)+sin(.125*t)+sin(.5*t) );
+    //mterm = ( sin(1*t) );
+    sample = tanh( sample - tanh( sample*( .5 * mterm ) ) );
+    
+    sample = sample - 1.7*reso*sample * sin(.9999*t);    
+    c = this.svf.eval_linearSVF_LP(sample);
+  );      
   
 function octaver_eval(sample)
   local()
@@ -10306,6 +10366,12 @@ function process(sample, dist)
     ) : ( this.filterType == 71 ) ? (
       sample = this.phone.phone_eval(sample);
       dist ? sample = distort(sample);
+    ) : ( this.filterType == 72 ) ? (
+      sample = this.modulon.modulon_eval(sample);
+      dist ? sample = distort(sample);      
+    ) : ( this.filterType == 73 ) ? (
+      sample = this.modulon.modulatrix_eval(sample);
+      dist ? sample = distort(sample);      
     );
     
     sample;
