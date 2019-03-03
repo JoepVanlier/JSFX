@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.22
+version: 2.23
 author: Joep Vanlier
 changelog: 
-+ Big refactor. Hopefully the jumpy spline woes are over now.
++ Added vibrato effect
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -210,12 +210,12 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.22";
+plugname = "FILTHER 2.23";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
-nFilters = 74;
+nFilters = 75;
 nModes = 10;
 nModes2 = 6;
 nLFO = 27;
@@ -311,6 +311,7 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 71 ) ? ( str = "Phone"
       ) : ( curitem == 72 ) ? ( str = "Tuned modulon (ZDF)"
       ) : ( curitem == 73 ) ? ( str = "Modulatrix (ZDF)"
+      ) : ( curitem == 74 ) ? ( str = "Vibrato"
       );
     ) : (stridx == 1) ? 
     (
@@ -838,9 +839,14 @@ local(fx, fy, wx, wx2, wy)
     gfx_printf("Phone\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Cutoff regulates the level of non-linearity. Resonance regulates the downsampling. Note that this filter only works properly for no oversampling and x2 oversampling.", wx2);
   ) : ( filteridx == 72 ) ? (
-    gfx_printf("Modulon (tuned)\nModulon works by modulating the signal with a set frequency and filtering the result.");
+    gfx_printf("Modulon (tuned)\n\n"); gfx_x = fx+5;
+    gfx_printf("Modulon works by modulating the signal with a set frequency and filtering the result. Considering that this filter is based on ring modulation, tuning is important. It is also recommended to use this filter in combination with keytracking.");
   ) : ( filteridx == 73 ) ? (
-    gfx_printf("Modulatrix (tuned)\nModulatrix works by modulating the signal with a set frequency and filtering the result.");
+    gfx_printf("Modulatrix (tuned)\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Modulatrix works by modulating the signal with a set frequency and filtering the result. Considering that this filter is based on ring modulation, tuning is important. It is also recommended to use this filter in combination with keytracking.", wx2);
+  ) : ( filteridx == 74 ) ? (
+    gfx_printf("Vibrato\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Simple vibrato effect.", wx2);
   );
 );
 
@@ -882,6 +888,23 @@ function readBuffer()
     readptr > scopebuffermax ? readptr = scopebuffer;
     
     c
+  );
+  
+function readBufferFrac(frac)
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer)
+  (
+    c1 = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c2 = readptr[];
+    c2 * (1.0-frac) + c1 * frac
+    
+    // Allpass interp
+    //c1 = c1 + (1.0-frac) * c2 - ( 1.0 - frac ) * ls;
+    //ls = c1;
   );
 
 function updateBuffer(M)
@@ -2913,7 +2936,20 @@ function modulatrix_init(filterfreq, res)
     reso = res;
     
     dt = dt * 2*$pi*srate*f;
-  );  
+  );
+
+function vibrato_init(filterfreq, res)
+  local(fs, f, fact)
+  global(srate, slider54)
+  instance(dt, reso)
+  (
+    fs   = srate * max(1, slider54);
+    dt   = 1/fs;
+    f    = .00125 * ( pow(10, filterfreq) - 1 ) / 9;
+    reso = res;
+    
+    dt = dt * 2*$pi*srate*f;
+  );
 
 function modulon_init(filterfreq, res)
   local(f)
@@ -5056,6 +5092,10 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.modulon.modulon_fixed_init(max(filterFreq, 0.0075), filterReso);
     ) : ( sliderValue == 73 ) ? (
       this.modulon.modulatrix_init(max(filterFreq, 0.0075), filterReso);
+    ) : ( sliderValue == 74 ) ? (
+      delayBuffer = selectBuffer( isR, isFilt2 );
+      this.vibrato.vibrato_init(filterFreq, filterReso);
+      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer+4000);
     );
   );     
     
@@ -5269,7 +5309,9 @@ function resetActiveFilter(filterType)
       this.modulon.modulon_reset();
     ) : ( filterType == 73 ) ? (
       this.modulon.modulon_reset();
-    );
+    ) : ( filterType == 74 ) ? (
+      this.vibrato.t = 0;
+    )
   );
  
 function resetActiveFilters()
@@ -7788,6 +7830,8 @@ filter_delay1.initBuffer(delay_buf1, delay_buf1 + filterFreq * 1000);
 filter_delay2.initBuffer(delay_buf2, delay_buf2 + filterReso * 2000);
 L.filter_delay.initBuffer(delay_buf1, delay_buf1 + filterFreq * 1000);
 R.filter_delay.initBuffer(delay_buf2, delay_buf2 + filterReso * 2000);
+L2.filter_delay.initBuffer(delay_buf1, delay_buf1 + filterFreq * 1000);
+R2.filter_delay.initBuffer(delay_buf2, delay_buf2 + filterReso * 2000);
 
 stereo_delay_bufferL.initBuffer(delay_buf1, delay_buf1 + 1000);
 stereo_delay_bufferR.initBuffer(delay_buf1, delay_buf1 + 1000);
@@ -10330,7 +10374,17 @@ function process(sample, dist)
       dist ? sample = distort(sample);      
     ) : ( this.filterType == 73 ) ? (
       sample = this.modulon.modulatrix_eval(sample);
-      dist ? sample = distort(sample);      
+      dist ? sample = distort(sample);
+    ) : ( this.filterType == 74 ) ? (
+      this.vibrato.t += this.vibrato.dt;
+      this.filter_delay.updateBuffer(sample);
+      
+      vib_delay = 800 * this.vibrato.reso * (1+sin(this.vibrato.t));
+      this.filter_delay.setOffset(vib_delay+5);
+      //sample = this.filter_delay.readBuffer(vib_delay);
+      sample = this.filter_delay.readBufferFrac(vib_delay-floor(vib_delay));
+
+      dist ? sample = distort(sample);
     );
     
     sample;
