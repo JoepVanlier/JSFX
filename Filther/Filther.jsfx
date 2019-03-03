@@ -1,10 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.21
+version: 2.22
 author: Joep Vanlier
 changelog: 
-+ Added properly tuned version of the modulon
-+ Added option to finetune
++ Big refactor. Hopefully the jumpy spline woes are over now.
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -211,7 +210,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.21";
+plugname = "FILTHER 2.22";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -5397,7 +5396,7 @@ function grabY(S, i)
     :(i==8) ? ( slider34 )
   );
 );
-
+  
 function grabFinalY(S)
 (
   (S == 2) ? grabY(S, slider2-1) : grabY(S, slider1-1)
@@ -5405,9 +5404,10 @@ function grabFinalY(S)
 
 // Really dumb sorting algorithm
 // Double buffered to make sure that we don't get clicks
-function sort_spline()
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(cyl, last, mini, iter, tmp, eps, shift)
+function f_sort_spline(N_write, xloc_write, yloc_write, tempx, tempy, tempz)
+  instance(splineIdx, indices)
+  local(cyl, last, mini, iter, tmp, eps, shift,
+        ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z )
   global(gfx_x, gfx_y)
 ( 
   // First copy it to temp 
@@ -5476,20 +5476,13 @@ function sort_spline()
     ptr_to_X += 1;
     ptr_to_Y += 1;
     ptr_to_Z += 1;
-  );  
-  
-  tmp = xloc_read;
-  xloc_read = xloc_write;
-  xloc_write = tmp;
-  
-  tmp = yloc_read;
-  yloc_read = yloc_write;
-  yloc_write = tmp;  
+  );
 );
 
-function update_spline()
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(cc1, m, mNext, cm, dx, dxNext, invdx, tmp)
+function f_update_spline(xloc_read, yloc_read, N_write, c1_write, c2_write, c3_write, tempx, tempy, tempz)
+  instance(splineIdx, indices)
+  local(cc1, m, mNext, cm, dx, dxNext, invdx, tmp,
+        ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z)
   global(gfx_x, gfx_y)
   (
     // Initialize coeffs
@@ -5572,167 +5565,105 @@ function update_spline()
       ptr_to_X   += 1;
       ptr_to_Y   += 1;
     );
-    
-    tmp = c1_read;
-    c1_read = c1_write;
-    c1_write = tmp;
-    
-    tmp = c2_read;
-    c2_read = c2_write;
-    c2_write = tmp;
-    
-    tmp = c3_read;
-    c3_read = c3_write;
-    c3_write = tmp;
-    
-    N_read = N_write;
   );
 
-function evalSplineBin(x)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(low, high, xHere, i, diff, diffSq, mid, out)
+function sort_spline(gfx)
+  instance(splineIdx, indices, 
+           N_gfx, N_audio,
+           xloc_gfx, yloc_gfx, 
+           xloc_audio, yloc_audio,
+           tempx_gfx, tempy_gfx, tempz_gfx
+           tempx_audio, tempy_audio, tempz_audio
+           )
+  local()
   global()
   (
-    // Out of bounds means return 1
-    (x > 1) ? out = yloc_read[N_read-1] : 
-    (
-      ( x < 0 ) ? out = 0 :
-      (
-        // Search for the correct interval by binary search
-        low       = 0;
-        high      = N_read;
-        while(
-          mid = floor( 0.5*(low+high) );
-          xHere = xloc_read[mid];
-          
-          ( xHere < x ) ? low = mid + 1 :
-          ( // else
-            ( xHere > x ) ? high = mid - 1 :
-              ( //else 
-                high = yloc_read[mid];
-                low = high+1; // Manual termination
-              );
-          );
-          
-          low <= high;
-        );
-        
-        i = max( 0, high );        
-        
-        diff    = x - xloc_read[i];
-        diffSq  = diff * diff;
-
-        out = yloc_read[i] + c1_read[i]*diff + c2_read[i]*diffSq + c3_read[i]*diff*diffSq;
-      )
-    );
-    
-    out;
+    gfx ?
+      this.f_sort_spline(N_gfx, xloc_gfx, yloc_gfx, tempx_gfx, tempy_gfx, tempz_gfx)
+    : this.f_sort_spline(N_audio, xloc_audio, yloc_audio, tempx_audio, tempy_audio, tempz_audio)
   );
-  
+
+function update_spline(gfx)
+  instance(splineIdx, indices, 
+           N_gfx, N_audio,
+           xloc_gfx, yloc_gfx, 
+           xloc_audio, yloc_audio,
+           c1_gfx, c2_gfx, c3_gfx,
+           c1_audio, c2_audio, c3_audio,
+           tempx_gfx, tempy_gfx, tempz_gfx
+           tempx_audio, tempy_audio, tempz_audio
+           )
+  local()
+  global()
+  (
+    gfx ?
+      this.f_update_spline(xloc_gfx, yloc_gfx, N_gfx, c1_gfx, c2_gfx, c3_gfx, tempx_gfx, tempy_gfx, tempz_gfx)
+    : this.f_update_spline(xloc_audio, yloc_audio, N_audio, c1_audio, c2_audio, c3_audio, tempx_audio, tempy_audio, tempz_audio)
+  );
+
 // Linear search empirically turned out to be faster than binary search (small number of nodes, less branching I guess).
 function evalSplineLin(x)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
+  instance(N_gfx, splineIdx, xloc_read, yloc_gfx, xloc_gfx, c1_gfx, c2_gfx, c3_gfx )
   local(low, high, xHere, i, diff, diffSq, mid, out)
   global()
   (
     i = -1;
-    xHere = xloc_read-1;
+    xHere = xloc_gfx-1;
     
     while(
       i += 1;
       xHere += 1;
       
-      x >= xHere[] && ( i < N_read )
+      x >= xHere[] && ( i < N_gfx )
     );
         
     i = max( 0, i-1 );
         
-    diff    = x - xloc_read[i];
+    diff    = x - xloc_gfx[i];
     diffSq  = diff * diff;
-    out = yloc_read[i] + c1_read[i]*diff + c2_read[i]*diffSq + c3_read[i]*diff*diffSq;
+    out     = yloc_gfx[i] + c1_gfx[i]*diff + c2_gfx[i]*diffSq + c3_gfx[i]*diff*diffSq;
     
     out;
-  );  
-  
-function evalSplineAudioBin(x)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(lowAudio, highAudio, xHereAudio, diffAudio, diffSqAudio, out, midAudio)
-  global()
-  (
-    // Out of bounds means return 1
-    ( x > 1 ) ? out = yloc_read[N_read-1] : 
-    (
-      ( x < 0 ) ? out = 0 :
-      (
-        // Search for the correct interval by binary search
-        lowAudio       = 0;
-        highAudio      = N_read;
-        while(
-          midAudio = floor( 0.5*(lowAudio+highAudio) );
-          xHereAudio = xloc_read[midAudio];
-          
-          ( xHereAudio < x ) ? lowAudio = midAudio + 1 :
-          ( // else
-            ( xHereAudio > x ) ? highAudio = midAudio - 1 :
-              ( //else 
-                highAudio = yloc_read[midAudio];
-                lowAudio = highAudio+1; // Manual termination
-              );
-          );
-          
-          lowAudio <= highAudio;
-        );
-        
-        iAudio = max( 0, highAudio );        
-          
-        diffAudio    = x - xloc_read[iAudio];
-        diffSqAudio  = diffAudio * diffAudio;
-          
-        out = yloc_read[iAudio] + c1_read[iAudio]*diffAudio + c2_read[iAudio]*diffSqAudio + c3_read[iAudio]*diffAudio*diffSqAudio;
-      )
-    );
-    
-    out;
-  );    
+  );
   
 function evalSplineAudioLin(x)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(lowAudio, highAudio, xHereAudio, diffAudio, diffSqAudio, out, midAudio)
-  global(gfx_x, gfx_y)
+  instance(N_audio, splineIdx, xloc_audio, yloc_audio, c1_audio, c2_audio, c3_audio, iAudio )
+  local(lowAudio, highAudio, xHereAudio, diffAudio, diffSqAudio, out, midAudio )
+  global()
   (
     iAudio = -1;
-    xHereAudio = xloc_read-1;
+    xHereAudio = xloc_audio-1;
     
     while(
       iAudio += 1;
       xHereAudio += 1;
       
-      x >= xHereAudio[] && ( iAudio < N_read )
+      x >= xHereAudio[] && ( iAudio < N_audio )
     );
     
     iAudio       = max(0, iAudio-1);
-    diffAudio    = x - xloc_read[iAudio];
+    diffAudio    = x - xloc_audio[iAudio];
     diffSqAudio  = diffAudio * diffAudio;
           
-    out = yloc_read[iAudio] + c1_read[iAudio]*diffAudio + c2_read[iAudio]*diffSqAudio + c3_read[iAudio]*diffAudio*diffSqAudio;
+    out = yloc_audio[iAudio] + c1_audio[iAudio]*diffAudio + c2_audio[iAudio]*diffSqAudio + c3_audio[iAudio]*diffAudio*diffSqAudio;
     
     out;
   );  
 
 // Get first derivative of the spline (needed for some analog models)
 function evalSplineAudioDiff(x)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(lowAudio, highAudio, interpAudio, xHereAudio, diffAudio, out, midAudio)
+  instance(N_audio, splineIdx, xloc_audio, yloc_audio, c1_audio, c2_audio, c3_audio, iAudio )
+  local(lowAudio, highAudio, interpAudio, xHereAudio, diffAudio, out, midAudio )
   global()
   (
     // Out of bounds means return 1
-    ( x > 1 ) ? out = yloc_read[N_read-1] : 
+    ( x > 1 ) ? out = yloc_audio[N_audio-1] : 
     (
       ( x < 0 ) ? out = 0 :
       ( 
         iAudio = max( 0, highAudio );
-        diffAudio    = x - xloc_read[iAudio];
-        out = c1_read[iAudio] + diffAudio*(2*c2_read[iAudio] + 3*diffAudio*c3_read[iAudio]);
+        diffAudio    = x - xloc_audio[iAudio];
+        out = c1_audio[iAudio] + diffAudio*(2*c2_audio[iAudio] + 3*diffAudio*c3_audio[iAudio]);
       )
     );
     
@@ -5741,23 +5672,24 @@ function evalSplineAudioDiff(x)
 
 // Plot the spline nodes
 function plot_spline(x, y, w, h)
-  instance(ldyn, ldyn2, ldyn3, ldyn4, N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
-  local(dhere, xx, res, lastx, lasty, dx, yout, nx, ny, epsx, epsy, xc, yc, yout)
+  instance(ldyn, ldyn2, ldyn3, ldyn4, N_gfx, splineIdx, xloc_gfx, yloc_gfx, indices, cap_mode, drag_node)
+  local(dhere, xx, res, lastx, lasty, dx, yout, nx, ny, epsx, epsy, xc, yc, yout,
+        ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z)
   global(block_analyzers, gfx_x, gfx_y, distortPlot, slider56, dynval, distortionDynamics
          spline_r, spline_g, spline_b, spline_a
          dyn_color_r, dyn_color_g, dyn_color_b, dyn_color_a)
   (
     epsx = 6;
     epsy = 6;
-    ptr_from_X = xloc_read;
-    ptr_from_Y = yloc_read;
+    ptr_from_X = xloc_gfx;
+    ptr_from_Y = yloc_gfx;
     ptr_from_Z = indices;
         
     gfx_set( spline_r, spline_g, spline_b, spline_a );
     gfx_x = 0;
     gfx_y = 0;
     ( slider56 == 0 ) ? (
-      loop(N_read,
+      loop(N_gfx,
         xc = x + w*ptr_from_X[] - epsx;
         yc = y + h*(1-ptr_from_Y[]) - epsy;
         gfx_rect(xc+.5*epsx-1, yc+.5*epsx-1, epsx, epsy);
@@ -5924,17 +5856,17 @@ function evalDiff(xx)
   
 //NODE_PROXIMITY = 5;
 function findNearest(x, y)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
+  instance(N_gfx, splineIdx, xloc_gfx, yloc_gfx, c1_gfx, c2_gfx, c3_gfx, drag_node)
   local(minDist, best, dx, dy, dist, left, i, right)
   global()
 (
     // Find nearest point that may have been clicked
-    i = 0;
+    i       = 0;
     minDist = 100000000000000;
-    best = -1;
-    loop(N_read,
-       dx = (x - xloc_read[i]);
-       dy = ((1-y) - yloc_read[i]);
+    best    = -1;
+    loop(N_gfx,
+       dx = (x - xloc_gfx[i]);
+       dy = ((1-y) - yloc_gfx[i]);
        dist = dx*dx + dy*dy;          
        ( dist < minDist ) ? 
        (
@@ -5951,7 +5883,7 @@ function findNearest(x, y)
 
 //NODE_PROXIMITY = 5;
 function killNode(i)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
+  instance(N_gfx, splineIdx, xloc_gfx, yloc_gfx, indices, drag_node)
   local(i, lastY)
   global()
   (
@@ -5960,17 +5892,17 @@ function killNode(i)
     i = 0;
     while(
       i += 1;
-      (indices[i]!=(N_read-2))&&(i<(N_read+1))
+      (indices[i]!=(N_gfx-2))&&(i<(N_gfx+1))
     );
     
-    manipulateXYSliders(splineIdx, indices[drag_node], xloc_read[i], yloc_read[i]);    
-    manipulateYSlider(splineIdx, N_read-2, lastY);
+    manipulateXYSliders(splineIdx, indices[drag_node], xloc_gfx[i], yloc_gfx[i]);    
+    manipulateYSlider(splineIdx, N_gfx-2, lastY);
     
-    setN(splineIdx, N_read-1);
+    setN(splineIdx, N_gfx-1);
   );
   
 function addNode(x, y)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
+  instance(N_gfx, splineIdx, xloc_gfx, yloc_gfx, xloc_gfx, yloc_gfx, indices, drag_node)
   local(i, lastY)
   global()
   (
@@ -5978,19 +5910,19 @@ function addNode(x, y)
     i = 0;
     while(
       i += 1;
-      (indices[i]!=(N_read-1))&&(i<(N_read+2))
+      (indices[i]!=(N_gfx-1))&&(i<(N_gfx+2))
     );
 
-    manipulateXYSliders(splineIdx, indices[N_read], xloc_read[i], yloc_read[i]);  
-    manipulateXYSliders(splineIdx, indices[N_read-1], x, y);
+    manipulateXYSliders(splineIdx, indices[N_gfx], xloc_gfx[i], yloc_gfx[i]);  
+    manipulateXYSliders(splineIdx, indices[N_gfx-1], x, y);
     
-    manipulateYSlider(splineIdx, N_read, lastY);
-    setN(splineIdx, N_read+1);
+    manipulateYSlider(splineIdx, N_gfx, lastY);
+    setN(splineIdx, N_gfx+1);
   );
 
 //NODE_PROXIMITY = 5;
 function processMouse(x, y, dx, dy, mc, lmc, th)
-  instance(offs, N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
+  instance(offs, N_gfx, splineIdx, indices, cap_mode, drag_node)
   local(left, right, lastleft, lastright, i, numberloc)
   global(manipulateXYSliders, gfx_x, gfx_y, slider35, maxNodes)
   (
@@ -6027,13 +5959,13 @@ function processMouse(x, y, dx, dy, mc, lmc, th)
           ( drag_node > -1 ) ? 
           (
             // Kill it!
-            ( N_read > 2 ) ? (
+            ( N_gfx > 2 ) ? (
               this.killNode(drag_node);
               cap_mode = 2;
             )
           ):(
             // Add one?
-            ( N_read < maxNodes ) ? (
+            ( N_gfx < maxNodes ) ? (
               ( x > 0 && y > 0 && x < 1 && y < 1 ) ? (
               this.addNode(x, 1-y);
               cap_mode = 2; )
@@ -6045,29 +5977,50 @@ function processMouse(x, y, dx, dy, mc, lmc, th)
   );
 
 // Generate a spline object
-function gen_spline(N_in, splineIdx_in, xloc_in, yloc_in, xloc_in2, yloc_in2, indices_in, tempx_in, tempy_in, tempz_in, c1_in, c2_in, c3_in, c1_in2, c2_in2, c3_in2)
-  instance(N_read, N_write, splineIdx, xloc_read, yloc_read, xloc_write, yloc_write, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
+function gen_spline(N_in, splineIdx_in, 
+                    xloc_in, yloc_in, 
+                    xloc_in2, yloc_in2, 
+                    indices_in, 
+                    tempx_in, tempy_in, tempz_in, 
+                    tempx_in2, tempy_in2, tempz_in2, 
+                    c1_in, c2_in, c3_in, 
+                    c1_in2, c2_in2, c3_in2)
+  instance( N_gfx, N_audio, 
+            splineIdx, 
+            xloc_gfx, yloc_gfx, 
+            xloc_audio, yloc_audio,
+            indices, 
+            tempx_gfx, tempy_gfx, tempz_gfx,
+            tempx_audio, tempy_audio, tempz_audio,
+            c1_gfx, c2_gfx, c3_gfx, 
+            c1_audio, c2_audio, c3_audio, 
+            cap_mode)
   global()
 (
-  N_read     = N_in;
-  N_write    = N_in;
-  xloc_read  = xloc_in;
-  yloc_read  = yloc_in;
-  xloc_write = xloc_in2;
-  yloc_write = yloc_in2;  
-  indices    = indices_in;
-  tempx      = tempx_in;
-  tempy      = tempy_in; 
-  tempz      = tempz_in;
-  c1_read    = c1_in;
-  c2_read    = c2_in;
-  c3_read    = c3_in;
-  c1_write   = c1_in2;
-  c2_write   = c2_in2;
-  c3_write   = c3_in2;    
-
-  splineIdx  = splineIdx_in;
-  cap_mode   = 0;
+  !N_gfx ? (
+    N_gfx       = N_in;
+    N_audio     = N_in;
+    xloc_gfx    = xloc_in;
+    yloc_gfx    = yloc_in;
+    xloc_audio  = xloc_in2;
+    yloc_audio  = yloc_in2;  
+    indices     = indices_in;
+    tempx_gfx   = tempx_in;
+    tempy_gfx   = tempy_in;
+    tempz_gfx   = tempz_in;
+    tempx_audio = tempx_in2;
+    tempy_audio = tempy_in2;
+    tempz_audio = tempz_in2;
+    c1_gfx      = c1_in;
+    c2_gfx      = c2_in;
+    c3_gfx      = c3_in;
+    c1_audio    = c1_in2;
+    c2_audio    = c2_in2;
+    c3_audio    = c3_in2;    
+  
+    splineIdx  = splineIdx_in;
+    cap_mode   = 0;
+  );
 );
 
 function setN(N_new)
@@ -6076,14 +6029,6 @@ function setN(N_new)
   instance(N_read, N_write, splineIdx, xloc, yloc, indices, tempx, tempy, tempz, c1_read, c2_read, c3_read, c1_write, c2_write, c3_write, ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z, cap_mode, drag_node, iAudio)
   (
     N_write = N_new;
-  );
-
-function wsetN(N_new)
-  local()
-  global()
-  instance(x, y, w, h, spline)
-  (
-    spline.setN(N_new)
   );
 
 function groupWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in)
@@ -6577,7 +6522,7 @@ function sliderWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, 
   global(newUI)
   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, unit, isInteger, thisUI, htime, hint, onmarker)
   (
-      thisUI        = newUI+=1;
+      !thisUI ? thisUI = newUI+=1;
       x             = x_in+2;
       y             = y_in;
       w             = w_in-4;
@@ -6827,18 +6772,24 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
     ) : 0;
   );
 
-function init_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, splineCoordsX2, splineCoordsY2, indices, tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ, c1_storage, c2_storage, c3_storage, c1_storage2, c2_storage2, c3_storage2)
-  instance(x, y, w, h, spline, buttonOff, buttonArctan, buttonFast, buttonSpline, buttonSine)
-  global(buttonOff.selectionButton, retina_scaling)
-  local(hy, bw, bh)
+function init_window_spline(N, splineIdx, 
+                     splineCoordsX, splineCoordsY, 
+                     splineCoordsX2, splineCoordsY2,
+                     indices,
+                     tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ,
+                     tempCoordStorageX2, tempCoordStorageY2, tempCoordStorageZ2,
+                     c1_storage, c2_storage, c3_storage,
+                     c1_storage2, c2_storage2, c3_storage2 )
+  instance(spline)
+  global()
+  local()
   (
-    spline = spline.gen_spline(N, splineIdx, splineCoordsX, splineCoordsY, splineCoordsX2, splineCoordsY2, indices, tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ, c1_storage, c2_storage, c3_storage, c1_storage2, c2_storage2, c3_storage2);
+    spline = spline.gen_spline(N, splineIdx, splineCoordsX, splineCoordsY, splineCoordsX2, splineCoordsY2, indices, tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ, tempCoordStorageX2, tempCoordStorageY2, tempCoordStorageZ2, c1_storage, c2_storage, c3_storage, c1_storage2, c2_storage2, c3_storage2);
   );
 
-function gen_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, splineCoordsX2, splineCoordsY2, indices, tempCoordStorageX, tempCoordStorageY, tempCoordStorageZ, c1_storage, c2_storage, c3_storage, c1_storage2, c2_storage2, c3_storage2)
-  instance(x, y, w, h, spline, /*buttonOff, buttonArctan, buttonFast, buttonSpline, buttonSine, */ shaperSelect)
+function gen_window(xp, yp, wp, hp)
+  instance(x, y, w, h, spline, shaperSelect)
   global(buttonOff.selectionButton, retina_scaling, shaperSelect.combobox,
-         /* selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, */
          widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a )
   local(hy, bw, bh, wR, wG, wB, wA, nShapers)
   (
@@ -6853,12 +6804,6 @@ function gen_window(xp, yp, wp, hp, N, splineIdx, splineCoordsX, splineCoordsY, 
     nShapers = 5;
 
     shaperSelect.combobox(x+5, y+4, bw*1.6, bh*1.5, widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a, nShapers, 4, 0, 1, "Waveshaper selection." );
-    
-    /*buttonOff.selectionButton(x+5, y+4, bw, bh, "OFF",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "No waveshaping");
-    buttonArctan.selectionButton(x+5, y+4+hy, bw, bh, "Tanh",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Tanh waveshaper");
-    buttonFast.selectionButton(x+5, y+4+2*hy, bw, bh, "Fast",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Tanh approximation");
-    buttonSpline.selectionButton(x+5, y+4+3*hy, bw, bh, "Spline", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Spline waveshaping");
-    buttonSine.selectionButton(x+5, y+4+4*hy, bw, bh, "Sine", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Sine waveshaping (FM-like)");*/
   );
 
 function gen_dynamics(xp, yp, wp, hp)
@@ -6913,22 +6858,21 @@ function processMouse(mx, my, dx, dy, mc, lmc)
     );
   );
 
-function sort_spline()
+function sort_spline(gfx)
   instance(x, y, w, h, spline)
   global()
   local()
   (
-    spline.sort_spline();
+    spline.sort_spline(gfx);
   );
 
-function update_spline()
+function update_spline(gfx)
   instance(x, y, w, h, spline)
   global()
   local()
   (
-    spline.update_spline();
+    spline.update_spline(gfx);
   );
-
 
 function rotatedPrint(x, y, str, rot)
 local(sw,sh)
@@ -7678,7 +7622,70 @@ function drawGonioMeter(cl)
       ptr > rEnd ? ptr = rStart;
     );
   );  
-  
+    
+function importNodes(s1x, s2x, s1y, s2y, gfx)
+  local(setter)
+  (
+    setter = s2x;
+    setter[] = 0; setter += 1;
+    setter[] = slider3; setter += 1;
+    setter[] = slider5; setter += 1;
+    setter[] = slider7; setter += 1;
+    setter[] = slider9; setter += 1;
+    setter[] = slider11; setter += 1;
+    setter[] = slider13; setter += 1;
+    setter[] = slider15; setter += 1;
+    setter[] = 1; setter += 1;
+    setter[] = 1; setter += 1;
+    
+    setter = s2y;
+    setter[] = 0; setter += 1;
+    setter[] = slider4; setter += 1;
+    setter[] = slider6; setter += 1;
+    setter[] = slider8; setter += 1;
+    setter[] = slider10; setter += 1;
+    setter[] = slider12; setter += 1;
+    setter[] = slider14; setter += 1;
+    setter[] = slider16; setter += 1;
+    setter[] = slider18; setter += 1;
+    setter[] = 1; setter += 1;
+    
+    setter = s1x;
+    setter[] = 0; setter += 1;
+    setter[] = slider19; setter += 1;
+    setter[] = slider21; setter += 1;
+    setter[] = slider23; setter += 1;
+    setter[] = slider25; setter += 1;
+    setter[] = slider27; setter += 1;
+    setter[] = slider29; setter += 1;
+    setter[] = slider31; setter += 1;
+    setter[] = 1; setter += 1;
+    setter[] = 1; setter += 1;
+    
+    setter = s1y;
+    setter[] = 0; setter += 1;
+    setter[] = slider20; setter += 1;
+    setter[] = slider22; setter += 1;
+    setter[] = slider24; setter += 1;
+    setter[] = slider26; setter += 1;
+    setter[] = slider28; setter += 1;
+    setter[] = slider30; setter += 1;
+    setter[] = slider32; setter += 1;
+    setter[] = slider34; setter += 1;  
+    setter[] = 1; setter += 1;
+    
+    gfx ? (
+      window1.spline.N_gfx = slider1;
+      window2.spline.N_gfx = slider2;
+    ) : (
+      window1.spline.N_audio = slider1;
+      window2.spline.N_audio = slider2;
+    );
+    
+    s1x[slider1-1] = 1;
+    s2x[slider2-1] = 1;
+  );
+
 //////////////////////////////////////////////////////////
 // Memory layout
 //////////////////////////////////////////////////////////
@@ -7753,6 +7760,10 @@ vowel_EE        = 2850 + splineOffset;
 vowel_src       = 2900 + splineOffset;
 kot_LUT_x       = 3000 + splineOffset;
 kot_LUT_y       = 3200 + splineOffset;
+temp_xloc2      = 3400 + splineOffset;
+temp_yloc2      = 3500 + splineOffset;
+temp_indices2   = 3600 + splineOffset;
+
 bootvowel();
 kot_lut(kot_LUT_x, kot_LUT_y);
 Nbuf            = 20000;
@@ -8093,65 +8104,13 @@ function updateSliders( hard )
   lfoGainButton.active            = gainLFO;
   keyFollow1.active               = followKey1;
   keyFollow2.active               = followKey2;
-  
-  setter = window2.spline.xloc_write;
-  setter[] = 0; setter += 1;
-  setter[] = slider3; setter += 1;
-  setter[] = slider5; setter += 1;
-  setter[] = slider7; setter += 1;
-  setter[] = slider9; setter += 1;
-  setter[] = slider11; setter += 1;
-  setter[] = slider13; setter += 1;
-  setter[] = slider15; setter += 1;
-  setter[] = 1; setter += 1;
-  setter[] = 1; setter += 1;
-  
-  setter = window2.spline.yloc_write;
-  setter[] = 0; setter += 1;
-  setter[] = slider4; setter += 1;
-  setter[] = slider6; setter += 1;
-  setter[] = slider8; setter += 1;
-  setter[] = slider10; setter += 1;
-  setter[] = slider12; setter += 1;
-  setter[] = slider14; setter += 1;
-  setter[] = slider16; setter += 1;
-  setter[] = slider18; setter += 1;
-  setter[] = 1; setter += 1;
-  
-  setter = window1.spline.xloc_write;
-  setter[] = 0; setter += 1;
-  setter[] = slider19; setter += 1;
-  setter[] = slider21; setter += 1;
-  setter[] = slider23; setter += 1;
-  setter[] = slider25; setter += 1;
-  setter[] = slider27; setter += 1;
-  setter[] = slider29; setter += 1;
-  setter[] = slider31; setter += 1;
-  setter[] = 1; setter += 1;
-  setter[] = 1; setter += 1;
-  
-  setter = window1.spline.yloc_write;
-  setter[] = 0; setter += 1;
-  setter[] = slider20; setter += 1;
-  setter[] = slider22; setter += 1;
-  setter[] = slider24; setter += 1;
-  setter[] = slider26; setter += 1;
-  setter[] = slider28; setter += 1;
-  setter[] = slider30; setter += 1;
-  setter[] = slider32; setter += 1;
-  setter[] = slider34; setter += 1;  
-  setter[] = 1; setter += 1;
-  
-  ( slider56 == 0 || hard == 1 ) ? (
-    window1.wsetN(slider1);
-    window2.wsetN(slider2);
-    window1.spline.xloc_write[slider1-1] = 1;
-    window2.spline.xloc_write[slider2-1] = 1;
- 
-    window1.sort_spline();
-    window2.sort_spline();
-    window1.update_spline();
-    window2.update_spline();
+    
+  ( ( slider56 == 0 ) || ( hard == 1 ) ) ? ( 
+    importNodes( window1.spline.xloc_audio, window2.spline.xloc_audio, window1.spline.yloc_audio, window2.spline.yloc_audio, 0 );
+    window1.sort_spline(0);
+    window2.sort_spline(0);
+    window1.update_spline(0);
+    window2.update_spline(0);
   );
 
   // Only update the oversampling filters when needed.
@@ -8182,8 +8141,8 @@ function updateSliders( hard )
 function initGUI()
 (
   // Initialize object instances
-  window1.init_window(wndPad, wndPad, wndX, wndY, 10, 1, negative_xloc, negative_yloc, negative_xloc2, negative_yloc2, pos_indices, temp_xloc, temp_yloc, temp_indices, neg_c1s, neg_c2s, neg_c3s, neg_c1s2, neg_c2s2, neg_c3s2);
-  window2.init_window(2*wndPad+wndX, wndPad, wndX, wndY, 10, 2, positive_xloc, positive_yloc, positive_xloc2, positive_yloc2, neg_indices, temp_xloc, temp_yloc, temp_indices, pos_c1s, pos_c2s, pos_c3s, pos_c1s2, pos_c2s2, pos_c3s2);
+  window1.init_window_spline(10, 1, negative_xloc, negative_yloc, negative_xloc2, negative_yloc2, pos_indices, temp_xloc, temp_yloc, temp_indices, temp_xloc2, temp_yloc2, temp_indices2, neg_c1s, neg_c2s, neg_c3s, neg_c1s2, neg_c2s2, neg_c3s2);
+  window2.init_window_spline(10, 2, positive_xloc, positive_yloc, positive_xloc2, positive_yloc2, neg_indices, temp_xloc, temp_yloc, temp_indices, temp_xloc2, temp_yloc2, temp_indices2, pos_c1s, pos_c2s, pos_c3s, pos_c1s2, pos_c2s2, pos_c3s2);
   
   updateSliders(1);
   updateActiveFilters(1);
@@ -8206,8 +8165,8 @@ function setupGUI()
   wndX    = 250 * retina_scaling;
   wndY    = 250 * retina_scaling;
   wndPad  = 30 * retina_scaling;
-  window1.gen_window(wndPad, wndPad, wndX, wndY, 10, 1, negative_xloc, negative_yloc, negative_xloc2, negative_yloc2, pos_indices, temp_xloc, temp_yloc, temp_indices, neg_c1s, neg_c2s, neg_c3s, neg_c1s2, neg_c2s2, neg_c3s2);
-  window2.gen_window(2*wndPad+wndX, wndPad, wndX, wndY, 10, 2, positive_xloc, positive_yloc, positive_xloc2, positive_yloc2, neg_indices, temp_xloc, temp_yloc, temp_indices, pos_c1s, pos_c2s, pos_c3s, pos_c1s2, pos_c2s2, pos_c3s2);
+  window1.gen_window(wndPad, wndPad, wndX, wndY);//, 10, 1, negative_xloc, negative_yloc, negative_xloc2, negative_yloc2, pos_indices, temp_xloc, temp_yloc, temp_indices, neg_c1s, neg_c2s, neg_c3s, neg_c1s2, neg_c2s2, neg_c3s2);
+  window2.gen_window(2*wndPad+wndX, wndPad, wndX, wndY);//, 10, 2, positive_xloc, positive_yloc, positive_xloc2, positive_yloc2, neg_indices, temp_xloc, temp_yloc, temp_indices, pos_c1s, pos_c2s, pos_c3s, pos_c1s2, pos_c2s2, pos_c3s2);
   window3.gen_dynamics(3*wndPad+2*wndX, wndPad, wndX, wndY );
   
   copyright_h = .8*sliderHeight;
@@ -10922,6 +10881,12 @@ updateActiveFilters(1);
   curSample += 1;
 
 @gfx 1135 785
+  importNodes( window1.spline.xloc_gfx, window2.spline.xloc_gfx, window1.spline.yloc_gfx, window2.spline.yloc_gfx, 1 );
+  window1.sort_spline(1);
+  window2.sort_spline(1);
+  window1.update_spline(1);
+  window2.update_spline(1);
+
   function angle_line(x, y, d1, d2, angle)
   local(ca, cb)
   (
@@ -11762,8 +11727,8 @@ updateActiveFilters(1);
         attackSlider.hint = "Attack\nHow long does the dynamic variable take to change\nto its maximal value once over the threshold..";
         decaySlider.hint  = "Decay\nHow long does the dynamic variable take to\ndecay when below the threshold"; 
       );
-            
-      updateSliders(1);
+
+      forceUpdate = 1;
       refreshDynMode = slider45;
     );
     
