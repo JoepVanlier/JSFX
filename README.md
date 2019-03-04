@@ -42,7 +42,7 @@ Filther contains _two filter modules_ which can be automated by dynamics and LFO
 
 Filther contains a large variety of filters, each with their own advantages and drawbacks. Most of the filters behave non-ideal and are intended for creative purposes rather than fidelity to specification. Note that not all filters are stable for all combinations of resonance and waveshaping. Using very sharp transitions in the spline waveshaper can result in filter instability for the filters where waveshaping is part of the filter. Filther contains a large array of filters listed below:
 
-![Filtertypes](https://i.imgur.com/3L1S8T2.png)
+![Filtertypes](https://i.imgur.com/mmfv1rk.png)
 
 ### Special filter modes
 Filter A has some special filter modes which can be used for stereo widening or processing samples differently.
