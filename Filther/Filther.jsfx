@@ -1,9 +1,12 @@
 desc:Filther
 tags: Filther
-version: 2.23
+version: 2.24
 author: Joep Vanlier
 changelog: 
-+ Added vibrato effect
++ Changed vibrato resonance slider to non-linear mode (more fine tuning control)
++ Improved smoothing of vibrato
++ Improved feedback (incorporation of fractional delay)
++ Improved feedback (smoothing of FB time)
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -210,7 +213,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.23";
+plugname = "FILTHER 2.24";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -2946,7 +2949,7 @@ function vibrato_init(filterfreq, res)
     fs   = srate * max(1, slider54);
     dt   = 1/fs;
     f    = .00125 * ( pow(10, filterfreq) - 1 ) / 9;
-    reso = res;
+    reso = ( pow(10, res) - 1 ) / 9;
     
     dt = dt * 2*$pi*srate*f;
   );
@@ -10378,8 +10381,9 @@ function process(sample, dist)
     ) : ( this.filterType == 74 ) ? (
       this.vibrato.t += this.vibrato.dt;
       this.filter_delay.updateBuffer(sample);
+      this.vibrato.smoothreso = this.vibrato.smoothreso * .999 + this.vibrato.reso * .001;
       
-      vib_delay = 800 * this.vibrato.reso * (1+sin(this.vibrato.t));
+      vib_delay = 800 * this.vibrato.smoothreso * (1+sin(this.vibrato.t));
       this.filter_delay.setOffset(vib_delay+5);
       //sample = this.filter_delay.readBuffer(vib_delay);
       sample = this.filter_delay.readBufferFrac(vib_delay-floor(vib_delay));
@@ -10768,15 +10772,18 @@ updateActiveFilters(1);
     newFbAmnt   = min(1, max(0, newFbAmnt));
     
     newFbDelay = .003125 * srate * (pow(2, newFbDelay)-1) + 1;
-    
     (slider35 & 256) ? newFbDelay *= 16;
     (slider35 & 512) ? newFbDelay *= 8;
     
-    fb_bufferL.setOffset(floor(newFbDelay));
-    fb_bufferR.setOffset(floor(newFbDelay));
+    smoothedFbDelay = smoothedFbDelay * .999 + newFbDelay * .001;
+    flNewFbDelay = floor(smoothedFbDelay);
+    fracFbDelay = smoothedFbDelay-flNewFbDelay;
+    
+    fb_bufferL.setOffset(flNewFbDelay);
+    fb_bufferR.setOffset(flNewFbDelay);
 
-    sl = 1.25*actual_tanh(.8*(sl + newFbAmnt * fb_bufferL.readBuffer()));
-    sr = 1.25*actual_tanh(.8*(sr + newFbAmnt * fb_bufferR.readBuffer()));
+    sl = 1.25*actual_tanh(.8*(sl + newFbAmnt * fb_bufferL.readBuffer(fracFbDelay)));
+    sr = 1.25*actual_tanh(.8*(sr + newFbAmnt * fb_bufferR.readBuffer(fracFbDelay)));
   );
 
   ( slider54 < 1.5 ) ? (
