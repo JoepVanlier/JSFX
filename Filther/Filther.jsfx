@@ -1,10 +1,11 @@
 desc:Filther
 tags: Filther
-version: 2.32
+version: 2.34
 author: Joep Vanlier
 changelog: 
-+ First version of pitch tracking
-+ Added global bypass
++ Show linear part of filters in FFT window
++ Added markers to help with tuning of some of the more exotic filters
++ Bugfix clamping
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -119,7 +120,10 @@ file_var(0,mod_LFO_rate);
 file_var(0,mod_LFO_amount);
 file_var(0,force_mono_output);
 file_var(0,rescale_factor);
-file_var(0,global_bypass)
+file_var(0,global_bypass);
+file_var(0,hideSpectrumIn);
+file_var(0,hideSpectrumOut);
+file_var(0,hideSpectrumFilters);
 
 @init
 // Colors
@@ -131,10 +135,18 @@ fft_out_r = .8;
 fft_out_g = .8;
 fft_out_b = .8;
 fft_out_a = 1.0;
-fft_in_r = .13;
-fft_in_g = .13;
-fft_in_b = .13;
+fft_in_r = .23;
+fft_in_g = .23;
+fft_in_b = .23;
 fft_in_a = .6;
+fft_filt_r = .2;
+fft_filt_g = .2;
+fft_filt_b = .7;
+fft_filt_a = .15;
+fft_filt2_r = .5;
+fft_filt2_g = .1;
+fft_filt2_b = .1;
+fft_filt2_a = .15;
 spline_r = .7;
 spline_g = .7;
 spline_b = .7;
@@ -206,6 +218,10 @@ selectionbutton_color_r = .3;
 selectionbutton_color_g = .4;
 selectionbutton_color_b = .8;
 selectionbutton_color_a = .3;
+selectionbutton_color_r = .3; 
+selectionbutton_color_g = .3;
+selectionbutton_color_b = .7;
+selectionbutton_color_a = .3;
 filter_description_bg_r = 0.1;
 filter_description_bg_g = 0.1;
 filter_description_bg_b = 0.2;
@@ -216,7 +232,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.32";
+plugname = "FILTHER 2.33";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -934,12 +950,14 @@ function clearBuffer()
   global(MAXBUFFERSIZE)
   instance(scopeptr, scopebuffermax, scopebuffer)
   (
-    scopeptr = scopebuffer;
+    memset( scopebuffer, 0, MAXBUFFERSIZE );
+    /*scopeptr = scopebuffer;
     //loop(scopebuffermax - scopebuffer + 1,
     loop(MAXBUFFERSIZE,
       scopeptr[] = 0;
       scopeptr += 1;
-    );
+    );*/
+    
     scopeptr = scopebuffer;
   );
 
@@ -950,6 +968,10 @@ function initBufferNoReset(scopebuffer_in, scopebuffermax_in)
   (
     scopebuffer     = scopebuffer_in;
     scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
   );
 
 function tanh(s)
@@ -1780,7 +1802,8 @@ function reset_MS20_nonlin()
   local()
   instance(y1, y2, d1, d2, h, hh, k, f)
   (
-    d1 = d2 = 0;
+    d1 = 0;
+    d2 = 0;
   );
   
 function resetrbj(sample)
@@ -1990,6 +2013,8 @@ function reset_wasp_nonlin_saw()
   );  
   
 function clamp(x)
+local(y)
+global()
 (
   x = 0.8 * x;
   y = 0.5 * (abs(x + 1) - abs(x - 1));
@@ -2916,9 +2941,9 @@ function kot_reset()
   ); 
  
 function modulon_fixed_init(filterfreq, res)
-  local(f, fact)
+  local(fact)
   global(srate, slider54)
-  instance(fs, dt, svf)
+  instance(f, fs, dt, svf)
   (
     //this.svf.init_linearSVF( filterfreq, res );
     fact = .5 * ( pow(10, filterfreq) - 1 ) / 9;
@@ -2932,9 +2957,9 @@ function modulon_fixed_init(filterfreq, res)
   );
   
 function modulatrix_init(filterfreq, res)
-  local(f, fact)
+  local(fact)
   global(srate, slider54)
-  instance(fs, dt, svf, reso)
+  instance(f, fs, dt, svf, reso)
   (
     //this.svf.init_linearSVF( filterfreq, res );
     fact = .125 * ( pow(10, filterfreq) - 1 ) / 9;
@@ -2962,9 +2987,9 @@ function vibrato_init(filterfreq, res)
   );
 
 function modulon_init(filterfreq, res)
-  local(f)
+  local()
   global(srate, slider54)
-  instance(fs, dt, svf)
+  instance(f, fs, dt, svf)
   (
     this.svf.init_linearSVF( filterfreq, res );
   
@@ -3037,10 +3062,11 @@ function octaverUp_reset()
 function metallic_init(filterFreq, reso)
   local()
   global(srate, slider54)
-  instance(f, res, dt)
+  instance(f, res, dt, dtref)
   (
     f = filterFreq;
-    dt = ((pow(10, filterfreq)-1))/(9*max(1, slider54));
+    dtref = (pow(10, filterfreq)-1)/9;
+    dt = dtref/max(1, slider54);
     res = (pow(10, reso)-1)/9;
   );   
 
@@ -3056,10 +3082,11 @@ function metallic_reset()
 function frazzle_init(filterfreq, res)
   local(fs, f_est)
   global(srate, slider54)
-  instance(f, dt bal2)
+  instance(f, dt bal2, dtref)
   (
     bal2 = res;
-    dt = ((pow(10, filterfreq)-1))/(9*max(1, slider54));
+    dtref = (pow(10, filterfreq)-1)/9;
+    dt = dtref/max(1, slider54);
  
     this.svf1.init_linearSVF_direct( .25*filterFreq, 0 );
     this.svf2.init_linearSVF_direct( .25*filterFreq, 0 );
@@ -4849,34 +4876,43 @@ function getHz(filterChoice, f)
       cur_y += delta
     );
     
-function selectBuffer(isR, isFilt2)
-  global(delay_buf1, delay_buf2, delay_buf3, delay_buf4)
+function selectBuffer(isR, isFilt2, isGFX)
+  global(delay_buf1, delay_buf2, delay_buf3, delay_buf4,
+         delay_buf5, delay_buf6, delay_buf7, delay_buf8)
   (
-    (isFilt2 == 1) ?
-    (
-      (isR == 1) ?
+    (isGFX == 1 ) ? (
+      (isFilt2 == 1) ?
       (
-        delay_buf4
-      ) : 
-      (
-        delay_buf3
+        (isR == 1) ? delay_buf8 : delay_buf7
+      ) : (
+        (isR == 1) ? delay_buf6 : delay_buf5
       )
     ) : (
-      (isR == 1) ?
+      (isFilt2 == 1) ?
       (
-        delay_buf2
-      ) : 
-      (
-        delay_buf1
+        (isR == 1) ? delay_buf4 : delay_buf3
+      ) : (
+        (isR == 1) ? delay_buf2 : delay_buf1
       )
     )
   );
   
   
-function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
-  global(filter_delay1, filter_delay2, slider54, slider56, forceUpdate, selectBuffer
-        filter_delay1.initBufferNoReset, filter_delay2.initBufferNoReset, srate, postResetWaitSamples,
-        filter_delay1.setOffset, filter_delay2.setOffset)
+function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2, isGFX)
+  global( filter_delay1, filter_delay2, /* Audio */
+          filter_delay3, filter_delay4, 
+          filter_delay5, filter_delay6, /* GFX   */
+          filter_delay7, filter_delay8
+          slider54, slider56, forceUpdate, selectBuffer
+          srate, postResetWaitSamples,
+          filter_delay1.initBufferNoReset, filter_delay2.initBufferNoReset, 
+          filter_delay3.initBufferNoReset, filter_delay4.initBufferNoReset, 
+          filter_delay5.initBufferNoReset, filter_delay6.initBufferNoReset, 
+          filter_delay7.initBufferNoReset, filter_delay8.initBufferNoReset, 
+          filter_delay1.setOffset, filter_delay2.setOffset,
+          filter_delay3.setOffset, filter_delay4.setOffset,
+          filter_delay5.setOffset, filter_delay6.setOffset,
+          filter_delay7.setOffset, filter_delay8.setOffset )
   local(val, delayBuffer, delayBuffer2)
   instance()
  ( 
@@ -4945,25 +4981,53 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.filter_phaser3.initphaserFET(filterFreq/2, filterReso);
       this.filter_phaser4.initphaserFET(filterFreq/3, filterReso);
     ) : ( sliderValue == 16 ) ? (
+      this.isGFX = isGFX;
+      this.isFilt2 = isFilt2;
       this.filter_dualfilt.initdualfilt(max(filterFreq, 0.0001), filterReso);
-      delayBuffer  = selectBuffer( 0, isFilt2 );
-      delayBuffer2 = selectBuffer( 1, isFilt2 );
+
       //filter_delay1.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*filterFreq * 1000);     
       //filter_delay2.initBufferNoReset(delayBuffer2, delayBuffer2 + max(1,slider54)*filterReso * 2000);
-      filter_delay1.initBufferNoReset(delayBuffer, delayBuffer + 10*5000);     
-      filter_delay2.initBufferNoReset(delayBuffer2, delayBuffer2 + 10*5000);
-      filter_delay1.setOffset(1+max(1,slider54)*filterFreq * 1000);
-      filter_delay2.setOffset(1+max(1,slider54)*filterReso * 2000);
+      !isGFX ? (
+        !isFilt2 ? (
+          filter_delay1.setOffset(1+max(1,slider54)*filterFreq * 1000);
+          filter_delay2.setOffset(1+max(1,slider54)*filterReso * 2000);
+        ) : (
+          filter_delay3.setOffset(1+max(1,slider54)*filterFreq * 1000);
+          filter_delay4.setOffset(1+max(1,slider54)*filterReso * 2000);
+        )
+      ) : (
+        !isFilt2 ? (
+          filter_delay5.setOffset(1+max(1,slider54)*filterFreq * 1000);
+          filter_delay6.setOffset(1+max(1,slider54)*filterReso * 2000);
+        ) : (
+          filter_delay7.setOffset(1+max(1,slider54)*filterFreq * 1000);
+          filter_delay8.setOffset(1+max(1,slider54)*filterReso * 2000);
+        )
+      )
     ) : ( sliderValue == 17 ) ? (
+      this.isGFX = isGFX;
+      this.isFilt2 = isFilt2;
       this.filter_dualfilt.initdualfilt(max(filterFreq, 0.0001), filterReso);
-      delayBuffer = selectBuffer( 0, isFilt2 );
-      delayBuffer2 = selectBuffer( 1, isFilt2 );
+
       //filter_delay1.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*filterFreq*(1000+4000*filterReso));
-      //filter_delay2.initBufferNoReset(delayBuffer2, delayBuffer2 + max(1,slider54)*filterFreq*(1000+4000*filterReso));
-      filter_delay1.initBufferNoReset(delayBuffer, delayBuffer + 10*5000);     
-      filter_delay2.initBufferNoReset(delayBuffer2, delayBuffer2 + 10*5000);
-      filter_delay1.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
-      filter_delay2.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+      //filter_delay2.initBufferNoReset(delayBuffer2, delayBuffer2 + max(1,slider54)*filterFreq*(1000+4000*filterReso)); 
+      !isGFX ? (
+        !isFilt2 ? (
+          filter_delay1.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+          filter_delay2.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+        ) : (
+          filter_delay3.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+          filter_delay4.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+        )
+      ) : (
+        !isFilt2 ? (
+          filter_delay5.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+          filter_delay6.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+        ) : (
+          filter_delay7.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+          filter_delay8.setOffset(1+max(1,slider54)*filterFreq*(1000+4000*filterReso));
+        )
+      )
     ) : ( sliderValue == 18 ) ? (
       filterFreq = max(filterFreq, 0.003);
       this.filter_ms20lin.init_MS20lin(filterFreq, filterReso);
@@ -4986,7 +5050,7 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.filter_ms20.init_MS20_nonlin(max(filterFreq, 0.003), filterReso);
       this.filter_phaser.initphaserFET(max(filterFreq, 0.003), filterReso);
       this.filter_phaser2.initphaserFET(max(filterFreq, 0.003)*2, filterReso);
-      delayBuffer = selectBuffer( isR, isFilt2 );
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
       this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*filterReso * (50+isR));
     ) : ( sliderValue == 25 ) ? (
       filterFreq = max(filterFreq, 0.004);
@@ -5051,28 +5115,30 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
       this.filter_SVF2.init_linearSVF( filterFreq*.5, filterReso*.5 );
     ) : ( sliderValue == 48 ) ? (
       val = ( pow(10, filterFreq) - 1 ) / 9;
-      delayBuffer = selectBuffer( isR, isFilt2 );
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
       this.chan = isR;
       this.stereoize = filterReso > 0.5 ? 1 : 0;
-      //this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*val * 250);
-      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 500);
+      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*val * 250);
+      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 5000);
       this.filter_delay.setOffset(1+max(1,slider54)*val * 250);
     ) : ( sliderValue == 49 ) ? (
+      /* Combed resonance */
       val = ( pow(10, filterFreq) - 1 ) / 9;
-      delayBuffer = selectBuffer( isR, isFilt2 );
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
       this.chan = isR;
+
       //this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*val * 250);
-      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 500);
+      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 5000);
       this.filter_delay.setOffset(1+max(1,slider54)*val * 250);
       this.filter_SVF_nores.init_linearSVF( max(filterFreq, 0.0035), 0 );
       this.filter_SVF.init_linearSVF( max(filterFreq, 0.0035), filterReso );
     ) : ( sliderValue == 50 ) ? (
       val = ( pow(10, filterFreq) - 1 ) / 9;
-      delayBuffer = selectBuffer( isR, isFilt2 );
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
       this.chan = isR;
       this.stereoize = filterReso;
       //this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + max(1,slider54)*val * 250);  
-      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 500);
+      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 5000);
       this.filter_delay.setOffset(1+max(1,slider54)*val * 250);
       this.filter_SVF_nores.init_linearSVF( max(filterFreq, 0.0035), 0 );
       this.filter_SVF.init_linearSVF( max(filterFreq, 0.0035), filterReso );
@@ -5148,16 +5214,16 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2)
     ) : ( sliderValue == 73 ) ? (
       this.modulon.modulatrix_init(max(filterFreq, 0.0075), filterReso);
     ) : ( sliderValue == 74 ) ? (
-      delayBuffer = selectBuffer( isR, isFilt2 );
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
       this.vibrato.vibrato_init(filterFreq, filterReso);
       this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer+4000);
     ) : ( sliderValue == 75 ) ? (
-      delayBuffer = selectBuffer( isR, isFilt2 );
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
       this.vibrato.vibrato_init(filterFreq, filterReso);
       this.vibrato.isR = isR;
       this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer+4000);
     );
-  );     
+  );        
     
 function updateActiveFilters( force )
   (  
@@ -5185,8 +5251,8 @@ function updateActiveFilters( force )
     ( updateFiltersNow ) ? (
       lastFilterReso = filterReso;
       lastFilterFreq = filterFreq;
-      L.updateActiveFilter(slider47, filterFreq, filterReso, 0, 0);
-      R.updateActiveFilter(slider47, filterFreq, filterReso, 1, 0);
+      L.updateActiveFilter(slider47, filterFreq, filterReso, 0, 0, 0);
+      R.updateActiveFilter(slider47, filterFreq, filterReso, 1, 0, 0);
     );
 
     // Cutoff and resonance handling filter 2
@@ -5205,8 +5271,8 @@ function updateActiveFilters( force )
     ( updateFiltersNow ) ? (
       lastFilterReso2 = filterReso2;
       lastFilterFreq2 = filterFreq2;
-      L2.updateActiveFilter(slider40, filterFreq2, filterReso2, 0, 1);
-      R2.updateActiveFilter(slider40, filterFreq2, filterReso2, 1, 1);
+      L2.updateActiveFilter(slider40, filterFreq2, filterReso2, 0, 1, 0);
+      R2.updateActiveFilter(slider40, filterFreq2, filterReso2, 1, 1, 0);
     );
     
     // Delay
@@ -5221,7 +5287,7 @@ function updateActiveFilters( force )
     );*/
  ); 
  
-function resetActiveFilter(filterType)
+function resetActiveFilter(filterType, isGFX)
   local(maxOversampling)
   (
     maxOversampling = 8;
@@ -5260,13 +5326,43 @@ function resetActiveFilter(filterType)
     ) : ( filterType == 16 ) ? (
       os1 = os2 = ys1 = 0;
       this.filter_dualfilt.resetdualfilt();
-      filter_delay1.clearBuffer();
-      filter_delay2.clearBuffer();
+      !this.isGFX ? (
+        !this.isFilt2 ? ( 
+          filter_delay1.clearBuffer();
+          filter_delay2.clearBuffer();
+        ) : (
+          filter_delay3.clearBuffer();
+          filter_delay4.clearBuffer();
+        )
+      ) : (
+        !this.isFilt2 ? ( 
+          filter_delay5.clearBuffer();
+          filter_delay6.clearBuffer();
+        ) : (
+          filter_delay7.clearBuffer();
+          filter_delay8.clearBuffer();
+        )
+      );
     ) : ( filterType == 17 ) ? (
       os1 = os2 = os3 = 0;
       this.filter_dualfilt.resetdualfilt();
-      filter_delay1.clearBuffer();
-      filter_delay2.clearBuffer();
+      !this.isGFX ? (
+        !this.isFilt2 ? ( 
+          filter_delay1.clearBuffer();
+          filter_delay2.clearBuffer();
+        ) : (
+          filter_delay3.clearBuffer();
+          filter_delay4.clearBuffer();
+        )
+      ) : (
+        !this.isFilt2 ? ( 
+          filter_delay5.clearBuffer();
+          filter_delay6.clearBuffer();
+        ) : (
+          filter_delay7.clearBuffer();
+          filter_delay8.clearBuffer();
+        )
+      );
     ) : ( filterType == 18 ) ? (
       this.filter_ms20lin.reset_MS20lin();
     ) : ( filterType == 19 ) ? (
@@ -5328,8 +5424,8 @@ function resetActiveFilter(filterType)
     ) : ( filterType == 48 ) ? (
       this.filter_delay.clearBuffer();
     ) : ( filterType == 49 ) ? (
-      this.filter_SVF_nores.reset_linearSVF();
-      this.filter_SVF.reset_linearSVF();
+ /*     this.filter_SVF_nores.reset_linearSVF();
+      this.filter_SVF.reset_linearSVF();*/// <== YOYOYOYOYO
       this.filter_delay.clearBuffer();
     ) : ( filterType == 50 ) ? (
       this.filter_SVF_nores.reset_linearSVF();
@@ -5341,13 +5437,13 @@ function resetActiveFilter(filterType)
       this.weeping_reset();
     ) : ( filterType == 60 ) ? (
       this.wah.reset_dlop();
-      postResetWaitSamples = 8192;
+      !isGFX ? postResetWaitSamples = 8192;
     ) : ( filterType == 61 ) ? (
       this.wah.reset_dlopH();
-      postResetWaitSamples = 8192;
+      !isGFX ? postResetWaitSamples = 8192;
     ) : ( filterType == 62 ) ? (
       this.wah.reset_dlopL();
-      postResetWaitSamples = 8192;
+      !isGFX ? postResetWaitSamples = 8192;
     ) : ( filterType == 63 ) ? (
       this.vowel_svf.resetvowelSVF();
     ) : ( filterType == 64 ) ? (
@@ -5366,7 +5462,7 @@ function resetActiveFilter(filterType)
       this.frazzle.frazzle_reset();
     ) : ( filterType == 71 ) ? (
       this.phone.phone_reset();
-      postResetWaitSamples = 8192;
+      !isGFX ? postResetWaitSamples = 8192;
     ) : ( filterType == 72 ) ? (
       this.modulon.modulon_reset();
     ) : ( filterType == 73 ) ? (
@@ -5393,10 +5489,10 @@ function resetActiveFilters()
     filterL.resetioFilter();
     filterR.resetioFilter();
     
-    L.resetActiveFilter( slider47 );
-    R.resetActiveFilter( slider47 );
-    L2.resetActiveFilter( slider40 );
-    R2.resetActiveFilter( slider40 );
+    L.resetActiveFilter( slider47, 0 );
+    R.resetActiveFilter( slider47, 0 );
+    L2.resetActiveFilter( slider40, 0 );
+    R2.resetActiveFilter( slider40, 0 );
   );
 
 itm1=itm2=otm1=otm2=0;
@@ -6799,7 +6895,7 @@ function sliderWidget_getValue2_nn()
    );    
   
 function sliderWidget_processMouse(xx, yy, dx, dy, mc)
-  local(left, right, change, newcap, onslider, shft)
+  local(left, right, change, newcap, onslider, shft, ctrl, mul)
   global(gfx_x, gfx_y, mouse_wheel, mouse_cap, lastUI, lastChar, retina_scaling)
   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, thisUI, htime, hint, onmarker, lastrightclick, disabled)
   (
@@ -6807,6 +6903,7 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
     (
       left  = mc & 1;
       right = mc & 2;
+      ctrl  = mc & 4;
       shft  = mc & 8;
       
       change = 0;
@@ -6830,10 +6927,13 @@ function sliderWidget_processMouse(xx, yy, dx, dy, mc)
           value       = default;
           change      = 1;
         ) : ( ( cap == 1 ) || ( ( onslider || onmarker ) && lastleft == 0 ) ) ? ( 
-          (mouse_cap & 8 == 0) ? (
+          ((shft == 0) && (ctrl == 0)) ? (
             value       = (xx-x)/w;
           ) : (
-            value       = value - .125*dx/w;
+            mul         = 1;
+            shft ? mul *= 0.125;
+            ctrl ? mul *= 0.1666666666667;
+            value       = value - mul*dx/w;
           );
           change      = 1;
           newcap      = 1;
@@ -7355,10 +7455,17 @@ function feedSampleLP(sample)
   (
     recPtr[] = sample;
     recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
-//    recPtr[] = .05*sample+.95*last;
-//    recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
-//    last = sample;
   );  
+  
+function impulse()
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc, last)
+  local()
+  (
+    recPtr = rStart;
+    memset(recPtr, 0, fftSize);
+    recPtr[] = 1;
+  );
   
 function initWindow(windowtype)
   global(fftSize)
@@ -7383,12 +7490,19 @@ function initWindow(windowtype)
     loop(fftsize*.5+1,window[i-=1]*=pwr);
  );
   
+function setToFFTLoc()
+ global(fftSize)
+ instance(recPtr, rStart)
+ local()
+ ( 
+    recPtr = rStart + fftSize;
+ ); 
+  
 function calcFFT()
   global(fftSize)
-  instance(recPtr, window, rStart, rEnd, fftLoc, slope, yshift, mxpos)
-  local(mx, buf1, buf2, buf3, yOut, i, prec, ty)
+  instance(recPtr, window, rStart, rEnd, fftLoc, slope, yshift)
+  local(buf1, buf2, buf3, yOut, i, prec, ty)
   (
-    slope = 3;
     buf1=recPtr-fftSize;
     buf1<rStart ? buf1+=(rEnd-rStart);
     buf2=window;
@@ -7416,16 +7530,9 @@ function calcFFT()
     slope   = .5*log(2)*slope;
     yshift  = slope*log(1.0+.5*fftSize);
     prec    = (10^(-500/20*2));
-    mx      = -100000000000000000000;
-    mxpos   = 0;
     loop(fftSize*0.5,   
       ty      = sqr(buf3[0])+sqr(buf3[1]);
       ty      = log(max(ty,prec));
-      
-      ty > mx ? (
-        mx    = ty;
-        mxpos = i;
-      );
       
       ty      = ty + slope*log(1.0+i) - yshift;
       yOut[]  = ty;
@@ -7572,12 +7679,16 @@ function drawLine(x1, y1, x2, y2)
   instance()
   (
     smooth = 1;
+    x1 = floor(x1);
+    x2 = floor(x2);
     gfx_x=x1;
     gfx_y=y1;
+    x2 = floor(x2);
+    y2 = floor(y2);
     
     smooth ? (
-      (x2 - x1) > 2 ? (
-        dx = 1/(x2-x1);
+      (x2 - x1) > 4 ? (
+        dx = 1.0/(x2-x1);
         dy = (y2 - y1)*6*dx;
         x = 0;
         loop(x2-x1,
@@ -7592,7 +7703,7 @@ function drawLine(x1, y1, x2, y2)
         );
       ) : (
         gfx_line(x1, y1-1, x2, y2-1, 1);
-        gfx_lineto(x2,y2,1); 
+        gfx_lineto(x2,y2,1);
       );
     ) : (
       gfx_line(x1, y1-1, x2, y2-1, 1);
@@ -7623,7 +7734,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     (
       dsteps_fft += floor(mouse_wheel/240);
       dsteps_fft > 8 ? dsteps_fft = 8;
-      dsteps_fft < -6 ? dsteps_fft = -6;
+      dsteps_fft < -4 ? dsteps_fft = -4;
       mouse_wheel = 0;
     );
     
@@ -7633,20 +7744,20 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     over
   );
 
-function drawFFT(fill)
-  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, dnoisefloor_freq,
+function drawFFT(fill, oversamplingFactor)
+  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate,
     fft_out_r, fft_out_g, fft_out_b, fft_out_a,
     fft_in_r, fft_in_g, fft_in_b, fft_in_a, dsteps_fft,
+    fft_filt_r, fft_filt_g, fft_filt_b, fft_filt_a,
+    fft_filt2_r, fft_filt2_g, fft_filt2_b, fft_filt2_a,
     pitchFFT.mxpos, currentPeakHzEstimate
   )
-  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
+  instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
   local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
   (
-    this.initWindow(3);
     this.calcFFT();
     //this.calcIncrementalFFT();
  
-    floorLevel = 25 + dnoisefloor_freq;
     cum = -10000000;
     cumelem = 0;
     i = 0;
@@ -7655,7 +7766,7 @@ function drawFFT(fill)
     fill_slmin = y;
 
     buf = fftLoc + fftsize*0.5 - 2;
-    stepsize = floor((7+dsteps_fft)*retina_scaling);
+    stepsize = floor((4+dsteps_fft)*retina_scaling);
     copyval = buf[];
     loop( stepsize*200,
       (buf+=1)[] = copyval;
@@ -7667,11 +7778,12 @@ function drawFFT(fill)
     tx = floor(x + log(1.0+pitchFFT.mxpos-hzoffset)*wsc);
     drawLine(tx, y, tx, y+h);
     
-    buf = fftLoc;
+    hstep = .5 * stepsize;
+    buf = fftLoc; // +.5*((7+dsteps_fft)) ;
     txl = x;
     lx = x;
     ly = y - max(buf[], -floorLevel)*h / floorLevel;
-    buf += 1;    
+    buf += 1;
     loop(fftsize*0.5+stepsize*200,
       tx = floor(x + log(1.0+ixsc-hzoffset)*wsc);
       cum = max(cum, buf[]);
@@ -7682,19 +7794,32 @@ function drawFFT(fill)
         ty = y - max(cum, -floorLevel)*h / floorLevel;
         //ty = y - log(cum)+100;
         txl = floor(tx);
-        gfx_r=fft_in_r;
-        gfx_g=fft_in_g;
-        gfx_b=fft_in_b;
-        gfx_a=fft_in_a;
+        
+        fill == 1 ? (
+          gfx_r=fft_in_r;
+          gfx_g=fft_in_g;
+          gfx_b=fft_in_b;
+          gfx_a=fft_in_a;
+        ) : ( fill == 3 ) ? (
+          gfx_r=fft_filt_r;
+          gfx_g=fft_filt_g;
+          gfx_b=fft_filt_b;
+          gfx_a=fft_filt_a;
+        ) : (
+          gfx_r=fft_filt2_r;
+          gfx_g=fft_filt2_g;
+          gfx_b=fft_filt2_b;
+          gfx_a=fft_filt2_a;
+        );
         
         tx = min(tx, x+w);
-        fill ? 
+        (fill) ? 
         (
           tx0=tx|0;
           lx0=lx|0;
           tx0>lx0 ? 
           (
-            gfx_triangle(lx0,max(y+h,ly),lx0,ly,tx0-1,ty,tx0-1,max(y+h,ty));
+            gfx_triangle(lx0-hstep,max(y+h,ly),lx0-hstep,ly,tx0-1-hstep,ty,tx0-1-hstep,max(y+h,ty));
           ) : (
             tx0 > fill_slast ? 
             (
@@ -7708,34 +7833,81 @@ function drawFFT(fill)
           fill_slast=tx0;        
         );
           
-        gfx_set( fft_out_r, fft_out_g, fft_out_b, fft_out_a );
-        !fill ? drawLine(lx, ly, tx, ty);
+        (fill==0) ? (
+          gfx_set( fft_out_r, fft_out_g, fft_out_b, fft_out_a );
+          drawLine(lx-hstep, ly, tx-hstep, ty);
+        ) : ( fill==3 ) ? (
+          gfx_set( fft_filt_r*2, fft_filt_g*2, fft_filt_b*2, fft_filt_a );
+          drawLine(lx-hstep, ly, tx-hstep, ty);
+        ) : ( fill==2 ) ? (
+          gfx_set( fft_filt2_r*2, fft_filt2_g*2, fft_filt2_b*2, fft_filt2_a );
+          drawLine(lx-hstep, ly, tx-hstep, ty);
+        );
         lx=tx; ly=ty; ly2=ty2; cum = -1000000; cumelem = 0;
       );
       
-      buf+=1; i+=1; ixsc+=1;
+      buf+=1; i+=1; ixsc+=oversamplingFactor;
     )
+  );
+  
+function drawLineFFT(peakLocation, filtidx)
+  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate,
+    fft_out_r, fft_out_g, fft_out_b, fft_out_a,
+    fft_in_r, fft_in_g, fft_in_b, fft_in_a, dsteps_fft,
+    fft_filt_r, fft_filt_g, fft_filt_b, fft_filt_a,
+    fft_filt2_r, fft_filt2_g, fft_filt2_b, fft_filt2_a,
+  )
+  instance(x, y, w, h, hzoffset)
+  local(wsc, tx, base, i)
+  (
+    wsc = w/log(1+fftSize*0.5-hzoffset);
+    base = fftSize*peakLocation;
+    tx = floor(x + log(1.0+base-hzoffset)*wsc);
+    
+    ( filtidx == 1 ) ? (
+      gfx_r=fft_filt_r+.1;
+      gfx_g=fft_filt_g+.1;
+      gfx_b=fft_filt_b+.1;
+      gfx_a=.9;
+    ) : (
+      gfx_r=fft_filt2_r+.1;
+      gfx_g=fft_filt2_g+.1;
+      gfx_b=fft_filt2_b+.1;
+      gfx_a=.9;
+    );
+    
+    drawLine(tx, y, tx, y+h);
+    
+    i = 1;
+    while( tx < x+w*.92 ) (
+      tx = floor(x + log(1.0+i*base-hzoffset)*wsc);
+      i = i * 2;
+      drawLine(tx, y, tx, y+h);
+      gfx_a *= .7;
+    );
   );
   
 function initSpectrum(memoryOffset)
   global(fftSize, srate, newUI)
-  instance(recPtr, window, rStart, rEnd, fftLoc, hzoffset, thisUI)
+  instance(recPtr, window, rStart, rEnd, fftLoc, hzoffset, thisUI, slope)
   local()
   (
-    hzoffset = 20*fftSize/srate;
-    window = memoryOffset + fftSize + (fftSize*0.5 - 1);
+    slope     = 3;
+  
+    hzoffset  = 20*fftSize/srate;
+    window    = memoryOffset + fftSize + (fftSize*0.5 - 1);
   
     // Start and end of the buffer
-    rStart = memoryOffset;                              // rpos
-    rEnd = window;                                      // hsize
+    rStart    = memoryOffset;                              // rpos
+    rEnd      = window;                                      // hsize
     
-    fftLoc = memoryOffset + window + (fftSize*0.5 + 1); // fftw
+    fftLoc    = window + (fftSize*0.5 + 1); // fftw
     
-    recPtr = rStart;
-    thisUI = newUI+=1;
+    recPtr    = rStart;
+    thisUI    = newUI+=1;
     
     this.initWindow(3)
-  );  
+  );
   
 function initGonioMeter(in, sampleCount)
   global(sampleCount, srate, newUI)
@@ -7983,7 +8155,8 @@ bootvowel();
 kot_lut(kot_LUT_x, kot_LUT_y);
 Nbuf            = 20000;
 
-fftSize         = 32768;
+//fftSize         = 32768;
+fftSize         = 2*8192;
 bufferDist      = 65536;
 audioBufIn      = 40*bufferDist;
 audioBufOut     = 42*bufferDist;
@@ -7994,19 +8167,18 @@ spectrumOut.initSpectrum(audioBufOut);
 gonioIn.initGonioMeter(gonioBuffer1, 1000);
 gonioOut.initGonioMeter(gonioBuffer2, 1000);
 
-
-
-fftSize         = 2*8192;
 inVol.initBuffer(20000, 20000+Nbuf-1);
 outVol.initBuffer(20000+Nbuf, 20000+2*Nbuf-1);
 dynBuf.initBuffer(20000+Nbuf*2, 20000+3*Nbuf-1);
 
-filter_delay1.initBuffer(delay_buf1, delay_buf1 + filterFreq * 1000);
-filter_delay2.initBuffer(delay_buf2, delay_buf2 + filterReso * 2000);
-L.filter_delay.initBuffer(delay_buf1, delay_buf1 + filterFreq * 1000);
-R.filter_delay.initBuffer(delay_buf2, delay_buf2 + filterReso * 2000);
-L2.filter_delay.initBuffer(delay_buf3, delay_buf3 + filterFreq * 1000);
-R2.filter_delay.initBuffer(delay_buf4, delay_buf4 + filterReso * 2000);
+L.filter_delay.initBuffer(delay_buf1, delay_buf1 + 1000);
+R.filter_delay.initBuffer(delay_buf2, delay_buf2 + 2000);
+L2.filter_delay.initBuffer(delay_buf3, delay_buf3 + 1000);
+R2.filter_delay.initBuffer(delay_buf4, delay_buf4 + 2000);
+L_gfx.filter_delay.initBuffer(delay_buf5, delay_buf5 + 1000);
+R_gfx.filter_delay.initBuffer(delay_buf6, delay_buf6 + 2000);
+L2_gfx.filter_delay.initBuffer(delay_buf7, delay_buf7 + 1000);
+R2_gfx.filter_delay.initBuffer(delay_buf8, delay_buf8 + 2000);
 
 stereo_delay_bufferL.initBuffer(delay_buf1, delay_buf1 + 1000);
 stereo_delay_bufferR.initBuffer(delay_buf1, delay_buf1 + 1000);
@@ -8020,6 +8192,27 @@ fb_bufferR.initBuffer(fb_buf2, fb_buf2+88200);
 
 pitchTrackerBuf = 52*bufferDist;
 pitchFFT.initSpectrum(pitchTrackerBuf);
+
+filterABuf = 54*bufferDist;
+filterA_gfx.initSpectrum(filterABuf);
+filterA_gfx.initWindow(4);
+filterBBuf = 56*bufferDist;
+filterB_gfx.initSpectrum(filterBBuf);
+filterB_gfx.initWindow(4);
+
+delay_buf5      = 58*bufferDist;
+delay_buf6      = delay_buf5 + 100000;
+delay_buf7      = delay_buf6 + 100000;
+delay_buf8      = delay_buf7 + 100000;
+
+filter_delay1.initBuffer(delay_buf1, delay_buf1 + 50000);
+filter_delay2.initBuffer(delay_buf2, delay_buf2 + 50000);
+filter_delay3.initBuffer(delay_buf3, delay_buf3 + 50000);
+filter_delay4.initBuffer(delay_buf4, delay_buf4 + 50000);
+filter_delay5.initBuffer(delay_buf5, delay_buf5 + 50000);
+filter_delay6.initBuffer(delay_buf6, delay_buf6 + 50000);
+filter_delay7.initBuffer(delay_buf7, delay_buf7 + 50000);
+filter_delay8.initBuffer(delay_buf8, delay_buf8 + 50000);
 
 dynval = 0;
 n_pos = 8;
@@ -8331,6 +8524,10 @@ function updateSliders( hard )
   keyFollow2.active               = followKey2;
   pitchFollow1.active             = followPitch1;
   pitchFollow2.active             = followPitch2;
+        
+  showSpectrumInButton.active     = 1 - hideSpectrumIn;
+  showSpectrumOutButton.active    = 1 - hideSpectrumOut;
+  showFiltersButton.active        = 1 - hideSpectrumFilters;
     
   ( ( slider56 == 0 ) || ( hard == 1 ) ) ? ( 
     importNodes( window1.spline.xloc_audio, window2.spline.xloc_audio, window1.spline.yloc_audio, window2.spline.yloc_audio, 0 );
@@ -8403,6 +8600,18 @@ function setupGUI()
   
   spectrumIn.setWindowLocation(wndPad, 2.4*wndPad + wndY - yOffset, 2*wndX + wndPad, wndY * .9);
   spectrumOut.setWindowLocation(wndPad, 2.4*wndPad + wndY - yOffset, 2*wndX + wndPad, wndY * .9);
+  filterA_gfx.setWindowLocation(wndPad, 2.4*wndPad + wndY - yOffset, 2*wndX + wndPad, wndY * .9);
+  filterB_gfx.setWindowLocation(wndPad, 2.4*wndPad + wndY - yOffset, 2*wndX + wndPad, wndY * .9);  
+  
+  hy = 15*retina_scaling;
+  bw = 35*retina_scaling;
+  bh = 10*retina_scaling;
+  //x+5, y+4, bw, bh
+  
+  showSpectrumInButton.selectionButton(wndPad+5, 2.4*wndPad + wndY - yOffset + 5, bw, bh, "In",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Show incoming spectrum");
+  showSpectrumOutButton.selectionButton(wndPad+5, 2.4*wndPad + wndY - yOffset + hy + 5, bw, bh, "Out",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Show outgoing spectrum");
+  showFiltersButton.selectionButton(wndPad+5, 2.4*wndPad + wndY - yOffset + 2*hy + 5, bw, bh, "Filter",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Show filter spectra");
+  
   gonioIn.setWindowLocation(3*wndPad+2*wndX, 2.4*wndPad + wndY - yOffset, wndX, wndY * .9);
   gonioOut.setWindowLocation(3*wndPad+2*wndX, 2.4*wndPad + wndY - yOffset, wndX, wndY * .9);  
    
@@ -8451,8 +8660,8 @@ function setupGUI()
   filterSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 4, "Filter selection.\nNon-linear (NL) filters are more expensive and benefit more from oversampling.\nTheir character comes out when driven (increase the pre-gain without enabling clipping).\nZero Delay Feedback (ZDF) filters behave better with rapid modulation.\nAll filters are IIR filters, meaning they do not preserve linear phase.\n\nWARNING: Not all filters are stable under rapid modulation!\nRemember to read the filter description to avoid being hit by instability.\nInstability manifests itself as there suddenly being a spike and then no sound." );
   inertia.selectionButton(filterPanelX+sliderPad + .8 * sliderWidth, filterPanelY+sliderPad*2+sliderHeight*1.05, .2*sliderWidth-2*sliderPad, .95*sliderHeight, "Inertia",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle cutoff and resonance inertia");
   modeSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad*2+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes, 1, 0, 1, "Filter mode selection.\nStereo - Default mode. Process left and right independently.\nMono double - Interleave samples and process.\nM1/S2 - Process mid regularly, feed side samples to filter twice.\nM2/S1 - Feed mid to filter twice, process side regularly.\nOnly side - Only filter the side channel.\nOnly mid - Only filter the mid channel.\nStereo Boost - Filter both, but pre-amplify side channel.\nStereoize - M/S processing. Side is boosted and computed with a delayed right channel for extra width.\nSubtle Stereo - M/S processing. Side is computed with a slightly delayed right channel for extra width.\nInverted - Signal is run through the filter, but filtered signal is subtracted from original and then distorted." );
-  cutoffSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+3.5*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Filter button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
-  resonanceSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+4.5*sliderPad+3*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Shaper button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
+  cutoffSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+3.5*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\nFor more info on modulation, hover over the Filter button in the dynamics panel.\n\nNote: When LFO and dynamics are both active, the modulation range is twice what is diplayed.\nNote: Hold Shift and/or Ctrl while dragging for smaller adjustments.\nNote: Use mouse wheel for precision adjustments.\nNote: Use shift + Mousewheel for precision adjustments of mod range.");
+  resonanceSlider.sliderWidget(filterPanelX+sliderPad, filterPanelY+4.5*sliderPad+3*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\nFor more info on modulation, hover over the Filter button in the dynamics panel.\n\nNote: When LFO and dynamics are both active, the modulation range is twice what is diplayed.\nNote: Hold Shift and/or Ctrl while dragging for smaller adjustments.\nNote: Use mouse wheel for precision adjustments.\nNote: Use shift + Mousewheel for precision adjustments of mod range.");
   bypassFilter1.selectionButton(postTextLoc + .015 * sliderWidth, filterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "B",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Bypass filter.");
   
   filterPanelX = masterPanelX;
@@ -8464,8 +8673,8 @@ function setupGUI()
   dynamicFilterButton2.selectionButton(filterPanelX + .82*sliderWidth - toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
   lfoFilterButton2.selectionButton(filterPanelX + .82*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
   filterSelect2.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 4, "Filter selection.\nNon-linear (NL) filters are more expensive and benefit more from oversampling.\nTheir character comes out when driven (increase the pre-gain without enabling clipping).\nZero Delay Feedback (ZDF) filters behave better with rapid modulation.\nAll filters are IIR filters, meaning they do not preserve linear phase.\n\nWARNING: Not all filters are stable under rapid modulation!\nRemember to read the filter description to avoid being hit by instability.\nInstability manifests itself as there suddenly being a spike and then no sound." );
-  cutoffSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+2.5*sliderPad+1*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Filter button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");
-  resonanceSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+3.5*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\n\nFor more info on modulation, hover over the Shaper button in the dynamics panel.\nNote that when LFO and dynamics are both active, the modulation range is twice what is diplayed.");  
+  cutoffSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+2.5*sliderPad+1*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\nFor more info on modulation, hover over the Filter button in the dynamics panel.\n\nNote: When LFO and dynamics are both active, the modulation range is twice what is diplayed.\nNote: Hold Shift and/or Ctrl while dragging for smaller adjustments.\nNote: Use mouse wheel for precision adjustments.\nNote: Use shift + Mousewheel for precision adjustments of mod range.");
+  resonanceSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+3.5*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\nFor more info on modulation, hover over the Filter button in the dynamics panel.\n\nNote: When LFO and dynamics are both active, the modulation range is twice what is diplayed.\nNote: Hold Shift and/or Ctrl while dragging for smaller adjustments.\nNote: Use mouse wheel for precision adjustments.\nNote: Use shift + Mousewheel for precision adjustments of mod range.");  
   bypassFilter2.selectionButton(postTextLoc + .015 * sliderWidth, filterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "B",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Bypass filter.");  
   
   routingPanelX = masterPanelX;
@@ -8525,7 +8734,7 @@ function setupGUI()
   feedbackAmount.sliderWidget(fbPanelX+sliderPad, fbPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, "Feedback amount", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Feedback amount");
   feedbackDelay.sliderWidget(fbPanelX+sliderPad, fbPanelY+2*sliderPad+sliderHeight, sliderWidth-2*sliderPad- 2*mulWidth-2*mulPad, sliderHeight, "Feedback delay", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Feedback delay");
   feedbackDelay_x8_1.selectionButton(fbPanelX-sliderPad+sliderWidth-mulWidth, fbPanelY+2*sliderPad+sliderHeight, mulWidth, sliderHeight-4, "x16",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Multiply value by 16");
-  feedbackDelay_x8_2.selectionButton(fbPanelX-sliderPad+sliderWidth-2*mulWidth-mulPad, fbPanelY+2*sliderPad+sliderHeight, mulWidth, sliderHeight-4, "x8",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Multiply value by 8");
+  feedbackDelay_x8_2.selectionButton(fbPanelX-sliderPad+sliderWidth-2*mulWidth-mulPad, fbPanelY+2*sliderPad+sliderHeight, mulWidth, sliderHeight-4, "x8",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Multiply value by 8"); 
   
   finalSize = fbPanelY + fbPanelH + sliderHeight - .5*sliderPad + yOffset;
   
@@ -8628,12 +8837,12 @@ function eval303(input)
   local(y0, s0, s)
   instance(wc, wc2, wc3, wc4, A, k, b, g, z0, z1, z2, z3, y1, y2, y3, y4
             b0, a0, a1, a2, a3, b10, a10, a11, a12, a13, b20, a20, a21, a22, a23, c2, c3 )
-  global(distort)
+  global()
   (
     s = (z0*wc3 + z1*a20 + z2*c2 + z3*c3) * b; // *b was missing in prev
     y4 = (g*input + s)/(1 + g*k);
     
-    y0 = max(-1,min(1,(distort(input) - k*y4)));
+    y0 = max(-1,min(1,(input - k*y4)));
     //y0 = fasttanh((distort(input) - k*y4));
  
     y1 = b * ( y0*b0 + z0*a0 + z1*a1 + z2*a2 + z3*a3 );     // #OK
@@ -8665,14 +8874,13 @@ function evalmoog(input)
     
     // Clipper band limited sigmoid
     y4-=(y4*y4*y4)/6.;
-    //y4 -= distort(y4);
     oldx = x; oldy1 = y1; oldy2 = y2; oldy3 = y3;
     
     y4;
   );
 
   //filter_karlsen
-function evalkarlsen(b_v)
+function evalkarlsen(b_v, dist)
   local(f, t, t2, cutoff, res, b_rez, b_vnc)
   global(slider54)
   instance(b_fres, b_fenv, b_aflt1, b_aflt2, b_aflt3, b_aflt4)
@@ -8681,7 +8889,7 @@ function evalkarlsen(b_v)
     b_v     = b_v - (b_rez*b_fres); // b_fres = resonance amount. 0..4 typical "to selfoscillation", 0.6 covers a more saturated range.
     
     b_vnc   = b_v; // clip, and adding back some nonclipped, to get a dynamic like analog.
-    b_v     = distort(b_v);
+    dist ? b_v = distort(b_v);
     b_v     = min(max(b_v, 0),1);
     //if (b_v > 1) {b_v = 1;} else if (b_v < -1) {b_v = -1;}
     b_v = b_vnc + ((-b_vnc + b_v) * 0.9840);
@@ -8694,7 +8902,7 @@ function evalkarlsen(b_v)
   );
  
   //filter_karlsen
-function evalkarlsen_sat(b_v)
+function evalkarlsen_sat(b_v, dist)
   local(f, t, t2, cutoff, res, b_rez, b_vnc)
   global(slider54)
   instance(b_fres, b_fenv, b_aflt1, b_aflt2, b_aflt3, b_aflt4, b_lfcut, b_lf, b_lf1hp, b_lfhp, b_lfgain)
@@ -8709,7 +8917,7 @@ function evalkarlsen_sat(b_v)
     b_v     = b_v - (b_rez*b_fres); // b_fres = resonance amount. 0..4 typical "to selfoscillation", 0.6 covers a more saturated range.
     
     b_vnc   = b_v; // clip, and adding back some nonclipped, to get a dynamic like analog.
-    b_v     = distort(b_v);
+    dist ? b_v = distort(b_v);
     b_v     = min(max(b_v, 0),1);
     //if (b_v > 1) {b_v = 1;} else if (b_v < -1) {b_v = -1;}
     b_v = b_vnc + ((-b_vnc + b_v) * 0.9840);
@@ -8721,44 +8929,57 @@ function evalkarlsen_sat(b_v)
     b_v = 4*b_aflt4;
   );
   
-function evaldualfilt(sample)
-  local(out, fbs)
+function evaldualfilt(sample, dist)
+  local(out, fbs, dd)
   global(distort)
   instance(fb, f, d0, d1)
   (
-    fbs = fb * .5*(distort(d0 - d1) + (d0-d1) + 0.15 * out );
+    dd = d0 - d1;
+    dist ? dd = distort(dd);
+    fbs = fb * .5*(dd + (d0-d1) + 0.15 * out );
     fbs = max(-2, min(2, fbs));
     d0  = d0 + f * (sample - d0 + fbs );
     d1  = d1 + f * ( d0 - d1 );
-    out = distort(d1)*0.9 + d1*0.1;
+    dd = d1;
+    dist ? dd = distort(dd);
+    out = dd*0.9 + d1*0.1;
   );
   
-function evaldualfiltHP(sample)
-  local(out, hp, bp, fbs)
+function evaldualfiltHP(sample, dist)
+  local(out, hp, bp, fbs, dd)
   global(distort)
   instance(fb, f, d0, d1)
   (
     hp  = sample - d0;
     bp  = d0 - d1;
-    fbs = fb * .5*(distort(d0 - d1) + (d0-d1) + 0.15 * out );
+    dd  = bp;
+    dist ? dd = distort(dd);
+    fbs = fb * .5*(dd + (d0-d1) + 0.15 * out );
     fbs = max(-2, min(2, fbs));
     d0  = d0 + f * ( hp + fbs );
     d1  = d1 + f * ( d0 - d1 );
-    out = distort(hp)*0.9 + hp*0.51;
+    dd  = hp;
+    dist ? dd  = distort(dd);
+    out = dd*0.9 + hp*0.51;
   );
   
-function evaldualfiltBP(sample)
-  local(out, hp, bp, fbs)
+function evaldualfiltBP(sample, dist)
+  local(out, hp, bp, fbs, dd)
   global(distor)
   instance(fb, f, d0, d1)
   (
     hp  = sample - d0;
     bp  = d0 - d1;
-    fbs = fb * (.6*distort(d0 - d1) + .4*(d0-d1) + 0.15 * out );
+    dd  = bp;
+    dist ? dd = distort(dd);
+    fbs = fb * (.6*dd + .4*(d0-d1) + 0.15 * out );
     fbs = max(-2, min(2, fbs));
     d0  = d0 + f * ( hp + fbs );
     d1  = d1 + f * ( d0 - d1 );
-    out = distort(bp)*.7 + bp*0.3 + 0.05*hp + 0.05*d1;
+    dd  = bp;
+    dist ? dd = distort(dd);
+    
+    out = dd*.7 + bp*0.3 + 0.05*hp + 0.05*d1;
   );
   
 function evalfancymoog(y0)
@@ -8769,7 +8990,7 @@ function evalfancymoog(y0)
         A0_2_0, A0_2_1, A0_2_2, A0_2_3,
         A0_3_0, A0_3_1, A0_3_2, A0_3_3                    
         )
-  global(distort, distortderivt)
+  global()
   instance(A, k, omega, hA, g, wc, wcT, T, y0, y1, y2, y3, y4, d0, d1, d2, d3, d4, S1)
   (
     loop(3,
@@ -8875,7 +9096,7 @@ function evalfancymoog(y0)
 
 function evalfancymoog_noJac(y0)
   local(S0, S1, S2, S3, S4, F1, F2, F3, F4, WS0, WS1, WS2, WS3, WS4)
-  global(distort, distortderiv)
+  global()
   instance(A, k, omega, hA, g, wc, wcT, T, y0, y1, y2, y3, y4, d0, d1, d2, d3, d4)
   (
     loop(3,
@@ -8939,14 +9160,14 @@ function evalvowel(sample)
     out  = amp1 * outA + amp2 * outB + amp3 * outC;
   );
   
-function evalsai0(sample)
+function evalsai0(sample, dist)
   instance( c, amp1, amp2, amp3, Ab0, Ab1, Ab2, Aa1, Aa2, Bb0, Bb1, Bb2, Ba1, Ba2, Cb0, Cb1, Cb2, Ca1, Ca2,
   d1x, d2x, d1yA, d2yA, d1yB, d2yB, d1yC, d2yC,
    )
-  local(out, outA, outB, outC)
+  local(out, outA, outB, outC, dd)
   global()
   (
-    sample = distort(sample);
+    dist ? sample = distort(sample);
     outA = Ab0 * sample + Ab1 * d1x + Ab2 * d2x - Aa1 * d1yA - Aa2 * d2yA;
     outB = Bb0 * sample + Bb1 * d1x + Bb2 * d2x - Ba1 * d1yB - Ba2 * d2yB;
     outC = Ab0 * sample + Cb1 * d1x + Cb2 * d2x - Ca1 * d1yC - Ca2 * d2yC;
@@ -8963,15 +9184,18 @@ function evalsai0(sample)
     d2yC = d1yC;
     d1yC = outC - .01 * ( outA - outB );
     
-    out  = outA-.6*distort(outC-outB);
+    dd   = outC-outB;
+    dist ? dd = distort(dd);
+    
+    out  = outA-.6*dd;
     out = 0.4*out;
   );  
   
-function evalmodulator(sample)
+function evalmodulator(sample, dist)
   instance( c, Ab0, Ab1, Ab2, Aa1, Aa2, Bb0, Bb1, Bb2, Ba1, Ba2,
   d1x, d2x, d1yA, d2yA, d1yB, d2yB, amp, d2x2, d1x2
    )
-  local(out, dS, outA, outB, modo)
+  local(out, dS, outA, outB, modo, dd1, dd2)
   global()
   (
     // Modulator LP
@@ -8988,8 +9212,13 @@ function evalmodulator(sample)
     d2x2 = d1x2;
     d1x2 = modo;
     
-    out  = distort(outB * distort(sample+amp*outA)*2);
-  );    
+    dd1  = sample+amp*outA;
+    dist ? dd1 = distort(dd1);
+    dd2  = outB * dd1*2;
+    dist ? dd2 = distort(dd2);
+    
+    out  = dd2;
+  );
   
 function evalrbj(sample)
   instance( c, b0, b1, b2, a1, a2, d1x, d2x, d1y, d2y )
@@ -9007,7 +9236,7 @@ function evalrbj(sample)
   );
 
 function evalphaserOTA(sample, jnk)
-  global(distort)
+  global()
   local(w)
   instance(C1, C2, dw, dx, sq)
   (
@@ -9020,7 +9249,7 @@ function evalphaserOTA(sample, jnk)
   );
     
 function evalphaserFET(sample)
-  global(distort)
+  global()
   local(w, u, I_ds, out)
   instance(C1, C2, dw, IDSSdivVpSq, thresh)
   (
@@ -9056,8 +9285,6 @@ function eval_MS20lin(x)
   local(y, ky)
   instance(a0, a1, a2, s1, s2, g, k, onepole1, onepole2)
   (
-    x = distort(x);
-  
     y  = a0 * x + a1 * s1 + a2 * s2;
     ky = k*y;
     onepole1.zdf(g, x - ky);
@@ -9074,8 +9301,6 @@ function eval_MS20linBP(x)
   local(y, ky)
   instance(a0, a1, a2, s1, s2, g, k, onepole1, onepole2)
   (
-    x = distort(x);
-  
     y  = -a0 * x + a1 * (s1 + x) + a2 * s2;
     ky = k*y;
     onepole1.zdf(g, -x - ky);
@@ -9092,8 +9317,6 @@ function eval_MS20linHP(x)
   local(y, ky)
   instance(a0, a1, a2, s1, s2, g, k, onepole1, onepole2)
   (
-    x = distort(x);
-  
     y  = a1 * (s1 - x) + x + s2;
     ky = k*y;
     onepole1.zdf(g, - ky);
@@ -9105,7 +9328,8 @@ function eval_MS20linHP(x)
     y
   );    
   
-function eval_MS20(x)
+/* Older version. No longer used. */  
+function eval_MS20(x, dist)
   global()
   local(ky, y, fy, fyprime, distky, ddistky)
   instance(s1, s2, G, Gsq, Gsqk, Gk, k, onepole1, onepole2)
@@ -9115,8 +9339,8 @@ function eval_MS20(x)
 
     loop(3,
       ky = k*y;
-      distky = distort(ky);
-      ddistky = distortderiv(ky);
+      dist ? distky = distort(ky) : distky = ky;
+      dist ? ddistky = distortderiv(ky) : ddistky = ky;
       fy = y - Gsq*x + Gsq*distky - G * S1 - G*distky - S2;
       fyprime = 1.0 + Gsq*ddistky - G*ddistky;
       y = y - fy/fyprime;
@@ -9147,8 +9371,6 @@ function eval_MS20_nonlin(x)
     atanterm2 = atan(d1 - d2 + gkd2);
     
     loop(3,
-      //gky2    = distort(k*y2);
-      //dgky2   = distortderiv(k*y2);
       gky2    = k*y2;
       dgky2   = 1 - ( abs(gky2) > 1 );  // Note that the chain ruled k part is already in the eqs (hk)
       gky2    = max(-1,min(1,gky2));
@@ -9177,8 +9399,6 @@ function eval_MS20_nonlin(x)
     
     d1 = y1;
     d2 = y2;
-    
-    distort(y2) 
   );  
   
 function eval_MS20_nonlin_FM(x)
@@ -9227,7 +9447,7 @@ function eval_MS20_nonlin_FM(x)
     d1 = y1;
     d2 = y2;
     
-    distort(y2) 
+    y2
   );    
   
 function eval_MS20_nonlin_mod(x)
@@ -9274,7 +9494,7 @@ function eval_MS20_nonlin_mod(x)
     d1 = y1;
     d2 = y2;
     
-    distort(y2) 
+    y2
   );
   
 function eval_MS20_nonlinBP(x)
@@ -9322,7 +9542,7 @@ function eval_MS20_nonlinBP(x)
     d1 = y1;
     d2 = y2;
     
-    distort(y2)
+    y2
   );  
   
 function eval_MS20_nonlinHP(x)
@@ -9373,7 +9593,7 @@ function eval_MS20_nonlinHP(x)
     d1 = y1;
     d2 = y2;
     
-    distort(y2+x)
+    y2+x
   );    
 
 // Checked for effect of tanh vs true_tanh
@@ -9620,6 +9840,7 @@ function eval_broken_nonlin_LP(x)
     d2 = y2;
   );
   
+/* This filter is no longer used. Too unstable */  
 function eval_broken_nonlin_BP(x)
   global(slider54)
   local(hk, sig1, sig2, a, b, c, d, norm, f1, f2, gkd2, gky2, dgky2, sfunsq, sub3, sub3i, sub4sq, sub5, atanterm1, atanterm2)
@@ -9663,7 +9884,7 @@ function eval_broken_nonlin_BP(x)
     d1 = y1;
     d2 = y2;
     
-    distort(y2)
+    y2
   );    
   
 function eval_wasp_nonlin2(Ui)
@@ -10056,9 +10277,7 @@ function modulatrix_eval(sample)
   instance(dt, t, svf, c, reso)
   (
     t = t + dt;
-//    sample = tanh(sample - tanh(sample*sin(t)*cos(.5*t)));
-    mterm = ( sin(1.5*t)+sin(.5*t)+sin(.125*t)+sin(.5*t) );
-    //mterm = ( sin(1*t) );
+    mterm = ( sin(1.5*t)+sin(.125*t)+2*sin(.5*t) );
     sample = tanh( sample - tanh( sample*( .5 * mterm ) ) );
     
     sample = sample - 1.7*reso*sample * sin(.9999*t);    
@@ -10305,15 +10524,70 @@ function eval_MS20_nonlinHP_tanh(x)
 );     
       
 function bufferFun(sample, delay1, delay2)
-  global(distort)
+  global()
   local(h)
   instance()
   (
     h = 5;
   );
 
+function specialGraphics()
+  local(specialValue)
+  global(showFilterFFT)
+  instance()
+  ( 
+    showFilterFFT = 1;
+    specialValue = 0;
+  
+    ( this.filtertype == 31 ) ?
+    (
+      showFilterFFT = 0;
+      specialValue = this.filter_sine.freq;
+    ) : ( this.filtertype == 66 || this.filtertype == 72 ) ? 
+    (
+      specialValue = this.modulon.f;
+    ) : ( this.filtertype == 73 ) ? 
+    (
+      specialValue = this.modulon.f;
+    ) : ( this.filtertype == 67 || this.filtertype == 68 || this.filtertype == 74 || this.filtertype == 75 ) ?
+    (
+      showFilterFFT = 0;
+    ) : ( this.filtertype == 70 ) ?
+    (
+      specialValue = this.frazzle.dtref;
+    ) : ( this.filtertype == 69 ) ? 
+    (
+      showFilterFFT = 0;
+      specialValue = .125*this.metallic.dtref;
+    );
+    
+    specialValue
+  );
+
   //global(window1.evalDist, window2.evalDist, filter_303.eval303)
 function process(sample, dist)
+  local(
+            /* Initialized immediately, hence no instance history */
+            os, os1, os2, ys1, flt, reso, lp, diff, vib_delay, vibratoSinTerm
+        )
+  global(slider55, gaincompensation,
+        /* This block is part of the cruft that is filter 16 and 17 :( */
+        filter_delay1,              filter_delay2,
+        filter_delay3,              filter_delay4,
+        filter_delay5,              filter_delay6,
+        filter_delay7,              filter_delay8,
+        filter_delay1.readBuffer,   filter_delay2.readBuffer, 
+        filter_delay1.updateBuffer, filter_delay2.updateBuffer
+        filter_delay3.readBuffer,   filter_delay4.readBuffer, 
+        filter_delay3.updateBuffer, filter_delay4.updateBuffer
+        filter_delay5.readBuffer,   filter_delay6.readBuffer, 
+        filter_delay5.updateBuffer, filter_delay6.updateBuffer
+        filter_delay7.readBuffer,   filter_delay8.readBuffer, 
+        filter_delay7.updateBuffer, filter_delay8.updateBuffer
+        
+        hist1, hist2, hist3, hist4
+  )
+  instance()
   (
     sample+=0.00000001; // DeNorm fix
   
@@ -10326,20 +10600,21 @@ function process(sample, dist)
       sample = this.rc_filter.evalRC(sample);
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 2 ) ? (
+      dist ? sample = distort(sample);
       sample = this.filter_303.eval303(sample);
     ) : ( this.filtertype == 3 ) ? (
       dist ? sample = distort(sample);
       sample = this.filter_vowel.evalvowel(sample);
     ) : ( this.filtertype == 4 ) ? (
-      sample = this.filter_karlsen.evalkarlsen(sample);
+      sample = this.filter_karlsen.evalkarlsen(sample, dist);
     ) : ( this.filtertype == 5 ) ? (
-      sample = this.filter_karlsen_sat.evalkarlsen_sat(sample);
+      sample = this.filter_karlsen_sat.evalkarlsen_sat(sample, dist);
     ) : ( this.filtertype == 6 ) ? (
-      sample = this.filter_dualfilt.evaldualfilt(sample);
+      sample = this.filter_dualfilt.evaldualfilt(sample, dist);
     ) : ( this.filtertype == 7 ) ? (
-      sample = this.filter_dualfiltHP.evaldualfiltHP(sample);
+      sample = this.filter_dualfiltHP.evaldualfiltHP(sample, dist);
     ) : ( this.filtertype == 8 ) ? (
-      sample = this.filter_dualfiltBP.evaldualfiltBP(sample);
+      sample = this.filter_dualfiltBP.evaldualfiltBP(sample, dist);
     ) : ( this.filtertype == 9 ) ? (
       sample = gaincompensation * this.filter_fancymoog.evalfancymoog(40*sample)/40;
       dist ? sample = distort(sample);
@@ -10350,16 +10625,17 @@ function process(sample, dist)
       sample = this.filter_notch.evalrbj(sample);
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 12 ) ? (
-      sample = this.filter_sai0.evalsai0(sample);
+      sample = this.filter_sai0.evalsai0(sample, dist);
     ) : ( this.filtertype == 13 ) ? (
-      sample = this.filter_modulator.evalmodulator(sample);
+      sample = this.filter_modulator.evalmodulator(sample, dist);
     ) : ( this.filtertype == 14 ) ? (
+      /* Have a closer look at jnk here. Behaviour modified. */
       os = sample;
-      sample = this.filter_phaser.evalphaserOTA(sample, jnk);
+      sample = this.filter_phaser.evalphaserOTA(sample, this.jnk);
       sample = this.filter_phaser2.evalphaserOTA(sample, 0);
       sample = this.filter_phaser3.evalphaserOTA(sample, 0);
       sample = this.filter_phaser4.evalphaserOTA(sample, 0);
-      jnk = sample;
+      this.jnk = sample;
       sample = (os + sample)*.5;
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 15 ) ? (
@@ -10371,40 +10647,104 @@ function process(sample, dist)
       sample = (os + sample)*.5;
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 16 ) ? (
-      os1 = filter_delay1.readBuffer();
-      os2 = filter_delay2.readBuffer();
-      ys1 = sample - .2 * distort(os1-os2);
-      filter_delay1.updateBuffer(sample);
-      filter_delay2.updateBuffer(ys1-sample);
+      !(this.isGFX) ? (
+        !(this.isFilt2) ? ( 
+          os1 = filter_delay1.readBuffer();
+          os2 = filter_delay2.readBuffer();
+          ys1 = sample - .2 * distort(os1-os2);
+          filter_delay1.updateBuffer(sample);
+          filter_delay2.updateBuffer(ys1-sample);
+        ) : (
+          os1 = filter_delay3.readBuffer();
+          os2 = filter_delay4.readBuffer();
+          ys1 = sample - .2 * distort(os1-os2);
+          filter_delay3.updateBuffer(sample);
+          filter_delay4.updateBuffer(ys1-sample);
+        )
+      ) : (
+        !(this.isFilt2) ? ( 
+          os1 = filter_delay5.readBuffer();
+          os2 = filter_delay6.readBuffer();
+          ys1 = sample - .2 * (os1-os2);
+          filter_delay5.updateBuffer(sample);
+          filter_delay6.updateBuffer(ys1-sample);
+        ) : (
+          os1 = filter_delay7.readBuffer();
+          os2 = filter_delay8.readBuffer();
+          ys1 = sample - .2 * (os1-os2);
+          filter_delay7.updateBuffer(sample);
+          filter_delay8.updateBuffer(ys1-sample);
+        )
+      );
       sample = ys1 + os2;
     ) : ( this.filtertype == 17 ) ? (
-      os1 = filter_delay1.readBuffer();
-      os2 = filter_delay2.readBuffer();
-      os3 = 0.001 * abs(sample) + 0.999 * abs(os3);
-      filter_delay1.updateBuffer(sample);
-      filter_delay2.updateBuffer(sample);
-      sample = tanh(5*os3*sample + distort(sample-os1));
+      !(this.isGFX) ? (
+        !(this.isFilt2) ? ( 
+          os1 = filter_delay1.readBuffer();
+          os2 = filter_delay2.readBuffer();
+          hist1 = 0.001 * abs(sample) + 0.999 * abs(hist1);
+          filter_delay1.updateBuffer(sample);
+          filter_delay2.updateBuffer(sample);
+          sample = tanh(5*hist1*sample + distort(sample-os1));
+        ) : (
+          os1 = filter_delay3.readBuffer();
+          os2 = filter_delay4.readBuffer();
+          hist2 = 0.001 * abs(sample) + 0.999 * abs(hist2);
+          filter_delay3.updateBuffer(sample);
+          filter_delay4.updateBuffer(sample);
+          sample = tanh(5*hist2*sample + distort(sample-os1));
+        )
+      ) : (
+        !(this.isFilt2) ? ( 
+          os1 = filter_delay5.readBuffer();
+          os2 = filter_delay6.readBuffer();
+          hist3 = 0.001 * abs(sample) + 0.999 * abs(hist3);
+          filter_delay5.updateBuffer(sample);
+          filter_delay6.updateBuffer(sample);
+          sample = tanh(5*hist3*sample + (sample-os1));
+        ) : (
+          os1 = filter_delay7.readBuffer();
+          os2 = filter_delay8.readBuffer();
+          hist4 = 0.001 * abs(sample) + 0.999 * abs(hist4);
+          filter_delay7.updateBuffer(sample);
+          filter_delay8.updateBuffer(sample);
+          sample = tanh(5*hist4*sample + (sample-os1));
+        )
+      );    
+      
     ) : ( this.filtertype == 18 ) ? (
+      dist ? sample = distort(sample);
       sample = this.filter_ms20lin.eval_MS20lin(sample);
     ) : ( this.filtertype == 19 ) ? (
+      dist ? sample = distort(sample);
       sample = this.filter_ms20lin.eval_MS20linBP(sample);
     ) : ( this.filtertype == 20 ) ? (
+      dist ? sample = distort(sample);
       sample = this.filter_ms20lin.eval_MS20linHP(sample);            
     ) : ( this.filtertype == 21 ) ? (
       sample = this.filter_ms20.eval_MS20_nonlin(sample);
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 22 ) ? (
       sample = this.filter_ms20.eval_MS20_nonlinBP(sample);
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 23 ) ? (
-      sample = this.filter_ms20.eval_MS20_nonlinHP(sample);      
+      sample = this.filter_ms20.eval_MS20_nonlinHP(sample);  
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 24 ) ? (
       sample += 0.8 * this.filter_phaser.evalphaserFET(this.filter_delay.getBuffer());
       flt = this.filter_ms20.eval_MS20_nonlin(sample);
+      dist ? flt = distort(flt);
       flt = this.filter_phaser2.evalphaserFET(flt);  
-      this.filter_delay.updateBuffer(distort(flt-.7*sample));
+      os = flt-.7*sample;
+      dist ? os = distort(os);      
+      this.filter_delay.updateBuffer(os);
       sample = this.filter_ms20.eval_MS20_nonlin(sample+flt);
+      dist ? sample = distort(sample);
       sample = this.filter_ms20.eval_MS20_nonlin(sample+flt);
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 25 ) ? (
-      sample = this.filter_ms20.eval_MS20_nonlin_mod(sample);  
+      sample = this.filter_ms20.eval_MS20_nonlin_mod(sample); 
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 26 ) ? (
       sample = this.filter_ssm.eval_ssm_nonlin(sample);   
       dist ? sample = distort(sample);
@@ -10424,12 +10764,15 @@ function process(sample, dist)
       sample = ( 1 - this.filter_sine.res ) * sample + this.filter_sine.res * sin(sample * this.filter_sine.freq);
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 32 ) ? (
-      sample = ( 1 - this.filter_sine.res ) * sample + this.filter_sine.res * this.filter_ms20.eval_MS20_nonlin_FM(sample);
+      os = this.filter_ms20.eval_MS20_nonlin_FM(sample);
+      dist ? os = distort(os);
+      sample = ( 1 - this.filter_sine.res ) * sample + this.filter_sine.res * os;
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 33 ) ? (
       os = .7 + .3* sin(.5*sample * this.filter_sine.freq);
       this.filter_ms20.init_MS20_nonlin(os*this.filter_sine.fraw, this.filter_sine.res);
       sample = this.filter_ms20.eval_MS20_nonlin(sample);
+      dist ? sample = distort(sample);
     ) : ( this.filtertype == 34 ) ? ( 
       sample = this.filter_broken.eval_broken_nonlin_LP(sample);   
       dist ? sample = distort(sample);
@@ -10467,7 +10810,9 @@ function process(sample, dist)
     ) : ( this.filtertype == 45 ) ? (
       reso = this.filter_SVF.eval_linearSVF_LP( sample );
       lp = this.filter_SVF_nores.eval_linearSVF_LP( sample );
-      sample = lp + .2*distort(5*(reso-lp));
+      os = 5*(reso-lp);
+      dist ? os = distort(os);
+      sample = lp + .2*os;
     ) : ( this.filtertype == 46 ) ? (
       reso = this.filter_SVF.eval_linearSVF_LP( sample );
       lp = this.filter_SVF_nores.eval_linearSVF_LP( sample );
@@ -10484,7 +10829,6 @@ function process(sample, dist)
       sample = (lp + diff)*.7;
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 48 ) ? (
-      //sample = distort(sample);
       dist ? sample = distort(sample);
       os = this.filter_delay.readBuffer();
       this.filter_delay.updateBuffer(sample);
@@ -11613,18 +11957,81 @@ updateActiveFilters(1);
     retina_scaling > 1 ? gfx_setfont(1, fontface, 10*retina_scaling) : gfx_setfont(0);
     //window3.draw_text("Dynamics", .025, .025);
     
+    // Display spectra
     block_analyzers == 0 ? (
       spectrumIn.drawGrid();
-      spectrumIn.drawFFT(1);
-      spectrumOut.drawFFT(0);    
+      
+      !hideSpectrumIn ? spectrumIn.drawFFT(1, 1);
+      !hideSpectrumOut ? spectrumOut.drawFFT(0, 1);    
       spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);
+      spectrumIn.floorLevel = 25 + dnoisefloor_freq;
+      spectrumOut.floorLevel = 25 + dnoisefloor_freq;
+
+      // Draw filter A
+      !hideSpectrumFilters ? (
+        (!bypassFilter1.active && slider47 > 0) ? 
+        ( 
+          L_gfx.resetActiveFilter( slider47, 1 );
+          L_gfx.updateActiveFilter(slider47, filterFreq, filterReso, 0, 0, 1);
+          
+          filterA_gfx.impulse();
+          (slider46 == 1 || slider46 == 2 || slider46 == 3) ?
+          (
+            // Dual mode
+            filterA_gfx.feedSample(L_gfx.process(L_gfx.process(1, 0), 0));
+          ) : ( slider46 == 9 ) ? (
+            // Inversion mode
+            filterA_gfx.feedSample(1-L_gfx.process(1, 0));
+          ) : (
+            filterA_gfx.feedSample(L_gfx.process(1, 0));
+          );
+          loop(fftSize-1,
+            (slider46 == 1 || slider46 == 2 || slider46 == 3) ?
+            (
+              // Dual mode
+              filterA_gfx.feedSample(L_gfx.process(L_gfx.process(0, 0), 0));
+            ) : ( slider46 == 9 ) ? (
+              // Inversion mode
+              filterA_gfx.feedSample(1-L_gfx.process(0, 0));
+            ) : (
+              filterA_gfx.feedSample(L_gfx.process(0, 0));
+            );
+          );
+          filterA_gfx.slope = 0;
+          filterA_gfx.floorLevel = 30;
+          filterA_gfx.setToFFTLoc();
+          peakLocation = L_gfx.specialGraphics();
+          peakLocation > 0 ? filterA_gfx.drawLineFFT( peakLocation, 0 );
+          showFilterFFT ? filterA_gfx.drawFFT(2, max(1, slider54));
+        );
+        
+        // Draw filter B
+        (!bypassFilter2.active && slider40 > 0) ? 
+        ( 
+          L2_gfx.resetActiveFilter( slider40, 1 );
+          L2_gfx.updateActiveFilter(slider40, filterFreq2, filterReso2, 0, 1, 1);      
+          filterB_gfx.impulse();
+          filterB_gfx.feedSample(L2_gfx.process(1, 0));      
+          loop(fftSize-1,
+            filterB_gfx.feedSample(L2_gfx.process(0, 0));
+          );
+          filterB_gfx.slope = 0;
+          filterB_gfx.floorLevel = 30;
+          filterB_gfx.setToFFTLoc();
+          
+          peakLocation = L2_gfx.specialGraphics();
+          peakLocation > 0 ? filterB_gfx.drawLineFFT( peakLocation, 1 );
+          showFilterFFT ? filterB_gfx.drawFFT(3, max(1, slider54));
+        );
+      );
+      
       spectrumIn.xlabel("Frequency");
       spectrumIn.ylabel("Level");
       
       gonioIn.drawGonioWindow();
       gonioIn.drawGonioMeter(0);
       gonioOut.drawGonioMeter(1);
-      gonioOut.gonio_processMouse(mouse_x, mouse_y, mouse_cap);
+      gonioOut.gonio_processMouse(mouse_x, mouse_y, mouse_cap);      
     );
     
     window3.xlabel("Time");    
@@ -11684,6 +12091,10 @@ updateActiveFilters(1);
     lfoFeedback.selectionButton_draw();
     dynamicMorph.selectionButton_draw();
     lfoMorph.selectionButton_draw();
+    
+    showSpectrumInButton.selectionButton_draw();
+    showSpectrumOutButton.selectionButton_draw();
+    showFiltersButton.selectionButton_draw();
     
     lfoFilterButton.selectionButton_draw();
     lfoFilterButton2.selectionButton_draw();
@@ -11994,6 +12405,10 @@ updateActiveFilters(1);
               mod_LFO_amount = modulationFactor.sliderWidget_getValue2_nn();
               forceUpdate = 1;
             );
+            
+            showSpectrumInButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap )  ? hideSpectrumIn      = 1 - showSpectrumInButton.active;
+            showSpectrumOutButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap ) ? hideSpectrumOut     = 1 - showSpectrumOutButton.active;
+            showFiltersButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap )     ? hideSpectrumFilters = 1 - showFiltersButton.active;
             
             // Something changed w.r.t. dynamics
             dynamicFilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
