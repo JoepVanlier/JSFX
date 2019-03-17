@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.37
+version: 2.38
 author: Joep Vanlier
 changelog: 
-+ Bugfix feedback x6
++ Hotfixes envelopes
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -90,7 +90,6 @@ slider57:0<0,63,1{Attack x1 Decay x1 RMS x1,Attack x8 Decay x1 RMS x1,Attack x4 
 
 // {OFF,F1F2DYN-LFO,SHAPER,F1F2DYN-LFO-SHAPER,F1DYN-LFO,F1F2DYN-LFO,F1DYN-LFO-SHAPER,F1F2DYN-LFO-SHAPER,F1LFO,F1F2DYN-F1LFO,F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F1DYN-F1LFO,F1F2DYN-F1LFO,F1DYN-F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F2DYN-LFO,F1F2DYN-LFO,F2DYN-LFO-SHAPER,F1F2DYN-LFO-SHAPER,F1F2DYN-LFO,F1F2DYN-LFO,F1F2DYN-LFO-SHAPER,F1F2DYN-LFO-SHAPER,F2DYN-F1LFO,F1F2DYN-F1LFO,F2DYN-F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F1F2DYN-F1LFO,F1F2DYN-F1LFO,F1F2DYN-F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F2LFO,F1F2DYN-F2LFO,F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F1DYN-F2LFO,F1F2DYN-F2LFO,F1DYN-F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F1F2LFO,F1F2DYN-F1F2LFO,F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER,F1DYN-F1F2LFO,F1F2DYN-F1F2LFO,F1DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER,F2DYN-F2LFO,F1F2DYN-F2LFO,F2DYN-F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F1F2DYN-F2LFO,F1F2DYN-F2LFO,F1F2DYN-F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F2DYN-F1F2LFO,F1F2DYN-F1F2LFO,F2DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO,F1F2DYN-F1F2LFO,F1F2DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER}
 slider58:0<0,4095,1>-Dynamics
-//
 
 slider59:1<0,1,.001>-Thresh
 slider60:5<0,50,.1>-Attack
@@ -171,6 +170,10 @@ file_var(0,envWindow2.useVelocities);
 file_var(0,envWindow1.snapping);
 file_var(0,envWindow2.snapping);
 
+// Reading?
+file_avail(0)>=0 ? envelopesPresent = 0;
+file_var(0,envelopesPresent);
+
 @init
 function resetEnvelope(vel, hard)
   global()
@@ -181,11 +184,11 @@ function resetEnvelope(vel, hard)
     (
       curTime   = 0;
       cpos      = memory;
-      tn        = 0;
       tnm1      = 0;
-      yn        = 0;
       ynm1      = 0;
-      dy        = 0;
+      tn        = cpos[];
+      yn        = cpos[1];
+      dy        = (yn - ynm1) / ( tn - tnm1 );
       cnode     = 0;
       curvel    = vel;
     );
@@ -299,7 +302,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.37";
+plugname = "FILTHER 2.38";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -405,6 +408,7 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 73 ) ? ( str = "Modulatrix (ZDF)"
       ) : ( curitem == 74 ) ? ( str = "Vibrato"
       ) : ( curitem == 75 ) ? ( str = "Spin"
+      ) : ( curitem == 76 ) ? ( str = "Wavefolder"
       );
     ) : (stridx == 1) ? 
     (
@@ -948,6 +952,9 @@ local(fx, fy, wx, wx2, wy)
   ) : ( filteridx == 75 ) ? (
     gfx_printf("Emulation of a spinning sound source\n\n"); gfx_x = fx+5;
     gfx_wrapprint("", wx2);
+  ) : ( filteridx == 76 ) ? (
+    gfx_printf("Wavefolder\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Lockhart wavefolder based on a model by Esqueda et al (2017).", wx2);
   );
 );
 
@@ -4972,6 +4979,36 @@ function selectBuffer(isR, isFilt2, isGFX)
     )
   );
   
+
+function folder_init(cutoff, reso)
+  local(RL)
+  instance(alpha, beta, gamma, betagamma, premul, postmul)
+  global()
+  (
+    RL = (1000+49000*reso);
+    alpha = - 2 * RL / 15000;
+    beta  = RL * .00000000000000001;
+    gamma = 1 / .025864;
+    betagamma = beta*gamma;
+  );
+  
+function folder_eval(sample)
+  local()
+  instance(alpha, beta, gamma, betagamma, premul, postmul,
+  f, J, RL, vout, expv)
+  global()
+  (
+    vout = 0;
+
+    loop( 5, 
+      expv = exp( sign(sample) * gamma * (sample - vout) );    
+      f = vout - alpha*sample - sign(sample) * beta * expv;
+      J = 1 + betagamma*expv*sign(sample)*sign(sample);
+      vout -= f / J;
+    );
+    
+    vout
+  );
   
 function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2, isGFX)
   global( filter_delay1, filter_delay2, /* Audio */
@@ -5297,6 +5334,8 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2, i
       this.vibrato.vibrato_init(filterFreq, filterReso);
       this.vibrato.isR = isR;
       this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer+4000);
+    ) : ( sliderValue == 76 ) ? (
+      this.folder.folder_init(filterFreq, filterReso);
     );
   );        
     
@@ -8661,7 +8700,7 @@ function processMouse()
   instance(x, y, w, h, h_graph, nodes, memory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
            speedSlider, soften, midiTrigger, midiVel, snap, snapping, division)
   local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx)
-  global(mouse_x, mouse_y, mouse_cap, mouse_wheel)
+  global(mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y)
   (
     mx = mouse_x;
     my = mouse_y;
@@ -8807,12 +8846,12 @@ function calcEnvelope(t)
 
 function evaluateEnvelope(notesOn)
   global()
-  instance(curTime, invsrate, cpos, memory, tn, tnm1, yn, ynm1, dy, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel)
-  local(ret, xptr)
+  instance(ret, curTime, invsrate, cpos, memory, tn, tnm1, yn, ynm1, dy, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel)
+  local(xptr)
   (
     //ret = this.calcEnvelope(curTime);
     ( cnode < nodes ) ? (
-      while( curTime > cpos[] )
+      while( curTime > tn )
       ( 
         tnm1  = cpos[];
         ynm1  = cpos[1];
@@ -8827,7 +8866,7 @@ function evaluateEnvelope(notesOn)
       ( useVelocities == 1 ) ? ret = curvel * ret;
       
       curTime = curTime + invsrate;
-      ( notesOn && (curTime > loopEnd) ) ? ( curTime = loopStart; cnode = 0; cpos = memory; );
+      ( notesOn && (curTime > loopEnd) ) ? ( curTime = loopStart; cnode = 0; cpos = memory; tn = cpos[2]; );
       
       softening == 1 ? (
         smoothMem = smoothMem + .05 * ( ret - smoothMem );
@@ -11760,6 +11799,9 @@ function process(sample, dist)
       sample = .6*sample + .4*sample * (1-(1-2*this.vibrato.isR)*vibratoSinTerm);
 
       dist ? sample = distort(sample);
+    ) : ( this.filterType == 76 ) ? (
+      sample = this.folder.folder_eval(sample);
+      dist ? sample = distort(sample);
     );
     
     sample;
@@ -13038,6 +13080,24 @@ updateActiveFilters(1);
     lfoFrequency.dynval                  = lfoModVal;
     modulationFactor.hasFilterDynamics   = dynamicLFOButton.active || env1LFO.active || env2LFO.active;
     modulationFactor.dynval              = lfoModVal;
+    
+    /* Code to disable envelopes in legacy presets */
+    envelopesPresent == 0 ?
+    (
+      envelopesPresent          = 1;
+      env1GainButton.active     = 0;
+      env2GainButton.active     = 0;
+      env1FilterButton.active   = 0;
+      env2FilterButton.active   = 0;
+      env1Filter2Button.active  = 0;
+      env2Filter2Button.active  = 0;
+      env1Morph.active          = 0;
+      env2Morph.active          = 0;
+      env1LFO.active            = 0;
+      env2LFO.active            = 0;
+      env1FB.active             = 0;
+      env2FB.active             = 0;
+    );
     
     (slider35 & 32) ? (
       feedbackAmount.disabled = 0;
