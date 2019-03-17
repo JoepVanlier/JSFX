@@ -1,9 +1,14 @@
 desc:Filther
 tags: Filther
-version: 2.35
+version: 2.36
 author: Joep Vanlier
 changelog: 
-+ Bugfix reverting accidental test code that made it into the main effect.
++ Started work on an envelope section.
++ Potential performance increase (less frequent updating of coefficients).
++ Minor optimizations (moved morph slider value computation).
++ Add optional notrigger that still resets on init.
++ Add snapping behaviour to loop points
++ Allow longer feedback times
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -57,8 +62,8 @@ slider32:0.8<0,1,.01>-Neg7y or FB time mod
 slider33:1.0<0,2,.01>-Key follow amount
 slider34:0.9<0,1,.01>-Neg8y or Morph mod %
 // This one secretly has the information folded in whether pre-gain modulation is being used.
-// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Dyn Morph, 12 = LFO Morph, 13 = Dynamic LFO
-slider35:0<0,8191,1>-Toggles (DO NOT AUTOMATE)
+// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Dyn Morph, 12 = LFO Morph, 13 = Dynamic LFO, 11 = feedback X16
+slider35:0<0,16383,1>-Toggles (DO NOT AUTOMATE)
 slider36:0<0,26,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,7,1{No reset,Reset,No reset + temposync,Reset + temposync,No reset + centered,Reset + centered,No reset + temposync + centered,Reset + temposync + centered>-Reset LFO
@@ -90,6 +95,7 @@ slider57:0<0,63,1{Attack x1 Decay x1 RMS x1,Attack x8 Decay x1 RMS x1,Attack x4 
 
 // {OFF,F1F2DYN-LFO,SHAPER,F1F2DYN-LFO-SHAPER,F1DYN-LFO,F1F2DYN-LFO,F1DYN-LFO-SHAPER,F1F2DYN-LFO-SHAPER,F1LFO,F1F2DYN-F1LFO,F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F1DYN-F1LFO,F1F2DYN-F1LFO,F1DYN-F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F2DYN-LFO,F1F2DYN-LFO,F2DYN-LFO-SHAPER,F1F2DYN-LFO-SHAPER,F1F2DYN-LFO,F1F2DYN-LFO,F1F2DYN-LFO-SHAPER,F1F2DYN-LFO-SHAPER,F2DYN-F1LFO,F1F2DYN-F1LFO,F2DYN-F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F1F2DYN-F1LFO,F1F2DYN-F1LFO,F1F2DYN-F1LFO-SHAPER,F1F2DYN-F1LFO-SHAPER,F2LFO,F1F2DYN-F2LFO,F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F1DYN-F2LFO,F1F2DYN-F2LFO,F1DYN-F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F1F2LFO,F1F2DYN-F1F2LFO,F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER,F1DYN-F1F2LFO,F1F2DYN-F1F2LFO,F1DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER,F2DYN-F2LFO,F1F2DYN-F2LFO,F2DYN-F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F1F2DYN-F2LFO,F1F2DYN-F2LFO,F1F2DYN-F2LFO-SHAPER,F1F2DYN-F2LFO-SHAPER,F2DYN-F1F2LFO,F1F2DYN-F1F2LFO,F2DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO,F1F2DYN-F1F2LFO,F1F2DYN-F1F2LFO-SHAPER,F1F2DYN-F1F2LFO-SHAPER}
 slider58:0<0,4095,1>-Dynamics
+//
 
 slider59:1<0,1,.001>-Thresh
 slider60:5<0,50,.1>-Attack
@@ -105,6 +111,9 @@ out_pin:right output
 options:no_meter 
 
 @serialize
+env_buf1 = 66*65536;
+env_buf2 = 68*65536;
+
 file_var(0,extraScale);
 file_var(0,hideToolTips);
 file_var(0,linuxMode);
@@ -123,7 +132,72 @@ file_var(0,hideSpectrumIn);
 file_var(0,hideSpectrumOut);
 file_var(0,hideSpectrumFilters);
 
+file_var(0,env1GainButton.active);
+file_var(0,env2GainButton.active);
+file_var(0,env1FilterButton.active);
+file_var(0,env2FilterButton.active);
+file_var(0,env1Filter2Button.active);
+file_var(0,env2Filter2Button.active);
+file_var(0,env1Morph.active);
+file_var(0,env2Morph.active);
+file_var(0,env1LFO.active);
+file_var(0,env2LFO.active);
+file_var(0,env1FB.active);
+file_var(0,env2FB.active);
+
+file_var(0,envWindow1.nodes);
+file_var(0,envWindow2.nodes);
+file_mem(0,env_buf1,256);
+file_mem(0,env_buf2,256);
+file_var(0,envWindow1.loopStart);
+file_var(0,envWindow1.loopEnd);
+file_var(0,envWindow1.loopType);
+file_var(0,envWindow1.division);
+file_var(0,envWindow1.speedSlider.value);
+
+file_var(0,envWindow2.loopStart);
+file_var(0,envWindow2.loopEnd);
+file_var(0,envWindow2.loopType);
+file_var(0,envWindow2.division);
+file_var(0,envWindow2.speedSlider.value);
+
+file_var(0,envWindow1.zoom);
+file_var(0,envWindow2.zoom);
+file_var(0,envWindow1.offset);
+file_var(0,envWindow2.offset);
+
+file_var(0,envWindow1.softening);
+file_var(0,envWindow2.softening);
+file_var(0,envWindow1.triggering);
+file_var(0,envWindow2.triggering);
+file_var(0,envWindow1.useVelocities);
+file_var(0,envWindow2.useVelocities);
+
+file_var(0,envWindow1.snapping);
+file_var(0,envWindow2.snapping);
+
 @init
+function resetEnvelope(vel, hard)
+  global()
+  instance(curTime, memory, cpos, tn, tnm1, yn, ynm1, dy, cnode, triggering, curvel)
+  local()
+  (
+    ( triggering == 1 || hard ) ?
+    (
+      curTime   = 0;
+      cpos      = memory;
+      tn        = 0;
+      tnm1      = 0;
+      yn        = 0;
+      ynm1      = 0;
+      dy        = 0;
+      cnode     = 0;
+      curvel    = vel;
+    );
+  );
+
+skipFactor = 3;
+
 // Colors
 bg_color_r = 0;
 bg_color_g = 0;
@@ -230,7 +304,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.35";
+plugname = "FILTHER 2.36";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -248,6 +322,9 @@ modulator.lastt = -1;
 notesOn = 0;
 israte = 1/srate;
 log2 = log(2);
+
+envWindow1.resetEnvelope(1, 1);
+envWindow2.resetEnvelope(1, 1);
 
 function comboStrings(stridx, curitem)
   local(str)
@@ -644,7 +721,7 @@ global(gfx_x, gfx_y, slider47, wndX, wndY, wndPad, retina_scaling, fontface
 local(fx, fy, wx, wx2, wy)
 (
   fx = 30*retina_scaling;
-  wx = 3*wndX + 2*wndPad;
+  wx = 2*wndX + wndPad;
   wx2 = wx - fx;
   gfx_x = fx+5;
   gfx_y = yloc;
@@ -790,7 +867,7 @@ local(fx, fy, wx, wx2, wy)
     gfx_wrapprint("ZDF filter that lowpasses the signal twice. Once with and once without resonance. Subsequently it waveshapes the version with resonance minus the version without and adds the waveshaped resonance to the no resonance lowpass mix.", wx2);  
   ) : ( filteridx == 46 ) ? (
     gfx_printf("Filter: Voodoo\n\n"); gfx_x = fx+5;
-    gfx_wrapprint("This one is a meanie. It filters the signal with and without resonance, computes the difference, amplifies it, saturates it and then adds it to a moving average that gets added to the signal. The result is then waveshaped. Yum.", wx2);  
+    gfx_wrapprint("This one is a meanie. It filters the signal with and without resonance, computes the difference, amplifies it, sa  turates it and then adds it to a moving average that gets added to the signal. The result is then waveshaped. Yum.", wx2);  
   ) : ( filteridx == 47 ) ? (
     gfx_printf("Filter: Junk (ZDF)\n\n"); gfx_x = fx+5;
     gfx_wrapprint("This one is fickle. It filters the signal with and without resonance, computes the difference, amplifies it, saturates it and then adds it back to the signal. The result is then waveshaped. Yum.", wx2);
@@ -831,19 +908,24 @@ local(fx, fy, wx, wx2, wy)
     gfx_printf("Filter: Weeping Demon Mode II\n\n"); gfx_x = fx+5;
     gfx_wrapprint("This is a model of the weeping demon wah pedal, originally modelled by Chet Gnegy and used with permission. Cutoff controls the wah level. Cutoff controls the pre-highpass. Prone to high resonance peaks.", wx2);
   ) : ( filteridx == 60 ) ? (
-    gfx_printf("Crybaby emulation\nEmulation of a wah-wah filter based on a paper by M. Holters, this one took quite some doing to get to work. It's heavy on the CPU, but sounds pretty authentic.");
+    gfx_printf("Crybaby emulation\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Emulation of a wah-wah filter based on a paper by M. Holters, this one took quite some doing to get to work. It's heavy on the CPU, but sounds pretty authentic.", wx2);
   ) : ( filteridx == 61 ) ? (
-    gfx_printf("Modified Crybaby emulation\nEmulation of a wah-wah filter based on a paper by M. Holters, this one took quite some doing to get to work. It's heavy on the CPU, but sounds pretty authentic.");
+    gfx_printf("Modified Crybaby emulation\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Emulation of a wah-wah filter based on a paper by M. Holters, this one took quite some doing to get to work. It's heavy on the CPU, but sounds pretty authentic.", wx2);
   ) : ( filteridx == 62 ) ? (
-    gfx_printf("Modified Crybaby emulation\nEmulation of a wah-wah filter based on a paper by M. Holters, this one took quite some doing to get to work. It's heavy on the CPU, but sounds pretty authentic.");
+    gfx_printf("Modified Crybaby emulation\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Emulation of a wah-wah filter based on a paper by M. Holters, this one took quite some doing to get to work. It's heavy on the CPU, but sounds pretty authentic.", wx2);
   ) : ( filteridx == 63 ) ? (
     gfx_printf("Vowel filter SVF");
   ) : ( filteridx == 64 ) ? (
     gfx_printf("Monstro (vowel madness)");
   ) : ( filteridx == 65 ) ? (
-    gfx_printf("King of Tone Pedal\nModelled after the King of Tone pedal. Warning: This one doesn't respond nicely to live updating the resonance parameter without interia or very sharp gain transitions.\nIn can produce clicks in such scenarios.");
+    gfx_printf("King of Tone Pedal\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Modelled after the King of Tone pedal. Warning: This one doesn't respond nicely to live updating the resonance parameter without interia or very sharp gain transitions. It can produce clicks in such scenarios.", wx2);
   ) : ( filteridx == 66 ) ? (
-    gfx_printf("Modulon\nModulon works by modulating the signal with a set frequency and filtering the result.");
+    gfx_printf("Modulon\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Modulon works by modulating the signal with a set frequency and filtering the result.", wx2);
   ) : ( filteridx == 67 ) ? (
     gfx_printf("Octaver (Down)\n\n"); gfx_x = fx+5;
     gfx_wrapprint("This chunky monkey can be used to add some deep bass. Recommended for monophonic sounds only. This effect adds bass one and two octaves down. Cutoff transitions between dry and wet, while resonance switches between using octave 1 and octave 2. Note that this effect is best applied only on the mid channel (as left and right can easily go out of phase and create a fluctuating stereo image).", wx2);
@@ -861,7 +943,7 @@ local(fx, fy, wx, wx2, wy)
     gfx_wrapprint("Cutoff regulates the level of non-linearity. Resonance regulates the downsampling. Note that this filter only works properly for no oversampling and x2 oversampling.", wx2);
   ) : ( filteridx == 72 ) ? (
     gfx_printf("Modulon (tuned)\n\n"); gfx_x = fx+5;
-    gfx_printf("Modulon works by modulating the signal with a set frequency and filtering the result. Considering that this filter is based on ring modulation, tuning is important. It is also recommended to use this filter in combination with keytracking.");
+    gfx_wrapprint("Modulon works by modulating the signal with a set frequency and filtering the result. Considering that this filter is based on ring modulation, tuning is important. It is also recommended to use this filter in combination with keytracking.", wx2);
   ) : ( filteridx == 73 ) ? (
     gfx_printf("Modulatrix (tuned)\n\n"); gfx_x = fx+5;
     gfx_wrapprint("Modulatrix works by modulating the signal with a set frequency and filtering the result. Considering that this filter is based on ring modulation, tuning is important. It is also recommended to use this filter in combination with keytracking.", wx2);
@@ -5227,11 +5309,16 @@ function updateActiveFilters( force )
   (  
     filteredDynval = 0.1 * dynval + 0.9 * filteredDynval; // Avoid too steep transitions.
   
-    modval = gainDynamics * filteredDynval + gainLFO * modulator.scaled_modvalue;   
-    pregain  = 2^((slider52 + 40 * dyn_mod_gain * modval)/6);
-    postgain = 2^((slider53 + 40 * dyn_mod_outgain * modval)/6);
-    
-    gaincompensation = 1/pregain;  
+    gainModVal            = 0;
+    cnt                   = 0;
+    gainDynamics          ? (gainModVal += filteredDynval; cnt += 1;);
+    env1GainButton.active ? (gainModVal += envelopeValue1; cnt += 1;);
+    env2GainButton.active ? (gainModVal += envelopeValue2; cnt += 1;);
+    cnt > 1               ? gainModVal /= cnt;
+    gainLFO               ? gainModVal += modulator.scaled_modvalue;
+
+    pregain  = 2^((slider52 + 40 * dyn_mod_gain * gainModVal)*0.166666666666666666666666666666666666666667);
+    postgain = 2^((slider53 + 40 * dyn_mod_outgain * gainModVal)*0.166666666666666666666666666666666666666667);
   
     // Cutoff and resonance handling filter 1
     ( slider47 > 0 ) ? (
@@ -5240,12 +5327,22 @@ function updateActiveFilters( force )
       followKey1 ? sliderCutoff = sliderCutoff + approxNoteFrequencyFilter1 * slider33;
       followPitch1 ? sliderCutoff = sliderCutoff + pitchLerp1.lerpSample() * slider33;
 
-      modval = filterDynamics1 * filteredDynval + filterLFO1 * modulator.scaled_modvalue;      
-      filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * modval ) );
-      filterReso = max( 0, min( .99, sliderReso + dyn_mod_reso * modval ) );
-    );
+      filter1ModVal           = 0;
+      cnt                     = 0;
+      filterDynamics1         ? (filter1ModVal += filteredDynval; cnt += 1;);
+      env1FilterButton.active ? (filter1ModVal += envelopeValue1; cnt += 1;);
+      env2FilterButton.active ? (filter1ModVal += envelopeValue2; cnt += 1;);
+      cnt > 1                 ? filter1ModVal /= cnt;
+      filterLFO1              ? filter1ModVal += modulator.scaled_modvalue;
       
-    updateFiltersNow = ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) || force;
+      filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * filter1ModVal ) );
+      filterReso = max( 0, min( .99, sliderReso + dyn_mod_reso * filter1ModVal ) );
+    );
+    
+    currentSkip += 1;
+    currentSkip > skipFactor ? currentSkip = 0;
+    
+    updateFiltersNow = ( (currentSkip == 0) && ( ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) ) ) || force;
     ( updateFiltersNow ) ? (
       lastFilterReso = filterReso;
       lastFilterFreq = filterFreq;
@@ -5260,9 +5357,16 @@ function updateActiveFilters( force )
       followKey2 ? sliderCutoff2  = sliderCutoff2 + approxNoteFrequencyFilter2 * slider33;
       followPitch2 ? sliderCutoff2 = sliderCutoff2 + pitchLerp2.lerpSample() * slider33;
       
-      modval = filterDynamics2 * filteredDynval + filterLFO2 * modulator.scaled_modvalue;
-      filterFreq2 = max( 0, min( 1, sliderCutoff2 + dyn_mod_filt2 * modval ) );
-      filterReso2 = max( 0, min( .99, sliderReso2 + dyn_mod_reso2 * modval ) );
+      filter2ModVal            = 0;
+      cnt                      = 0;
+      filterDynamics2          ? (filter2ModVal += filteredDynval; cnt += 1;);
+      env1Filter2Button.active ? (filter2ModVal += envelopeValue1; cnt += 1;);
+      env2Filter2Button.active ? (filter2ModVal += envelopeValue2; cnt += 1;);
+      cnt > 1                  ? filter2ModVal /= cnt;
+      filterLFO2               ? filter2ModVal += modulator.scaled_modvalue;
+      
+      filterFreq2 = max( 0, min( 1, sliderCutoff2 + dyn_mod_filt2 * filter2ModVal ) );
+      filterReso2 = max( 0, min( .99, sliderReso2 + dyn_mod_reso2 * filter2ModVal ) );
     );
     
     updateFiltersNow = ( filterFreq2 != lastFilterFreq2 ) || ( filterReso2 != lastFilterReso2 ) || force;
@@ -6774,11 +6878,11 @@ function sliderWidget_getValue()
   
 function sliderWidget_draw()
   local(jnk, siz, q, str, modmax, modmin, modoffset, tmp)
-  global(slider38, gfx_x, gfx_y, lastUI, retina_scaling,widgetFontSize, dynval, modulator.scaled_modvalue, mlevel, fontface, modulatorDynamics,
+  global(slider38, gfx_x, gfx_y, lastUI, retina_scaling,widgetFontSize, modulator.scaled_modvalue, mlevel, fontface, modulatorDynamics,
          font_color_r, font_color_g, font_color_b, font_color_a, slider_marker_r, slider_marker_g, slider_marker_b, slider_marker_a,
          highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a,
          disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a, modulator.getScale )
-  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, unit, thisUI, htime, overridevalue, overrideunit, onmarker, hasFilterDynamics, hasModulatorDynamics, disabled)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, unit, thisUI, htime, overridevalue, overrideunit, onmarker, hasFilterDynamics, hasModulatorDynamics, disabled, dynval, postMeter)
   (
     gfx_setfont(1, fontface, widgetFontSize*retina_scaling);
     gfx_set( min(1,r + .25*htime), min(1,g + .25*htime), min(1,b + .25*htime), .1 );
@@ -6843,7 +6947,9 @@ function sliderWidget_draw()
     ( overridevalue == 0 ) ? (
       sprintf( str, "%2.3g%s", this.sliderWidget_getValue(), unit );
     ) : (
-      ( overridevalue == -1000 ) ? (
+      ( overridevalue == -2000 ) ? (
+        sprintf( str, "%s", overrideunit );
+      ) : ( overridevalue == -1000 ) ? (
         sprintf( str, "%2.3g (%s)", this.sliderWidget_getValue(), overrideunit );
       ) : (
         ( overridevalue > 1000 ) ? (
@@ -6854,8 +6960,13 @@ function sliderWidget_draw()
       );
     );
     gfx_measurestr(str, siz, jnk);
-    gfx_x = x + w - siz;
-    gfx_y = y + 11*retina_scaling;
+    !postMeter ? (
+      gfx_x = x + w - siz;
+      gfx_y = y + 11*retina_scaling;
+    ) : (
+      gfx_x = postMeter < 2 ? x + w + 4 : postMeter - siz - 2;
+      gfx_y = y + 0.5*jnk;
+    );
     gfx_printf( str );
   );
   
@@ -7917,8 +8028,8 @@ function initGonioMeter(in, sampleCount)
     rEnd = in + sampleCount - 1;
     recPtr = in;
     thisUI = newUI+=1;
-  );  
-  
+  );    
+ 
 function feedGonio(l1, r1)
   global()
   instance(rStart, rEnd, recPtr)
@@ -8069,6 +8180,673 @@ function importNodes(s1x, s2x, s1y, s2y, gfx)
     s1x[slider1-1] = 1;
     s2x[slider2-1] = 1;
   );
+  
+function updateNodeCount()
+  instance(nodes, memory)  
+  local(xptr, tmp)
+  global()
+  (
+    tmp = 2;
+    xptr = memory+2;
+    while( xptr[] > 0 )
+    (
+      xptr += 2;
+      tmp += 1;
+    );
+    
+    nodes = tmp;
+  );  
+   
+function bsort()
+  instance(nodes, memory, grabbed)  
+  local(xptr, tmpx, tmpy, cur, next, i)
+  global()
+  (
+    this.updateNodeCount();
+  
+    loop(nodes-2,
+      xptr = memory;
+      i = 1;
+      loop(nodes-2,
+        cur  = xptr[];
+        next = xptr[2];
+        ( cur > next ) ? (
+          tmpx = cur;
+          tmpy = xptr[1];
+          xptr[]  = next;
+          xptr[1] = xptr[3];
+          xptr[2] = tmpx;
+          xptr[3] = tmpy;
+          
+          ( grabbed == i ) ? ( 
+            grabbed += 1;
+          ) : ( grabbed == (i+1) ) ? (
+            grabbed -= 1 ;
+          );
+        );
+        
+        xptr += 2;
+        i += 1;
+      );
+    );
+  );      
+  
+function updateEnvRate()
+  instance(invsrate, ispeed)
+  global(srate, tempo)
+  local()
+  (
+    invsrate = tempo/(srate*ispeed*16*4*4);
+  );
+ 
+function envelopeTempo(cTime)
+  instance( cRate, tempoLabel )
+  local()
+  global()
+  (
+  ( cTime < 0.0416667 ) ?
+  (
+    tempoLabel = "1/16";
+    cRate = 0.0625;
+  ) : ( cTime < 0.0833333 ) ?
+  (
+    tempoLabel = "1/12";
+    cRate = 0.0833333;
+  ) : ( cTime < 0.125 ) ?
+  (
+    tempoLabel = "1/8";
+    cRate = 0.125;
+  ) : ( cTime < 0.166667 ) ?
+  (
+    tempoLabel = "1/6";
+    cRate = 0.166667;
+  ) : ( cTime < 0.208333 ) ?
+  (
+    tempoLabel = "1/5";
+    cRate = 0.2;
+  ) : ( cTime < 0.25 ) ?
+  (
+    tempoLabel = "1/4";
+    cRate = 0.25;
+  ) : ( cTime < 0.291667 ) ?
+  (
+    tempoLabel = "1/3";
+    cRate = 0.333333;
+  ) : ( cTime < 0.333333 ) ?
+  (
+    tempoLabel = "1/2";
+    cRate = 0.5;
+  ) : ( cTime < 0.375 ) ?
+  (
+    tempoLabel = "1";
+    cRate = 1;
+  ) : ( cTime < 0.416667 ) ?
+  (
+    tempoLabel = "2";
+    cRate = 2;
+  ) : ( cTime < 0.458333 ) ?
+  (
+    tempoLabel = "3";
+    cRate = 3;
+  ) : ( cTime < 0.5 ) ?
+  (
+    tempoLabel = "4";
+    cRate = 4;
+  ) : ( cTime < 0.541667 ) ?
+  (
+    tempoLabel = "6";
+    cRate = 6;
+  ) : ( cTime < 0.583333 ) ?
+  (
+    tempoLabel = "7";
+    cRate = 7;
+  ) : ( cTime < 0.625 ) ?
+  (
+    tempoLabel = "8";
+    cRate = 8;
+  ) : ( cTime < 0.666667 ) ?
+  (
+    tempoLabel = "12";
+    cRate = 12;
+  ) : ( cTime < 0.708333 ) ?
+  (
+    tempoLabel = "16";
+    cRate = 16;
+  ) : ( cTime < 0.75 ) ?
+  (
+    tempoLabel = "24";
+    cRate = 24;
+  ) : ( cTime < 0.791667 ) ?
+  (
+    tempoLabel = "32";
+    cRate = 32;
+  ) : ( cTime < 0.833333 ) ?
+  (
+    tempoLabel = "64";
+    cRate = 64;
+  ) : ( cTime < 0.875 ) ?
+  (
+    tempoLabel = "128";
+    cRate = 128;
+  ) : ( cTime < 0.916667 ) ?
+  (
+    tempoLabel = "256";
+    cRate = 256;
+  ) : ( cTime < 0.958333 ) ?
+  (
+    tempoLabel = "512";
+    cRate = 512;
+  ) : ( cTime < 1 ) ?
+  (
+    tempoLabel = "1024";
+    cRate = 1024;
+  )
+); 
+ 
+function updateEnvelopeSpeed() 
+  instance( ispeed, cRate, tempoLabel, speedSlider )
+  global()
+  local()
+  (
+    this.envelopeTempo(speedSlider.value);
+    speedSlider.overrideunit = tempoLabel;
+    speedSlider.overrideValue = -2000;
+    ispeed = cRate;
+    this.updateEnvRate();
+  ); 
+ 
+function updateToggles()
+  instance(soften, midiTrigger, midiVel, snap, softening, triggering, useVelocities, snapping)
+  global()
+  local()
+  (
+    !softening      ? ( softening = 1; soften.active = 1; );
+    !triggering     ? ( triggering = 1; midiTrigger.active = 1; );
+    !useVelocities  ? ( useVelocities = 1; midiVel.active = 1; );
+    !snapping       ? ( snapping = 2; snap.active == 0; );
+    
+    soften.active == 1      ? softening = 1 : softening = 2;
+    midiTrigger.active == 1 ? triggering = 1 : triggering = 2;
+    midiVel.active == 1     ? useVelocities = 1 : useVelocities = 2;
+    snap.active == 1        ? snapping = 1 : snapping = 0;
+  );
+ 
+function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, nodes_in, title_in)
+  global( newUI, srate, retina_scaling,
+          selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a,
+          widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,)
+  instance(memory, nodes, thisUI, x, y, w, h, h_graph, h_total, invsrate, cpos, loopStart, loopEnd, loopType, ispeed, division, title,
+           speedSlider, offset, zoom,
+           soften, midiTrigger, midiVel, snap,
+           softening, triggering, useVelocities, snapping )
+  local(xptr, bw, bh, cx)
+  (
+    cx = 0.12;
+    x = x_in;
+    y = y_in;
+    w = w_in;
+    h_total = h_in;
+    h_graph = h_in * (1-cx);
+    h = h_in*(.9-cx);
+  
+    bw = 15 * retina_scaling;
+    bh = 12 * retina_scaling;
+
+    soften.selectionButton(x+.5*bw, y-.5*bh, 2*bw, bh, "SOFT", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Soften envelope");
+    midiTrigger.selectionButton(x+2.8*bw, y-.5*bh, 2*bw, bh, "TRIG", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Trigger on MIDI note");
+    midiVel.selectionButton(x+5.1*bw, y-.5*bh, 2*bw, bh, "VEL", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use MIDI Velocity");
+    snap.selectionButton(x+7.4*bw, y-.5*bh, 2*bw, bh, "SNAP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Snap to grid");
+    this.updateToggles();
+    
+    speedSlider.sliderWidget(x+2, y + h_graph - .5*cx*h_in, .9*w, 2*cx*h_in, "", widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a, 0, 0, 1, .36, " ", 0, "Envelope length (measures)");
+    speedSlider.yslidercenter = speedSlider.y + 0.5 * speedSlider.h;
+    speedSlider.postMeter = x+w;
+  
+    !speedSlider.value ? speedSlider.value = .36;
+    !loopStart ? loopStart = 0.4;
+    !loopEnd   ? loopEnd = 0.5;
+    !loopType  ? loopType = 0;
+    !division  ? division = 1;
+    !zoom      ? zoom = 1;
+    !offset    ? offset = 0;
+
+    !nodes  ? nodes = nodes_in;
+    !thisUI ? (       
+      title = title_in;
+      memory = envelopeMemory;
+      xptr = memory;
+      thisUI = newUI+=1;
+      xptr[] = 0.1; // t = .1,  y = 1
+      xptr += 1; xptr[] = 1;
+      xptr += 1; xptr[] = 0.2; // t = 0.2, y = 0.5
+      xptr += 1; xptr[] = 0.5;
+      xptr += 1; xptr[] = 0.3; // t = 0.3, y = 0.4
+      xptr += 1; xptr[] = 0.4;      
+      xptr += 1; xptr[] = 0.6; // t = 0.6, y = 0.4
+      xptr += 1; xptr[] = 0.4;            
+      xptr += 1; xptr[] = 1;   // t = 1.0, y = 1.0
+      xptr += 1; xptr[] = 0;
+      
+      this.updateNodeCount();
+      this.bsort();
+      this.resetEnvelope(1, 1);
+    );
+    
+    this.updateEnvelopeSpeed();
+  );  
+  
+function drawEnvelopeWindow()  
+  global( grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
+          backface_color_r, backface_color_g, backface_color_b, backface_color_a,
+          widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,
+          fontface, widgetFontSize, retina_scaling,
+          font_color_r, font_color_g, font_color_b, font_color_a,
+          widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,
+          gfx_x, gfx_y )
+  instance(x, y, w, h, h_graph, h_total, nodes, memory, curTime, loopStart, loopEnd, grabbed, over, title, division,
+           x4_1, x4_2, x4_3, x4_4, x3_1, x3_2, x5, bw, bh, offset, zoom, speedSlider, 
+           soften, midiTrigger, midiVel, snap)
+  local(xptr, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx
+        lps, lpe)
+  (    
+    gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
+    gfx_rect(x, y, w, h_graph);
+
+    xs = w-4;
+    ys = h-4;
+    ym = y+h_graph-2;
+    
+    cuts = 1;
+    division == 1 ? cuts = 16 + 16*floor(zoom/2) :
+    division == 2 ? cuts = 9 + 9*floor(zoom/2);
+
+    xc = x-xs*offset;
+    dx = zoom*xs/cuts;
+    gfx_set(1, 1, 1, .1);
+    loop(cuts-1,
+      xc += dx;
+      (xc > x && xc < x+w) ? (      
+        gfx_line(xc, y+1, xc, y+h_graph);
+      );
+    ); 
+    
+    gfx_set(1,1,1,1);
+    xptr = memory;
+    tnm1 = - w*offset;
+    ynm1 = 0;
+    //gfx_circle(x, ym, 2);
+    loop(nodes-1,
+      tn = zoom*xptr[]*xs - xs*offset; xptr += 1;
+      yn = xptr[]*ys; xptr += 1;
+      (tn > 0) && (tnm1 < w) ? (
+        tnm1 < 0 ? (
+          ynm1 = ynm1 - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * tnm1;
+          tnm1 = 0;
+        );
+        tn > w ? (
+          yn = yn - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * (tn-w);
+          tn = w;
+        ) : gfx_circle(x+tn, ym-yn-1, 2);
+        gfx_line(x+tnm1, ym-ynm1,   x+tn, ym-yn);
+        gfx_line(x+tnm1, ym-ynm1-1, x+tn, ym-yn-1);
+        
+      );
+      
+      tnm1 = tn;
+      ynm1 = yn;
+    );
+    
+    ymin = y+h_graph-h;
+    ymax = y+h_graph;
+    xc   = x+zoom*xs*curTime-xs*offset;
+    ( xc > x && xc < x+w ) ? gfx_line( xc, ymin, xc, ymax );
+    
+    // Loop start
+    lps = min(x+w-2, max(x+2, x+w*(zoom*loopStart-offset)));
+    over == -2 ? ( 
+      gfx_set(.5,.5,1,.3);
+      gfx_line( lps+1, ymin, lps+1, ymax );
+      gfx_line( lps-1, ymin, lps-1, ymax );
+      gfx_set(widgetcolor_r,widgetcolor_g,widgetcolor_b,widgetcolor_a*1.5);
+      gfx_line( lps, ymin, lps, ymax );
+    ) : ( 
+      gfx_set(widgetcolor_r,widgetcolor_g,widgetcolor_b,widgetcolor_a);
+      gfx_line( lps, ymin, lps, ymax );
+    );
+    
+    // Loop end
+    lpe = min(x+w-2, max(x+2, x+w*(zoom*loopEnd-offset)));
+    over == -1 ? ( 
+      gfx_set(.7,.7,1,.3);
+      gfx_line( lpe+1, ymin, lpe+1, ymax ); 
+      gfx_line( lpe-1, ymin, lpe-1, ymax ); 
+      gfx_set(widgetcolor_r,widgetcolor_g,widgetcolor_b,widgetcolor_a*1.5);
+      gfx_line( lpe, ymin, lpe, ymax );
+    ) : (
+      gfx_set(widgetcolor_r,widgetcolor_g,widgetcolor_b,widgetcolor_a);
+      gfx_line( lpe, ymin, lpe, ymax );
+    );
+    
+    gfx_set(.7,.7,1,.1);
+    gfx_rect( lps, ymin, lpe-lps, h );
+    
+    gfx_setfont(1, fontface, widgetFontSize*retina_scaling);    
+    gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
+    gfx_measurestr(title, siz, jnk);
+    gfx_x = x + w - siz - 10;
+    gfx_y = y - .5*jnk + 1;
+    gfx_printf(title);
+    gfx_set( widgetcolor_r, widgetcolor_g, widgetcolor_b, .4 );
+    gfx_line(x, y, x, y+h_total);
+    gfx_line(x+1, y, x + w - siz - 13, y);
+    gfx_line(x+w-8, y, x+w-1, y);
+    gfx_line(x+w, y, x+w, y+h_total);
+    gfx_line(x+1, y+h_graph, x+w-1, y+h_graph);
+    
+    gfx_line(x+1, y+h_total, x+w, y+h_total);
+//    gfx_line(x+1, y+h_graph-h, x + w, y+h_graph-h);
+
+    speedSlider.sliderwidget_draw();
+    soften.selectionButton_draw();
+    midiTrigger.selectionButton_draw();
+    midiVel.selectionButton_draw();
+    snap.selectionButton_draw();
+  ); 
+ 
+ 
+function envTrafoX(mx)
+  instance(x, w, zoom, offset)
+  local()
+  global()
+  (
+    mx = (mx - x)/(w-4);
+    mx = (mx + offset)/zoom;
+    mx = max(0.0001,min(1,mx))
+  );
+  
+function envTrafoY(my)
+  instance(y, h, h_graph)
+  local(ym)
+  global()
+  (
+    ym = y+h_graph-2;
+    my = (ym - my)/(h-4);
+    my = max(0,min(1,my))
+  );  
+  
+function enviTrafoX(mx)
+  instance(x, w, zoom, offset)
+  local()
+  global()
+  (
+    mx = mx*zoom - offset;
+    mx = mx*(w-4)+x;
+  );
+  
+function enviTrafoY(my)
+  instance(y, h, h_graph)
+  local(ym)
+  global()
+  (
+    ym = y+h_graph-2;
+    my = ym - my*(h-4)
+  );   
+ 
+function selectEnvelopePoint(ex, ey)
+  instance(x, y, w, h, nodes, memory, zoom)
+  local(xptr, dx, dy, ndist, dist, i, cur)
+  (
+    xptr = memory;
+    ex = ex;
+    dist = ex*ex + ey*ey;
+    cur = 0;
+    i = 0;
+    loop(nodes,
+      i += 1;
+      dx = (ex - xptr[])*zoom;
+      xptr += 1;
+      dy = ey - xptr[];
+      xptr += 1;
+      
+      ndist = sqrt(dx * dx + dy * dy);
+      ( ndist < dist ) ?
+      (
+        dist = ndist;
+        cur = i;
+      );
+    );
+    
+    (dist < 0.05) ? cur : -1;
+  );
+  
+/*function moveEnvPt(idx, dx, dy)
+  instance(x, y, w, h, nodes, memory)
+  local(xptr, ym, dx, dy, ndist, dist, i, cur)
+  (
+    xptr = memory;
+    xptr += 2*(idx-1);
+    xptr[] = max(0, min(1, xptr[]+dx/w)); xptr += 1;
+    xptr[] = max(0, min(1, xptr[]+dy/h));
+  );*/
+  
+function setEnvPt(idx, ex, ey)
+  instance(x, y, w, h, memory)
+  local(xptr)
+  global()
+  (
+    xptr = memory;
+    xptr += 2*(idx-1);
+    xptr[] = ex; xptr += 1;
+    xptr[] = ey;
+    
+    this.bsort();
+  );
+  
+function getEnvX(idx)
+  instance(x, y, w, h, memory)
+  local(xptr)
+  global()
+  (
+    xptr = memory;
+    xptr += 2*(idx-1);
+    xptr[]
+  );  
+  
+function getEnvY(idx)
+  instance(x, y, w, h, memory)
+  local(xptr)
+  global()
+  (
+    xptr = memory;
+    xptr += 2*(idx-1) + 1;
+    xptr[]
+  );  
+ 
+function processMouse()
+  instance(x, y, w, h, h_graph, nodes, memory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
+           speedSlider, soften, midiTrigger, midiVel, snap, snapping, division)
+  local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx)
+  global(mouse_x, mouse_y, mouse_cap, mouse_wheel)
+  (
+    mx = mouse_x;
+    my = mouse_y;
+    mc = mouse_cap;
+    left = (mc & 1);
+    right = (mc & 2);
+    
+    // Find nearest
+    ex = abs(mx - this.enviTrafoX(loopStart));
+    ey = abs(mx - this.enviTrafoX(loopEnd));
+    over = ex < ey ? -2 : -1;
+    
+    // If nearest is not close enough, reset selection
+    min(ex,ey) > 10/zoom ? over = 0;
+    
+    cuts = 1;
+    division == 1 ? cuts = 16 + 16*floor(zoom/2) :
+    division == 2 ? cuts = 9 + 9*floor(zoom/2);
+    
+    ymin = y+h_graph-h;
+    ymax = y+h_graph;
+    ( left > 0 ) ?
+    (
+      ( lastleft == 0 ) ? (
+        ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+        (
+          idx = this.selectEnvelopePoint(this.envTrafoX(mx), this.envTrafoY(my));
+          ( idx > 0 ) ? (
+            grabbed = idx;
+          ) : (
+            grabbed = over;
+            // Nothing grabbed? => Drag offset
+            ( grabbed == 0 ) ? grabbed = -3;
+          )
+        )
+      ) : ( grabbed > 0 ) ?
+      (
+        // Dragging a node
+        ex = this.envTrafoX(mx);
+        ey = this.envTrafoY(my);
+        ( snapping == 1 ) ? (
+          tx = floor(ex * cuts + .5) / cuts;
+
+          (tx < ex) ? ex = tx - 0.0000001 : ex = tx + 0.0000001;
+        );
+        
+        this.setEnvPt(grabbed, ex, ey );
+      ) : ( grabbed == -3 ) ? 
+      (
+        offset = min( zoom-1, max( 0, offset - this.envTrafoX(mx) + this.envTrafoX(lx) ) );
+      ) : ( grabbed == -2 ) ?
+      (
+        ex = this.envTrafoX(mx);
+        ( snapping == 1 ) ? ex = floor(ex * cuts + .5) / cuts;
+        
+        ex = min(ex, loopEnd - 0.01);
+        loopStart = ex;
+      ) : ( grabbed == -1 ) ?
+      (
+        ex = this.envTrafoX(mx);
+        ( snapping == 1 ) ? ex = floor(ex * cuts + .5) / cuts;
+        
+        ex = max(ex, loopStart + 0.01);
+        loopEnd = ex;
+      );
+    ) : (
+      grabbed = 0;
+    );
+    
+    ( right > 0 ) ?
+    (
+      ( lastright == 0 ) ? (
+        ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+        (
+          endX = this.getEnvX(nodes-1);
+          endY = this.getEnvY(nodes-1);
+          ex = this.envTrafoX(mx);
+          ey = this.envTrafoY(my);
+          idx = this.selectEnvelopePoint(ex, ey);
+          ( idx > 0 ) ? (
+            this.setEnvPt(idx, endX, endY);
+            this.setEnvPt(nodes, 0, 0);
+          ) : (
+            ( snapping == 1 ) ? (
+              tx = floor(ex * cuts + .5) / cuts;
+              ex = tx < ex ? ex = tx - 0.000000001;
+              ex = tx > ex ? ex = tx + 0.000000001;
+            );
+            this.setEnvPt(nodes, ex, ey);
+          );
+        );
+      );
+    );
+    
+    speedSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);    
+    soften.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    midiTrigger.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    midiVel.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    snap.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    
+    this.updateEnvelopeSpeed();
+    this.updateToggles();
+    
+    ( abs(mouse_wheel) > 0 ) ? (
+      ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+      (
+        zoom = max(1,zoom + .001*mouse_wheel);
+        mouse_wheel = 0;
+        offset = min( zoom-1, max( 0, offset - this.envTrafoX(mx) + this.envTrafoX(lx) ) );
+      );
+    );
+    
+    lx = mx;
+    ly = my;
+    lastleft = left;
+    lastright = right;
+  );  
+
+function calcEnvelope(t)
+  global( grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
+          backface_color_r, backface_color_g, backface_color_b, backface_color_a )
+  instance(memory, nodes)
+  local(xptr, tn, tnm1, yn, ynm1, dy)
+  (
+    xptr = memory;
+    loop(nodes,
+      tn = xptr[];
+      tn > t ? (
+        xptr += 1;
+        yn = xptr[];
+        xptr -= 2;
+        ynm1 = xptr[];
+        xptr -= 1;
+        tnm1 = xptr[];
+      );
+      xptr += 2;
+    );
+    
+    // Lerp it baby
+    dy = (yn - ynm1) / ( tn - tnm1 );
+    ynm1 + dy * (t-tnm1);
+  );
+
+function evaluateEnvelope(notesOn)
+  global()
+  instance(curTime, invsrate, cpos, memory, tn, tnm1, yn, ynm1, dy, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel)
+  local(ret, xptr)
+  (
+    //ret = this.calcEnvelope(curTime);
+    ( cnode < nodes ) ? (
+      while( curTime > cpos[] )
+      ( 
+        tnm1  = cpos[];
+        ynm1  = cpos[1];
+        tn    = cpos[2];
+        yn    = cpos[3];
+        dy    = (yn - ynm1) / ( tn - tnm1 );
+        cpos  += 2;
+        cnode += 1;
+      );      
+      
+      ret = ynm1 + dy * (curTime-tnm1);
+      ( useVelocities == 1 ) ? ret = curvel * ret;
+      
+      curTime = curTime + invsrate;
+      ( notesOn && (curTime > loopEnd) ) ? ( curTime = loopStart; cnode = 0; cpos = memory; );
+      
+      softening == 1 ? (
+        smoothMem = smoothMem + .05 * ( ret - smoothMem );
+      ) : (
+        ret
+      );
+    ) : (
+      softening == 1 ? (
+        smoothMem = smoothMem - .05 * smoothMem;
+      ) : (
+        0
+      );
+    )
+  );  
 
 //////////////////////////////////////////////////////////
 // Memory layout
@@ -8185,8 +8963,8 @@ fb_buf1         = 48*bufferDist;
 fb_buf2         = 50*bufferDist;
 
 // Fixed feedback buffers
-fb_bufferL.initBuffer(fb_buf1, fb_buf1+88200);
-fb_bufferR.initBuffer(fb_buf2, fb_buf2+88200);
+fb_bufferL.initBuffer(fb_buf1, fb_buf1+120000);
+fb_bufferR.initBuffer(fb_buf2, fb_buf2+120000);
 
 pitchTrackerBuf = 52*bufferDist;
 pitchFFT.initSpectrum(pitchTrackerBuf);
@@ -8202,6 +8980,9 @@ delay_buf5      = 58*bufferDist;
 delay_buf6      = delay_buf5 + 100000;
 delay_buf7      = delay_buf6 + 100000;
 delay_buf8      = delay_buf7 + 100000;
+
+env_buf1        = 66*65536;
+env_buf2        = 68*65536;
 
 filter_delay1.initBuffer(delay_buf1, delay_buf1 + 50000);
 filter_delay2.initBuffer(delay_buf2, delay_buf2 + 50000);
@@ -8612,29 +9393,44 @@ function setupGUI()
   
   gonioIn.setWindowLocation(3*wndPad+2*wndX, 2.4*wndPad + wndY - yOffset, wndX, wndY * .9);
   gonioOut.setWindowLocation(3*wndPad+2*wndX, 2.4*wndPad + wndY - yOffset, wndX, wndY * .9);  
-   
+  
+  envX = 3*wndPad+2*wndX;
+  envY = 2.4*wndPad + 2*wndY - yOffset; 
+  envW = wndX;
+  envH = wndY * .35;
+  envWindow1.initEnvelope(envX, envY, envW, envH, env_buf1, 6, "ENVELOPE 1 (BETA)");
+
+  envY = 2.4*wndPad + 2.440*wndY - yOffset;
+  envWindow2.initEnvelope(envX, envY, envW, envH, env_buf2, 6, "ENVELOPE 2 (BETA)");
+  
   wR = widgetcolor_r;
   wG = widgetcolor_g;
   wB = widgetcolor_b;
   wA = widgetcolor_a;
   
-  buttonHeight = 12 * retina_scaling;
-  buttonWidth = 70 * retina_scaling;
-  buttonPad = 6 * retina_scaling;
+  buttonHeight  = 12 * retina_scaling;
+  buttonWidth   = 70 * retina_scaling;
+  buttonPad     = 6 * retina_scaling; 
   
-  masterPanelX = 4*wndPad+3*wndX;
-  masterPanelY = (30 + 5) * retina_scaling - yOffset;
-  sliderWidth = 234 * retina_scaling;
-  sliderHeight= 20 * retina_scaling;
-  sliderPad   = 5 * retina_scaling;
-  masterPanelH = sliderHeight*4+6*sliderPad;
+  masterPanelX  = 4*wndPad+3*wndX;
+  masterPanelY  = (30 + 5) * retina_scaling - yOffset;
+  sliderWidth   = 234 * retina_scaling;
+  sliderHeight  = 20 * retina_scaling;
+  sliderPad     = 5 * retina_scaling;
+  masterPanelH  = sliderHeight*4+6*sliderPad;
+  
+  toggleWidth   = .15 * sliderWidth; // .2
+  baseRight     = sliderWidth - .8*toggleWidth; // .82
+  toggleOffset  = .12 * sliderWidth; // .185
   postTextLoc = masterPanel.groupWidget(masterPanelX, masterPanelY, sliderWidth, masterPanelH, "MASTER", wR, wG, wB, wA );
-  lfoGainButton.selectionButton(masterPanelX + .82*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the gain responds to changes in the LFO.");
-  dynamicGainButton.selectionButton(masterPanelX + .82*sliderWidth - .185*sliderWidth, masterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic gain manipulation.\n\nWhen activated, the gain responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  lfoGainButton.selectionButton(masterPanelX + baseRight, masterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the gain responds to changes in the LFO.");
+  dynamicGainButton.selectionButton(masterPanelX + baseRight - toggleOffset, masterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic gain manipulation.\n\nWhen activated, the gain responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  env1GainButton.selectionButton(masterPanelX + baseRight - 3*toggleOffset, masterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN1",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 1 for gain manipulation.");
+  env2GainButton.selectionButton(masterPanelX + baseRight - 2*toggleOffset, masterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for gain manipulation.");
   
   agcButton.selectionButton(postTextLoc + .015 * sliderWidth, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "AGC",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Automatic Gain Control (BETA)\n\nAdjusts the level between post-filter and post-gain in order\nto keep the RMS ratio between post-filter and post-drive fixed.\n\nThis setting is meant to protect your ears when tweaking filters,\nnot to be used in final production as it affects dynamics.\n\n\nClicking this button with the outer mouse button transfers the \ngain correction estimated by AGC to the Post-Gain slider and\ndisables AGC.");
-  force_mono.selectionButton(postTextLoc + .015 * sliderWidth + .14*sliderWidth-1*sliderPad, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "M",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Force mono\n\nSums left and right output. Use this every now\nand then to spot any phase issues in the bass.\n");
-  globalbypass.selectionButton(postTextLoc + .015 * sliderWidth + .28*sliderWidth-2*sliderPad, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "B",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Bypass plugin.\n");
+  force_mono.selectionButton(postTextLoc + .015 * sliderWidth + .14*sliderWidth-1*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "M",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Force mono\n\nSums left and right output. Use this every now\nand then to spot any phase issues in the bass.\n");
+  globalbypass.selectionButton(postTextLoc + .015 * sliderWidth + .24*sliderWidth-2*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "B",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Bypass plugin.\n");
 
   inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 40, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
   inClip.selectionButton(masterPanelX+sliderPad+ + .8*sliderWidth, 3+masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle input clipping");
@@ -8645,16 +9441,16 @@ function setupGUI()
   firButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+3*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "FIR",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable FIR up/downsampling\n(preserves phase but expensive)");
   linkButton.selectionButton(masterPanelX+sliderPad + .745*sliderWidth, masterPanelY+sliderPad+1, .028*sliderWidth, sliderHeight+3*sliderPad+2, "",  .3, .4, .8, .3, "Link");
 
-  toggleWidth = .165;
-  toggleButtonWidth = .185;
   filterPanelX = masterPanelX;
   filterPanelY = masterPanelY + masterPanelH + sliderHeight - .5*sliderPad;
   filterPanelH = sliderHeight*4+6*sliderPad;
   postTextLoc = filterPanel.groupWidget(filterPanelX, filterPanelY, sliderWidth, filterPanelH, "FILTER", wR, wG, wB, wA );  
-  pitchFollow1.selectionButton(filterPanelX + .82*sliderWidth - 3*toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "PIT",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable pitch following for this filter (BETA).\n\nWhen activated, the filter follows the dominant incoming frequency.");
-  keyFollow1.selectionButton(filterPanelX + .82*sliderWidth - 2*toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "KEY",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable note following for this filter.\n\nWhen activated, the filter follows the note pitch\nof the last note sent to it over MIDI.");
-  dynamicFilterButton.selectionButton(filterPanelX + .82*sliderWidth - toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
-  lfoFilterButton.selectionButton(filterPanelX + .82*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
+  pitchFollow1.selectionButton(filterPanelX + baseRight - 5*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "PIT",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable pitch following for this filter (BETA).\n\nWhen activated, the filter follows the dominant incoming frequency.");
+  keyFollow1.selectionButton(filterPanelX + baseRight - 4*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "KEY",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable note following for this filter.\n\nWhen activated, the filter follows the note pitch\nof the last note sent to it over MIDI.");
+  env1FilterButton.selectionButton(filterPanelX + baseRight - 3*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN1",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 1 for filter manipulation.");
+  env2FilterButton.selectionButton(filterPanelX + baseRight - 2*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for filter manipulation.");
+  dynamicFilterButton.selectionButton(filterPanelX + baseRight - toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  lfoFilterButton.selectionButton(filterPanelX + baseRight, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
   filterSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 4, "Filter selection.\nNon-linear (NL) filters are more expensive and benefit more from oversampling.\nTheir character comes out when driven (increase the pre-gain without enabling clipping).\nZero Delay Feedback (ZDF) filters behave better with rapid modulation.\nAll filters are IIR filters, meaning they do not preserve linear phase.\n\nWARNING: Not all filters are stable under rapid modulation!\nRemember to read the filter description to avoid being hit by instability.\nInstability manifests itself as there suddenly being a spike and then no sound." );
   inertia.selectionButton(filterPanelX+sliderPad + .8 * sliderWidth, filterPanelY+sliderPad*2+sliderHeight*1.05, .2*sliderWidth-2*sliderPad, .95*sliderHeight, "Inertia",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle cutoff and resonance inertia");
   modeSelect.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad*2+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes, 1, 0, 1, "Filter mode selection.\nStereo - Default mode. Process left and right independently.\nMono double - Interleave samples and process.\nM1/S2 - Process mid regularly, feed side samples to filter twice.\nM2/S1 - Feed mid to filter twice, process side regularly.\nOnly side - Only filter the side channel.\nOnly mid - Only filter the mid channel.\nStereo Boost - Filter both, but pre-amplify side channel.\nStereoize - M/S processing. Side is boosted and computed with a delayed right channel for extra width.\nSubtle Stereo - M/S processing. Side is computed with a slightly delayed right channel for extra width.\nInverted - Signal is run through the filter, but filtered signal is subtracted from original and then distorted." );
@@ -8666,10 +9462,12 @@ function setupGUI()
   filterPanelY = filterPanelY + filterPanelH + sliderHeight - .5*sliderPad;  
   filterPanelH = sliderHeight*3+5*sliderPad;
   postTextLoc = filterPanel2.groupWidget(filterPanelX, filterPanelY, sliderWidth, filterPanelH, "FILTER", wR, wG, wB, wA );
-  pitchFollow2.selectionButton(filterPanelX + .82*sliderWidth - 3*toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "PIT",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable pitch following for this filter (BETA).\n\nWhen activated, the filter follows the dominant incoming frequency.");
-  keyFollow2.selectionButton(filterPanelX + .82*sliderWidth - 2*toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "KEY",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable note following for this filter.\n\nWhen activated, the filter follows the note pitch\nof the last note sent to it over MIDI.");
-  dynamicFilterButton2.selectionButton(filterPanelX + .82*sliderWidth - toggleWidth*sliderWidth, filterPanelY-buttonHeight, toggleButtonWidth*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
-  lfoFilterButton2.selectionButton(filterPanelX + .82*sliderWidth, filterPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
+  pitchFollow2.selectionButton(filterPanelX + baseRight - 5*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "PIT",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable pitch following for this filter (BETA).\n\nWhen activated, the filter follows the dominant incoming frequency.");
+  keyFollow2.selectionButton(filterPanelX + baseRight - 4*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "KEY",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable note following for this filter.\n\nWhen activated, the filter follows the note pitch\nof the last note sent to it over MIDI.");
+  env1Filter2Button.selectionButton(filterPanelX + baseRight - 3*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN1",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 1 for filter manipulation.");
+  env2Filter2Button.selectionButton(filterPanelX + baseRight - 2*toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for filter manipulation.");
+  dynamicFilterButton2.selectionButton(filterPanelX +  baseRight - toggleOffset, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  lfoFilterButton2.selectionButton(filterPanelX + baseRight, filterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic filter manipulation.\n\nWhen activated, the filter responds to changes in the LFO.");
   filterSelect2.combobox(filterPanelX+sliderPad, filterPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nFilters, 0, 0, 4, "Filter selection.\nNon-linear (NL) filters are more expensive and benefit more from oversampling.\nTheir character comes out when driven (increase the pre-gain without enabling clipping).\nZero Delay Feedback (ZDF) filters behave better with rapid modulation.\nAll filters are IIR filters, meaning they do not preserve linear phase.\n\nWARNING: Not all filters are stable under rapid modulation!\nRemember to read the filter description to avoid being hit by instability.\nInstability manifests itself as there suddenly being a spike and then no sound." );
   cutoffSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+2.5*sliderPad+1*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Cutoff", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter cutoff.\nLMB sets filter cutoff.\nRMB sets range for modulation.\nFor more info on modulation, hover over the Filter button in the dynamics panel.\n\nNote: When LFO and dynamics are both active, the modulation range is twice what is diplayed.\nNote: Hold Shift and/or Ctrl while dragging for smaller adjustments.\nNote: Use mouse wheel for precision adjustments.\nNote: Use shift + Mousewheel for precision adjustments of mod range.");
   resonanceSlider2.sliderWidget(filterPanelX+sliderPad, filterPanelY+3.5*sliderPad+2*sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Resonance", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Filter resonance.\nLMB sets filter cutoff.\nRMB sets range for modulation.\nFor more info on modulation, hover over the Filter button in the dynamics panel.\n\nNote: When LFO and dynamics are both active, the modulation range is twice what is diplayed.\nNote: Hold Shift and/or Ctrl while dragging for smaller adjustments.\nNote: Use mouse wheel for precision adjustments.\nNote: Use shift + Mousewheel for precision adjustments of mod range.");  
@@ -8681,8 +9479,10 @@ function setupGUI()
   postTextLoc = routingPanel.groupWidget(routingPanelX, routingPanelY, sliderWidth, routingPanelH, "ROUTING", wR, wG, wB, wA );
   modeSelect2.combobox(routingPanelX+sliderPad, routingPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, wR, wG, wB, wA, nModes2, 3, 0, 1, "Filter routing mode.\n\nSerial Dual Dist - Both filters are in series. Both with waveshaper enabled.\nSerial - Both filters are placed in series. The second filter does not use the waveshaper.\nParallel Dual Dist - Both filters are in series. Both filters have the waveshaper enabled.\nParallel - Both filters are in series. The second filter does not use the waveshaper.\nMorph Dual Dist - Both filters are linked in parallel. The Morph slider can be used to interpolate between A and B.\nMorph Dist - Both filters are linked in parallel. The Morph slider can be used to interpolate between A and B. B does not use the waveshaper.\n\n\nNote: Using morph routing means you can only use a maximum of 7 nodes for the spline waveshaper" );
   morphSlider.sliderWidget(routingPanelX+sliderPad, routingPanelY+sliderPad*2+sliderHeight, sliderWidth-2*sliderPad, sliderHeight, "Morph", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Routing control (depends on current function).");
-  dynamicMorph.selectionButton(routingPanelX + .82*sliderWidth - .185*sliderWidth, routingPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic manipulation.\n\nWhen activated, the controls in this tab can respond to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
-  lfoMorph.selectionButton(routingPanelX + .82*sliderWidth, routingPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic manipulation.\n\nWhen activated, the controls in this tab can respond to changes in the LFO.");
+  env1Morph.selectionButton(routingPanelX + baseRight - 3*toggleOffset, routingPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN1",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 1 for morph manipulation.");
+  env2Morph.selectionButton(routingPanelX + baseRight - 2*toggleOffset, routingPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for morph manipulation.");
+  dynamicMorph.selectionButton(routingPanelX + baseRight - toggleOffset, routingPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic manipulation.\n\nWhen activated, the controls in this tab can respond to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  lfoMorph.selectionButton(routingPanelX + baseRight, routingPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic manipulation.\n\nWhen activated, the controls in this tab can respond to changes in the LFO.");
   
   dynamicsPanelX = masterPanelX;
   dynamicsPanelY = routingPanelY + routingPanelH + sliderHeight - .5*sliderPad;
@@ -8720,21 +9520,41 @@ function setupGUI()
   lfoFrequency.sliderWidget(lfoPanelX+sliderPad, lfoPanelY+2.5*sliderPad+sliderHeight, .82*sliderWidth-2*sliderPad, sliderHeight, "Rate", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "LFO rate");
   tempoLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+2.5*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Tempo",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Synchronize to tempo");
   centeredLFOButton.selectionButton(lfoPanelX+sliderPad + .8*sliderWidth, lfoPanelY+3.5*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Center",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Centered");
-  dynamicLFOButton.selectionButton(lfoPanelX + .82*sliderWidth, lfoPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic LFO manipulation.\n\nWhen activated, the gain responds to changes in the dynamic variable.");
+  env1LFO.selectionButton(lfoPanelX + baseRight - 2*toggleOffset, lfoPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN1",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 1 for LFO manipulation.");
+  env2LFO.selectionButton(lfoPanelX + baseRight - 1*toggleOffset, lfoPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for LFO manipulation.");
+  dynamicLFOButton.selectionButton(lfoPanelX + baseRight, lfoPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic LFO manipulation.\n\nWhen activated, the gain responds to changes in the dynamic variable.");
   
   fbPanelX = masterPanelX;
   fbPanelY = lfoPanelY + lfoPanelH + sliderHeight - .5*sliderPad;
   fbPanelH = buttonHeight+sliderHeight*2;
   postTextLoc = feedbackPanel.groupWidget(fbPanelX, fbPanelY, sliderWidth, buttonHeight+sliderHeight*2+1*sliderPad, "Feedback (BETA)", wR, wG, wB, wA );
   feedbackActive.selectionButton(postTextLoc + .015 * sliderWidth, fbPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "A",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable global feedback.\n\nBe careful. While the total feedback amount is limited,\nthe sounds produced can be quite horrible.\n");
-  dynamicFeedback.selectionButton(fbPanelX + .82*sliderWidth - .185*sliderWidth, fbPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic feedback manipulation.\n\nWhen activated, the feedback responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
-  lfoFeedback.selectionButton(fbPanelX + .82*sliderWidth, fbPanelY-buttonHeight, .2*sliderWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic feedback manipulation.\n\nWhen activated, the feedback responds to changes in the LFO.");
+  env1FB.selectionButton(fbPanelX + baseRight - 3*toggleOffset, fbPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN1",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 1 for feedback manipulation.");
+  env2FB.selectionButton(fbPanelX + baseRight - 2*toggleOffset, fbPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for feedback manipulation.");  
+  dynamicFeedback.selectionButton(fbPanelX + baseRight - toggleOffset, fbPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "DYN",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic feedback manipulation.\n\nWhen activated, the feedback responds to changes in the dynamic\nvariable (shown with the yellow curve). This value changes based\non the settings set in the dynamics panel. It is either modulated\nby an attack/decay mechanism based on thresholding the input RMS\nvalue, or directly set to some function of the RMS value (RMS mode).");
+  lfoFeedback.selectionButton(fbPanelX + baseRight, fbPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "LFO",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable dynamic feedback manipulation.\n\nWhen activated, the feedback responds to changes in the LFO.");
   feedbackAmount.sliderWidget(fbPanelX+sliderPad, fbPanelY+sliderPad, sliderWidth-2*sliderPad, sliderHeight, "Feedback amount", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Feedback amount");
-  feedbackDelay.sliderWidget(fbPanelX+sliderPad, fbPanelY+2*sliderPad+sliderHeight, sliderWidth-2*sliderPad- 2*mulWidth-2*mulPad, sliderHeight, "Feedback delay", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Feedback delay");
+  feedbackDelay.sliderWidget(fbPanelX+sliderPad, fbPanelY+2*sliderPad+sliderHeight, sliderWidth-2*sliderPad- 3*mulWidth-3*mulPad, sliderHeight, "Feedback delay", wR, wG, wB, wA, 1, 0, 1, 0, "", 0, "Feedback delay");
   feedbackDelay_x8_1.selectionButton(fbPanelX-sliderPad+sliderWidth-mulWidth, fbPanelY+2*sliderPad+sliderHeight, mulWidth, sliderHeight-4, "x16",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Multiply value by 16");
   feedbackDelay_x8_2.selectionButton(fbPanelX-sliderPad+sliderWidth-2*mulWidth-mulPad, fbPanelY+2*sliderPad+sliderHeight, mulWidth, sliderHeight-4, "x8",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Multiply value by 8"); 
+  feedbackDelay_x8_3.selectionButton(fbPanelX-sliderPad+sliderWidth-3*mulWidth-2*mulPad, fbPanelY+2*sliderPad+sliderHeight, mulWidth, sliderHeight-4, "x6",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Multiply value by 6");
   
   finalSize = fbPanelY + fbPanelH + sliderHeight - .5*sliderPad + yOffset;
+  
+  env1GainButton.style = 2;
+  env2GainButton.style = 2;
+  env1GainButton.style = 2;
+  env2GainButton.style = 2;
+  env1FilterButton.style = 2;
+  env2FilterButton.style = 2;
+  env1Filter2Button.style = 2;
+  env2Filter2Button.style = 2;
+  env1Morph.style = 2;
+  env2Morph.style = 2;
+  env1LFO.style = 2;
+  env2LFO.style = 2;
+  env1FB.style = 2;
+  env2FB.style = 2;
   
   dynamicGainButton.style = 2;
   lfoGainButton.style = 2;
@@ -10547,7 +11367,7 @@ function specialGraphics()
     ) : ( this.filtertype == 73 ) ? 
     (
       specialValue = this.modulon.f;
-    ) : ( this.filtertype == 67 || this.filtertype == 68 || this.filtertype == 74 || this.filtertype == 75 ) ?
+    ) : ( this.filtertype == 60 || this.filtertype == 61 || this.filtertype == 62 || this.filtertype == 67 || this.filtertype == 68 || this.filtertype == 74 || this.filtertype == 75 ) ?
     (
       showFilterFFT = 0;
     ) : ( this.filtertype == 70 ) ?
@@ -10568,7 +11388,7 @@ function process(sample, dist)
             /* Initialized immediately, hence no instance history */
             os, os1, os2, ys1, flt, reso, lp, diff, vib_delay, vibratoSinTerm
         )
-  global(slider55, gaincompensation,
+  global(slider55, pregain,
         /* This block is part of the cruft that is filter 16 and 17 :( */
         filter_delay1,              filter_delay2,
         filter_delay3,              filter_delay4,
@@ -10614,10 +11434,10 @@ function process(sample, dist)
     ) : ( this.filtertype == 8 ) ? (
       sample = this.filter_dualfiltBP.evaldualfiltBP(sample, dist);
     ) : ( this.filtertype == 9 ) ? (
-      sample = gaincompensation * this.filter_fancymoog.evalfancymoog(40*sample)/40;
+      sample = (1/pregain) * this.filter_fancymoog.evalfancymoog(40*sample)/40;
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 10 ) ? (
-      sample = gaincompensation * this.filter_fancymoog.evalfancymoog_noJac(40*sample)/40;
+      sample = (1/pregain) * this.filter_fancymoog.evalfancymoog_noJac(40*sample)/40;
       dist ? sample = distort(sample);
     ) : ( this.filtertype == 11 ) ? (
       sample = this.filter_notch.evalrbj(sample);
@@ -11066,10 +11886,28 @@ function processSamples()
         ssr = .5*ssr + .5*R2.process(sr_in, 0);
       ) : ( secondFilterMode == 4 ) ? (
         // Parallel dual dist
+        morphModVal              = 0;
+        cnt                      = 0;
+        slider35 & 1024          ? (morphModVal += filteredDynval; cnt += 1;);
+        env1Morph.active         ? (morphModVal += envelopeValue1; cnt += 1;);
+        env2Morph.active         ? (morphModVal += envelopeValue2; cnt += 1;);
+        cnt > 1                  ? morphModVal /= cnt;
+        slider35 & 2048          ? morphModVal += modulator.scaled_modvalue;
+        morphSliderValue = min(1, max(0, slider18 + slider34 * morphModVal));
+        
         ssl = (1-morphSliderValue)*ssl + morphSliderValue*L2.process(sl_in, 1);
         ssr = (1-morphSliderValue)*ssr + morphSliderValue*R2.process(sr_in, 1);
       ) : ( secondFilterMode == 5 ) ? (
         // Parallel single dist
+        morphModVal              = 0;
+        cnt                      = 0;
+        slider35 & 1024          ? (morphModVal += filteredDynval; cnt += 1;);
+        env1Morph.active         ? (morphModVal += envelopeValue1; cnt += 1;);
+        env2Morph.active         ? (morphModVal += envelopeValue2; cnt += 1;);
+        cnt > 1                  ? morphModVal /= cnt;
+        slider35 & 2048          ? morphModVal += modulator.scaled_modvalue;
+        morphSliderValue = min(1, max(0, slider18 + slider34 * morphModVal));
+        
         ssl = (1-morphSliderValue)*ssl + morphSliderValue*L2.process(sl_in, 0);
         ssr = (1-morphSliderValue)*ssr + morphSliderValue*R2.process(sr_in, 0);
       );
@@ -11097,6 +11935,9 @@ updateActiveFilters(1);
   cTempo            = tempo; 
   blockSize         = samplesblock;
   secondFilterMode  = floor(slider50*.5);
+
+  envWindow1.updateEnvRate();
+  envWindow2.updateEnvRate();
 
   function inertiaSmoothing(newval)
     instance(prev, val, boost)
@@ -11158,7 +11999,7 @@ updateActiveFilters(1);
     pdc_delay = pdcDelay;
   );
   
-  handlesMIDI = (slider38&1) || ((slider45 > 1) && (slider45 < 6)) || followKey1 || followKey2;
+  //handlesMIDI = (slider38&1) || ((slider45 > 1) && (slider45 < 6)) || followKey1 || followKey2;
   notePtr = note_mem;
   while (midirecv(offset,msg1,msg2,msg3)) (
       noteOn = msg1>$x89&&msg1<$xA0 && msg3!=0;
@@ -11186,6 +12027,15 @@ updateActiveFilters(1);
   notes_remain    = 1;        // End of the note buffer?
   note_next       = notePtr[];
  
+  c_feedbackEnabled = slider35 & 32;
+  c_feedbackEnabled ? (
+    c_feedbackDynamic = slider35 & 64;
+    c_feedbackLFO     = slider35 & 128;
+    c_feedbackMul1    = slider35 & 256;
+    c_feedbackMul2    = slider35 & 512;
+    c_feedbackMul3    = slider35 & 8192;
+  ); 
+ 
 @sample
   sl        = spl0 * pregain;
   sr        = spl1 * pregain;
@@ -11202,15 +12052,20 @@ updateActiveFilters(1);
   
   // Does this plugin respond to MIDI signals?
   // Take notes from the stack until we hit the end marker -1
-  (handlesMIDI && notes_remain) ? (
+  (notes_remain) ? (
     while( note_next == curSample ) (
       notePtr += 1; 
       (notePtr[] > 0) ? ( // note-on
-        modulator.reset=1;
+        modulator.reset = 1;
         LFO_was_reset = 1;
         notesOn = notesOn + 1;
-        lastVel = ( (slider45 == 4) || (slider45 == 5) ) ? notePtr[]/127 : 1;
+        lastVel_cur = notePtr[]/127;
+        lastVel = ( (slider45 == 4) || (slider45 == 5) ) ? lastVel_cur : 1;
         (slider45 == 2 || slider45 == 4) ? ( tDynamic = 0; dynval = 0; );
+        
+        envWindow1.resetEnvelope(lastVel_cur, 0);
+        envWindow2.resetEnvelope(lastVel_cur, 0);
+        
         notePtr += 1;
         lastNote = notePtr[];
         
@@ -11227,6 +12082,9 @@ updateActiveFilters(1);
       notes_remain = note_next != -1337;
     );
   );
+  
+  envelopeValue1 = envWindow1.evaluateEnvelope(notesOn);
+  envelopeValue2 = envWindow2.evaluateEnvelope(notesOn);
   
   notePtrAtEnd=note_next;
   // Dynamics
@@ -11293,10 +12151,18 @@ updateActiveFilters(1);
   // Update active filter only if cutoff changed
   updateActiveFilters(0);
   
-  (slider35 & 4096) ? (
-    modulator.updateModRate(max(0,min(1,slider37 + mod_LFO_rate * filteredDynval)));
-    modulator.updateScale(max(0,min(4,slider39 + mod_LFO_amount * filteredDynval)));
-  ); 
+  lfoModVal                 = 0;
+  cnt                       = 0;
+  slider35 & 4096           ? ( lfoModVal += filteredDynval; cnt += 1; );
+  env1LFO.active            ? ( lfoModVal += envelopeValue1; cnt += 1; );
+  env2LFO.active            ? ( lfoModVal += envelopeValue2; cnt += 1; );
+  cnt > 1                   ? lfoModVal /= cnt;
+  
+  (lfoModVal != lfoModValLast) ? (
+    modulator.updateModRate(max(0,min(1,slider37 + mod_LFO_rate * lfoModVal)));
+    modulator.updateScale(max(0,min(4,slider39 + mod_LFO_amount * lfoModVal)));
+    lfoModValLast = lfoModVal;
+  );
   
   ( lookAhead ) ?
   (
@@ -11316,32 +12182,24 @@ updateActiveFilters(1);
   movavgLP = max(alpha*movavgLP,  sl);
   movavgRN = max(alpha*movavgRN, -sr);
   movavgRP = max(alpha*movavgRP,  sr);
-
-  morphSliderValue = slider18;
-  slider35 & 1024 ? morphSliderValue += slider34 * filteredDynval;
-  slider35 & 2048 ? morphSliderValue += slider34 * modulator.scaled_modvalue;
-  morphSliderValue = min(1, max(0, morphSliderValue));
-
+  
   // FEEDBACK
-  slider35 & 32 ? (  
-    newFbAmnt = slider15;
-    newFbDelay = slider16;
-    
-    // Dynamic FB
-    ((slider35 & 128) > 0) ? (
-      newFbAmnt   += slider31 * modulator.scaled_modvalue;
-      newFbDelay  += slider32 * modulator.scaled_modvalue;
-    );
-    ((slider35 & 64) > 0) ? (
-      newFbAmnt   += slider31 * filteredDynval;
-      newFbDelay  += slider32 * filteredDynval;
-    );
-    newFbDelay  = min(1, max(0, newFbDelay));
-    newFbAmnt   = min(1, max(0, newFbAmnt));
+  c_feedbackEnabled ? (  
+    fbModVal                 = 0;
+    cnt                      = 0;
+    c_feedbackDynamic        ? ( fbModVal += filteredDynval; cnt += 1; );
+    env1FB.active            ? ( fbModVal += envelopeValue1; cnt += 1; );
+    env2FB.active            ? ( fbModVal += envelopeValue2; cnt += 1; );
+    cnt > 1                  ? fbModVal /= cnt;
+    c_feedbackLFO            ? fbModVal += modulator.scaled_modvalue;
+        
+    newFbDelay  = min(1, max(0, slider16 + slider32 * fbModVal));
+    newFbAmnt   = min(1, max(0, slider15 + slider31 * fbModVal));
     
     newFbDelay = .003125 * srate * (pow(2, newFbDelay)-1) + 1;
-    (slider35 & 256) ? newFbDelay *= 16;
-    (slider35 & 512) ? newFbDelay *= 8;
+    c_feedbackMul1 ? newFbDelay *= 16;
+    c_feedbackMul2 ? newFbDelay *= 8;
+    c_feedbackMul3 ? newFbDelay *= 6;
     
     smoothedFbDelay = smoothedFbDelay * .999 + newFbDelay * .001;
     flNewFbDelay = floor(smoothedFbDelay);
@@ -11931,7 +12789,7 @@ updateActiveFilters(1);
     gfx_rect(fx, fy, wx, hh);
     gfx_rect(fx, fy + fy2, wx, hh);
     filterDescription(slider47, fy + 5 * retina_scaling);
-    filterDescription(slider40, fy + fy2 + 5*retina_scaling);  
+    filterDescription(slider40, fy + fy2 + 25*retina_scaling);  
     
     window3.draw_back();
     window3.inLight.active ? (
@@ -12032,6 +12890,11 @@ updateActiveFilters(1);
       gonioOut.gonio_processMouse(mouse_x, mouse_y, mouse_cap);      
     );
     
+    envWindow1.drawEnvelopeWindow();
+    envWindow2.drawEnvelopeWindow();
+    envWindow1.processMouse();
+    envWindow2.processMouse();
+    
     window3.xlabel("Time");    
     window3.ylabel("RMS / Level");
     window1.draw_window(movAvgLN, movAvgRN, movavgOLN, movavgORN);
@@ -12100,6 +12963,21 @@ updateActiveFilters(1);
     lfoGainButton.selectionButton_draw();
     dynamicLFOButton.selectionButton_draw();
     
+    env1GainButton.selectionButton_draw();
+    env2GainButton.selectionButton_draw();
+    env1GainButton.selectionButton_draw();
+    env2GainButton.selectionButton_draw();
+    env1FilterButton.selectionButton_draw();
+    env2FilterButton.selectionButton_draw();
+    env1Filter2Button.selectionButton_draw();
+    env2Filter2Button.selectionButton_draw();
+    env1Morph.selectionButton_draw();
+    env2Morph.selectionButton_draw();
+    env1LFO.selectionButton_draw();
+    env2LFO.selectionButton_draw();
+    env1FB.selectionButton_draw();
+    env2FB.selectionButton_draw();
+    
     dynamicWaveShapingButton.selectionButton_draw();
     lookaheadButton.selectionButton_draw();
     dynButton.selectionButton_draw();
@@ -12118,6 +12996,7 @@ updateActiveFilters(1);
     
     feedbackDelay_x8_1.selectionButton_draw();
     feedbackDelay_x8_2.selectionButton_draw();
+    feedbackDelay_x8_3.selectionButton_draw();
     
     modulatorDisplay.draw_modulator();
     
@@ -12127,23 +13006,43 @@ updateActiveFilters(1);
     rmsSlider.sliderWidget_draw();
     
     /* These flags determine whether these values have an animated slider and mod range on top or not */
-    inGain.hasFilterDynamics             = dynamicGainButton.active;
+    inGain.hasFilterDynamics             = dynamicGainButton.active || env1GainButton.active || env2GainButton.active;
+    inGain.dynval                        = gainModVal;
     inGain.hasModulatorDynamics          = lfoGainButton.active;
-    outGain.hasFilterDynamics            = dynamicGainButton.active;
+    outGain.hasFilterDynamics            = dynamicGainButton.active || env1GainButton.active || env2GainButton.active;
+    outGain.dynval                       = gainModVal;
     outGain.hasModulatorDynamics         = lfoGainButton.active;
-    cutoffSlider.hasFilterDynamics       = dynamicFilterButton.active;
+    
+    cutoffSlider.hasFilterDynamics       = dynamicFilterButton.active || env1FilterButton.active || env2FilterButton.active;
     cutoffSlider.hasModulatorDynamics    = lfoFilterButton.active;
-    resonanceSlider.hasFilterDynamics    = dynamicFilterButton.active;
+    cutoffSlider.dynval                  = filter1ModVal;
+    resonanceSlider.hasFilterDynamics    = dynamicFilterButton.active || env1FilterButton.active || env2FilterButton.active;
     resonanceSlider.hasModulatorDynamics = lfoFilterButton.active;
-    feedbackAmount.hasFilterDynamics     = dynamicFeedback.active;
+    resonanceSlider.dynval               = filter1ModVal;
+    
+    cutoffSlider2.hasFilterDynamics      = dynamicFilterButton2.active || env1Filter2Button.active || env2Filter2Button.active;
+    cutoffSlider2.hasModulatorDynamics   = lfoFilterButton2.active;
+    cutoffSlider2.dynval                 = filter2ModVal;
+    resonanceSlider2.hasFilterDynamics   = dynamicFilterButton2.active || env1Filter2Button.active || env2Filter2Button.active;
+    resonanceSlider2.hasModulatorDynamics= lfoFilterButton2.active;
+    resonanceSlider2.dynval              = filter2ModVal;
+    
+    feedbackAmount.hasFilterDynamics     = dynamicFeedback.active || env1FB.active || env2FB.active;
     feedbackAmount.hasModulatorDynamics  = lfoFeedback.active;
-    feedbackDelay.hasFilterDynamics      = dynamicFeedback.active;
+    feedbackAmount.dynval                = fbModVal;
+    feedbackDelay.hasFilterDynamics      = dynamicFeedback.active || env1FB.active || env2FB.active;
     feedbackDelay.hasModulatorDynamics   = lfoFeedback.active;
-    morphSlider.hasFilterDynamics        = dynamicMorph.active;
+    feedbackDelay.dynval                 = fbModVal;
+    
+    morphSlider.hasFilterDynamics        = dynamicMorph.active || env1Morph.active || env2Morph.active;
+    morphSlider.dynval                   = morphModVal;
     morphSlider.hasModulatorDynamics     = lfoMorph.active;
-    lfoFrequency.hasFilterDynamics       = dynamicLFOButton.active;
-    modulationFactor.hasFilterDynamics   = dynamicLFOButton.active;
-
+    
+    lfoFrequency.hasFilterDynamics       = dynamicLFOButton.active || env1LFO.active || env2LFO.active;
+    lfoFrequency.dynval                  = lfoModVal;
+    modulationFactor.hasFilterDynamics   = dynamicLFOButton.active || env1LFO.active || env2LFO.active;
+    modulationFactor.dynval              = lfoModVal;
+    
     (slider35 & 32) ? (
       feedbackAmount.disabled = 0;
       feedbackDelay.disabled  = 0;
@@ -12179,12 +13078,7 @@ updateActiveFilters(1);
     cutoffSlider.overridevalue = hz;
     cutoffSlider.overrideunit = "Hz";
     cutoffSlider.sliderWidget_draw();
-    resonanceSlider.sliderWidget_draw();
-    
-    cutoffSlider2.hasFilterDynamics = dynamicFilterButton2.active;
-    cutoffSlider2.hasModulatorDynamics = lfoFilterButton2.active;
-    resonanceSlider2.hasFilterDynamics = dynamicFilterButton2.active;
-    resonanceSlider2.hasModulatorDynamics = lfoFilterButton2.active;
+    resonanceSlider.sliderWidget_draw();    
     
     hz = getHz(slider40, cutoffSlider2.sliderWidget_getValue());
     cutoffSlider2.overridevalue = hz;
@@ -12358,20 +13252,7 @@ updateActiveFilters(1);
             rms_x4_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);                
             newMultiplierMode = atk_x4_1.active + 2*atk_x4_2.active + 4 * decay_x4_1.active + 8 * decay_x4_2.active + 16 * rms_x4_1.active + 32 * rms_x4_2.active;
             ( slider57 != newMultiplierMode ) ? ( slider_automate( slider57=newMultiplierMode; ); forceUpdate = 1; );
-            
-            lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&1))+lookAheadButton.active; ); forceUpdate = 1; );
-            bypassFilter1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&4))+4*bypassFilter1.active; ); forceUpdate = 1; );
-            bypassFilter2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&8))+8*bypassFilter2.active; ); forceUpdate = 1; );
-            lfoSmoothButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&16))+16*lfoSmoothButton.active; ); forceUpdate = 1; );
-            feedbackActive.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&32))+32*feedbackActive.active; ); forceUpdate = 1; );
-            dynamicFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&64))+64*dynamicFeedback.active; ); forceUpdate = 1; );
-            lfoFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&128))+128*lfoFeedback.active; ); forceUpdate = 1; );            
-            feedbackDelay_x8_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&256))+256*feedbackDelay_x8_1.active; ); forceUpdate = 1; );
-            feedbackDelay_x8_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&512))+512*feedbackDelay_x8_2.active; ); forceUpdate = 1; );
-            dynamicMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&1024))+1024*dynamicMorph.active; ); forceUpdate = 1; );
-            lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&2048))+2048*lfoMorph.active; ); forceUpdate = 1; );            
-            dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( slider_automate( slider35=(slider35 - (slider35&4096))+4096*dynamicLFOButton.active; ); forceUpdate = 1; );
-          
+                      
             change = agcButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             ( change == 1 ) ? ( 
               agcControl = agcButton.active;
@@ -12409,6 +13290,59 @@ updateActiveFilters(1);
             showFiltersButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap )     ? hideSpectrumFilters = 1 - showFiltersButton.active;
             
             // Something changed w.r.t. dynamics
+            env1GainButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env2GainButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env1FilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env2FilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env1Filter2Button.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env2Filter2Button.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env1Morph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env2Morph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env1LFO.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env2LFO.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env1FB.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            env2FB.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            
+            lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)     ? ( slider_automate( slider35=(slider35 - (slider35&1))+lookAheadButton.active; ); forceUpdate = 1; );
+            bypassFilter1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)       ? ( slider_automate( slider35=(slider35 - (slider35&4))+4*bypassFilter1.active; ); forceUpdate = 1; );
+            bypassFilter2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)       ? ( slider_automate( slider35=(slider35 - (slider35&8))+8*bypassFilter2.active; ); forceUpdate = 1; );
+            lfoSmoothButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)     ? ( slider_automate( slider35=(slider35 - (slider35&16))+16*lfoSmoothButton.active; ); forceUpdate = 1; );
+            feedbackActive.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)      ? ( slider_automate( slider35=(slider35 - (slider35&32))+32*feedbackActive.active; ); forceUpdate = 1; );
+            dynamicFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)     ? ( slider_automate( slider35=(slider35 - (slider35&64))+64*dynamicFeedback.active; ); forceUpdate = 1; );
+            lfoFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)         ? ( slider_automate( slider35=(slider35 - (slider35&128))+128*lfoFeedback.active; ); forceUpdate = 1; );            
+            feedbackDelay_x8_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)  ? ( slider_automate( slider35=(slider35 - (slider35&256))+256*feedbackDelay_x8_1.active; ); forceUpdate = 1; );
+            feedbackDelay_x8_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)  ? ( slider_automate( slider35=(slider35 - (slider35&512))+512*feedbackDelay_x8_2.active; ); forceUpdate = 1; );
+            feedbackDelay_x8_3.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)  ? ( slider_automate( slider35=(slider35 - (slider35&8192))+8192*feedbackDelay_x8_2.active; ); forceUpdate = 1; );
+            dynamicMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)        ? ( slider_automate( slider35=(slider35 - (slider35&1024))+1024*dynamicMorph.active; ); forceUpdate = 1; );
+            lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)            ? ( slider_automate( slider35=(slider35 - (slider35&2048))+2048*lfoMorph.active; ); forceUpdate = 1; );            
+            dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)    ? ( slider_automate( slider35=(slider35 - (slider35&4096))+4096*dynamicLFOButton.active; ); forceUpdate = 1; );
+            
+            /*lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            bypassFilter1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            bypassFilter2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            lfoSmoothButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            feedbackActive.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            dynamicFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            lfoFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            feedbackDelay_x8_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            feedbackDelay_x8_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            dynamicMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
+            dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( updateDynamicsSlider2 = 1; );
+            
+            updateDynamicsSlider2 ? (
+              slider35 = slider35&2 +
+                          lookAheadButton.active          + 4  * bypassFilter1.active +
+                          8*bypassFilter2.active          + 16 * lfoSmoothButton.active +
+                          32*feedbackActive.active        + 64 * dynamicFeedback.active +
+                          128*lfoFeedback.active          + 256 * feedbackDelay_x8_1.active + 
+                          512*feedbackDelay_x8_2.active   + 1024 * dynamicMorph.active +
+                          2048*lfoMorph.active            + 4096 * dynamicLFOButton.active;
+                          
+              forceUpdate = 1;
+              updateDynamicsSlider2 = 0;
+            );*/
+            
             dynamicFilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
             dynamicFilterButton2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
             lfoFilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
@@ -12420,6 +13354,10 @@ updateActiveFilters(1);
             keyFollow2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap ) || 
             pitchFollow1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap ) ||
             pitchFollow2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap ) ? (
+              updateDynamicsSlider = 1;
+            );
+            
+            updateDynamicsSlider ? (
               slider58 = 2 * dynamicWaveShapingButton.active + 4 * dynamicFilterButton.active +
                          8 * lfoFilterButton.active + 16 * dynamicFilterButton2.active +
                          32 * lfoFilterButton2.active + 64 * dynamicGainButton.active + 
@@ -12428,6 +13366,7 @@ updateActiveFilters(1);
                          2048 * pitchFollow2.active;
               slider_automate(slider58);
               forceUpdate = 1;
+              updateDynamicsSlider = 0;
             );
             
             window1.processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap, last_mouse_cap);
