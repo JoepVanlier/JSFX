@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.45
+version: 2.46
 author: Joep Vanlier
 changelog: 
-+ Don't update envelope when envelope is not used.
++ Added Serge wavefolder
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -302,12 +302,12 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.45";
+plugname = "FILTHER 2.46";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
-nFilters = 78;
+nFilters = 79;
 nShapers = 6;
 nModes = 10;
 nModes2 = 6;
@@ -411,6 +411,7 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 75 ) ? ( str = "Spin"
       ) : ( curitem == 76 ) ? ( str = "Wavefolder"
       ) : ( curitem == 77 ) ? ( str = "Multi-Wavefolder"
+      ) : ( curitem == 78 ) ? ( str = "Serge Wavefolder"
       );
     ) : (stridx == 1) ? 
     (
@@ -959,6 +960,9 @@ local(fx, fy, wx, wx2, wy)
     gfx_wrapprint("Lockhart wavefolder based on a model by Esqueda et al (2017). Cutoff controls strength, resonance controls bias. Note that these are very sensitive to input gain.", wx2);
   ) : ( filteridx == 77 ) ? (
     gfx_printf("Multi-wavefolder\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("A stack of lockhart wavefolders based on a model by Esqueda et al (2017). Cutoff controls strength, resonance controls bias. Note that these are very sensitive to input gain.", wx2);
+  ) : ( filteridx == 78 ) ? (
+    gfx_printf("Serge wavefolder\n\n"); gfx_x = fx+5;
     gfx_wrapprint("A stack of lockhart wavefolders based on a model by Esqueda et al (2017). Cutoff controls strength, resonance controls bias. Note that these are very sensitive to input gain.", wx2);
   );
 );
@@ -5017,7 +5021,7 @@ function folder_init(cutoff, reso)
     alpha   = 2 * RL / R;
     beta    = (alpha + 1) * iVt;
     delta   = log( RL * .00000000000000001 * iVt );
-  );
+  );  
   
 function folder_res(sample, vout, alpha, l2betagamma, lgamma, lbeta)
   global()
@@ -5057,11 +5061,35 @@ function lambertExpApprox(x)
   
 function folder_eval(sample)
   local(lambda)
-  instance(alpha, beta, delta, Vt, bloop)
+  instance(alpha, beta, delta)
   global()
   (
     lambda = sign(sample);
     .025864 * lambda * lambertExpApprox( lambda * beta * sample + delta ) - alpha * sample
+  );  
+  
+function serge_init(cutoff, reso)
+  local(Is, nu, R1, Vt)
+  instance(dc_scum, alpha, beta, delta)
+  global()
+  (
+    Is = 0.00000000252;
+    nu = 1.752;
+    R1 = 33000;
+    Vt = .025864;
+    
+    alpha = -2 * nu * Vt;
+    beta = 1/(nu*Vt); 
+    delta = log(R1*Is*beta);
+  );  
+
+function serge_eval(sample)
+  local(lambda)
+  instance(alpha, beta, delta)
+  global()
+  (
+    lambda = sign(sample);
+    sample + lambda * alpha * lambertExpApprox( lambda * beta * sample + delta  );
   );  
   
 function folder_eval_old(sample)
@@ -5438,6 +5466,14 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2, i
       this.folder2.folder_init(filterFreq, filterReso);
       this.folder3.folder_init(filterFreq, filterReso);
       this.folder4.folder_init(filterFreq, filterReso);
+    ) : ( sliderValue == 78 ) ? (
+      this.serge1.gain = filterFreq;
+      this.serge1.serge_init(filterFreq, filterReso);
+      this.serge2.serge_init(filterFreq, filterReso);
+      this.serge3.serge_init(filterFreq, filterReso);
+      this.serge4.serge_init(filterFreq, filterReso);
+      this.serge5.serge_init(filterFreq, filterReso);
+      this.serge6.serge_init(filterFreq, filterReso);
     );
   );        
     
@@ -11920,6 +11956,16 @@ function process(sample, dist)
       sample = this.folder2.folder_eval(sample);
       sample = this.folder3.folder_eval(sample);
       sample = actual_tanh(this.folder4.folder_eval(sample));
+      dist ? sample = distort(sample);
+    ) : ( this.filterType == 78 ) ? (
+      sample = sample + this.serge1.dc_scum;
+      
+      sample = this.serge1.serge_eval(sample*2^(this.serge1.gain*5));
+      sample = this.serge2.serge_eval(sample);
+      sample = this.serge3.serge_eval(sample);
+      sample = this.serge4.serge_eval(sample);
+      sample = this.serge5.serge_eval(sample);
+      sample = actual_tanh(4*this.serge6.serge_eval(sample));
       dist ? sample = distort(sample);
     );
     
