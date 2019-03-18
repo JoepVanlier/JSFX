@@ -1,11 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.41
+version: 2.42
 author: Joep Vanlier
 changelog: 
-+ Added some mean wavefolders
-+ Remove frequency label, since everyone knows that is what it is.
-+ Added a version of the tanh that isn't pre-squashed for distortion purposes.
++ Added better approximation for LambertW(exp(x)) to make more exact wavefolder
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -304,7 +302,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.41";
+plugname = "FILTHER 2.42";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -4987,7 +4985,7 @@ function selectBuffer(isR, isFilt2, isGFX)
   );
   
 
-function folder_init(cutoff, reso)
+function folder_init_old(cutoff, reso)
   local(RL)
   instance(alpha, beta, gamma, betagamma, dc_scum)
   global()
@@ -5005,6 +5003,21 @@ function folder_init(cutoff, reso)
     dc_scum = .1 * reso;
   );
   
+function folder_init(cutoff, reso)
+  local(R, RL, Vt, iVt)
+  instance(dc_scum, alpha, beta, delta)
+  global()
+  (
+    R       = 15000;
+    RL      = (8000+49000*cutoff);
+    iVt     = 1/.025864;
+    dc_scum = .1 * reso;
+    
+    alpha   = 2 * RL / R;
+    beta    = (alpha + 1) * iVt;
+    delta   = log( RL * .00000000000000001 * iVt );
+  );
+  
 function folder_res(sample, vout, alpha, l2betagamma, lgamma, lbeta)
   global()
   local(expv)
@@ -5015,9 +5028,44 @@ function folder_res(sample, vout, alpha, l2betagamma, lgamma, lbeta)
     f_trial = vout - alpha*sample - lbeta * expv;
   );
   
+  // Approximation to W(exp(x))
+function lambertExpApprox(x)  
+  local(ex, approx, v, c, p, t, f)
+  global()
+  instance()
+  (
+    ex = exp(x);
+    
+    approx = sqrt(2*$e*ex + 2) - 1;
+    v = log(ex + 1);
+    v = v - log(v);
+    c = abs(ex + 1/$e);
+    c = (c > 1.45);
+    approx = (1 - c)*approx + c*v;
+    loop(2,
+      p = exp(approx);
+      t = approx*p - ex;
+//      f = (approx ~= -1);
+//      t = f*t/(p*(approx + f) - 0.5*(approx + 2.0)*t/(approx + f));
+      t = t/(p*(approx + 1) - 0.5*(approx + 2.0)*t/(approx + 1));
+      approx = approx - t;
+    );
+    
+    approx
+  );
+  
 function folder_eval(sample)
-  local(step, nRej, iter, err, newErr, v_trial, l2betagamma, lgamma, lbeta, expv, lambda)
-  instance(f_trial, J_trial, vout
+  local(lambda)
+  instance(alpha, beta, delta, Vt, bloop)
+  global()
+  (
+    lambda = sign(sample);
+    .025864 * lambda * lambertExpApprox( lambda * beta * sample + delta ) - alpha * sample
+  );  
+  
+function folder_eval_old(sample)
+  local(step, nRej, err, newErr, v_trial, l2betagamma, lgamma, lbeta, expv, lambda)
+  instance(f_trial, J_trial, vout, iter
            alpha, beta, gamma)
   global()
   (
@@ -5030,6 +5078,8 @@ function folder_eval(sample)
     lbeta = lambda*beta;
     l2betagamma = lgamma*lbeta;
     
+    vout = -0.001;
+    
     this.folder_res(sample, vout, alpha, l2betagamma, lgamma, lbeta);
     err = abs(f_trial);
     
@@ -5039,7 +5089,7 @@ function folder_eval(sample)
       this.folder_res(sample, v_trial, alpha, l2betagamma, lgamma, lbeta);
       newErr = abs(f_trial);
       
-      newErr < err ?
+      (newErr < err) ?
       (
         // Accept step
         vout = v_trial;
