@@ -1,9 +1,11 @@
 desc:Filther
 tags: Filther
-version: 2.47
+version: 2.48
 author: Joep Vanlier
 changelog: 
-+ Bugfix envelope left bound
++ Remove filter plot for Serge wavefolder.
++ Added envelope shapes (double click toggles).
++ Bugfix envelopes not activating when UI not open.
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -105,8 +107,12 @@ out_pin:right output
 options:no_meter 
 
 @serialize
-env_buf1 = 66*65536;
-env_buf2 = 68*65536;
+env_buf1        = 66*65536;
+env_buf_shapes1 = 67*65536;
+env_buf2        = 68*65536;
+env_buf_shapes2 = 69*65536;
+//env_buf1 = 66*65536;
+//env_buf2 = 68*65536;
 
 file_var(0,extraScale);
 file_var(0,hideToolTips);
@@ -170,6 +176,9 @@ file_var(0,envWindow2.useVelocities);
 file_var(0,envWindow1.snapping);
 file_var(0,envWindow2.snapping);
 
+file_mem(0,env_buf_shapes1,256);
+file_mem(0,env_buf_shapes2,256);
+
 // Reading?
 file_avail(0)>=0 ? envelopesPresent = 0;
 file_var(0,envelopesPresent);
@@ -177,20 +186,25 @@ file_var(0,envelopesPresent);
 @init
 function resetEnvelope(vel, hard)
   global()
-  instance(curTime, memory, cpos, tn, tnm1, yn, ynm1, dy, cnode, triggering, curvel)
+  instance(curTime, memory, curveMemory, cpos, cpos2, tn, tnm1, yn, ynm1, dy, invdx, cnode, triggering, curvel, curCurve)
   local()
   (
     ( triggering == 1 || hard ) ?
     (
       curTime   = 0;
       cpos      = memory;
+      cpos2     = curveMemory; 
       tnm1      = 0;
       ynm1      = 0;
       tn        = cpos[];
       yn        = cpos[1];
-      dy        = (yn - ynm1) / ( tn - tnm1 );
       cnode     = 0;
       curvel    = vel;
+      dy        = (yn - ynm1);
+      invdx     =  1 / ( tn - tnm1 );
+      curCurve  = cpos2[];
+      curCurve == 0 ? dy *= invdx;
+      cpos2     += 1;
     );
   );
 
@@ -8375,25 +8389,29 @@ function updateNodeCount()
   );  
    
 function bsort()
-  instance(nodes, memory, grabbed)  
-  local(xptr, tmpx, tmpy, cur, next, i)
+  instance(nodes, memory, curveMemory, grabbed)  
+  local(xptr, xptr2, tmpx, tmpy, tmpc, cur, next, i)
   global()
   (
     this.updateNodeCount();
   
     loop(nodes-2,
       xptr = memory;
+      xptr2 = curveMemory;
       i = 1;
       loop(nodes-2,
         cur  = xptr[];
         next = xptr[2];
         ( cur > next ) ? (
           tmpx = cur;
+          tmpc = xptr2[];
           tmpy = xptr[1];
           xptr[]  = next;
           xptr[1] = xptr[3];
           xptr[2] = tmpx;
           xptr[3] = tmpy;
+          xptr2[] = xptr2[1];
+          xptr2[1] = tmpc;
           
           ( grabbed == i ) ? ( 
             grabbed += 1;
@@ -8403,6 +8421,7 @@ function bsort()
         );
         
         xptr += 2;
+        xptr2 += 1;
         i += 1;
       );
     );
@@ -8548,11 +8567,11 @@ function updateToggles()
     snap.active == 1        ? snapping = 1 : snapping = 0;
   );
  
-function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, nodes_in, title_in)
+function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_in, title_in)
   global( newUI, srate, retina_scaling,
           selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a,
           widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,)
-  instance(memory, nodes, thisUI, x, y, w, h, h_graph, h_total, invsrate, cpos, loopStart, loopEnd, loopType, ispeed, division, title,
+  instance(memory, curveMemory, nodes, thisUI, x, y, w, h, h_graph, h_total, invsrate, cpos, loopStart, loopEnd, loopType, ispeed, division, title,
            speedSlider, offset, zoom,
            soften, midiTrigger, midiVel, snap,
            softening, triggering, useVelocities, snapping )
@@ -8583,6 +8602,7 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, nodes_in, title_in
     !thisUI ? (       
       title = title_in;
       memory = envelopeMemory;
+      curveMemory = typeMemory;
       xptr = memory;
       thisUI = newUI+=1;
       
@@ -8613,6 +8633,31 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, nodes_in, title_in
     this.updateEnvelopeSpeed();
   );  
   
+// Clips line to X range  
+function safeLine(x1, y1, x2, y2, xmin, xmax)
+  local(w)
+  global()
+  instance()
+  (
+    ( (x2 > xmin) && (x1 < xmax) ) ? (
+      w = xmax - xmin;
+      x1 = x1 - xmin;
+      x2 = x2 - xmin;
+    
+      x1 < 0 ? (
+        y1 = y1 - ( ( y2 - y1 ) / ( x2 - x1 ) ) * x1;
+        x1 = 0;
+      );
+      x2 > (xmax-xmin) ? (
+        y2 = y2 - ( ( y2 - y1 ) / ( x2 - x1 ) ) * (x2-w);
+        x2 = w;
+      );
+      
+      gfx_line(xmin + x1, y1,     xmin+x2, y2);
+      gfx_line(xmin + x1, y1 - 1, xmin+x2, y2-1);
+    );
+  );
+  
 function drawEnvelopeWindow()  
   global( grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
           backface_color_r, backface_color_g, backface_color_b, backface_color_a,
@@ -8621,11 +8666,11 @@ function drawEnvelopeWindow()
           font_color_r, font_color_g, font_color_b, font_color_a,
           widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,
           gfx_x, gfx_y )
-  instance(x, y, w, h, h_graph, h_total, nodes, memory, curTime, loopStart, loopEnd, grabbed, over, title, division,
+  instance(x, y, w, h, h_graph, h_total, nodes, memory, curveMemory, curTime, loopStart, loopEnd, grabbed, over, title, division,
            x4_1, x4_2, x4_3, x4_4, x3_1, x3_2, x5, bw, bh, offset, zoom, speedSlider, 
            soften, midiTrigger, midiVel, snap)
-  local(xptr, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx
-        lps, lpe)
+  local(xptr, xptr2, ctype, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx, idx, idt, tc, t, t2, t3, y1, y2
+        lps, lpe, xmax)
   (    
     gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
     gfx_rect(x, y, w, h_graph);
@@ -8633,6 +8678,7 @@ function drawEnvelopeWindow()
     xs = w-4;
     ys = h-4;
     ym = y+h_graph-2;
+    xmax = x + w;
     
     cuts = 1;
     division == 1 ? cuts = 16 + 16*floor(zoom/2) :
@@ -8650,24 +8696,88 @@ function drawEnvelopeWindow()
     
     gfx_set(1,1,1,1);
     xptr = memory;
+    xptr2 = curveMemory;
     tnm1 = - w*offset;
     ynm1 = 0;
-    //gfx_circle(x, ym, 2);
     loop(nodes-1,
       tn = zoom*xptr[]*xs - xs*offset; xptr += 1;
       yn = xptr[]*ys; xptr += 1;
-      (tn > 0) && (tnm1 < w) ? (
-        tnm1 < 0 ? (
-          ynm1 = ynm1 - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * tnm1;
-          tnm1 = 0;
+      ctype = xptr2[]; xptr2 += 1;
+      
+      (tn > 0) && (tnm1 < w) ? 
+      (
+        (ctype == 0) ?
+        (
+          tnm1 < 0 ? (
+            ynm1 = ynm1 - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * tnm1;
+            tnm1 = 0;
+          );
+          tn > w ? (
+            yn = yn - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * (tn-w);
+            tn = w;
+          ) : gfx_circle(x+tn, ym-yn-1, 2);
+          gfx_line(x+tnm1, ym-ynm1,   x+tn, ym-yn);
+          gfx_line(x+tnm1, ym-ynm1-1, x+tn, ym-yn-1);
+        ) : (ctype == 1) ? (
+          // Smooth
+          dy = (yn - ynm1);
+          
+          dx = 10;
+          idt = 1 / dx;
+          idx = (tn - tnm1) * idt;
+          xc = x+tnm1;
+          tc = t2 = t3 = 0;
+          loop(dx, 
+            y1 = ynm1+dy*(3*t2-2*t3);
+            tc += idt;
+            t2 = tc*tc;
+            t3 = t2*tc;
+            y2 = ynm1+dy*(3*t2-2*t3);
+//            gfx_line(xc, ym-y1, xc+idx, ym-y2);
+//            gfx_line(xc, ym-y1-1, xc+idx, ym-y2-1);
+            safeLine(xc, ym-y1, xc+idx, ym-y2, x, xmax);
+            xc += idx;
+          );
+          (x + tn) < xmax ? gfx_circle(x+tn, ym-yn-1, 2);
+        ) : (ctype == 2) ? (
+          // Exponential 1
+          dy = (yn - ynm1);
+          
+          dx = 10;
+          idt = 1 / dx;
+          idx = (tn - tnm1) * idt;
+          xc = x+tnm1;
+          tc = t2 = t3 = 0;
+          loop(dx, 
+            y1 = ynm1+dy*(1-exp(-5*tc));
+            tc += idt;
+            y2 = ynm1+dy*(1-exp(-5*tc));
+//            gfx_line(xc, ym-y1, xc+idx, ym-y2);
+//            gfx_line(xc, ym-y1-1, xc+idx, ym-y2-1);
+            safeLine(xc, ym-y1, xc+idx, ym-y2, x, xmax);
+            xc += idx;
+          );
+          (x + tn) < xmax ? gfx_circle(x+tn, ym-yn-1, 2);
+        ) : (
+          // Exponential 2
+          dy = (yn - ynm1);
+          
+          dx = 10;
+          idt = 1 / dx;
+          idx = (tn - tnm1) * idt;
+          xc = x+tnm1;
+          tc = t2 = t3 = 0;
+          loop(dx, 
+            y1 = ynm1+dy*tc*tc*tc;
+            tc += idt;
+            y2 = ynm1+dy*tc*tc*tc;
+//            gfx_line(xc, ym-y1, xc+idx, ym-y2);
+//            gfx_line(xc, ym-y1-1, xc+idx, ym-y2-1);
+            safeLine(xc, ym-y1, xc+idx, ym-y2, x, xmax);
+            xc += idx;
+          );
+          (x + tn) < xmax ? gfx_circle(x+tn, ym-yn-1, 2);
         );
-        tn > w ? (
-          yn = yn - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * (tn-w);
-          tn = w;
-        ) : gfx_circle(x+tn, ym-yn-1, 2);
-        gfx_line(x+tnm1, ym-ynm1,   x+tn, ym-yn);
-        gfx_line(x+tnm1, ym-ynm1-1, x+tn, ym-yn-1);
-        
       );
       
       tnm1 = tn;
@@ -8796,6 +8906,23 @@ function selectEnvelopePoint(ex, ey)
     (dist < 0.05) ? cur : -1;
   );
   
+function selectEnvelopePointByX(ex)
+  instance(x, y, w, h, nodes, memory, zoom)
+  local(cpos, ct)
+  (
+    cpos = memory;
+    ct = cpos[];
+    cnode = 0;
+    while( (ct < ex) && (cnode < nodes) )
+    ( 
+      cpos  += 2;
+      cnode += 1;
+      ct = cpos[];
+    );    
+    
+    cnode
+  );  
+  
 /*function moveEnvPt(idx, dx, dy)
   instance(x, y, w, h, nodes, memory)
   local(xptr, ym, dx, dy, ndist, dist, i, cur)
@@ -8839,11 +8966,13 @@ function getEnvY(idx)
     xptr[]
   );  
  
+N_CURVES = 3;
+ 
 function processMouse()
-  instance(x, y, w, h, h_graph, nodes, memory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
-           speedSlider, soften, midiTrigger, midiVel, snap, snapping, division )
-  local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx)
-  global(mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y)
+  instance(x, y, w, h, h_graph, nodes, memory, curveMemory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
+           speedSlider, soften, midiTrigger, midiVel, snap, snapping, division, lastLeftTime )
+  local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx, now)
+  global(mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y, dbl, N_CURVES)
   (
     mx = mouse_x;
     my = mouse_y;
@@ -8859,6 +8988,7 @@ function processMouse()
     // If nearest is not close enough, reset selection
     min(ex,ey) > 10/zoom ? over = 0;
     
+    time_precise(now);
     cuts = 1;
     division == 1 ? cuts = 16 + 16*floor(zoom/2) :
     division == 2 ? cuts = 9 + 9*floor(zoom/2);
@@ -8875,9 +9005,23 @@ function processMouse()
             grabbed = idx;
           ) : (
             grabbed = over;
-            // Nothing grabbed? => Drag offset
-            ( grabbed == 0 ) ? grabbed = -3;
-          )
+            
+            // Nothing grabbed?
+            ( grabbed == 0 ) ? (
+              // Double click? Change envelope shape
+              ( (now - lastLeftTime) < .3 ) ? (
+                idx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
+                curveMemory[idx] += 1;
+                ( curveMemory[idx] > N_CURVES ) ? curveMemory[idx] = 0;
+                
+                dbl = idx;
+              ) : (
+                // Or drag offset?
+                grabbed = -3;
+              );
+            ) 
+          );
+          lastLeftTime = now;
         )
       ) : ( grabbed > 0 ) ?
       (
@@ -8988,28 +9132,59 @@ function calcEnvelope(t)
   );
 
 function evaluateEnvelope(notesOn)
-  global()
-  instance(ret, curTime, invsrate, cpos, memory, tn, tnm1, yn, ynm1, dy, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel)
-  local(xptr)
+  global(test, env_buf1)
+  instance(ret, curTime, invsrate, cpos, cpos2, memory, curveMemory, tn, tnm1, yn, ynm1, dy, invdx, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel, curCurve)
+  local(xptr,t2, t3, tmp)
   (
     //ret = this.calcEnvelope(curTime);
     ( cnode < nodes ) ? (
       while( (curTime > tn) && (cnode < nodes) )
       ( 
-        tnm1  = cpos[];
-        ynm1  = cpos[1];
-        tn    = cpos[2];
-        yn    = cpos[3];
-        dy    = (yn - ynm1) / ( tn - tnm1 );
+        tnm1      = cpos[];
+        ynm1      = cpos[1];
+        tn        = cpos[2];
+        yn        = cpos[3];
+        curCurve  = cpos2[];
+        
+        dy        = (yn - ynm1);
+        invdx     =  1 / ( tn - tnm1 );
+        curCurve == 0 ? dy *= invdx;
+        
         cpos  += 2;
+        cpos2 += 1;
         cnode += 1;
       );      
       
-      ret = ynm1 + dy * (curTime-tnm1);
+      memory == env_buf1 ? test = curCurve;
+      
+      curCurve == 0 ? (
+        ret = ynm1 + dy * (curTime-tnm1)
+      ) : ( curCurve == 1 ) ? 
+      ( 
+        tmp = (curTime - tnm1)*invdx;
+        t2  = tmp*tmp;
+        t3  = tmp*t2;
+        ret = ynm1+dy*(3*t2-2*t3);
+      ) : ( curCurve == 2 ) ? 
+      (
+        tmp = (curTime - tnm1)*invdx;
+        ret = ynm1+dy*(1-exp(-5*tmp))
+      ) : ( curCurve == 3 ) ? 
+      (
+        tmp = (curTime - tnm1)*invdx;
+        ret = ynm1+dy*tmp*tmp*tmp
+      );
+      
       ( useVelocities == 1 ) ? ret = curvel * ret;
       
       curTime = curTime + invsrate;
-      ( notesOn && (curTime > loopEnd) ) ? ( curTime = loopStart; cnode = 0; cpos = memory; tn = cpos[2]; );
+      ( notesOn && (curTime > loopEnd) ) ? ( 
+        curTime = loopStart; 
+        cnode = 0; 
+        cpos = memory; 
+        cpos2 = curveMemory; 
+        tn = cpos[2]; 
+      );
       
       softening == 1 ? (
         smoothMem = smoothMem + .05 * ( ret - smoothMem );
@@ -9159,7 +9334,9 @@ delay_buf7      = delay_buf6 + 100000;
 delay_buf8      = delay_buf7 + 100000;
 
 env_buf1        = 66*65536;
+env_buf_shapes1 = 67*65536;
 env_buf2        = 68*65536;
+env_buf_shapes2 = 69*65536;
 
 filter_delay1.initBuffer(delay_buf1, delay_buf1 + 50000);
 filter_delay2.initBuffer(delay_buf2, delay_buf2 + 50000);
@@ -9577,10 +9754,10 @@ function setupGUI()
   envY = 2.4*wndPad + 2*wndY - yOffset; 
   envW = wndX*2+wndPad;
   envH = wndY * .35;
-  envWindow1.initEnvelope(envX, envY, envW, envH, env_buf1, 6, "ENVELOPE 1 (BETA)");
+  envWindow1.initEnvelope(envX, envY, envW, envH, env_buf1, env_buf_shapes1, 6, "ENVELOPE 1 (BETA)");
 
   envY = 2.4*wndPad + 2.440*wndY - yOffset;
-  envWindow2.initEnvelope(envX, envY, envW, envH, env_buf2, 6, "ENVELOPE 2 (BETA)");
+  envWindow2.initEnvelope(envX, envY, envW, envH, env_buf2, env_buf_shapes2, 6, "ENVELOPE 2 (BETA)");
   
   wR = widgetcolor_r;
   wG = widgetcolor_g;
@@ -11550,7 +11727,7 @@ function specialGraphics()
     ) : ( this.filtertype == 73 ) ? 
     (
       specialValue = this.modulon.f;
-    ) : ( this.filtertype == 76 || this.filtertype == 77 || this.filtertype == 60 || this.filtertype == 61 || this.filtertype == 62 || this.filtertype == 67 || this.filtertype == 68 || this.filtertype == 74 || this.filtertype == 75 ) ?
+    ) : ( this.filtertype == 76 || this.filtertype == 77 || this.filtertype == 78 || this.filtertype == 60 || this.filtertype == 61 || this.filtertype == 62 || this.filtertype == 67 || this.filtertype == 68 || this.filtertype == 74 || this.filtertype == 75 ) ?
     (
       showFilterFFT = 0;
     ) : ( this.filtertype == 70 ) ?
@@ -12142,6 +12319,9 @@ updateActiveFilters(1);
 
   envWindow1.updateEnvRate();
   envWindow2.updateEnvRate();
+  
+  env1Active = env1GainButton.active || env1FilterButton.active || env1Filter2Button.active || env1FB.active || env1Morph.active || env1LFO.active;
+  env2Active = env2GainButton.active || env2FilterButton.active || env2Filter2Button.active || env2FB.active || env2Morph.active || env2LFO.active;
 
   function inertiaSmoothing(newval)
     instance(prev, val, boost)
@@ -13206,10 +13386,7 @@ updateActiveFilters(1);
     threshSlider.sliderWidget_draw();
     attackSlider.sliderWidget_draw();
     decaySlider.sliderWidget_draw();
-    rmsSlider.sliderWidget_draw();
-    
-    env1Active = env1GainButton.active || env1FilterButton.active || env1Filter2Button.active || env1FB.active || env1Morph.active || env1LFO.active;
-    env2Active = env2GainButton.active || env2FilterButton.active || env2Filter2Button.active || env2FB.active || env2Morph.active || env2LFO.active;    
+    rmsSlider.sliderWidget_draw();    
     
     /* These flags determine whether these values have an animated slider and mod range on top or not */
     inGain.hasFilterDynamics             = dynamicGainButton.active || env1GainButton.active || env2GainButton.active;
