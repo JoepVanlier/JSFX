@@ -1,11 +1,12 @@
 desc:Filther
 tags: Filther
-version: 2.48
+version: 2.49
 author: Joep Vanlier
 changelog: 
-+ Remove filter plot for Serge wavefolder.
-+ Added envelope shapes (double click toggles).
-+ Bugfix envelopes not activating when UI not open.
++ Bugfix envelope preset handling
++ Tweaked AGC to correct more gently (also nested the if statements)
++ Tweaked the AGC cap to distort less (although it provides slightly less protection now)
++ Outer mouse button can drag threshold
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -20,7 +21,7 @@ Weeping Demon emulation by Chet Gnegy (https://ccrma.stanford.edu/~chet/)
 Special thanks goes out to everyone who has reported bugs and provided ideas to me:
 Eliseat, Bri1, FoxAsteria, EpicSounds, TonE, daxliniere, JamesPeters, kneipp123, 
 jrengmusic, mawi, vdubreeze, Sju, nitsuj.
-And of course Cockos Inc for develping JSFX.
+And of course Cockos Inc for developing JSFX.
 
 slider1:2<2,9,1>-Nodes negative
 slider2:2<2,9,1>-Nodes positive
@@ -107,6 +108,8 @@ out_pin:right output
 options:no_meter 
 
 @serialize
+(file_avail(0)>=0) ? envelopesPresent = 0;
+
 env_buf1        = 66*65536;
 env_buf_shapes1 = 67*65536;
 env_buf2        = 68*65536;
@@ -180,7 +183,6 @@ file_mem(0,env_buf_shapes1,256);
 file_mem(0,env_buf_shapes2,256);
 
 // Reading?
-file_avail(0)>=0 ? envelopesPresent = 0;
 file_var(0,envelopesPresent);
 
 @init
@@ -316,7 +318,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.47";
+plugname = "FILTHER 2.49";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -1317,13 +1319,17 @@ function resetfancymoog()
   );
   
 function capIt(sl, agcpre)
-  local()
+  local(thr)
+  global()
+  instance()
   (
     thr = 1.5*agcpre;
     (sl > thr) ? (
-      thr + tanh(sl - thr)
+      thr + actual_tanh(sl - thr);
+      //sl
     ) : ( sl < -thr ) ? (
-      -thr + tanh(sl + thr)
+      -thr + actual_tanh(sl + thr);
+      //sl;
     ) : sl;
   );  
   
@@ -7596,7 +7602,7 @@ function draw_dynamics(thresh)
   );
   
 function processMouseDynamics(xx, yy, dx, dy, mc, thresh)
-  instance(x, y, w, h, yref, sc, cap_mode, highlight, inLight, outLight, dynLight, lastleft, RMSButton, RMSButton2, RMSButton3, MIDIButton, MIDIButton2)
+  instance(x, y, w, h, yref, sc, cap_mode, highlight, inLight, outLight, dynLight, lastleft, RMSButton, RMSButton2, RMSButton3, MIDIButton, MIDIButton2, lastRight)
   local(left, right, buttonClicked)
   global(slider45, forceUpdate, gfx_x, gfx_y, mouse_wheel, slider59, inLight.toggleLight_processMouse, outLight.toggleLight_processMouse, dynLight.toggleLight_processMouse, RMSButton.selectionButton_setActive, MIDIButton.selectionButton_setActive, MIDIButton2.selectionButton_setActive, RMSButton.selectionButton_processMouse, MIDIButton.selectionButton_processMouse, MIDIButton2.selectionButton_processMouse)
   (
@@ -7630,7 +7636,19 @@ function processMouseDynamics(xx, yy, dx, dy, mc, thresh)
         ( sc < 0 ) ? sc = 0.01;
       );
       
-      ( left ) ?
+      ( right ) ? 
+      (
+        ( cap_mode == 5 ) ? (
+          thresh = thresh + .001*dy;
+          ( thresh < 0 ) ? thresh = 0;
+          ( thresh > h/sc ) ? thresh = h/sc;
+          ( thresh > 1 ) ? thresh = 1;                  
+        ) : ( cap_mode == 0 ) ? (
+          ( xx > x && yy > (y-8) && xx < (x+w) && yy < (y+h) && lastRight == 0 ) ? (
+            cap_mode = 5;
+          )
+        )
+      ) : ( left ) ?
       (
         ( cap_mode == 0 ) ? 
         (
@@ -7669,6 +7687,7 @@ function processMouseDynamics(xx, yy, dx, dy, mc, thresh)
     );
     
     lastleft = left;
+    lastright = right;
     thresh
   );  
 
@@ -12680,32 +12699,34 @@ updateActiveFilters(1);
   (
     ( agcControl == 1 || agcOverride > 0 ) ?
     (
-      alpha = 0.9999;
-      agccur = max(spl0*spl0, spl1*spl1);
-      agcsumpre = agcsumpre * alpha + (agccur) * (1-alpha);
-      agcsumpost = agcsumpost * alpha + (max(sl*sl, sr*sr)*agc_corr*agc_corr) * (1-alpha);
-      agcpre = sqrt(agcsumpre);
-      agcpost = sqrt(agcsumpost);
+      alpha       = 0.9999;
+      agccur      = max(spl0*spl0, spl1*spl1);
       
-      // Automatic Gain Control
-      // Decrease fast, increase slower (don't want wobble) with hysteresis
-      // Direct dynamic solution with PID controller was attempted but ended up oscillating too much.
-      (agccur) > 0.01 ? (
-        agcpost > agcpre ? (
-          agc_corr = agc_corr * .9999999;
-        ) : ( agcpost < agcpre ) ? agc_corr = agc_corr * 1.0000001;
-        
-        agcpost > 1.04*agcpre ? (
-          agc_corr = agc_corr * .99999;
-        ) : ( agcpost < 0.96*agcpre ) ? agc_corr = agc_corr * 1.00001;
-    
-        // Faster attacks for nastier differences
-        agcpost > 3*agcpre ? (
-          agc_corr = agc_corr * .9999;
-        ) : ( agcpost < .33*agcpre ) ? agc_corr = agc_corr * 1.0001;
+      ( abs(agccur) > 0.0001 ) ? (      
+        agcsumpre   = agcsumpre * alpha + agccur * (1-alpha);
+        agcsumpost  = agcsumpost * alpha + max(sl*sl, sr*sr) * (1-alpha);
+        agcpre      = sqrt(agcsumpre);
+        agcpost     = sqrt(agcsumpost)*agc_corr;
       
-        agcpost > 10*agcpre ? (
-          agc_corr = agc_corr * .999;
+        // Automatic Gain Control
+        // Decrease fast, increase slower (don't want wobble) with hysteresis
+        // Direct dynamic solution with PID controller was attempted but ended up oscillating too much.
+        ( agcpost > agcpre ) ? (
+          // Higher
+          ( agcpost > 10*agcpre ) ? (
+            agc_corr = agc_corr * .99;
+          ) : ( agcpost > 3.5*agcpre ) ? (
+            agc_corr = agc_corr * .999;
+          ) : ( agcpost > 1.4*agcpre ) ? (
+            agc_corr = agc_corr * .99999;
+          ) : agc_corr = agc_corr * .999999;
+        ) : (
+          // Lower
+          ( agcpost < .2*agcpre ) ? (
+            agc_corr = agc_corr * 1.001;
+          ) : ( agcpost < .71*agcpre ) ? (
+            agc_corr = agc_corr * 1.00001;
+          ) : agc_corr = agc_corr * 1.000001;
         );
       );
       
@@ -13427,7 +13448,7 @@ updateActiveFilters(1);
     modulationFactor.dynval              = lfoModVal;
     
     /* Code to disable envelopes in legacy presets */
-    envelopesPresent == 0 ?
+    ( envelopesPresent == 0 ) ?
     (
       envelopesPresent          = 1;
       env1GainButton.active     = 0;
