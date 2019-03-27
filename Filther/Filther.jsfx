@@ -3,10 +3,11 @@ tags: Filther
 version: 2.49
 author: Joep Vanlier
 changelog: 
-+ Bugfix envelope preset handling
-+ Tweaked AGC to correct more gently (also nested the if statements)
-+ Tweaked the AGC cap to distort less (although it provides slightly less protection now)
-+ Outer mouse button can drag threshold
++ Shift logo.
++ Added a proper logarithmic scaling for the cutoff sliders (this will become the new default).
++ Added legacy button for reverting to old slider mapping.
++ Minor render bug fixed.
++ Minor bugfix bit reduction filter (bias resolves issues when there is no input).
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -60,8 +61,8 @@ slider32:0.8<0,1,.01>-Neg7y or FB time mod
 slider33:1.0<0,2,.01>-Key follow amount
 slider34:0.9<0,1,.01>-Neg8y or Morph mod %
 // This one secretly has the information folded in whether pre-gain modulation is being used.
-// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Dyn Morph, 12 = LFO Morph, 13 = Dynamic LFO, 11 = feedback X16
-slider35:0<0,16383,1>-Toggles (DO NOT AUTOMATE)
+// Mask: 1 = lookahead, 2 = MGM, 3 = BYPASS 1, 4 = BYPASS 2, 5 = LFO SMOOTHING, 6 = FB Active, 7 = DYN FB, 8 = LFO FB, 9 = feedback X16, 10 = feedback X8, 11 = Dyn Morph, 12 = LFO Morph, 13 = Dynamic LFO, 11 = feedback X16, 12 = Modern sliders
+slider35:16384<0,32767,1>-Toggles (DO NOT AUTOMATE)
 slider36:0<0,26,1>-LFO type
 slider37:0<0,1,0.001>-LFO freq
 slider38:0<0,7,1{No reset,Reset,No reset + temposync,Reset + temposync,No reset + centered,Reset + centered,No reset + temposync + centered,Reset + temposync + centered>-Reset LFO
@@ -108,7 +109,10 @@ out_pin:right output
 options:no_meter 
 
 @serialize
-(file_avail(0)>=0) ? envelopesPresent = 0;
+(file_avail(0)>=0) ? (
+  envelopesPresent = 0;
+  newCutoffMapping = 1;
+);
 
 env_buf1        = 66*65536;
 env_buf_shapes1 = 67*65536;
@@ -184,6 +188,7 @@ file_mem(0,env_buf_shapes2,256);
 
 // Reading?
 file_var(0,envelopesPresent);
+file_var(0,newCutoffMapping);
 
 @init
 function resetEnvelope(vel, hard)
@@ -1131,6 +1136,33 @@ instance()
  // x = (-.0000067436811832+(.2468149110712040+(.0583691066395175+.03357335044280075*x)*x)*x)/(.2464845986383725+(.0609347197060491+(.1086202599228572+.02874707922475963*x)*x)*x);
 );
 
+/* Frequency slider transformation. Abstracted away in order to be able to ensure legacy axes. */
+function f_trafo_hz(freq)
+  local()
+  global(slider54, legacyCutoff)
+  instance()
+  (
+    legacyCutoff ? (
+      ( pow(10, freq) - 1 ) / 9
+    ) : (
+      //exp( log(20/22050) + freq*(log(1) - log(20/22050)) )
+      exp( (1-freq) * log(20/22050) )
+    );
+  );
+
+function f_trafo(freq)
+  local()
+  global(slider54, legacyCutoff)
+  instance()
+  (
+    legacyCutoff ? (
+      (pow(10, freq)-1)/9 * $pi / (max(1,slider54));
+    ) : (
+      //exp( log(20/22050) + freq*(log(1) - log(20/22050)) ) * $pi / (max(1,slider54));
+      exp( (1-freq) * log(20/22050) ) * $pi / (max(1,slider54));
+    )
+  );
+
 //----------------------------------------------
 // Filter initialization section
 //----------------------------------------------
@@ -1152,7 +1184,7 @@ function init303(freq, q)
   (
     // This specific filter came from
     // Copyright (c) 2012 Dominique Wurtz (www.blaukraut.info)
-    wc  = .25 * (pow(10, freq)-1)/9 * $pi / max(slider54,1);
+    wc  = .25 * f_trafo(freq);
     wc2 = wc*wc;
     wc3 = wc2*wc;
     wc4 = wc3*wc;
@@ -1261,14 +1293,14 @@ function resetkarlsen_sat()
   instance(b_fres, b_fenv, b_aflt1, b_aflt2, b_aflt3, b_aflt4, b_lfcut, b_lf, b_lf1hp, b_lfhp, b_lfgain)
   (
     b_aflt1 = b_aflt2 = b_aflt3 = b_aflt4 = b_lfcut = b_lf = b_lf1hp = b_lfhp = b_lfgain = 0;
-  );
-  
+  );  
+
 function initdualfilt(freq, res)
   local(q)
   global(slider54)
   instance(fb, f, d0, d1)
   (
-    f = (pow(10, freq)-1)/9 * $pi / (max(1,slider54));
+    f = f_trafo(freq);
     q = res;
     
     //set feedback amount given f and q between 0 and 1
@@ -1296,9 +1328,10 @@ function initfancymoog(freq, q)
   instance(A, k, omega, hA, g, wc, wcT, T, y0, y1, y2, y3, y4, d0, d1, d2, d3, d4, ftarget)
   (
     fs      = max(slider54,1) * srate;
-    //ftarget = 24*(pow(10, freq)-1)/9; //24
+    //ftarget = 24*(pow(10, freq)-1)/9; //24    
     
-    ftarget   = .5*(srate/1000)*(pow(10, freq)-1)/9;
+    // TODO
+    ftarget   = .5*(srate/1000)*f_trafo_hz(freq);
     //ftarget = 6*freq;
     VT      = 26/1000;
     A       = 0.5 * VT;
@@ -1515,7 +1548,7 @@ function initnotch(freq, q)
   local( out, w0, cw, sw, alpha, a0, a0i )
   global(srate, slider54)
   (
-    w0    = (pow(10, freq)-1)/9 * $pi / max(slider54,1);
+    w0    = f_trafo(freq);
     q     = q*0.9 + .1;
     cw    = cos(w0);
     sw    = sin(w0);
@@ -1536,7 +1569,7 @@ function initsai0(freq, qin)
   global(slider54, srate, rfn)
   (
     fact  = 1 / max(slider54,1);
-    w0c   = .1*(pow(10, freq)-1)/9 * $pi * fact + .025*5*fact;
+    w0c   = .1*f_trafo(freq) + .025*5*fact;
     qav   = qin*1.5 + .5;
   
     amp1  = 1;
@@ -1600,7 +1633,8 @@ function initmodulator(freq, qin)
   global(slider54, srate, rfn)
   (
     fact  = 1 / (max(slider54,1));
-    w0c   = .1*(pow(10, freq)-1)/9 * $pi * fact + .25*fact;
+    w0c   = .1*f_trafo(freq) + .25*fact;
+    
     Q     = qin*15 + 20;
     amp   = qin*2;
     
@@ -1679,7 +1713,7 @@ function init_MS20lin(freq, reso)
   instance(a0, a1, a2, s1, s2, G, k)
   (
 //    fg      = 1 - exp( - $pi * ( freq / max(slider54,1) ) );
-    smallg  = .5 * (pow(10, freq)-1)/9 * $pi / max(slider54,1);
+    smallg  = .5 * f_trafo(freq);
     k       = 2*reso;
     invTerm = 1.0 / ( 1.0 + smallg );
     G       = smallg * invTerm;
@@ -1705,7 +1739,7 @@ function init_MS20(freq, reso)
   instance(s1, s2, G, Gsq, Gsqk, Gk, k, smallg)
   (
 //    fg      = 1 - exp( - $pi * ( freq / max(slider54,1) ) );
-    smallg  = .5 * (pow(10, freq)-1)/9 * $pi / max(slider54,1);
+    smallg  = .5 * f_trafo(freq);
     k       = 2*reso;
     invTerm = 1.0 / ( 1.0 + smallg );
     G       = smallg * invTerm;
@@ -1715,7 +1749,7 @@ function init_MS20(freq, reso)
   ); 
 
 function init_ssm_nonlin(freq, reso)
-  global(slider54, srate)
+  global(slider54, srate, israte)
   local(h, K1, KOTA, C, dG, R, wrel)
   instance(hh, itau, K2, hhitau, f, rate, Kout)
   (
@@ -1723,8 +1757,8 @@ function init_ssm_nonlin(freq, reso)
     h       = 1.0 / rate;
 
     // Prewarping
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 20 * rate * tan( .5 * wrel * h );
+    wrel    = 2 * 22050 * f_trafo(freq) * israte;
+    f       = 20 * rate * tan( .5 * wrel );
     
     dG      = f;
     KOTA    = .00192;
@@ -1747,7 +1781,7 @@ function reset_ssm_nonlin()
   ); 
   
 function init_cem_nonlin(freq, reso)
-  global(slider54, srate)
+  global(slider54, srate, israte)
   local(h, K1, KOTA, C1, C2, dG1, dG2, R, wrel)
   instance(hh, itau, itau2, K2, hhitau, hhitau2, f, rate, Kout, res)
   (
@@ -1755,8 +1789,8 @@ function init_cem_nonlin(freq, reso)
     h       = 1.0 / rate;
 
     // Prewarping
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 20 * rate * tan( .5 * wrel * h );
+    wrel    = 2 * 22050 * f_trafo(freq) * israte;
+    f       = 20 * rate * tan( .5 * wrel );
         
     dG1      = f;
     dG2      = f * 75;
@@ -1784,7 +1818,7 @@ function reset_cem_nonlin()
   );
   
 function init_ssm_lin(freq, reso)
-  global(slider54, srate)
+  global(slider54, srate, israte)
   local(h, K1, KOTA, C, dG, R, wrel, rate, f, hh, hh2, hh3, hh4, itau, itau2, itau3, itau4)
   instance(x0, x1, x15, x2, x6, x7, x11, x13, x14, K2)
   (
@@ -1792,8 +1826,8 @@ function init_ssm_lin(freq, reso)
     h       = 1.0 / rate;
 
     // Prewarping
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 20 * rate * tan( .5 * wrel * h );
+    wrel    = 2 * 22050 * f_trafo(freq) * israte;
+    f       = 20 * rate * tan( .5 * wrel );
     
     dG      = f;
     KOTA    = .00192;
@@ -1831,7 +1865,7 @@ function reset_ssm_lin()
   );  
   
 function init_cem_lin(freq, reso)
-  global(slider54, srate)
+  global(slider54, srate, israte)
   local(rate, f, h, hh, hh2, hh3, hh4, itau, itau2, hhitau, hhitau2, K1, KOTA, C1, C2, dG1, dG2, R, wrel)
   instance(res, x0, x1, x2, x3, x4, x5, x6, x11, x12, x13, x14, x15, x19, x27, x22, x23, x28, hh2, hh3, K2 )
   (
@@ -1839,8 +1873,8 @@ function init_cem_lin(freq, reso)
     h       = 1.0 / rate;
   
     // Prewarping
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 20 * rate * tan( .5 * wrel * h );
+    wrel    = 2 * 22050 * f_trafo(freq) * israte;
+    f       = 20 * rate * tan( .5 * wrel );
       
     dG1     = f;
     dG2     = f * 75;
@@ -1889,10 +1923,9 @@ function reset_cem_lin()
 function init_MS20_nonlin(freq, reso)
   global(slider54)
   local()
-  instance(y1, y2, d1, d2, h, hh, k, f)
+  instance(y1, y2, d1, d2, h, hh, k)
   (
-    f = .5 * (pow(10, freq)-1)/9 * $pi;
-    h  = f / max(slider54,1);
+    h  = .5 * f_trafo(freq);
     hh = 0.5 * h;
     k  = 2*reso;
   );
@@ -1900,10 +1933,9 @@ function init_MS20_nonlin(freq, reso)
 function init_MS20_nonlin_2(freq, reso)
   global(slider54)
   local()
-  instance(y1, y2, d1, d2, h, hh, k, f)
+  instance(y1, y2, d1, d2, h, hh, k)
   (
-    f = (pow(10, freq)-1)/9 * $pi;
-    h  = f / max(slider54,1);
+    h  = f_trafo(freq);
     hh = 0.5 * h;
     k  = 2*reso;
   );  
@@ -1911,7 +1943,7 @@ function init_MS20_nonlin_2(freq, reso)
 function reset_MS20_nonlin()
   global()
   local()
-  instance(y1, y2, d1, d2, h, hh, k, f)
+  instance(d1, d2)
   (
     d1 = 0;
     d2 = 0;
@@ -1956,18 +1988,17 @@ function initSine(f, r)
   local()
   instance(freq, res, fraw)
   (
-    freq  = 80 * $pi * ( ( pow(10, f) - 1 ) / 9 );
+    freq  = 80 * $pi * f_trafo_hz(f);
     res   = r;
     fraw  = f;
   );
  
 function init_linearSVF(freq, res)
   global(srate, slider54)
-  local(g, fn)
+  local(g)
   instance(ic1eq, ic2eq, k, a1, a2, a3)
   (
-    fn = ( ( pow(10, freq) - 1 ) / 9 );
-    g = tan(.5 * $pi * fn / max(slider54,1));
+    g = tan(.5 * f_trafo(freq));
     k = 2 - 2*res;
     
     a1 = 1/(1+g*(g+k));
@@ -2071,7 +2102,7 @@ function resetvowelSVF()
   
 function init_wasp_nonlin(freq, res)
   local(a, h)
-  global(slider54, srate)
+  global(slider54, srate, israte)
   instance(nl, hah, hahnl, rate, wrel, f, r, offset)
   (
     rate    = srate * max(slider54,1);
@@ -2079,8 +2110,9 @@ function init_wasp_nonlin(freq, res)
   
     // Prewarping
     offset  = 0.01;
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 40 * rate * tan( .5 * wrel * h );
+    wrel    = 2 * 22050 * f_trafo(freq)*israte;
+    f       = 40 * rate * tan( .5 * wrel );
+    
     r       = .8-.6*res;
     nl      = .35;
     a       = .08 * f;
@@ -2098,7 +2130,7 @@ function reset_wasp_nonlin()
   
 function init_wasp_nonlin_saw(freq, res)
   local(a, h)
-  global(slider54, srate)
+  global(slider54, srate, israte)
   instance(nl, hah, hahnl, rate, wrel, f, r, offset)
   (
     rate    = srate * max(slider54,1);
@@ -2106,8 +2138,9 @@ function init_wasp_nonlin_saw(freq, res)
   
     // Prewarping
     offset  = .4+res*.4;
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 40 * rate * tan( .5 * wrel * h );
+    wrel    = 2 * 22050 * f_trafo(freq)*israte;
+    f       = 40 * rate * tan( .5 * wrel );
+    
     r       = .8-.6*res;
     nl      = .35;
     a       = .08 * f;
@@ -2410,14 +2443,16 @@ function eval_wasp_nonlin_BP(Vi)
   );    
   
 function init_wasplin(freq, res)
-  global(srate, slider54)
+  global(srate, slider54, israte)
   local(f, h, hh, itau, wrel, rate)
   instance(U0, U1, Di, D0, D1, x0, x1, x2, x3, i1, K2)
   (
     rate    = (srate * max(slider54,1));
-    wrel    = 2 * $pi * 22050 * ( ( pow(10, freq) - 1 ) / 9 );
-    f       = 20 * rate * tan( .5 * wrel * h );
     h       = 1.0 / rate;
+    
+    wrel    = 2 * 22050 * f_trafo(freq)*israte;
+    f       = 20 * rate * tan( .5 * wrel );
+    
     hh      = 0.5 * h;
     itau    = .08 * f;
     K2      = .8-.6*res;
@@ -2428,7 +2463,6 @@ function init_wasplin(freq, res)
     x3 = 4*x0*x0;
     i1 = 1.0/(x2 + x3 + 1);
   );
-  
   
   function pwm_init(freq, reso)
     instance(len, ilen, c, svf)
@@ -3052,16 +3086,18 @@ function kot_reset()
   ); 
  
 function modulon_fixed_init(filterfreq, res)
-  local(fact)
+  local(fact, fs)
   global(srate, slider54)
-  instance(f, fs, dt, svf)
+  instance(f, dt, svf)
   (
     //this.svf.init_linearSVF( filterfreq, res );
-    fact = .5 * ( pow(10, filterfreq) - 1 ) / 9;
+    
+    fact = .5 * f_trafo_hz(filterfreq);
     this.svf.init_linearSVF_direct( fact, res );
     
     fs = srate * max(1, slider54);
     dt = 1/fs;
+    
     f = .25 * fact;
     
     dt = dt * 2*$pi*srate*f;
@@ -3073,7 +3109,7 @@ function modulatrix_init(filterfreq, res)
   instance(f, fs, dt, svf, reso)
   (
     //this.svf.init_linearSVF( filterfreq, res );
-    fact = .125 * ( pow(10, filterfreq) - 1 ) / 9;
+    fact = .125 * f_trafo_hz(filterfreq);
     this.svf.init_linearSVF_direct( fact, res );
     
     fs = srate * max(1, slider54);
@@ -3092,7 +3128,7 @@ function vibrato_init(filterfreq, res)
     ovs   = max(1, slider54);
     fs   = srate * ovs;
     dt   = 1/fs;
-    f    = .00125 * ( pow(10, filterfreq) - 1 ) / 9;
+    f    = .00125 * f_trafo_hz(filterfreq);
     reso = ( pow(10, res) - 1 ) / 9;
     
     dt = dt * 2*$pi*srate*f;
@@ -3107,7 +3143,7 @@ function modulon_init(filterfreq, res)
   
     fs = srate * max(1, slider54);
     dt = 1/fs;
-    f = .5 * (pow(10, filterfreq)-1)/9;
+    f = .5 * f_trafo_hz(filterfreq);
     
     dt = dt * 2*$pi*srate*f;
   );
@@ -3177,9 +3213,9 @@ function metallic_init(filterFreq, reso)
   instance(f, res, dt, dtref)
   (
     f = filterFreq;
-    dtref = (pow(10, filterfreq)-1)/9;
+    dtref = f_trafo_hz(filterfreq);
     dt = dtref/max(1, slider54);
-    res = (pow(10, reso)-1)/9;
+    res = f_trafo_hz(reso);
   );   
 
 function metallic_reset()
@@ -3197,7 +3233,7 @@ function frazzle_init(filterfreq, res)
   instance(f, dt bal2, dtref)
   (
     bal2 = res;
-    dtref = (pow(10, filterfreq)-1)/9;
+    dtref = f_trafo_hz(filterfreq);
     dt = dtref/max(1, slider54);
  
     this.svf1.init_linearSVF_direct( .25*filterFreq, 0 );
@@ -4665,6 +4701,33 @@ function outputFilter(sample)
     o4  = o3;
     o3  = out;
   );
+
+function calcTuning(cutoff, refNote)
+  local(tmp)
+  global(legacyCutoff)
+  instance()
+  (
+    legacyCutoff ? (
+      tmp = 10^-cutoff;
+      log( tmp + ( 1 - tmp ) * 2^(refNote/12) ) / log(10)
+    ) : (
+      - log(2^(refNote/12)) / log(20/22050)
+    );
+  );
+
+
+function calcPitch(cutoff, pitch)
+  local(tmp)
+  global(legacyCutoff)
+  instance()
+  (
+    legacyCutoff ? (
+      tmp = 10^-cutoff;
+      log( tmp + ( 1 - tmp ) * pitch ) / log(10);
+    ) : (
+      - log(pitch) / log(20/22050)
+    );
+  );
   
 function getTuning(filterChoice, lastNote, cutoff)
   local(refNote, approxNoteFrequency, tmp)
@@ -4675,8 +4738,7 @@ function getTuning(filterChoice, lastNote, cutoff)
     ( filterChoice == 1 ) ? (
       approxNoteFrequency = ( log( 2^(refNote/12)*(440/srate) ) + log(256*$pi) ) / ( 8 * log(2) );
     ) : ( filterChoice == 2 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * 2^(refNote/12) ) / log(10);
+      approxNoteFrequency = calcTuning(cutoff, refNote);
     ) : ( filterChoice == 3 ) ? (
       // Note follow makes no sense in vowel context
       approxNoteFrequency = 0;
@@ -4685,20 +4747,17 @@ function getTuning(filterChoice, lastNote, cutoff)
     ) : ( filterChoice == 5 ) ? (
       approxNoteFrequency = ( log( 2^(refNote/12)*(4*440/srate) ) + log(256*$pi) ) / ( 8 * log(2) );
     ) : ( filterChoice > 5 && filterChoice < 16 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * 2^(refNote/12) ) / log(10);
+      approxNoteFrequency = calcTuning(cutoff, refNote);
     ) : ( filterChoice == 16 ) ? (
       approxNoteFrequency = 0;
     ) : ( filterChoice == 17 ) ? (
       approxNoteFrequency = 0;
     ) : ( filterChoice > 17 && filterChoice < 24 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * 2^(refNote/12) ) / log(10);
+      approxNoteFrequency = calcTuning(cutoff, refNote);
     ) : ( filterChoice == 24 ) ? (
       approxNoteFrequency = 0; // Experimental (untuneable)
     ) : ( filterChoice > 24 && filterChoice < 31 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * 2^(refNote/12) ) / log(10);
+      approxNoteFrequency = calcTuning(cutoff, refNote);
     ) : ( filterChoice == 31 ) ? (
       approxNoteFrequency = 0;//2^(refNote/12); // Unclear, no resonant peak
     ) : ( filterChoice == 32 ) ? (
@@ -4709,8 +4768,7 @@ function getTuning(filterChoice, lastNote, cutoff)
       // scalar = 9*tmp/(.5*srate);
       // approxNoteFrequency = log( 10^(-cutoff)* (scalar*2^(refNote/12)+1) ) / log(10);
       // approxNoteFrequency = log( 10^(-cutoff) * ((10^cutoff - 1)*2^(refNote/12)+1) ) / log(10);
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * 2^(refNote/12) ) / log(10);
+      approxNoteFrequency = calcTuning(cutoff, refNote);
     );
     
     approxNoteFrequency;
@@ -4724,8 +4782,7 @@ function getPitchMod(filterChoice, pitch, cutoff)
     ( filterChoice == 1 ) ? (
       approxNoteFrequency = ( log( pitch*(440/srate) ) + log(256*$pi) ) / ( 8 * log(2) );
     ) : ( filterChoice == 2 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * pitch ) / log(10);
+      approxNoteFrequency = calcPitch(cutoff, pitch);
     ) : ( filterChoice == 3 ) ? (
       // Note follow makes no sense in vowel context
       approxNoteFrequency = 0;
@@ -4734,28 +4791,24 @@ function getPitchMod(filterChoice, pitch, cutoff)
     ) : ( filterChoice == 5 ) ? (
       approxNoteFrequency = ( log( pitch*(4*440/srate) ) + log(256*$pi) ) / ( 8 * log(2) );
     ) : ( filterChoice > 5 && filterChoice < 16 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) *pitch ) / log(10);
+      approxNoteFrequency = calcPitch(cutoff, pitch);
     ) : ( filterChoice == 16 ) ? (
       approxNoteFrequency = 0;
     ) : ( filterChoice == 17 ) ? (
       approxNoteFrequency = 0;
     ) : ( filterChoice > 17 && filterChoice < 24 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * pitch ) / log(10);
+      approxNoteFrequency = calcPitch(cutoff, pitch);
     ) : ( filterChoice == 24 ) ? (
       approxNoteFrequency = 0; // Experimental (untuneable)
     ) : ( filterChoice > 24 && filterChoice < 31 ) ? (
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * pitch ) / log(10);
+      approxNoteFrequency = calcPitch(cutoff, pitch);
     ) : ( filterChoice == 31 ) ? (
       approxNoteFrequency = 0;//2^(refNote/12); // Unclear, no resonant peak
     ) : ( filterChoice == 32 ) ? (
       approxNoteFrequency = 0; // Unclear, no resonant peak
     ) : ( filterChoice > 32 ) ? (
       // SVF
-      tmp = 10^-cutoff;
-      approxNoteFrequency = log( tmp + ( 1 - tmp ) * pitch ) / log(10);
+      approxNoteFrequency = calcPitch(cutoff, pitch);
     );
     
     approxNoteFrequency;
@@ -4783,21 +4836,21 @@ function getHz(filterChoice, f)
         outHz = 0;
       ) : ( filterChoice == 6 ) ? (
         f = max(f, 0.003);
-        outHz = srate * (pow(10, f)-1)/9 / 2.185; // dualFilt LP
+        outHz = srate * f_trafo_Hz(f) / 2.185; // dualFilt LP
       ) : ( filterChoice == 7 ) ? (
         f = max(f, 0.003);
-        outHz = srate * (pow(10, f)-1)/9 / 2.25; // dualFilt HP
+        outHz = srate * f_trafo_Hz(f) / 2.25; // dualFilt HP
       ) : ( filterChoice == 8 ) ? (
         f = max(f, 0.003);
-        outHz = srate * (pow(10, f)-1)/9 / 2.058; // dualFilt BP
+        outHz = srate * f_trafo_Hz(f) / 2.058; // dualFilt BP
       ) : ( filterChoice == 9 || filterChoice == 10 ) ? (
         f = max(f, 0.003);
-        outHz = srate * (pow(10, f)-1)/9 / 1.75; // moogs
+        outHz = srate * f_trafo_Hz(f) / 1.75; // moogs
       ) : ( filterChoice == 11 ) ? (
         f = max(f, 0.003);
-        outHz = .5 * srate * (pow(10, f)-1)/9; // notch
+        outHz = .5 * srate * f_trafo_Hz(f); // notch
       ) : ( filterChoice == 12 ) ? (
-        outHz = 1111*(pow(10, f)-1)/9 + 440; // narsty
+        outHz = 1111*f_trafo_Hz(f) + 440; // narsty
       ) : ( filterChoice == 13 ) ? (
         outHz = 0; // modulator   
       ) : ( filterChoice == 14 ) ? (
@@ -4810,49 +4863,51 @@ function getHz(filterChoice, f)
         outHz = 0;
       ) : ( filterChoice == 18 ) ? (
         f = max(f, 0.003);
-        outHz = .5 * srate * (pow(10, f)-1)/9; // ms-20 linear
+        outHz = .5 * srate * f_trafo_Hz(f); // ms-20 linear
       ) : ( filterChoice == 19 ) ? (
         f = max(f, 0.003);
-        outHz = .5 * srate * (pow(10, f)-1)/9; // ms-20 linear
+        outHz = .5 * srate * f_trafo_Hz(f); // ms-20 linear
       ) : ( filterChoice == 20 ) ? (
         f = max(f, 0.003);
-        outHz = .5 * srate * (pow(10, f)-1)/9; // ms-20 linear
+        outHz = .5 * srate * f_trafo_Hz(f); // ms-20 linear
       ) : ( filterChoice == 21 ) ? (
         f = max(f, 0.006);
-        outHz = .227 * srate * (pow(10, f)-1)/9; // ms-20 non-linear LP
+        outHz = .227 * srate * f_trafo_Hz(f); // ms-20 non-linear LP
       ) : ( filterChoice == 22 ) ? (
-        f = max(f, 0.004);    
-        outHz = .227 * srate * (pow(10, f)-1)/9; // ms-20 non-linear BP
+        f = max(f, 0.004);      
+        outHz = .227 * srate * f_trafo_Hz(f); // ms-20 non-linear BP
       ) : ( filterChoice == 23 ) ? (
         f = max(f, 0.004);
-        outHz = .227 * srate * (pow(10, f)-1)/9; // ms-20 non-linear HP
+        outHz = .227 * srate * f_trafo_Hz(f); // ms-20 non-linear HP
       ) : ( filterChoice == 24 ) ? (
         outHz = 0; // Experimental (untuneable)
       ) : ( filterChoice == 25 ) ? (
         f = max(f, 0.004);
-        outHz = .215 * srate * (pow(10, f)-1)/9; // strange thing based on ms-20
+        outHz = .227 * srate * f_trafo_Hz(f); // strange thing based on ms-20
       ) : ( filterChoice == 26 ) ? (
         f = max(f, 0.0045);
-        outHz = 2 * .203 * srate * (pow(10, f)-1)/9; // ssm
+        //outHz = 2 * .203 * srate * f_trafo_Hz(f); // ssm
+        outHz = 2 * .24 * srate * f_trafo_Hz(f); // ssm
       ) : ( filterChoice == 27 ) ? (
         f = max(f, 0.0045);    
-        outHz = 2 * .203 * srate * (pow(10, f)-1)/9; // ssm
+        //outHz = 2 * .203 * srate * f_trafo_Hz(f); // ssm
+        outHz = 2 * .24 * srate * f_trafo_Hz(f); // ssm
       ) : ( filterChoice == 28 ) ? (
         f = max(f, 0.007);
-        outHz = 2 * .3333 * srate * (pow(10, f)-1)/9; // cem (very approximate)
+        outHz = 2 * .39 * srate * f_trafo_Hz(f); // cem (very approximate)
       ) : ( filterChoice == 29 ) ? (
         f = max(f, 0.01);   
-        outHz = .444 * srate * (pow(10, f)-1)/9; // ssm linear
+        outHz = .444 * srate * f_trafo_Hz(f); // ssm linear
       ) : ( filterChoice == 30 ) ? (
         f = max(f, 0.01);
-        outHz = .716 * srate * (pow(10, f)-1)/9; // cem linear
+        outHz = .716 * srate * f_trafo_Hz(f); // cem linear
       ) : ( filterChoice == 31 ) ? (
         outHz = 0; // Unclear, no resonant peak
       ) : ( filterChoice == 32 ) ? (
         outHz = 0; // Unclear, no resonant peak
       ) : ( filterChoice == 33 ) ? (
         f = max(f, 0.007);
-        outHz = 0.135 * srate * (pow(10, f)-1)/9; // very rough (poorly tuned)
+        outHz = 0;//0.153 * srate * f_trafo_Hz(f); // very rough (poorly tuned)
       ) : ( filterChoice == 34 ) ? (
         // filterFreq = max(filterFreq, 0.004);
         outHz = 0; // Too inaccurate
@@ -4860,7 +4915,7 @@ function getHz(filterChoice, f)
         //filterFreq = max(filterFreq, 0.0048);
         outHz = 0; // Too inaccurate
       ) : ( filterChoice == 36 ) ? (
-        outHz = .77 * srate * ( ( pow(10, f) - 1 ) / 9 ); // Wasp linear
+        outHz = .77 * srate * f_trafo_Hz(f); // Wasp linear
       ) : ( filterChoice == 37 ) ? (
         // filterFreq = max(filterFreq, 0.006);
         outHz = 0; // Too inaccurate
@@ -4869,34 +4924,34 @@ function getHz(filterChoice, f)
         outHz = 0; // Too inaccurate
       ) : ( ( filterChoice > 38 ) && ( filterChoice < 44 ) ) ? (
         f = max(f, 0.0035);
-        outHz = .5 * ( ( pow(10, f) - 1 ) / 9 ) * srate;
+        outHz = .5 * f_trafo_Hz(f) * srate;
       ) : ( filterChoice == 44 ) ? (
         // filterFreq = max(filterFreq, 0.02);
         outHz = 0; // Too inaccurate
       ) : ( filterChoice == 45 ) ? (
         f = max(f, 0.0035);
-        outHz = .5 * ( ( pow(10, f) - 1 ) / 9 ) * srate;
+        outHz = .5 * f_trafo_Hz(f) * srate;
       ) : ( filterChoice == 46 ) ? (
         f = max(f, 0.0035);
-        outHz = .5 * ( ( pow(10, f) - 1 ) / 9 ) * srate;
+        outHz = .5 * f_trafo_Hz(f) * srate;
       ) : ( filterChoice == 47 ) ? (
         f = max(f, 0.0035);
-        outHz = .5 * ( ( pow(10, f) - 1 ) / 9 ) * srate;
+        outHz = .5 * f_trafo_Hz(f) * srate;
       ) : ( filterChoice == 48 ) ? (
         outHz = 0; // comb (inaccurate)
       ) : ( filterChoice == 49 ) ? (
-        outHz = .5 * ( ( pow(10, f) - 1 ) / 9 ) * srate; // combed resonance
+        outHz = .5 * f_trafo_Hz(f) * srate; // combed resonance
       ) : ( filterChoice == 50 ) ? (
-        outHz = .5 * ( ( pow(10, f) - 1 ) / 9 ) * srate; // combed resonance
+        outHz = .5 * f_trafo_Hz(f) * srate; // combed resonance
       ) : ( filterChoice == 51 ) ? (
         f = max(f, 0.004);
-        outHz = .444 * srate * (pow(10, f)-1)/9;
+        outHz = .444 * srate * f_trafo_Hz(f);
       ) : ( filterChoice == 52 ) ? (
         f = max(f, 0.004);
-        outHz = .444 * srate * (pow(10, f)-1)/9;
+        outHz = .444 * srate * f_trafo_Hz(f);
       ) : ( filterChoice == 53 ) ? (
         f = max(f, 0.004);
-        outHz = .444 * srate * (pow(10, f)-1)/9;
+        outHz = .6 * srate * f_trafo_Hz(f);
       );
       
       outHz
@@ -8611,6 +8666,10 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_
     midiTrigger.selectionButton(x+2.8*bw, y-.5*bh, 2*bw, bh, "TRIG", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Trigger on MIDI note");
     midiVel.selectionButton(x+5.1*bw, y-.5*bh, 2*bw, bh, "VEL", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use MIDI Velocity");
     snap.selectionButton(x+7.4*bw, y-.5*bh, 2*bw, bh, "SNAP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Snap to grid");
+    soften.style = 2;
+    midiTrigger.style = 2;
+    midiVel.style = 2;
+    snap.style = 2;
     this.updateToggles();
     
     speedSlider.sliderWidget(x+2, y + h_graph - .5*cx*h_in, .9*w, 2*cx*h_in, "", widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a, 0, 0, 1, .36, " ", 0, "Envelope length (measures)");
@@ -9371,6 +9430,15 @@ n_pos = 8;
 n_neg = 8;
 initialized = 1;
 
+function updateLegacyStatus()
+(
+  (slider35 & 16384) ? (
+    legacyCutoff = 0;
+  ) : (
+    legacyCutoff = 1;
+  );
+);
+
 function updateSliders( hard )
 (
   slider54 < 1 ? slider54 = 1;
@@ -9599,6 +9667,9 @@ function updateSliders( hard )
   dynamicMorph.active             = slider35 & 1024 ? 1 : 0;
   lfoMorph.active                 = slider35 & 2048 ? 1 : 0;
   dynamicLFOButton.active         = slider35 & 4096 ? 1 : 0;
+  legacySliders.active            = slider35 & 16384 ? 0 : 1; // Reversed order is not accidental. Legacy is the default for older presets!
+  updateLegacyStatus();
+   
   force_mono.active               = force_mono_output;
   globalbypass.active             = global_bypass;
 
@@ -9804,8 +9875,9 @@ function setupGUI()
   env2GainButton.selectionButton(masterPanelX + baseRight - 2*toggleOffset, masterPanelY-buttonHeight, toggleWidth-2*sliderPad, buttonHeight, "EN2",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable Envelope 2 for gain manipulation.");
   
   agcButton.selectionButton(postTextLoc + .015 * sliderWidth, masterPanelY-buttonHeight, .14*sliderWidth-2*sliderPad, buttonHeight, "AGC",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Automatic Gain Control (BETA)\n\nAdjusts the level between post-filter and post-gain in order\nto keep the RMS ratio between post-filter and post-drive fixed.\n\nThis setting is meant to protect your ears when tweaking filters,\nnot to be used in final production as it affects dynamics.\n\n\nClicking this button with the outer mouse button transfers the \ngain correction estimated by AGC to the Post-Gain slider and\ndisables AGC.");
-  force_mono.selectionButton(postTextLoc + .015 * sliderWidth + .14*sliderWidth-1*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "M",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Force mono\n\nSums left and right output. Use this every now\nand then to spot any phase issues in the bass.\n");
-  globalbypass.selectionButton(postTextLoc + .015 * sliderWidth + .24*sliderWidth-2*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "B",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Bypass plugin.\n");
+  force_mono.selectionButton(postTextLoc + .015 * sliderWidth + .13*sliderWidth-1*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "M",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Force mono\n\nSums left and right output. Use this every now\nand then to spot any phase issues in the bass.\n");
+  globalbypass.selectionButton(postTextLoc + .015 * sliderWidth + .22*sliderWidth-2*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "B",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Bypass plugin.\n");
+  legacySliders.selectionButton(postTextLoc + .015 * sliderWidth + .31*sliderWidth-3*sliderPad, masterPanelY-buttonHeight, .1*sliderWidth-2*sliderPad, buttonHeight, "L",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use legacy slider mapping.\n\nLegacy slider mapping has less resolution for lower frequencies\n");
 
   inGain.sliderWidget(masterPanelX+sliderPad, masterPanelY+sliderPad, .78*sliderWidth-2*sliderPad, sliderHeight, "Pre-Gain / Drive", wR, wG, wB, wA, 40, -40, 40, 0, " dB", 0, "Input gain\n(Post upsampling, pre-effect)");
   inClip.selectionButton(masterPanelX+sliderPad+ + .8*sliderWidth, 3+masterPanelY+sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle input clipping");
@@ -9948,6 +10020,7 @@ function setupGUI()
   agcButton.style = 2;
   force_mono.style = 2;
   globalbypass.style = 2;
+  legacySliders.style = 2;
   dynamicMorph.style = 2;
   lfoMorph.style = 2;
   dynamicLFOButton.style = 2;
@@ -11356,15 +11429,15 @@ function pwm_eval_BP(sample)
 function bit_eval(sample)
   instance(depth, idepth, res)
   local(s, bass)
-  global()
-  (
+  global(testo)
+  (  
     res > 0.01 ? 
     (
       bass = this.filter_SVF.eval_linearSVF_LP(sample);
       sample = sample - bass;
     );
-    sample = floor( sample * depth ) * idepth;
-    res > 0.01 ? sample = sample + bass;
+    sample = floor( sample * depth + 0.00000002 ) * idepth;
+    res > 0.01 ? sample += bass;
     
     sample
   );
@@ -11739,7 +11812,6 @@ function specialGraphics()
     ( this.filtertype == 31 ) ?
     (
       showFilterFFT = 0;
-      specialValue = this.filter_sine.freq;
     ) : ( this.filtertype == 66 || this.filtertype == 72 ) ? 
     (
       specialValue = this.modulon.f;
@@ -11787,7 +11859,7 @@ function process(sample, dist)
   instance()
   (
     sample+=0.00000001; // DeNorm fix
-  
+
     // Optional clipping
     ( slider55 & 1 ) ? sample = min(1,max(-1,sample));
     
@@ -12332,6 +12404,7 @@ updateActiveFilters(1);
 @block     
   agc_corr == 0 ? agc_corr = 1;
 
+  updateLegacyStatus();
   cTempo            = tempo; 
   blockSize         = samplesblock;
   secondFilterMode  = floor(slider50*.5);
@@ -13154,7 +13227,7 @@ updateActiveFilters(1);
     
     gfx_setfont(1, fontface, 10*retina_scaling);
     gfx_measurestr( "FILTHER", t1, t2 );
-    gfx_x = x + 18;
+    gfx_x = x + 18*retina_scaling;
     gfx_y = y - .5*t2;
     gfx_a = .3 + .5 * sin(a);
     gfx_printf(plugname)
@@ -13173,7 +13246,7 @@ updateActiveFilters(1);
     gfx_clear = -1;
     updating = 1;
     
-    block_analyzers == 0 ? draw_logo(17*retina_scaling, 17*retina_scaling - yOffset, 9*retina_scaling);
+    block_analyzers == 0 ? draw_logo(18*retina_scaling, 18*retina_scaling - yOffset, 9*retina_scaling);
     
     // Clear screen first
     gfx_r=bg_color_r;
@@ -13352,6 +13425,7 @@ updateActiveFilters(1);
     agcButton.selectionButton_draw();
     force_mono.selectionButton_draw();
     globalbypass.selectionButton_draw();
+    legacySliders.selectionButton_draw();
     dynamicFeedback.selectionButton_draw();
     lfoFeedback.selectionButton_draw();
     dynamicMorph.selectionButton_draw();
@@ -13738,6 +13812,7 @@ updateActiveFilters(1);
             dynamicMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)        ? ( slider_automate( slider35=(slider35 - (slider35&1024))+1024*dynamicMorph.active; ); forceUpdate = 1; );
             lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)            ? ( slider_automate( slider35=(slider35 - (slider35&2048))+2048*lfoMorph.active; ); forceUpdate = 1; );            
             dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)    ? ( slider_automate( slider35=(slider35 - (slider35&4096))+4096*dynamicLFOButton.active; ); forceUpdate = 1; );
+            legacySliders.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)       ? ( slider_automate( slider35=(slider35 - (slider35&16384))+16384*(1-legacySliders.active); ); forceUpdate = 1; );
             
             /*lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
             bypassFilter1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
