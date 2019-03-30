@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.56
+version: 2.57
 author: Joep Vanlier
 changelog: 
-+ Always show dynamic curve to enhance user feedback
++ Optimizations
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -231,7 +231,7 @@ function resetEnvelope(vel, hard)
     );
   );
 
-skipFactor = 3;
+skipFactor = 4;
 
 // Colors
 bg_color_r = 0;
@@ -384,7 +384,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.56";
+plugname = "FILTHER 2.57";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -5635,10 +5635,7 @@ function updateSmoothing( force )
 function updateActiveFilters( force )
   (  
     force ? updateSmoothing();
-    
     filteredDynval = (1-dynvalSmoothing) * dynval + dynvalSmoothing * filteredDynval; // Avoid too steep transitions.
-    //filteredDynval = 0.005 * dynval + 0.995 * filteredDynval; // Avoid too steep transitions.
-    //filteredDynval = 0.025 * dynval + 0.975 * filteredDynval; // Avoid too steep transitions.
   
     gainModVal            = 0;
     cnt                   = 0;
@@ -5652,36 +5649,40 @@ function updateActiveFilters( force )
     postgain = 2^((slider53 + 40 * dyn_mod_outgain * gainModVal)*0.166666666666666666666666666666666666666667);
   
     // Cutoff and resonance handling filter 1
+    currentSkip += 1;
+    currentSkip > skipFactor ? currentSkip = 0;
+    
     ( slider47 > 0 ) ? (
+      
       sliderCutoff  = cutoffLerp.lerpSample();
       sliderReso    = resoLerp.lerpSample();
       followKey1    ? sliderCutoff = sliderCutoff + approxNoteFrequencyFilter1 * slider33;
       followPitch1  ? sliderCutoff = sliderCutoff + pitchLerp1.lerpSample() * slider33;
-
-      filter1ModValCutoff     = 0;
-      cnt                     = 0;
-      F1_dyn_cutoff           ? (filter1ModValCutoff += filteredDynval; cnt += 1;);
-      F1_env1_cutoff          ? (filter1ModValCutoff += envelopeValue1; cnt += 1;);
-      F1_env2_cutoff          ? (filter1ModValCutoff += envelopeValue2; cnt += 1;);
-      cnt > 1                 ? filter1ModValCutoff /= cnt;
-      F1_lfo_cutoff           ? filter1ModValCutoff += modulator.scaled_modvalue;
       
-      filter1ModValReso       = 0;
-      cnt                     = 0;
-      F1_dyn_reso             ? (filter1ModValReso += filteredDynval; cnt += 1;);
-      F1_env1_reso            ? (filter1ModValReso += envelopeValue1; cnt += 1;);
-      F1_env2_reso            ? (filter1ModValReso += envelopeValue2; cnt += 1;);
-      cnt > 1                 ? filter1ModValReso /= cnt;
-      F1_lfo_reso             ? filter1ModValReso += modulator.scaled_modvalue;
-      
-      filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * filter1ModValCutoff ) );
-      filterReso = max( 0, min( .99, sliderReso + dyn_mod_reso * filter1ModValReso ) );
-    );
+      /* Only update cutoff and resonance every N samples */
+      ( currentSkip == 0 )? (
+        filter1ModValCutoff     = 0;
+        cnt                     = 0;
+        F1_dyn_cutoff           ? (filter1ModValCutoff += filteredDynval; cnt += 1;);
+        F1_env1_cutoff          ? (filter1ModValCutoff += envelopeValue1; cnt += 1;);
+        F1_env2_cutoff          ? (filter1ModValCutoff += envelopeValue2; cnt += 1;);
+        cnt > 1                 ? filter1ModValCutoff /= cnt;
+        F1_lfo_cutoff           ? filter1ModValCutoff += modulator.scaled_modvalue;
+        
+        filter1ModValReso       = 0;
+        cnt                     = 0;
+        F1_dyn_reso             ? (filter1ModValReso += filteredDynval; cnt += 1;);
+        F1_env1_reso            ? (filter1ModValReso += envelopeValue1; cnt += 1;);
+        F1_env2_reso            ? (filter1ModValReso += envelopeValue2; cnt += 1;);
+        cnt > 1                 ? filter1ModValReso /= cnt;
+        F1_lfo_reso             ? filter1ModValReso += modulator.scaled_modvalue;
+        
+        filterFreq = max( 0, min( 1, sliderCutoff + dyn_mod_filt * filter1ModValCutoff ) );
+        filterReso = max( 0, min( .99, sliderReso + dyn_mod_reso * filter1ModValReso ) );
+      )
+    );    
     
-    currentSkip += 1;
-    currentSkip > skipFactor ? currentSkip = 0;
-    
-    updateFiltersNow = ( (currentSkip == 0) && ( ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) ) ) || force;
+    updateFiltersNow = ( ( ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) ) ) || force;
     ( updateFiltersNow ) ? (
       lastFilterReso = filterReso;
       lastFilterFreq = filterFreq;
@@ -5690,54 +5691,45 @@ function updateActiveFilters( force )
     );
 
     // Cutoff and resonance handling filter 2
+    currentSkip2 += 1;
+    currentSkip2 > skipFactor ? currentSkip2 = 0;
+    
     ( slider40 > 0 ) ? (
       sliderCutoff2 = cutoffLerp2.lerpSample();
       sliderReso2   = resoLerp2.lerpSample();
       followKey2    ? sliderCutoff2  = sliderCutoff2 + approxNoteFrequencyFilter2 * slider33;
       followPitch2  ? sliderCutoff2 = sliderCutoff2 + pitchLerp2.lerpSample() * slider33;
       
-      filter2ModValCutoff      = 0;
-      cnt                      = 0;
-      F2_dyn_cutoff            ? (filter2ModValCutoff += filteredDynval; cnt += 1;);
-      F2_env1_cutoff           ? (filter2ModValCutoff += envelopeValue1; cnt += 1;);
-      F2_env2_cutoff           ? (filter2ModValCutoff += envelopeValue2; cnt += 1;);
-      cnt > 1                  ? filter2ModValCutoff /= cnt;
-      F2_lfo_cutoff            ? filter2ModValCutoff += modulator.scaled_modvalue;
-      
-      filter2ModValReso        = 0;
-      cnt                      = 0;
-      F2_dyn_reso              ? (filter2ModValReso += filteredDynval; cnt += 1;);
-      F2_env1_reso             ? (filter2ModValReso += envelopeValue1; cnt += 1;);
-      F2_env2_reso             ? (filter2ModValReso += envelopeValue2; cnt += 1;);
-      cnt > 1                  ? filter2ModValReso /= cnt;
-      F2_lfo_reso              ? filter2ModValReso += modulator.scaled_modvalue;
-      
-      filterFreq2 = max( 0, min( 1, sliderCutoff2 + dyn_mod_filt2 * filter2ModValCutoff ) );
-      filterReso2 = max( 0, min( .99, sliderReso2 + dyn_mod_reso2 * filter2ModValReso ) );
-    );
+      /* Only update cutoff and resonance every N samples */
+      (currentSkip2 == 0) ? (
+        filter2ModValCutoff      = 0;
+        cnt                      = 0;
+        F2_dyn_cutoff            ? (filter2ModValCutoff += filteredDynval; cnt += 1;);
+        F2_env1_cutoff           ? (filter2ModValCutoff += envelopeValue1; cnt += 1;);
+        F2_env2_cutoff           ? (filter2ModValCutoff += envelopeValue2; cnt += 1;);
+        cnt > 1                  ? filter2ModValCutoff /= cnt;
+        F2_lfo_cutoff            ? filter2ModValCutoff += modulator.scaled_modvalue;
+        
+        filter2ModValReso        = 0;
+        cnt                      = 0;
+        F2_dyn_reso              ? (filter2ModValReso += filteredDynval; cnt += 1;);
+        F2_env1_reso             ? (filter2ModValReso += envelopeValue1; cnt += 1;);
+        F2_env2_reso             ? (filter2ModValReso += envelopeValue2; cnt += 1;);
+        cnt > 1                  ? filter2ModValReso /= cnt;
+        F2_lfo_reso              ? filter2ModValReso += modulator.scaled_modvalue;
+        
+        filterFreq2 = max( 0, min( 1, sliderCutoff2 + dyn_mod_filt2 * filter2ModValCutoff ) );
+        filterReso2 = max( 0, min( .99, sliderReso2 + dyn_mod_reso2 * filter2ModValReso ) );
+      );
+    );    
     
-    currentSkip2 += 1;
-    currentSkip2 > skipFactor2 ? currentSkip2 = 0;
-    
-    updateFiltersNow = ( (currentSkip2 == 0) && ( ( filterFreq != lastFilterFreq ) || ( filterReso != lastFilterReso ) ) ) || force;
-    //( filterFreq2 != lastFilterFreq2 ) || ( filterReso2 != lastFilterReso2 ) || force;
+    updateFiltersNow = ( ( ( filterFreq2 != lastFilterFreq2 ) || ( filterReso2 != lastFilterReso2 ) ) ) || force;
     ( updateFiltersNow ) ? (
       lastFilterReso2 = filterReso2;
       lastFilterFreq2 = filterFreq2;
       L2.updateActiveFilter(slider40, filterFreq2, filterReso2, 0, 1, 0);
       R2.updateActiveFilter(slider40, filterFreq2, filterReso2, 1, 1, 0);
     );
-    
-    // Delay
-    /*( lookAhead ) ?
-    (
-      oldFreq = cutoffBuffer.getBuffer();
-      oldReso = resoBuffer.getBuffer();
-      cutoffBuffer.updateBuffer( filterFreq );
-      resoBuffer.updateBuffer( filterReso );
-      filterFreq = oldFreq;
-      filterReso = oldReso;
-    );*/
  ); 
  
 function resetActiveFilter(filterType, isGFX)
@@ -12161,7 +12153,7 @@ function process(sample, dist)
             /* Initialized immediately, hence no instance history */
             os, os1, os2, ys1, flt, reso, lp, diff, vib_delay, vibratoSinTerm
         )
-  global(slider55, pregain,
+  global(pregain, clipInput, clipOutput
         /* This block is part of the cruft that is filter 16 and 17 :( */
         filter_delay1,              filter_delay2,
         filter_delay3,              filter_delay4,
@@ -12183,7 +12175,7 @@ function process(sample, dist)
     sample+=0.00000001; // DeNorm fix
 
     // Optional clipping
-    ( slider55 & 1 ) ? sample = min(1,max(-1,sample));
+    ( clipInput ) ? sample = min(1,max(-1,sample));
     
     ( this.filtertype == 0 ) ? (
       dist ? sample = distort(sample);
@@ -12848,6 +12840,30 @@ updateActiveFilters(1);
     c_feedbackMul3    = slider35 & 8192;
   ); 
  
+ clipInput = slider55 & 1;
+ clipOutput = slider55 & 2;
+ 
+ ( slider45 == 0 || slider45 == 6 || slider45 == 8 ) ? (
+   dynamic_variable_mode = 1;
+ ) : ( slider45 == 1 || slider45 == 7 || slider45 == 9 ) ? (
+   dynamic_variable_mode = 2;
+ ) : ( slider45 == 2 || slider45 == 4 ) ? (
+   dynamic_variable_mode = 3;
+ ) : ( slider45 == 3 || slider45 == 5 ) ? (
+   dynamic_variable_mode = 4;
+ );
+ 
+ ( slider45 == 8 || slider45 == 9 ) ? (
+   listenChan = 1; // Side chain
+ ) : ( slider45 > 5 ) ? (
+   listenChan = 2; // Pregain RMS
+ ) : (
+   listenChan = 3; // Normal RMS
+ );
+ 
+ FIR_upsampling  = slider50 & 1;
+ modulatorSmoothingFactor = slider35 & 16 == 16 ? 0.996 : 0;
+ 
 @sample
   sl        = spl0 * pregain;
   sr        = spl1 * pregain;
@@ -12860,14 +12876,14 @@ updateActiveFilters(1);
     spectrumIn.feedSample(sl+sr);
     gonioIn.feedGonio(sl, sr);
   );
-  modulator.updateModulator(slider35 & 16 == 16 ? 0.996 : 0);
+  modulator.updateModulator(modulatorSmoothingFactor);
   
   // Does this plugin respond to MIDI signals?
   // Take notes from the stack until we hit the end marker -1
   (notes_remain) ? (
     while( note_next == curSample ) (
       currentSkip = skipFactor + 1; // Make sure we update filter coeffs at such an important moment
-      currentSkip2 = skipFactor2 + 1; // Make sure we update filter coeffs at such an important moment
+      currentSkip2 = skipFactor + 1; // Make sure we update filter coeffs at such an important moment
       notePtr += 1;
       (notePtr[] > 0) ? ( // note-on
         modulator.reset = 1;
@@ -12926,7 +12942,7 @@ updateActiveFilters(1);
   // Optional input clipping
   // Note that this input clipping is just for the dynamics and that the real clipping
   // is done on the oversampled samples to avoid aliasing issues.
-  ( slider55 & 1 ) ?
+  ( clipInput ) ?
   ( 
     sbl = min(1,max(-1,sl));
     sbr = min(1,max(-1,sr));
@@ -12935,16 +12951,16 @@ updateActiveFilters(1);
     sbr = sr;
   );
   
-  ( slider45 > 7 ) ? (
+  ( listenChan == 1 ) ? (
     inV = inVol.updateBuffer( RMS1.updateRMS(spl2, spl3) );
-  ) : ( slider45 > 5 ) ? (
+  ) : ( listenChan == 2 ) ? (
     inV = inVol.updateBuffer( RMS1.updateRMS(spl0, spl1) );
   ) : (
     inV = inVol.updateBuffer( RMS1.updateRMS(sbl, sbr) );
   );
-  
+
   // Calculation of the dynamic variable  
-  ( slider45 == 0 || slider45 == 6 || slider45 == 8 ) ?
+  ( dynamic_variable_mode == 1 ) ?
   (
     // Regular threshold mode
     ( inV > dyn_thresh ) ? (
@@ -12953,11 +12969,11 @@ updateActiveFilters(1);
     ) : (
       dynval = dynval - dyn_decay * dynval;
     );
-  ) : ( slider45 == 1 || slider45 == 7 || slider45 == 9 ) ? (
+  ) : ( dynamic_variable_mode == 2 ) ? (
     // Direct RMS based mode
     dynval = min(1, (abs(inV)/dyn_thresh)^dyn_atk);
     dynval = (1 - dyn_decay) * dynval + dyn_decay * (1-dynval);
-  ) : ( slider45 == 2 || slider45 == 4 ) ? (
+  ) : ( dynamic_variable_mode == 3 ) ? (
     // Fixed envelope that plays on note on
     tDynamic = tDynamic + 1;
     (tDynamic < dyn_atk_time) ? (
@@ -12966,8 +12982,7 @@ updateActiveFilters(1);
       dynval = dynval - dyn_decay * dynval;
     ) : dynval = lastVel;
     dynval = min(1, dynval);
-    
-  ) : ( slider45 == 3 || slider45 == 5 ) ? (
+  ) : ( dynamic_variable_mode == 4 ) ? (
     // Note mode (Legato)
     ( notesOn > 0 ) ? (
       dynval = dynval + dyn_atk * ( 1-dyn_thresh ) + 3*dyn_thresh * dyn_atk*(1-dynval);
@@ -13052,28 +13067,18 @@ updateActiveFilters(1);
     processSamples();
     sl = ssl;
     sr = ssr;
-//  ) : ( slider54 == 1 ) ? (
-//    // With oversampling
-//    os.os_up2(sl); 
-//    os.y1 = process(os.y1);
-//    os.y0 = process(os.y0);    
-//    sl = os.os_down2();
-//    os.os_up2(sr);  
-//    os.y1 = process(os.y1);
-//    os.y0 = process(os.y0);
-//    sr = os.os_down2();
   ) : ( 
     q = 0;
     // N>1 oversampling
     sli = sl;
     sri = sr;
-    ( slider50 & 1 ) ? (
+    FIR_upsampling ? (
       sincFilterL.advanceSinc(sli);
       sincFilterR.advanceSinc(sri);
     );
     loop( slider54,
       // Upsampling
-      ( slider50 & 1 ) ? (
+      FIR_upsampling ? (
         ssl = sincFilterL.getSubSample();
         ssr = sincFilterR.getSubSample();
       ) : (
@@ -13084,7 +13089,7 @@ updateActiveFilters(1);
       processSamples();
       
       // IIR downsampling?
-      ( slider50 & 1 ) ? (
+      FIR_upsampling ? (
         sincDownL.advanceHist(ssl);
         sincDownR.advanceHist(ssr);  
       ) : (
@@ -13099,7 +13104,7 @@ updateActiveFilters(1);
     );
     
     // FIR downsampling?
-    ( slider50 & 1 ) ?
+    FIR_upsampling ?
     (
       sl = sincDownL.sincDownSample();
       sr = sincDownR.sincDownSample();
@@ -13107,7 +13112,7 @@ updateActiveFilters(1);
   );
   
   // FEEDBACK
-  slider35 & 32 ? (
+  c_feedbackEnabled ? (
     fb_bufferL.updateBuffer(sl);
     fb_bufferR.updateBuffer(sr);
   );
@@ -13194,12 +13199,11 @@ updateActiveFilters(1);
   outVol.updateBuffer( RMS2.updateRMS(spl0, spl1) );
 
   !global_bypass ? (
-
     spl0 = out0;
     spl1 = out1;
 
     // Optional output clipping
-    ( slider55 & 2  ) ? 
+    ( clipOutput ) ? 
     ( 
       spl0 = min(1,max(-1,spl0));
       spl1 = min(1,max(-1,spl1));
