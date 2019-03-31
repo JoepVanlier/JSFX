@@ -3,8 +3,8 @@ tags: Filther
 version: 2.60
 author: Joep Vanlier
 changelog: 
-+ Fixed envelope issue.
-+ Fix issue with filter description not scrolling properly
++ Added some verby things.
++ Force AGC reset upon filterchange.
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -390,7 +390,7 @@ plugname = "FILTHER 2.60";
 fontface = "Arial";
 newUI = 1;
 refreshDynMode = -1;
-nFilters = 79;
+nFilters = 81;
 nShapers = 6;
 nModes = 10;
 nModes2 = 6;
@@ -461,15 +461,15 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 42 ) ? ( str = "Linear SVF Notch (ZDF)"   
       ) : ( curitem == 43 ) ? ( str = "Linear SVF Peak (ZDF)"    
       ) : ( curitem == 44 ) ? ( str = "Everything is a saw (ZDF)"     
-      ) : ( curitem == 45 ) ? ( str = "SVF with waveshaped resonance (ZDF)"
+      ) : ( curitem == 45 ) ? ( str = "SVF w/shaped res (ZDF)"
       ) : ( curitem == 46 ) ? ( str = "Voodoo"
       ) : ( curitem == 47 ) ? ( str = "Junk (ZDF)"  
       ) : ( curitem == 48 ) ? ( str = "Comb"    
       ) : ( curitem == 49 ) ? ( str = "Combed resonance (LP)"
       ) : ( curitem == 50 ) ? ( str = "Combed resonance (BP)"
-      ) : ( curitem == 51 ) ? ( str = "Kr0g MS-20 nonlin LP MK ][ (ZDF)"
-      ) : ( curitem == 52 ) ? ( str = "Kr0g MS-20 nonlin BP MK ][ (ZDF)"
-      ) : ( curitem == 53 ) ? ( str = "Kr0g MS-20 nonlin HP MK ][ (ZDF)"
+      ) : ( curitem == 51 ) ? ( str = "Kr0g MS-20 nonlin LP ][ (ZDF)"
+      ) : ( curitem == 52 ) ? ( str = "Kr0g MS-20 nonlin BP ][ (ZDF)"
+      ) : ( curitem == 53 ) ? ( str = "Kr0g MS-20 nonlin HP ][ (ZDF)"
       ) : ( curitem == 54 ) ? ( str = "Weeping Demon"
       ) : ( curitem == 55 ) ? ( str = "PWM Potatoes LP"
       ) : ( curitem == 56 ) ? ( str = "PWM Potatoes BP"
@@ -477,8 +477,8 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 58 ) ? ( str = "Muck"     
       ) : ( curitem == 59 ) ? ( str = "Weeping Demon ]["     
       ) : ( curitem == 60 ) ? ( str = "Crybaby"       
-      ) : ( curitem == 61 ) ? ( str = "Crybaby (Circuit bent for higher pitch)" 
-      ) : ( curitem == 62 ) ? ( str = "Crybaby (Circuit bent for lower pitch)" 
+      ) : ( curitem == 61 ) ? ( str = "Crybaby (Higher pitch)" 
+      ) : ( curitem == 62 ) ? ( str = "Crybaby (Lower pitch)" 
       ) : ( curitem == 63 ) ? ( str = "Vowel SVF (ZDF)"
       ) : ( curitem == 64 ) ? ( str = "Monstro (ZDF)"
       ) : ( curitem == 65 ) ? ( str = "King of Tone"
@@ -493,9 +493,10 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 74 ) ? ( str = "Vibrato"
       ) : ( curitem == 75 ) ? ( str = "Spin"
       ) : ( curitem == 76 ) ? ( str = "Wavefolder"
-      ) : ( curitem == 77 ) ? ( str = "Multi-Wavefolder"
+      ) : ( curitem == 77 ) ? ( str = "Multi-Wavefolder" 
       ) : ( curitem == 78 ) ? ( str = "Serge Wavefolder"
-      ) : ( curitem == 79 ) ? ( str = ""
+      ) : ( curitem == 79 ) ? ( str = "Metallic diffuser"
+      ) : ( curitem == 80 ) ? ( str = "Sproing"
       );
     ) : (stridx == 1) ? 
     (
@@ -1048,6 +1049,12 @@ local(fx, fy, wx, wx2, wy)
   ) : ( filteridx == 78 ) ? (
     gfx_printf("Serge wavefolder\n\n"); gfx_x = fx+5;
     gfx_wrapprint("A stack of lockhart wavefolders based on a model by Esqueda et al (2017). Cutoff controls strength, resonance controls bias. Note that these are very sensitive to input gain.", wx2);
+  ) : ( filteridx == 79 ) ? (
+    gfx_printf("Metallic diffuser\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Allpass-based reverb. Resonance around 0.5 is typically reverb level. Higher resonances lead to stranger soundscapes, with a sudden behavior shift around 0.9. Cutoff increases internal delays. Low cutoffs lead to metallic sounds. High cutoffs to more natural delay-type sounds.", wx2);  
+  ) : ( filteridx == 80 ) ? (
+    gfx_printf("Sproing\n\n"); gfx_x = fx+5;
+    gfx_wrapprint("Allpass-based stuttering sproing reverb.", wx2);  
   );
 );
 
@@ -5271,7 +5278,285 @@ function folder_eval_old(sample)
     );
   
     vout
+  );  
+
+  
+function allpass(s)
+  local(xhat, xhatm1)
+  instance(f, a)
+  global()
+  (
+    xhatm1 = this.readBufferFrac(f);
+    xhat = s + a * xhatm1;
+    this.updateBuffer(xhat);
+    
+    xhatm1 - a * xhat
+  );  
+  
+function diffuser_clear()
+  global()
+  local()
+  instance( otm1, itm1,
+            allpass1, allpass2, allpass3, allpass4, allpass5, allpass6, allpass7, allpass8 )
+  (
+    allpass1.clearBuffer();
+    allpass2.clearBuffer();
+    allpass3.clearBuffer();
+    allpass4.clearBuffer();
+    allpass5.clearBuffer();
+    allpass6.clearBuffer();
+    allpass7.clearBuffer();
+    allpass8.clearBuffer();
+    otm1 = itm1 = 0;
+  );  
+  
+function diffuser_init(filterFreq, filterReso, delayBuffer)
+  instance(allpass1, allpass2, allpass3, allpass4, allpass5, allpass6, allpass7, allpass8, r)
+  local(cD, os, 
+        f1, f2, f3, f4, f5, f6, f7, f8, 
+        a1, a2, a3, a4, a5, a6, a7, a8,
+        Fs)
+  global(slider54, bloop)
+  (
+    cD = delayBuffer;
+    r  = 11.11111111111111111*(filterReso-.9)*(filterReso>.9);
+    r  = r*r;
+  
+    filterFreq = 2*filterFreq;
+    f1 = 100   + 100*filterFreq;
+    f2 = 60    + 224*filterFreq;
+    f3 = 40    + 306*filterFreq + 5*rand();
+    f4 = 80    + 560*filterFreq;
+    f5 = 30    + 703*filterFreq + 10*rand();
+    f6 = 90    + 130*filterFreq;
+    f7 = 140.4 + 516*filterFreq + 5*rand();
+    f8 = 250   + 200*filterFreq;
+
+    os = max(1,slider54);
+    f1 = f1 * os;
+    f2 = f2 * os;
+    f3 = f3 * os;
+    f4 = f4 * os;
+    f5 = f5 * os;
+    f6 = f6 * os;
+    f7 = f7 * os;
+    f8 = f8 * os;
+    
+    a1 = a2 = a3 = a4 = .9995*filterReso;
+    a5 = a6 = a7 = a8 = .9995*filterReso;
+  
+    Fs = 10000;
+    allpass1.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass1.setOffset(f1);
+    allpass1.f = f1 - floor(f1);
+    allpass1.a = a1;
+    
+    allpass2.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass2.setOffset(f2);
+    allpass2.f = f2 - floor(f2);
+    allpass2.a = a2;
+    
+    allpass3.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass3.setOffset(f3);
+    allpass3.f = f3 - floor(f3);
+    allpass3.a = a3;
+        
+    allpass4.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass4.setOffset(f4);
+    allpass4.f = f4 - floor(f4);
+    allpass4.a = a4;
+    
+    allpass5.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass5.setOffset(f5);
+    allpass5.f = f5 - floor(f5);
+    allpass5.a = a5;
+    
+    allpass6.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass6.setOffset(f6);
+    allpass6.f = f6 - floor(f6);
+    allpass6.a = a6;
+    
+    allpass7.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass7.setOffset(f7);
+    allpass7.f = f7 - floor(f7);
+    allpass7.a = a7;
+    
+    allpass8.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass8.setOffset(f8);
+    allpass8.f = f8 - floor(f8);
+    allpass8.a = a8;
   );
+  
+function diffuser_eval(sample)
+  instance(allpass1, allpass2, allpass3, allpass4, allpass5, allpass6, allpass7, allpass8, u8, r, otm1, itm1)
+  local(cD, u1, u2, u3, u4, u5, u6, u7, v)
+  global()
+  (
+    u1  = allpass1.allpass(sample);
+    u2  = allpass2.allpass(u1);
+    
+    u3  = allpass3.allpass(u2);
+    u4  = allpass4.allpass(u3);
+    
+    u5  = allpass5.allpass(u4-.025*u1);
+    u6  = allpass6.allpass(u5);
+    
+    u7  = allpass7.allpass(u6-.025*u3);
+    u8  = allpass8.allpass(u7);
+    
+    v = (1+2*r)*(u8-sample*r);
+    
+    // Small single pole highpass to prevent DC blowups.
+    otm1=0.999*otm1 + v - itm1;
+    itm1=v;
+    
+    otm1
+  );
+  
+  
+function space_clear()
+  global()
+  local()
+  instance( otm1, itm1, u8, u9, u10,
+            allpass1, allpass2, allpass3, allpass4, allpass5, allpass6, allpass7, allpass8, allpass9, allpass10 )
+  (
+    allpass1.clearBuffer();
+    allpass2.clearBuffer();
+    allpass3.clearBuffer();
+    allpass4.clearBuffer();
+    allpass5.clearBuffer();
+    allpass6.clearBuffer();
+    allpass7.clearBuffer();
+    allpass8.clearBuffer();
+    allpass9.clearBuffer();
+    allpass10.clearBuffer();
+    otm1 = itm1 = 0;
+    u8=u9=u10=0;
+  );  
+  
+function space_init(filterFreq, filterReso, delayBuffer)
+  instance(allpass1, allpass2, allpass3, allpass4, allpass5, allpass6, allpass7, allpass8, allpass9, allpass10, r)
+  local(cD, os, 
+        f1, f2, f3, f4, f5, f6, f7, f8, f9, f10,
+        a1, a2, a3, a4, a5, a6, a7, a8, a9, a10,
+        Fs)
+  global(slider54, bloop)
+  (
+    cD = delayBuffer;
+    r  = 11.11111111111111111*(filterReso-.9)*(filterReso>.9);
+    r  = r*r;
+  
+    filterFreq = 2*filterFreq;
+    f1 = 100   + 200*filterFreq;
+    f2 = 60    + 424*filterFreq;
+    f3 = 40    + 606*filterFreq;
+    f4 = 80    + 860*filterFreq;
+    f5 = 30    + 303*filterFreq;
+    f6 = 90    + 530*filterFreq;
+    f7 = 140.4 + 716*filterFreq;
+    f8 = 250   + 900*filterFreq;
+    f9 = 55;
+    f10 = 58;
+
+    os = max(1,slider54);
+    f1 = f1 * os;
+    f2 = f2 * os;
+    f3 = f3 * os;
+    f4 = f4 * os;
+    f5 = f5 * os;
+    f6 = f6 * os;
+    f7 = f7 * os;
+    f8 = f8 * os;
+    f9 = f9 * os;
+    f10 = f10 * os;
+        
+    a1 = a2 = a3 = a4 = -.92*filterReso;
+    a5 = a6 = a7 = a8 = -.92*filterReso;
+    a9 = .1;
+    a10 = .1;
+ 
+    Fs = 10000;
+    allpass1.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass1.setOffset(f1);
+    allpass1.f = f1 - floor(f1);
+    allpass1.a = a1;
+    
+    allpass2.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass2.setOffset(f2);
+    allpass2.f = f2 - floor(f2);
+    allpass2.a = a2;
+    
+    allpass3.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass3.setOffset(f3);
+    allpass3.f = f3 - floor(f3);
+    allpass3.a = a3;
+        
+    allpass4.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass4.setOffset(f4);
+    allpass4.f = f4 - floor(f4);
+    allpass4.a = a4;
+    
+    allpass5.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass5.setOffset(f5);
+    allpass5.f = f5 - floor(f5);
+    allpass5.a = a5;
+    
+    allpass6.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass6.setOffset(f6);
+    allpass6.f = f6 - floor(f6);
+    allpass6.a = a6;
+    
+    allpass7.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass7.setOffset(f7);
+    allpass7.f = f7 - floor(f7);
+    allpass7.a = a7;
+    
+    allpass8.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass8.setOffset(f8);
+    allpass8.f = f8 - floor(f8);
+    allpass8.a = a8;
+    
+    allpass9.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass9.setOffset(f8);
+    allpass9.f = f8 - floor(f8);
+    allpass9.a = a8;
+    
+    allpass10.initBufferNoReset(cD, cD+Fs); cD+=Fs+1;
+    allpass10.setOffset(f8);
+    allpass10.f = f8 - floor(f8);
+    allpass10.a = a8;
+  );
+  
+function space_eval(sample)
+  instance(allpass1, allpass2, allpass3, allpass4, allpass5, allpass6, allpass7, allpass8, allpass9, allpass10, u8, u9, u10, r, otm1, itm1)
+  local(cD, u1, u2, u3, u4, u5, u6, u7, v)
+  global()
+  (
+    u1  = allpass1.allpass(sample);
+    u2  = allpass2.allpass(u1);
+    
+    u3  = allpass3.allpass(u2);
+    u4  = allpass4.allpass(u3);
+    
+    u5  = allpass5.allpass(u4);
+    u6  = allpass6.allpass(u5);
+    
+    u7  = allpass7.allpass(u6*(1-.85*u10));
+    u8  = allpass8.allpass(u7);
+    
+    u9  = allpass9.allpass(u8-.9*u1);
+    u10 = allpass10.allpass(u9-.9*u1);
+    
+    v = u10;
+    v = (1+2*r)*(u10+sample*r);
+    
+    // Small single pole highpass to prevent DC blowups.
+    otm1=0.999*otm1 + v - itm1;
+    itm1=v;
+    
+    otm1
+  );    
+  
   
 function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2, isGFX)
   global( filter_delay1, filter_delay2, /* Audio */
@@ -5614,10 +5899,10 @@ function updateActiveFilter(sliderValue, filterFreq, filterReso, isR, isFilt2, i
       this.serge6.serge_init(filterFreq, filterReso);
     ) : ( sliderValue == 79 ) ? (
       delayBuffer = selectBuffer( isR, isFilt2, isGFX );
-      this.filter_delay.initBufferNoReset(delayBuffer, delayBuffer + 5000);
-      this.filter_delay.setOffset(1+max(1,slider54)*val * 250);
-      this.disperser.f = filterFreq;
-      this.disperser.r = filterReso;
+      this.diffuser.diffuser_init(filterFreq, filterReso, delayBuffer);
+    ) : ( sliderValue == 80 ) ? (
+      delayBuffer = selectBuffer( isR, isFilt2, isGFX );
+      this.space.space_init(filterFreq, filterReso, delayBuffer);
     );
   );        
 
@@ -5705,7 +5990,7 @@ function updateActiveFilters( force )
     ( slider40 > 0 ) ? (
       sliderCutoff2 = cutoffLerp2.lerpSample();
       sliderReso2   = resoLerp2.lerpSample();
-      followKey2    ? sliderCutoff2  = sliderCutoff2 + approxNoteFrequencyFilter2 * slider33;
+      followKey2    ? sliderCutoff2  = sliderCutoff2  + approxNoteFrequencyFilter2 * slider33;
       followPitch2  ? sliderCutoff2 = sliderCutoff2 + pitchLerp2.lerpSample() * slider33;
       
       /* Only update cutoff and resonance every N samples */
@@ -5927,7 +6212,9 @@ function resetActiveFilter(filterType, isGFX)
       this.vibrato.t = 0;
       this.filter_delay.clearBuffer();
     ) : ( filterType == 79 ) ? (
-      this.filter_delay.clearBuffer();
+      this.diffuser.diffuser_clear();
+    ) : ( filterType == 79 ) ? (
+      this.space.space_clear();
     )
   );
  
@@ -5948,6 +6235,8 @@ function resetActiveFilters()
     R.resetActiveFilter( slider47, 0 );
     L2.resetActiveFilter( slider40, 0 );
     R2.resetActiveFilter( slider40, 0 );
+    
+    agcpost = agcpre = agcsumpost = agcsumpre = 1;
   );
 
 itm1=itm2=otm1=otm2=0;
@@ -12561,17 +12850,11 @@ function process(sample, dist)
       sample = actual_tanh(4*this.serge6.serge_eval(sample));
       dist ? sample = distort(sample);
     ) : ( this.filterType == 79 ) ? (
-      ys1 = 1;
-      os = .999;
-      loop(25,
-        ys1 += 15*this.disperser.f;
-        this.filter_delay.setOffset(ys1);
-        diff = this.filter_delay.readBufferFrac(ys1-floor(ys1));
-        os = os * .999;
-      );
-      
-      sample = sample + this.disperser.r * diff;
-      this.filter_delay.updateBuffer(sample);
+      dist ? sample = distort(sample);
+      sample = this.diffuser.diffuser_eval(sample);
+    ) : ( this.filterType == 80 ) ? (
+      dist ? sample = distort(sample);
+      sample = this.space.space_eval(sample);
     );
     
     sample;
@@ -14207,32 +14490,6 @@ updateActiveFilters(1);
             lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)            ? ( slider_automate( slider35=(slider35 - (slider35&2048))+2048*lfoMorph.active; ); forceUpdate = 1; );            
             dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)    ? ( slider_automate( slider35=(slider35 - (slider35&4096))+4096*dynamicLFOButton.active; ); forceUpdate = 1; );
             legacySliders.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap)       ? ( slider_automate( slider35=(slider35 - (slider35&16384))+16384*(1-legacySliders.active); ); forceUpdate = 1; );
-            
-            /*lookAheadButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            bypassFilter1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            bypassFilter2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            lfoSmoothButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            feedbackActive.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            dynamicFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            lfoFeedback.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            feedbackDelay_x8_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            feedbackDelay_x8_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            dynamicMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            lfoMorph.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ||
-            dynamicLFOButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? ( updateDynamicsSlider2 = 1; );
-            
-            updateDynamicsSlider2 ? (
-              slider35 = slider35&2 +
-                          lookAheadButton.active          + 4  * bypassFilter1.active +
-                          8*bypassFilter2.active          + 16 * lfoSmoothButton.active +
-                          32*feedbackActive.active        + 64 * dynamicFeedback.active +
-                          128*lfoFeedback.active          + 256 * feedbackDelay_x8_1.active + 
-                          512*feedbackDelay_x8_2.active   + 1024 * dynamicMorph.active +
-                          2048*lfoMorph.active            + 4096 * dynamicLFOButton.active;
-                          
-              forceUpdate = 1;
-              updateDynamicsSlider2 = 0;
-            );*/
             
             dynamicFilterButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
             dynamicFilterButton2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) || 
