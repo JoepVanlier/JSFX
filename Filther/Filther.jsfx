@@ -1,9 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.69
+version: 2.70
 author: Joep Vanlier
 changelog: 
-+ Bugfix filter rendering
++ Mark dangerous filters/modes. Don't select dangerous filters/modes with arrow keys or scroll wheel.
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -105,6 +105,9 @@ out_pin:right output
 options:no_meter 
 
 @serialize
+danger_list     = 960000-500; // List of dangerous filters
+danger_list2    = 960000-100; // List of dangerous modes
+
 (file_avail(0)>=0) ? (
   envelopesPresent = 0;
   newCutoffMapping = 1;
@@ -117,6 +120,9 @@ options:no_meter
   env2FilterButton.mode = 0;
   env1Filter2Button.mode = 0;
   env2Filter2Button.mode = 0;
+  
+  memset(danger_list,0,255);
+  memset(danger_list2,0,99);
 );
 
 env_buf1        = 66*65536;
@@ -205,6 +211,16 @@ file_var(0,env1FilterButton.mode);
 file_var(0,env2FilterButton.mode);
 file_var(0,env1Filter2Button.mode);
 file_var(0,env2Filter2Button.mode);
+
+file_mem(0,danger_list,256);
+file_mem(0,danger_list2,100);
+
+danger_list[16] = 1;
+danger_list[24] = 1;
+danger_list[10] = 1;
+danger_list2[1] = 1;
+danger_list2[2] = 1;
+danger_list2[3] = 1;
 
 @init
 function resetEnvelope(vel, hard)
@@ -385,7 +401,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.69";
+plugname = "FILTHER 2.70";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -7517,9 +7533,9 @@ function combobox_draw()
   );
   
 function combobox_draw_top()
-  local(i, j, xtxt, x1, x2, x3, y1, y2, y3, pad, wi, delta, ny)
-  global(gfx_x, gfx_y, font_color_r, font_color_g, font_color_b, font_color_a )
-  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols)
+  local(i, j, xtxt, x1, x2, x3, y1, y2, y3, pad, wi, delta, ny, hasMarked)
+  global(gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, font_color_r, font_color_g, font_color_b, font_color_a )
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols, dangerousElements)
   (    
     xtxt = x+3;
     delta = goup ? (nitems/cols+1)*h : 0;
@@ -7527,6 +7543,7 @@ function combobox_draw_top()
     gfx_y = y + 4 - delta;
     ny = ceil(nitems/cols);
     
+    hasMarked = dangerousElements > 0;
     open ?
     (
       gfx_set( r*.3, g*.3, b*.3, 1 );
@@ -7545,7 +7562,11 @@ function combobox_draw_top()
             gfx_set( 0, 0, 0, a, 0.95 );
           ) : gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
 
-          gfx_printf(comboStrings(stridx, i));
+          ( hasMarked && dangerousElements[i] ) ? (
+            gfx_set( gfx_r+.3, gfx_g-.5, gfx_b-.5, .75*gfx_a );
+            gfx_printf("[%s]", comboStrings(stridx, i));
+            gfx_set( gfx_r-.3, gfx_g+.5, gfx_b+.5, gfx_a/.75 );
+          ) : gfx_printf(comboStrings(stridx, i));
           i += 1;
         );
         gfx_y = y + 4 - delta;
@@ -7556,23 +7577,24 @@ function combobox_draw_top()
   );
 
 function combobox_processMouse(xx, yy, mc)
-  local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny)
+  local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny, hasMarked, olditem)
   global(gfx_x, gfx_y, lastUI, lastChar, mouse_wheel)
-  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, hasfocus, goup, cols, thisUI, htime, hint, disabled)  
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled, dangerousElements)  
   (
     disabled == 0 ? (
-      delta = goup ? (nitems/cols+1)*h : 0;
-      change = 0;
-      left = mc & 1;
+      delta   = goup ? (nitems/cols+1)*h : 0;
+      change  = 0;
+      left    = mc & 1;
+      right   = mc & 2;
       
-      xmin = x - (cols-1)*w;
-      ymin = y + h - delta;
-      xmax = x + w;
-      ny   = ceil(nitems/cols);
-      ymax = ymin + ny*h;
+      olditem = curitem;
+      xmin    = x - (cols-1)*w;
+      ymin    = y + h - delta;
+      xmax    = x + w;
+      ny      = ceil(nitems/cols);
+      ymax    = ymin + ny*h;
       
-  //    ( y+((nitems)/cols+1)*h-delta );
-      
+      hasMarked = dangerousElements > 0;
       over = xx > x && xx < ( x+w ) && yy > y && yy < ( y + h );
       
       ( lastUI == thisUI ) ?
@@ -7581,6 +7603,12 @@ function combobox_processMouse(xx, yy, mc)
         ( 
           curitem = curitem + 1;
           curitem > nitems - 1 ? curitem = 0;
+          while( hasMarked && (dangerousElements[curitem]==1) && (curitem != olditem) )
+          (
+            curitem = curitem + 1;
+            curitem > nitems - 1 ? curitem = 0;
+          );
+          
           change = 1;
           mouse_wheel = 0;
         ) : (
@@ -7588,6 +7616,12 @@ function combobox_processMouse(xx, yy, mc)
           (
             curitem = curitem - 1;
             curitem < 0 ? curitem = nitems-1;
+            while( hasMarked && (dangerousElements[curitem]==1) && (curitem != olditem) )
+            (
+              curitem = curitem - 1;
+              curitem < 0 ? curitem = nitems-1;
+            );
+            
             change = 1;
             mouse_wheel = 0;
           );
@@ -7600,6 +7634,13 @@ function combobox_processMouse(xx, yy, mc)
         ( 
           curitem = curitem + 1;
           curitem > nitems - 1 ? curitem = 0;
+          
+          while( hasMarked && (dangerousElements[curitem]==1) && (curitem != olditem) )
+          (
+            curitem = curitem + 1;
+            curitem > nitems - 1 ? curitem = 0;
+          );
+          
           change = 1;
           mouse_wheel = 0;
         ) : 
@@ -7608,6 +7649,13 @@ function combobox_processMouse(xx, yy, mc)
           (
             curitem = curitem - 1;
             curitem < 0 ? curitem = nitems-1;
+            
+            while( hasMarked && (dangerousElements[curitem]==1) && (curitem != olditem) )
+            (
+              curitem = curitem - 1;
+              curitem < 0 ? curitem = nitems-1;
+            );
+            
             change = 1;
             mouse_wheel = 0;
           );
@@ -7626,9 +7674,11 @@ function combobox_processMouse(xx, yy, mc)
         
         hover = min( nitems-1, max( 0, xl * ny + max(0, min(ny-1, yl)) ) );
         
-        !lastleft && left ? (
+        ( !lastleft && left ) ? (
           open = 0;
           ( xx > xmin && xx < xmax && yy > (y+h-delta) && yy < ( ymax ) ) ? ( curitem = hover; change = 1 );
+        ) : ( !lastright && right ) ? (
+          hover > 0 ? dangerousElements[hover] = 1 - dangerousElements[hover];
         )
       ) : (
         ( lastleft == 0 && left && over ) ? (
@@ -7639,6 +7689,7 @@ function combobox_processMouse(xx, yy, mc)
       ( !left && !open ) ? hasfocus = 0;
       
       lastleft = left;
+      lastright = right;
       
       change
     );
@@ -9975,6 +10026,10 @@ sinc_flt3       = 930000; // Downsamplers
 sinc_flt4       = 940000;
 sinc_hist1      = 950000; // Downsampler history
 sinc_hist2      = 960000;
+
+danger_list     = 960000-500; // List of dangerous filters
+danger_list2    = 960000-100; // List of dangerous modes
+
 note_mem        = 970000;
 memset(note_mem, -1337, 10000);
 
@@ -10289,7 +10344,9 @@ function updateSliders( hard )
   
   // Filter 1
   filterSelect.combobox_setcuritem(slider47);
+  filterSelect.dangerousElements = danger_list;
   modeSelect.combobox_setcuritem(slider46);
+  modeSelect.dangerousElements = danger_list2;
   lfoSelect.combobox_setcuritem(slider36);
   cutoffSlider.sliderWidget_setValue(slider48);
   resonanceSlider.sliderWidget_setValue(slider49); 
@@ -10298,6 +10355,7 @@ function updateSliders( hard )
   
   // Filter 2
   filterSelect2.combobox_setcuritem(slider40);
+  filterSelect2.dangerousElements = danger_list;
   modeSelect2.combobox_setcuritem(floor(slider50*.5));
   cutoffSlider2.sliderWidget_setValue(slider41);
   resonanceSlider2.sliderWidget_setValue(slider42); 
