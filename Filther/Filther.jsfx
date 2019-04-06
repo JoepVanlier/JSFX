@@ -1,9 +1,11 @@
 desc:Filther
 tags: Filther
-version: 2.73
+version: 2.74
 author: Joep Vanlier
 changelog: 
-+ Fix some of the control ranges
++ Improved randomization feature
++ Added envelope reset
++ Added envelope randomization
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -217,6 +219,9 @@ file_mem(0,danger_list2,100);
 danger_list[16] = 1;
 danger_list[24] = 1;
 danger_list[10] = 1;
+danger_list[6] = 1;
+danger_list[7] = 1;
+danger_list[8] = 1;
 danger_list2[1] = 1;
 danger_list2[2] = 1;
 danger_list2[3] = 1;
@@ -400,7 +405,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.73";
+plugname = "FILTHER 2.74";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -9319,7 +9324,111 @@ function updateToggles()
     midiTrigger.active == 1 ? triggering = 1 : triggering = 2;
     midiVel.active == 1     ? useVelocities = 1 : useVelocities = 2;
     snap.active == 1        ? snapping = 1 : snapping = 0;
-  );
+  ); 
+ 
+function resetEnvelopeCurve()
+  instance(memory, curveMemory, speedSlider, loopStart, loopEnd, loopType, division, zoom, offset)
+  global()
+  local(xptr, xptr2)
+  (
+    xptr = memory;
+    xptr2 = curveMemory;
+      
+    speedSlider.value = .36;
+    loopStart = 0.4;
+    loopEnd = 0.5;
+    loopType = 0;
+    division = 1;
+    zoom = 1;
+    offset = 0;
+      
+    // Nullify
+    memset(memory,0,5000);
+    memset(curveMemory,0,5000);  
+    
+    xptr[] = 0.1; // t = .1,  y = 1
+    xptr2[] = 0;
+    xptr += 1; xptr[] = 1;
+    xptr += 1; xptr[] = 0.2; // t = 0.2, y = 0.5
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0.5;
+    xptr += 1; xptr[] = 0.3; // t = 0.3, y = 0.4
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0.4;      
+    xptr += 1; xptr[] = 0.6; // t = 0.6, y = 0.4
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0.4;            
+    xptr += 1; xptr[] = 1;   // t = 1.0, y = 1.0
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0;
+      
+    this.updateNodeCount();
+    this.bsort();
+    this.resetEnvelope(1, 1);  
+  ); 
+
+function randomEnvelopeCurve()
+  instance(memory, curveMemory, speedSlider, loopStart, loopEnd, loopType, division, zoom, offset, snap)
+  global()
+  local(xptr, xptr2, tmp, N)
+  (
+    xptr = memory - 1;
+    xptr2 = curveMemory - 1;
+      
+    speedSlider.value = .36;
+    loopStart = 0.4;
+    loopEnd = 0.5;
+    loopType = 0;
+    division = 1;
+    zoom = 1;
+    offset = 0;
+      
+    // Nullify
+    memset(memory,0,5000);
+    memset(curveMemory,0,5000);
+    
+    !snap.active ? (
+      loop(1+floor(100*rand()),
+        xptr += 1; xptr[] = rand();
+        xptr += 1; xptr[] = rand();
+        xptr2 += 1; xptr2[] = floor(rand(3));
+      );
+      
+      loopStart = rand()*.98+.01;
+      loopEnd = rand()*.98+.01;
+    ) : (
+      N = pow(2, floor(rand()*3+2));
+      loop(1+floor(2*N*rand()),
+        xptr += 1; xptr[] = ceil(rand()*(N-2)+1)/N;
+        xptr += 1; xptr[] = rand();
+        xptr2 += 1; xptr2[] = floor(rand(3));
+      );
+      
+      loopStart = floor(rand()*N)/N;
+      loopEnd = floor(rand()*N);
+    );
+    
+    speedSlider.value = rand()*.5+.1;;
+    
+    // Cap
+    xptr += 1; xptr[] = 1;   // t = 1.0, y = 1.0
+    xptr += 1; xptr[] = 0;
+
+    loopStart > loopEnd ?
+    (
+      tmp = loopEnd;
+      loopEnd = loopStart;
+      loopStart = tmp;
+    );
+    
+    division = 1;
+    zoom = 1;
+    offset = 0;
+    
+    this.updateNodeCount();
+    this.bsort();
+    this.resetEnvelope(1, 1);
+  );  
  
 function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_in, title_in, in_wR, in_wG, in_wB, in_wA)
   global( newUI, srate, retina_scaling,
@@ -9327,7 +9436,7 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_
           widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,)
   instance(memory, curveMemory, nodes, thisUI, x, y, w, h, h_graph, h_total, invsrate, cpos, loopStart, loopEnd, loopType, ispeed, division, title,
            speedSlider, offset, zoom,
-           soften, midiTrigger, midiVel, snap,
+           soften, midiTrigger, midiVel, snap, clear, random,
            softening, triggering, useVelocities, snapping, wR, wG, wB, wA )
   local(xptr, bw, bh, cx)
   (
@@ -9344,17 +9453,24 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_
     h_graph = h_in * (1-cx);
     h = h_in*(.9-cx);
   
-    bw = 15 * retina_scaling;
+    bw = 16.5 * retina_scaling;
     bh = 12 * retina_scaling;
 
     soften.selectionButton(x+.5*bw, y-.5*bh, 2*bw, bh, "SOFT", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Soften envelope");
     midiTrigger.selectionButton(x+2.8*bw, y-.5*bh, 2*bw, bh, "TRIG", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Trigger on MIDI note");
     midiVel.selectionButton(x+5.1*bw, y-.5*bh, 2*bw, bh, "VEL", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use MIDI Velocity");
     snap.selectionButton(x+7.4*bw, y-.5*bh, 2*bw, bh, "SNAP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Snap to grid");
+    clear.selectionButton(x+9.7*bw, y-.5*bh, 2*bw, bh, "RESET", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Clear envelope back to standard");
+    random.selectionButton(x+12*bw, y-.5*bh, 2*bw, bh, "RAND", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Randomize envelope");
+    
+//    envelope1.resetEnvelopeCurve()
+    
     soften.style = 2;
     midiTrigger.style = 2;
     midiVel.style = 2;
     snap.style = 2;
+    clear.style = 2;
+    random.style = 2;
     this.updateToggles();
     
     speedSlider.sliderWidget(x+2, y + h_graph - .5*cx*h_in, .9*w, 2*cx*h_in, "", widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a, 0, 0, 1, .36, " ", 0, "Envelope length (measures)");
@@ -9430,7 +9546,8 @@ function drawEnvelopeWindow()
           gfx_x, gfx_y, gfx_mode )
   instance(x, y, w, h, h_graph, h_total, nodes, memory, curveMemory, curTime, loopStart, loopEnd, grabbed, over, title, division,
            x4_1, x4_2, x4_3, x4_4, x3_1, x3_2, x5, bw, bh, offset, zoom, speedSlider, wR, wG, wB, wA, 
-           soften, midiTrigger, midiVel, snap, highlighted)
+           soften, midiTrigger, midiVel, snap, highlighted,
+           clear, random)
   local(xptr, xptr2, ctype, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx, idx, idt, tc, t, t2, t3, y1, y2
         lps, lpe, xmax)
   (    
@@ -9614,6 +9731,8 @@ function drawEnvelopeWindow()
     midiTrigger.selectionButton_draw();
     midiVel.selectionButton_draw();
     snap.selectionButton_draw();
+    clear.selectionButton_draw();
+    random.selectionButton_draw();
   ); 
  
  
@@ -9746,7 +9865,7 @@ N_CURVES = 3;
  
 function processMouse()
   instance(x, y, w, h, h_graph, nodes, memory, curveMemory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
-           speedSlider, soften, midiTrigger, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime )
+           speedSlider, soften, midiTrigger, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime, clear, random )
   local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx, now)
   global(mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y, dbl, N_CURVES)
   (
@@ -9897,6 +10016,16 @@ function processMouse()
     midiTrigger.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
     midiVel.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
     snap.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    
+    clear.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+      this.resetEnvelopeCurve();
+      clear.active = 0;
+    );
+    
+    random.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+      this.randomEnvelopeCurve();
+      random.active = 0;
+    );
     
     this.updateEnvelopeSpeed();
     this.updateToggles();
@@ -13781,11 +13910,68 @@ updateActiveFilters(1);
     );
   );
 
-  function randomize()
+  // Very basic Box Mueller. Can be done more efficiently, but who cares.
+  function clampedGauss(mean, sd, lb, ub)
+  local(val, iter)
+  global()
+  instance()
+  (
+    val = -1; iter = 0;
+    while( ( val < lb ) || ( val > ub ) && ( iter < 50 ) )
+    (
+      val = sd*sqrt(-2*log(rand()))*cos(2*$pi*rand())+mean;
+      iter += 1;
+    );
+    
+    min(ub, max(lb, val));
+  );
+
+ function randomizeFilters()
   (
     agcOverride = 1;
     agc_corr = 1;
     slider53 = 0;
+  
+    // Filter2
+    slider40 = floor(rand(nFilters));
+    while(danger_list[slider40] == 1)
+    (
+      slider40 = floor(rand(nFilters));
+    );
+    slider41 = clampedGauss(.2, 1/3, 0, 0.97);    // Cutoff
+    slider42 = clampedGauss(.2, 1/3, 0, 0.9);     // Resonance
+    slider43 = rand(2)-1;                         // Cutoff mod
+    slider44 = rand(2)*.7-1;                      // Resonance mod
+    
+    // Filter 1
+    slider47 = floor(rand(nFilters));
+    while(danger_list[slider47] == 1)
+    (
+      slider47 = floor(rand(nFilters));
+    );
+    slider48 = clampedGauss(.2, 1/3, 0, 0.97);
+    slider49 = clampedGauss(.2, 1/3, 0, 0.9);
+    slider62 = rand(2)-1;
+    slider63 = rand(2)*.7-1;
+    
+    // Filter 1 mode
+    slider46 = floor(rand(6));
+    
+    // Second filter routing
+    slider50 = floor(rand(3));
+    
+    slider46 == 1 ? slider46 = 0; // Don't use mono double, too buggy!
+    slider46 == 2 ? slider46 = 7; // Don't use M1/S2, too buggy!
+    slider46 == 3 ? slider46 = 7; // Don't use M2/S1, too buggy!
+    
+    forceUpdate = 1;
+  );
+
+  function randomize()
+  (
+    agcOverride = 1;
+    agc_corr = 1;
+    //slider53 = 0;
     
     // SPLINE
     slider1 = 2+floor(rand(7));
@@ -13820,11 +14006,28 @@ updateActiveFilters(1);
     slider32 = rand(1);
     slider34 = rand(1);
     
+    // Randomize
+    env1GainButton.active = rand() > 0.5;
+    env2GainButton.active = rand() > 0.5;
+    env1FilterButton.active = rand() > 0.5;
+    env2FilterButton.active = rand() > 0.5;
+    env1Filter2Button.active = rand() > 0.5;
+    env2Filter2Button.active = rand() > 0.5;
+    env1Morph.active = rand() > 0.5;
+    env2Morph.active = rand() > 0.5;
+    env1LFO.active = rand() > 0.5;
+    env2LFO.active = rand() > 0.5;
+    env1FB.active = rand() > 0.5;
+    env2FB.active = rand() > 0.5;
+    
+    envWindow1.randomEnvelopeCurve();
+    envWindow2.randomEnvelopeCurve();    
+    
     // Second filter routing
     slider50 = floor(rand(3));
     
     // Enabled toggles
-    slider58 = floor(rand(1023));
+    slider58 = floor(rand(4095));
     
     // x4 x8 etc
     slider57 = floor(rand(63));
@@ -13836,42 +14039,24 @@ updateActiveFilters(1);
     slider33 = rand(1) + 1;
     
     // Pre-Gain Mod%
-    slider17 = rand(1)*0.1; 
+    slider51 = rand(1)*0.1; 
     
     // Lookahead on
-    slider35 = 3;
+    slider35 = 3 + 16384;
     
     // LFO type
-    slider36 = floor(rand(nLFO));
-    
-    // LFO freq
-    slider37 = rand(1);
+    slider36 = floor(rand(nLFO));    
     
     // LFO flags
     slider38 = floor(rand(7));
     
+    // LFO freq
+    slider37 = rand(1);
+    
     // Mod range
     slider39 = rand(4);
     
-    // Filter2
-    slider40 = floor(rand(nFilters));
-    slider41 = rand(1);
-    slider42 = rand(1)*.6;
-    slider43 = rand(1);
-    slider44 = rand(1);
-    
-    // Filter 1
-    slider47 = floor(rand(nFilters));
-    slider48 = rand(1);
-    slider49 = rand(1)*.6;
-    slider62 = rand(1);
-    slider63 = rand(1);
-    
-    // Filter 1 mode
-    slider46 = floor(rand(6));
-    slider46 == 1 ? slider46 = 0; // Don't use mono double, too buggy!
-    slider46 == 2 ? slider46 = 7; // Don't use M1/S2, too buggy!
-    slider46 == 3 ? slider46 = 7; // Don't use M2/S1, too buggy!
+    randomizeFilters();
     
     // Integration time
     slider64 = rand(40);
@@ -13910,40 +14095,7 @@ updateActiveFilters(1);
     swapSlider(44, 63);
     
     forceUpdate = 1;
-  );
-  
-  function randomizeFilters()
-  (
-    agcOverride = 1;
-    agc_corr = 1;
-    slider53 = 0;
-  
-    // Filter2
-    slider40 = floor(rand(nFilters));
-    slider41 = rand(1);
-    slider42 = rand(1)*.7;
-    slider43 = rand(2)-1; // CMOD
-    slider44 = rand(2)*.7-1; // RMOD
-    
-    // Filter 1
-    slider47 = floor(rand(nFilters));
-    slider48 = rand(1);
-    slider49 = rand(1)*.7;
-    slider62 = rand(2)-1;
-    slider63 = rand(2)*.7-1;
-    
-    // Filter 1 mode
-    slider46 = floor(rand(6));
-    
-    // Second filter routing
-    slider50 = floor(rand(3));
-    
-    slider46 == 1 ? slider46 = 0; // Don't use mono double, too buggy!
-    slider46 == 2 ? slider46 = 7; // Don't use M1/S2, too buggy!
-    slider46 == 3 ? slider46 = 7; // Don't use M2/S1, too buggy!
-    
-    forceUpdate = 1;
-  );
+  );  
   
   function randomizeWaveshaper()
   (
