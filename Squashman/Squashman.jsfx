@@ -1,0 +1,918 @@
+desc:Squashman (NOT READY FOR USE)
+tags: multiband saturation plugin (WORK IN PROGRESS)
+version: 0.01
+author: Joep Vanlier
+changelog: 
+license: MIT
+
+Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
+Proceedings of the 19th International Conference on Digital Audio Effects (DAFx-16), Brno, Czech Republic, September 5–9, 2016
+I have only implemented the rect version, since the linear one depends on Li2 and LUTs aren't so fast in JSFX.
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+slider1:Cuts=1<0,3,1>Cuts
+slider2:Freq1=0.5<0,1,.0001>Frequency 1
+slider3:Freq2=0.5<0,1,.0001>Frequency 2
+slider4:Freq3=0.5<0,1,.0001>Frequency 3
+//slider7:Freq6=0.8<0,1,.0001>-Frequency 6
+
+slider10:Drive1=0<-6,60,1>Drive (dB)
+slider11:Drive2=0<-6,60,1>Drive (dB)
+slider12:Drive3=0<-6,60,1>Drive (dB)
+slider13:Drive4=0<-6,60,1>Drive (dB)
+
+slider20:Ceil1=0<-18,0,1>Ceiling (dB)
+slider21:Ceil2=0<-18,0,1>-Ceiling (dB)
+slider22:Ceil3=0<-18,0,1>-Ceiling (dB)
+slider23:Ceil4=0<-18,0,1>-Ceiling (dB)
+
+slider63:2<0,1,1>Oversampling
+slider64:0<0,1,1>-Fix DC?
+
+@init 
+function feedSample(sample)
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc)
+  local()
+  (
+    recPtr[] = sample;
+    recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
+  );
+
+function initWindow(windowtype)
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc)
+  local(i, pwr, dwindowpos, windowpos)
+  (
+    windowpos = 0;
+    dwindowpos = $pi*2/fftSize;
+    i = 0; pwr = 0;
+    loop(fftSize*.5+1,
+       pwr += (window[i] = (
+         windowtype==1 ? ( 0.53836 - cos(windowpos)*0.46164 ) :
+         windowtype==2 ? ( 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) ) :
+         windowtype==3 ? ( 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) ) :
+         windowtype==4 ? ( 1.0 ) :
+         ( .21557895 - 0.41663158 * cos(windowpos) + 0.277263158 * cos(2*windowpos) - 0.083578947 * cos(3*windowpos) + 0.006947368 * cos(4*windowpos) )
+         ) );
+       i+=1;
+       windowpos+=dwindowpos;
+    );
+    pwr=.5/(pwr*2-window[i-1]);
+    loop(fftsize*.5+1,window[i-=1]*=pwr);
+ );
+  
+function setToFFTLoc()
+ global(fftSize)
+ instance(recPtr, rStart)
+ local()
+ ( 
+    recPtr = rStart + fftSize;
+ ); 
+  
+function calcFFT()
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc, slope, yshift)
+  local(buf1, buf2, buf3, yOut, i, prec, ty)
+  (
+    buf1=recPtr-fftSize;
+    buf1<rStart ? buf1+=(rEnd-rStart);
+    buf2=window;
+    buf3=fftLoc;
+    loop(fftSize*.5 + 1,
+      buf3[] = buf1[]*buf2[];
+      buf3+=1;
+    
+      buf2+=1;
+      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
+    );
+    buf2-=1;
+    loop(fftSize*.5 - 1,
+      buf3[] = buf1[]*(buf2-=1)[];
+      buf3+=1;
+      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
+    );
+    
+    fft_real(fftLoc,fftSize);
+    fft_permute(fftLoc,fftSize/2);
+    
+    buf3    = fftLoc;
+    yOut    = fftLoc;  
+    i       = 0;
+    slope   = .5*log(2)*slope;
+    yshift  = slope*log(1.0+.5*fftSize);
+    prec    = (10^(-500/20*2));
+    loop(fftSize*0.5,   
+      ty      = sqr(buf3[0])+sqr(buf3[1]);
+      ty      = log(max(ty,prec));
+      
+      ty      = ty + slope*log(1.0+i) - yshift;
+      yOut[]  = ty;
+      yOut    += 1;
+      buf3    += 2;    
+      
+      i += 1;
+    );
+  );  
+
+function calcIncrementalFFT()
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc, mxpos, lastpeak)
+  local(mx, buf1, buf2, buf3, yOut, i, ty, buf4, buf5, mf, c, x0, y1, y2, y3, mxtmp, sum, N_use, peak, tpeak)
+  (
+    buf1=recPtr-fftSize;
+    buf1<rStart ? buf1+=(rEnd-rStart);
+    buf2=window;
+    buf3=fftLoc;
+    loop(fftSize/2 + 1,
+      buf3[] = buf1[]*buf2[];
+      buf3+=1;
+    
+      buf2+=1;
+      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
+    );
+    buf2-=1;
+    loop(fftSize/2 - 1,
+      buf3[] = buf1[]*(buf2-=1)[];
+      buf3+=1;
+      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
+    );
+    
+    fft_real(fftLoc,fftSize);
+    fft_permute(fftLoc,fftSize/2);
+    
+    i       = 16; // Implicit HP by starting at a specific freq bin
+    yOut    = fftLoc + i;
+    buf3    = fftLoc + 2*i;
+    buf4    = fftLoc + 4*i;
+    buf5    = fftLoc + 6*i;
+    mf      = 1;
+    sum     = 0;
+    N_use   = fftSize/32;
+    loop(N_use,   
+      peak    = (sqr(buf3[])+sqr(buf3[1]));
+      ty      =  peak * (sqrt(sqr(buf4[])+sqr(buf4[1])));
+      ty      *= sqrt(sqr(buf5[])+sqr(buf5[1]));
+      ty      *= mf;
+      
+      yOut[]  = ty;
+      yOut    += 1;
+      buf3    += 2;
+      buf4    += 4;
+      buf5    += 6;
+      
+      i += 1;
+      mf = mf * .9;
+      sum     += ty;
+    );
+  );
+
+function setWindowLocation(_x, _y, _w, _h)
+  global()
+  instance(x, y, w, h, cap)
+  local()
+  ( 
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+  );
+
+function drawGrid()  
+  global(   fftSize, srate,
+            grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
+            backface_color_r, backface_color_g, backface_color_b, backface_color_a )
+  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset )
+  local(xx, i, wsc, N)
+  (    
+    i = 0;
+    
+    gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
+    gfx_rect(x, y, w, h);
+
+    gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y+h, x+w, y+h);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    
+    i = 0;
+    wsc = w/log(1+fftSize*0.5-hzoffset);
+    loop(21,
+      xx = x + log(1+i*fftSize/srate-hzoffset)*wsc;
+      gfx_line(xx, y, xx, y+h);
+      i < 10 ? i += 2 :
+      i < 100 ? i += 20 :
+      i < 1000 ? i += 200 :
+      i < 10000 ? i += 2000 :
+      i < 100000 ? i += 20000;
+    );
+    
+    N = 8;
+    xx = y;
+    loop(N,
+      xx += h/8;
+      gfx_line(x, xx, x+w, xx);
+    );
+  );
+  
+function drawLine(x1, y1, x2, y2)
+  local(dx, dy, x, smooth)
+  global(gfx_x, gfx_y)
+  instance()
+  (
+    smooth = 1;
+    x1 = floor(x1);
+    x2 = floor(x2);
+    gfx_x=x1;
+    gfx_y=y1;
+    x2 = floor(x2);
+    y2 = floor(y2);
+    
+    smooth ? (
+      (x2 - x1) > 4 ? (
+        dx = 1.0/(x2-x1);
+        dy = (y2 - y1)*6*dx;
+        x = 0;
+        loop(x2-x1,
+          x2 = x1 + 1;
+          y2 = y1 + dy * ( x - x*x );
+          
+          gfx_line(x1, y1-1, x2, y2-1, 1);
+          gfx_lineto(x2,y2,1);
+          x1 = x2;
+          y1 = y2;
+          x = x + dx;
+        );
+      ) : (
+        gfx_line(x1, y1-1, x2, y2-1, 1);
+        gfx_lineto(x2,y2,1);
+      );
+    ) : (
+      gfx_line(x1, y1-1, x2, y2-1, 1);
+      gfx_lineto(x2,y2,1); 
+    );
+  );
+
+function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
+  instance(x, y, w, h, ly, lcap, cap, thisUI, htime, hint)
+  global(dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI)
+  local(over)
+  (
+    over = mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h);
+    ( cap == 1 && mouse_cap & 1 == 1 ) ? (
+      dnoisefloor_freq -= .5*(mouse_y-ly);
+      dnoisefloor_freq > 35 ? dnoisefloor_freq = 35;
+      dnoisefloor_freq < -15 ? dnoisefloor_freq = -15;
+    ) : ( 
+      cap = 0;
+      ( mouse_cap & 1 == 1 && lcap & 1 == 0 && over ) ? (
+        cap = 1;
+      );
+    );
+    
+    mouse_wheel > 0 && over ? lastUI = thisUI;
+    
+    abs(floor(mouse_wheel/240)) > 0 && over ?
+    (
+      dsteps_fft += floor(mouse_wheel/240);
+      dsteps_fft > 8 ? dsteps_fft = 8;
+      dsteps_fft < -4 ? dsteps_fft = -4;
+      mouse_wheel = 0;
+    );
+    
+    ly = mouse_y;
+    lcap = mouse_cap;
+    
+    over
+  );
+
+function drawFFT(fill, oversamplingFactor, r, g, b, a)
+  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft )
+  instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset, highlighted)
+  local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
+  (
+    this.calcFFT();
+ 
+    cum = -10000000;
+    cumelem = 0;
+    i = 0;
+    ixsc = 0;
+    wsc = w/log(1+fftsize*0.5-hzoffset);
+    fill_slmin = y;
+
+    buf = fftLoc + fftsize*0.5 - 2;
+    stepsize = floor((4+dsteps_fft)*retina_scaling);
+    copyval = buf[];
+    loop( stepsize*200,
+      (buf+=1)[] = copyval;
+    );
+     
+    gfx_r = r;
+    gfx_g = g;
+    gfx_b = b;
+    gfx_a = a;
+ 
+    hstep = .5 * stepsize;
+    buf = fftLoc;
+    txl = x;
+    lx = x;
+    ly = y - max(buf[], -floorLevel)*h / floorLevel;
+    buf += 1;
+    loop(fftsize*0.5+stepsize*200,
+      tx = floor(x + log(1.0+ixsc-hzoffset)*wsc);
+      cum = max(cum, buf[]);
+      cumelem += 1;
+      
+      ( (tx != txl) && (tx-txl > stepsize) && tx > x && i && ( tx < (x+w+stepsize) ) ) ? // 
+      ( 
+        ty = y - max(cum, -floorLevel)*h / floorLevel;
+        //ty = y - log(cum)+100;
+        txl = floor(tx);
+        
+        tx = min(tx, x+w);
+        (fill) ? 
+        (
+          tx0=tx|0;
+          lx0=lx|0;
+          tx0>lx0 ? 
+          (
+            gfx_triangle(lx0-hstep,max(y+h,ly),lx0-hstep,ly,tx0-1-hstep,ty,tx0-1-hstep,max(y+h,ty));
+          ) : (
+            tx0 > fill_slast ? 
+            (
+              fill_slast < h ? gfx_line(fill_slast,h,fill_slast,fill_slmin);
+              fill_slmin=h;
+            ) : (
+              fill_slmin=min(fill_slmin,ty);
+            );
+          );
+          
+          fill_slast=tx0;        
+        );
+        
+        (fill==0) ? (
+          drawLine(lx-hstep, ly, tx-hstep, ty);
+        );
+        
+        lx=tx; ly=ty; ly2=ty2; cum = -1000000; cumelem = 0;
+      );
+      
+      buf+=1; i+=1; ixsc+=oversamplingFactor;
+    );
+  );
+  
+function drawLineFFT(peakLocation)
+  global(retina_scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate)
+  instance(x, y, w, h, hzoffset)
+  local(wsc, tx, base, i)
+  (
+    wsc = w/log(1+fftSize*0.5-hzoffset);
+    base = fftSize*peakLocation;
+    tx = floor(x + log(1.0+base-hzoffset)*wsc);
+    
+    drawLine(tx, y, tx, y+h);
+    
+    i = 1;
+    while( tx < x+w*.92 ) (
+      tx = floor(x + log(1.0+i*base-hzoffset)*wsc);
+      i = i * 2;
+      drawLine(tx, y, tx, y+h);
+      gfx_a *= .7;
+    );
+  );
+  
+function initSpectrum(memoryOffset, fftSize, srate)
+  global(newUI)
+  instance(recPtr, window, rStart, rEnd, fftLoc, hzoffset, thisUI, slope)
+  local()
+  (
+    slope     = 3;
+  
+    hzoffset  = 20*fftSize/srate;
+    window    = memoryOffset + fftSize + (fftSize*0.5 - 1);
+  
+    // Start and end of the buffer
+    rStart    = memoryOffset;                              // rpos
+    rEnd      = window;                                      // hsize
+    
+    fftLoc    = window + (fftSize*0.5 + 1); // fftw
+    
+    recPtr    = rStart;
+    thisUI    = newUI+=1;
+    
+    this.initWindow(3)
+  );
+
+bpos=0;
+
+// MEMORY LAYOUT
+fftSize     = 2*8192;
+bufferDist  = 65536;
+audioBufIn  = 0;
+audioBufOut = bufferDist;
+
+// INITIALIZATION
+spectrumIn.initSpectrum(audioBufIn, fftSize, srate);
+spectrumOut.initSpectrum(audioBufOut, fftSize, srate);
+
+@serialize
+file_var(0,dnoisefloor_freq);
+file_var(0,dsteps_fft);
+
+@slider
+
+@block
+blah+=samplesblock;
+
+@sample
+  // Generate windowed sinc filter at memory location FIR
+  // Inputs are:
+  //    fir   - Memory location to store windowed sinc
+  //    nt    - Number of taps
+  //    bw    - Fractional bandwidth
+  //     g    - Gain
+  function sinc(fir, nt, bw, g)
+    local(a, ys, yg, yw, i, pibw2, pifc2, pidnt2, hnt)
+    global()
+    (
+      pibw2   = 2.0*$pi*bw;
+      pidnt2  = 2.0*$pi/nt;
+      hnt     = 0.5*nt;
+      i       = 1;
+          
+      loop(nt-1,
+        // Sinc width
+        a  = (i - hnt) * pibw2;
+          
+        // Sinc
+        ys = (a != 0) ? sin(a)/a : 1.0;
+   
+        // Window gain
+        yg = g * (4.0 * bw);
+          
+        // Hamming window (could be replaced with Kaiser in the future)
+        yw = 0.54 - 0.46 * cos(i * pidnt2);
+           
+        // Calc FIR coeffs
+        fir[i-1] = yw * yg * ys;
+        
+        i += 1;
+      );
+    );
+  
+  // Generate sinc filters for a specific upsampling ratio
+  //
+  // Upsampling leads to a sample followed by N-1 zeroes. Hence 
+  // to compute each subsample, we only need 1/Nth of the taps.
+  // This is why we set up a specific filter for each subsample.
+  // i.e. for N=4, you get something like f1*Zn + f5*Zn-1 + ...
+  //
+  // Inputs:
+  //    N_in            - oversampling factor
+  //    tapsPerFilter   - Taps per subfilter (should be 8 in this implementation)
+  //    targetmem       - Location to store the coefficients
+  //    tmp             - Working memory
+  function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
+    local(nHist, iFilt, nTaps)
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta)
+    global()
+    (
+      N       = N_in;
+      nHist   = tapsPerFilter;
+      loc     = 0;
+      coeffs  = targetmem;
+      nTaps   = N*nHist;
+      
+      // Memory being set is conservatively large.
+      memset(coeffs,0,10000);
+      memset(tmp,0,10000);
+      
+      sinc(tmp, nTaps, .5/N, .5*N);
+      
+      // Divide sinc over the different filters
+      iFilt = 0; // Filter idx for which subsample this filter is
+      delta = 0; // Sample idx
+      loop(nTaps,
+        coeffs[delta + iFilt*100] = tmp[];
+        iFilt += 1;
+        iFilt == N ? ( iFilt = 0; delta += 1 );
+        tmp += 1;
+      );
+    );
+  
+  // Generate downsample filter
+  // Here, the full N*nHist tap filter has to be evaluated for every sample, 
+  // but only every Nth sample has to be evaluated.
+  function updateSincDownsampleFilter(N_in, nTaps_in, histmem, coeffmem)
+    global()
+    instance(hist, hend, hptr, coeffs, loc, N, delta, nTaps)
+    local()
+    (
+      N       = N_in;
+      hist    = histmem;
+      coeffs  = coeffmem;
+      nTaps   = nTaps_in;
+      hptr    = hist;
+      hend    = hist + nTaps;
+      
+      memset(coeffs,0,10000);
+      sinc(coeffs, nTaps, .5/N, .5);
+    );
+    
+  function advanceHist(sample)
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, nTaps)
+    (
+      hptr += 1;
+      ( hptr == hend ) ? hptr = hist;
+      hptr[] = sample;
+    );
+  
+  function sincDownSample()
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, hm1, hptr2, out, cfptr)
+    (
+      hm1   = hist-1;
+      hptr2 = hptr;
+      cfptr = coeffs;
+      out   = 0;
+      
+      loop(nTaps,
+        out = out + hptr2[] * cfptr[];
+        
+        cfptr += 1;
+        hptr2 -= 1;
+        ( hptr2 == hm1 ) ? hptr2 = hend-1;
+      );
+      
+      out
+    );
+  
+  function resetSincDown()
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, hm1, hptr2)
+    (
+      hm1   = hist-1;
+      hptr2 = hptr;
+      
+      loop(nTaps,
+        hptr2[] = 0;
+        
+        hptr2 -= 1;
+        ( hptr2 == hm1 ) ? hptr2 = hend-1;
+      );
+    );
+  
+  // Maintain input sample history. Hardcoded for speed.
+  // Note h7 is omitted because for integer upsampling it is always zero!
+  function advanceSinc(sample)
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt)
+    (
+      h6 = h5;
+      h5 = h4;
+      h4 = h3;
+      h3 = h2;
+      h2 = h1;
+      h1 = h0;
+      h0 = sample;
+      loc = 0;
+    );
+  
+  function resetSincUp()
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt)
+    (
+      h0 = h1 = h2 = h3 = h4 = h5 = h6 = 0;
+    );
+  
+  // Note h7 is omitted because for integer upsampling it is always zero!
+  function getSubSample()
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt, out)
+    (
+      filt = coeffs + loc;
+  
+      out =  filt[] * h0 + filt[1] * h1 + filt[2] * h2 + filt[3] * h3 + filt[4] * h4 + filt[5] * h5 + filt[6] * h6;
+  
+      loc += 100;
+      out
+    );
+
+  function F0(x, em2x)
+  local()
+  global()
+  instance()
+  (
+    x - log(2/(1 + em2x))
+  );
+  
+  function tanh_prec(x, em2x)
+  local() 
+  global()
+  instance()
+  (
+    (2/(1+em2x))-1
+  );
+  
+  function tanh(x)
+  local()
+  global()
+  instance()
+  (
+    (2/(1+exp(-2*x)))-1
+  );
+  
+  function antialiased_tanh_rect(x)
+  local(eps, em2x, F0_xn)
+  global(slider4)
+  instance(antialias, F0_xnm1, xnm1,diff)
+  (
+    354 < abs(x) ? (
+      antialias = sign(x);
+      x         = antialias * 354;
+      F0_xn     = 354 - log(2);
+    ) : (
+      em2x      = exp(-2*x);
+      F0_xn     = F0(x, em2x);
+      diff      = ( x - xnm1 );
+      eps       = 0.0000000001;
+      antialias = (abs(diff) > eps) ? ( F0_xn - F0_xnm1 ) / diff : tanh(.5*(x+xnm1));
+    );
+    
+    F0_xnm1   = F0_xn;
+    xnm1      = x;
+
+    antialias
+  );
+
+  function fix_dc(x)
+  local()
+  global()
+  instance(DC_fixed, prev)
+  (
+    DC_fixed=0.999*DC_fixed + x - prev;
+    prev=x;
+    DC_fixed
+  );
+
+  function init_LR(freq)
+    global(srate, slider54)
+    local(g, res)
+    instance(k, a1, a2, a3)
+    (
+      g = tan( .5 * $pi * exp( (1-freq) * log(20/22050) ) );
+      k = 2;
+      
+      a1 = 1/(1+g*(g+k));
+      a2 = g*a1;
+      a3 = g*a2;
+    ); 
+
+  function init_LR2(freq)
+    global(srate, slider54)
+    local(g, res)
+    instance(k, a1, a2, a3)
+    (
+      g = tan( .5 * $pi * exp( (1-freq) * log(20/22050) ) );
+      k = sqrt(2); /* Note the different peak resonance because we're combining 2 SVFs into the Linkwitz-Riley structure */
+
+      a1 = 1/(1+g*(g+k));
+      a2 = g*a1;
+      a3 = g*a2;
+    ); 
+  
+  function reset_LR()
+    global()
+    local()
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq, k, a1, a2, a3)
+    (
+      ic1eq = ic2eq = 0;  
+    );  
+
+  function eval_LRLP(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic3eq, ic4eq, k, a1, a2, a3)
+    (
+      v3 = v0 - ic4eq;
+      v1 = a1 * ic3eq + a2 * v3;
+      v2 = ic4eq + a2 * ic3eq + a3 * v3;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      
+      v2
+    ); 
+ 
+  function eval_LRAP(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic5eq, ic6eq, k, a1, a2, a3)
+    (
+      v3 = v0 - ic6eq;
+      v1 = a1 * ic5eq + a2 * v3;
+      v2 = ic6eq + a2 * ic5eq + a3 * v3;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;    
+      
+      v0 - 2*k*v1
+    );    
+
+  function eval_LR2(v0)
+    global()
+    local(v1, v2, v3, all)
+    instance(ic1eq, ic2eq, k, a1, a2, a3, hp, lp)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3 * v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;    
+      
+      all = v0 - 2 * k * v1;
+ 
+      lp = this.eval_LRLP(v2); 
+      hp = all - lp;
+    );    
+
+  function updateCoeffs()
+  local()
+  global(Cuts, Freq1, Freq2, Freq3, F2, F3)
+  instance(LF1, LF2, LF3, LA_F2, LA_F3, LA_F3_2, LA_F3_3, RF1, RF2, RF3, RA_F2, RA_F3, RA_F3_2)
+  (
+      F2 = Freq1 + Freq2*(1-Freq1);
+      F3 = F2 + Freq3*(1-F2);
+  
+      LF1.init_LR2(Freq1);
+      RF1.k  = LF1.k;
+      RF1.a1 = LF1.a1;
+      RF1.a2 = LF1.a2;
+      RF1.a3 = LF1.a3;
+      LF2.init_LR2(F2);
+      RF2.k  = LF2.k;
+      RF2.a1 = LF2.a1;
+      RF2.a2 = LF2.a2;
+      RF2.a3 = LF2.a3;
+      LF3.init_LR2(F3);
+      RF3.k  = LF3.k;
+      RF3.a1 = LF3.a1;
+      RF3.a2 = LF3.a2;
+      RF3.a3 = LF3.a3;
+      
+      // All-passes for maintaining the phase relation between the bands
+      LA_F2.init_LR(F2);
+      LA_F3.init_LR(F3);
+      
+      RA_F3.k   = RA_F3_2.k  = LA_F3_2.k  = LA_F3.k;
+      RA_F3.a1  = RA_F3_2.a1 = LA_F3_2.a1 = LA_F3.a1;
+      RA_F3.a2  = RA_F3_2.a2 = LA_F3_2.a2 = LA_F3.a2;
+      RA_F3.a3  = RA_F3_2.a3 = LA_F3_2.a3 = LA_F3.a3;
+
+      RA_F2.k  = LA_F2.k;
+      RA_F2.a1 = LA_F2.a1;
+      RA_F2.a2 = LA_F2.a2;
+      RA_F2.a3 = LA_F2.a3;
+  );
+  
+  // Make sure the delay is the same on all bands (identical number of filters)
+  function splitBands(sl, sr)
+  local()
+  global(Cuts)
+  instance( LF1, LF2, LF3, LF4, LF5, LA_F2, LA_F3, LA_F3_2, 
+            RF1, RF2, RF3, RF4, RF5, RA_F2, RA_F3, RA_F3_2,
+            b1, b2, b3, b4 )
+  (
+    LF1.eval_LR2(sl);
+    b1.l   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
+    
+    LF2.eval_LR2(LF1.hp);
+    b2.l   = LA_F3_2.eval_LRAP(LF2.lp);
+    
+    LF3.eval_LR2(LF2.hp);
+    b3.l   = LF3.lp;
+    b4.l   = LF3.hp;
+    
+    RF1.eval_LR2(sr);
+    b1.r   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
+    
+    RF2.eval_LR2(RF1.hp);
+    b2.r   = RA_F3_2.eval_LRAP(RF2.lp);
+    
+    RF3.eval_LR2(RF2.hp);
+    b3.r   = RF3.lp;
+    b4.r   = RF3.hp;
+  );
+  
+  function processBand(drive, inceil)
+  local(preamp, ceiling, inv_ceiling)
+  global(antialiased_tanh_rect)
+  instance(l, r)
+  (
+    preamp      = 10^(drive/20);
+    ceiling     = 10^(-inceil/20);
+    inv_ceiling = 10^(inceil/20);
+    
+    l *= preamp;
+    r *= preamp;
+    l *= ceiling;
+    r *= ceiling;
+    
+    l = this.ch0.antialiased_tanh_rect(l);
+    r = this.ch1.antialiased_tanh_rect(r);
+    
+    l *= inv_ceiling;
+    r *= inv_ceiling;
+  );
+  
+  function processBands()
+  local()
+  global(Drive1, Drive2, Drive3, Drive4, Ceil1, Ceil2, Ceil3, Ceil4)
+  instance(b1, b2, b3, b4)
+  (
+    b1.processBand(Drive1, Ceil1);
+    b2.processBand(Drive2, Ceil2);
+    b3.processBand(Drive3, Ceil3);
+    b4.processBand(Drive4, Ceil4);
+  );
+  
+  spectrumIn.feedSample(.5*(spl0+spl1));
+
+  // Split signal into bands
+  filterBank.updateCoeffs();
+  filterBank.splitBands(spl0, spl1);
+  filterBank.processBands();
+  
+  spl0 = filterBank.b1.l + filterBank.b2.l + filterBank.b3.l + filterBank.b4.l;
+  spl1 = filterBank.b1.r + filterBank.b2.r + filterBank.b3.r + filterBank.b4.r;
+  
+  slider64 ? (
+    spl0 = dc0.fix_dc(spl0);
+    spl1 = dc1.fix_dc(spl1);
+  );
+  
+  spectrumOut.feedSample(.5*(spl0+spl1));
+  
+@gfx 600 300
+  function createGUI()
+  (
+    scaling   = gfx_ext_retina;
+    spectrumX = 0;
+    spectrumY = 0;
+    spectrumW = gfx_w;
+    spectrumH = gfx_h - 150 * (1+scaling);
+    spectrumIn.setWindowLocation(spectrumX,  spectrumY, spectrumW, spectrumH);
+    spectrumOut.setWindowLocation(spectrumX, spectrumY, spectrumW, spectrumH);
+  );
+
+  bg_color_r = 0;
+  bg_color_g = 0;
+  bg_color_b = 0;
+  bg_color_a = 0;
+  fft_out_r = .8;
+  fft_out_g = .8;
+  fft_out_b = .8;
+  fft_out_a = 1.0;
+  fft_in_r = .13;
+  fft_in_g = .13;
+  fft_in_b = .23;
+  fft_in_a = .6;
+  grid_color_r = .3;
+  grid_color_g = .3;
+  grid_color_b = .6;
+  grid_color_a = .2;
+  backface_color_r = .2;
+  backface_color_g = .2;
+  backface_color_b = .3;
+  backface_color_a = .1;
+
+  gfx_r=bg_color_r;
+  gfx_g=bg_color_g;
+  gfx_b=bg_color_b;
+  gfx_a=bg_color_a;
+  gfx_x=gfx_y=0;
+  gfx_rectto(gfx_w,gfx_h);
+  
+  createGUI();
+  
+  gfx_r = 1;
+  spectrumIn.drawGrid();
+  spectrumIn.floorLevel = 25 + dnoisefloor_freq;
+  spectrumOut.floorLevel = 25 + dnoisefloor_freq;
+  spectrumIn.drawFFT(1, 1, fft_in_r, fft_in_g, fft_in_b, fft_in_a);
+  spectrumOut.drawFFT(0, 1, fft_out_r, fft_out_g, fft_out_b, fft_out_a);
+  spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);
+  
+  gfx_x = gfx_y = 30;
+  gfx_setfont(1,"ARIAL",30);
+  gfx_printf("THIS PLUGIN IS *NOT* READY FOR USE. CHECK BACK LATER");
