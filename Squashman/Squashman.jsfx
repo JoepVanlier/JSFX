@@ -1,8 +1,10 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: + Did work on gain control via GUI.
+changelog: 
++ Added mute / solo button
++ Enforced minimum distance of 0 between bands
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -250,16 +252,26 @@ function isOver(mx, my)
     ( ( mx >= (x-overRange) ) && ( mx <= (x+w+overRange) ) && ( my >= (y-overRange) ) && ( my <= (y+h+overRange) ) ) ? 1 : 0;
   );
 
+function clamp(value, mini, maxi)
+  local()
+  global()
+  (
+    max(min(value,maxi),mini)
+  );
+
 function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
   instance(x, y, w, h, lx, ly, lcap, cap, thisUI, htime, hint,
            x_over, dragging, hzoffset
            x1, x2, x3, x4, x5,
            v1, v2, v3, v4, v5,
-           h1, h2, h3, h4, h5, )
+           h1, h2, h3, h4, h5, 
+           c1, c2, c3, c4, c5 )
   global(dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI, fftSize,
          bandClickRange, cuts,
          Freq1, Freq2, Freq3, Freq4,
          Drive1, Drive2, Drive3, Drive4, Drive5,
+         mute1, mute2, mute3, mute4, mute5,
+         solo1, solo2, solo3, solo4, solo5,
          driveMin, driveMax )
   local(dx, dy, over,
         F1, F2, F3, F4,
@@ -271,11 +283,11 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_y - ly;
       
-      dragging == 1 ? ( Drive1 -= 100*dy/h; Drive1 = max(min(Drive1, driveMax), driveMin); );
-      dragging == 2 ? ( Drive2 -= 100*dy/h; Drive2 = max(min(Drive2, driveMax), driveMin); );
-      dragging == 3 ? ( Drive3 -= 100*dy/h; Drive3 = max(min(Drive3, driveMax), driveMin); );
-      dragging == 4 ? ( Drive4 -= 100*dy/h; Drive4 = max(min(Drive4, driveMax), driveMin); );
-      dragging == 5 ? ( Drive5 -= 100*dy/h; Drive5 = max(min(Drive5, driveMax), driveMin); );
+      dragging == 1 ? ( Drive1 -= 100*dy/h; Drive1 = clamp(Drive1, driveMin, driveMax); );
+      dragging == 2 ? ( Drive2 -= 100*dy/h; Drive2 = clamp(Drive2, driveMin, driveMax); );
+      dragging == 3 ? ( Drive3 -= 100*dy/h; Drive3 = clamp(Drive3, driveMin, driveMax); );
+      dragging == 4 ? ( Drive4 -= 100*dy/h; Drive4 = clamp(Drive4, driveMin, driveMax); );
+      dragging == 5 ? ( Drive5 -= 100*dy/h; Drive5 = clamp(Drive5, driveMin, driveMax); );
       
     ) : ( cap == 2 && mouse_cap & 1 == 1 ) ? (
       // Dragging a band frequency
@@ -292,22 +304,24 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       
       dragging == 1 ? ( 
         F1 = 1-log( (exp((x1 - x + dx)/wsc) + hzoffset)/hfft )/lmin;
-        slider_automate( Freq1 = F1 );
-        slider_automate( Freq2 = (F2 - F1) / (1-F1) );        
+        slider_automate( Freq1 = clamp( F1, 0, 1 ) );
+        slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-F1), 0, 1 ) );
       );
       dragging == 2 ? ( 
         F2 = 1-log( (exp((x2 - x + dx)/wsc) + hzoffset)/hfft )/lmin; 
-        slider_automate( Freq2 = (F2 - Freq1) / (1-Freq1) );
-        slider_automate( Freq3 = (F3 - F2) / (1-F2) );
+        slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-Freq1), 0, 1 ) );
+        F2 = Freq1  + Freq2 * (1 - Freq1);
+        slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1) );
       );
       dragging == 3 ? ( 
         F3 = 1-log( (exp((x3 - x + dx)/wsc) + hzoffset)/hfft )/lmin; 
-        slider_automate( Freq3 = (F3 - F2) / (1-F2) );
-        slider_automate( Freq4 = (F4 - F3) / (1-F3) );
+        slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1 ) );
+        F3 = F2     + Freq3 * (1 - F2);
+        slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
       );
       dragging == 4 ? ( 
         F4 = 1-log( (exp((x4 - x + dx)/wsc) + hzoffset)/hfft )/lmin; 
-        slider_automate( Freq4 = (F4 - F3) / (1-F3) );
+        slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
       );
 
     ) : ( cap == 1 && mouse_cap & 1 == 1 ) ? (
@@ -316,7 +330,27 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       dnoisefloor_freq < -15 ? dnoisefloor_freq = -15;
     ) : ( 
       // Not already capped
-      ( v1.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
+      ( c1.isOver(mouse_x, mouse_y) == 1 ) ? (
+        c1.over = 1;
+        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute1 = 1-mute1; solo1 ? (mute1 = 1; solo1 = 0;) );
+        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo1 = 1-solo1; );
+      ) : ( c2.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
+        c2.over = 1;
+        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute2 = 1-mute2; solo2 ? (mute2 = 1; solo2 = 0;) );
+        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo2 = 1-solo2; );
+      ) : ( c3.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 1 ) ? (
+        c3.over = 1;
+        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute3 = 1-mute3; solo3 ? (mute3 = 1; solo3 = 0;) );
+        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo3 = 1-solo3; );
+      ) : ( c4.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 2 ) ? (
+        c4.over = 1;
+        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute4 = 1-mute4; solo4 ? (mute4 = 1; solo4 = 0;) );
+        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo4 = 1-solo4; );
+      ) : ( c5.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 3 ) ? (
+        c5.over = 1;
+        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute5 = 1-mute5; solo5 ? (mute5 = 1; solo5 = 0;) );
+        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo5 = 1-solo5; );
+      ) : ( v1.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
         v1.over = 1;
         ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 2; dragging = 1; )
       ) : ( v2.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
@@ -501,6 +535,59 @@ function updateBands()
     y5 = y+h*(dmax-iRange*Drive5);
   );
 
+function fancyCircle(x1, y1, rin, mute, solo)
+  local(dx)
+  global()
+  instance(x, y, r, over)
+  (
+    x = x1;
+    y = y1;
+    rin == 0 ? r = 10 : r = rin;
+    
+    over ? (
+      gfx_set(1, 1, 1, .2);
+      gfx_circle(x, y, 1.1*r, 1, 1);
+      gfx_set(1, 1, 1, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+      gfx_set(1, 1, 1, .2);
+      gfx_circle(x, y, 1.3*r, 1, 1);
+    );
+    
+    gfx_set(.2, .2, .2, 1);
+    gfx_circle(x, y, r, 1, 1);
+    
+    gfx_set(.7, .7, .7, .7);
+    gfx_circle(x, y, .92*r, 1, 1);
+    
+    gfx_set(.2, .2, .2, .7);
+    gfx_circle(x, y, .8*r, 1, 1);
+    
+    gfx_set(.2, .2, .2, .7);
+    gfx_circle(x, y, .7*r, 1, 1);
+    
+    ( solo == 1 ) ? (
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, .8*r, 1, 1);
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, .9*r, 1, 1);
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, r, 1, 1);
+      gfx_set(.2, 1, .2, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+    ) : ( mute == 1 ) ? (
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, .8*r, 1, 1);
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, .9*r, 1, 1);
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, r, 1, 1);
+      gfx_set(1, .2, .2, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+    );    
+    
+    over = 0;
+  );
+
 function fancyLineV(x1, y1, x2, y2)
   local(dx)
   global()
@@ -556,12 +643,15 @@ function fancyLineH(x1, y1, x2, y2)
   );
   
 function drawBands()
-  global(Cuts)
+  global(Cuts, 
+           mute1, mute2, mute3, mute4, mute5,
+           solo1, solo2, solo3, solo4, solo5,)
   instance(x, y, w, h, 
            x1, x2, x3, x4, x5, // Band frequency screen positions
            y1, y2, y3, y4, y5, // Band drive positions
            v1, v2, v3, v4, v5, // Frequency handles
            h1, h2, h3, h4, h5, // Drive handles
+           c1, c2, c3, c4, c5, // Circle handles
            x_over)
   local()
   (
@@ -591,24 +681,39 @@ function drawBands()
     
     ( Cuts == 0 ) ? (
        h1.fancyLineH(x, y1, x+w-2, y1);
+       c1.fancyCircle(x + .5*w, y1, 0, mute1, solo1);
     ) : ( Cuts == 1 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1);
        h2.fancyLineH(x1, y2, x+w-2, y2);
+       c2.fancyCircle(x1 + .5*(w-x1), y2, 0, mute2, solo2);
     ) : ( Cuts == 2 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1);
        h2.fancyLineH(x1, y2, x2-2, y2);
+       c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2);
        h3.fancyLineH(x2, y3, x+w-2, y3);
+       c3.fancyCircle(x2 + .5*(w-x2), y3, 0, mute3, solo3);
     ) : ( Cuts == 3 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1);
        h2.fancyLineH(x1, y2, x2-2, y2);
+       c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2);
        h3.fancyLineH(x2, y3, x3-2, y3);
+       c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3);
        h4.fancyLineH(x3, y4, x+w-2, y4);
+       c4.fancyCircle(x3 + .5*(x4-x3), y4, 0, mute4, solo4);
     ) : ( Cuts == 4 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1);
        h2.fancyLineH(x1, y2, x2-2, y2);
+       c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2);
        h3.fancyLineH(x2, y3, x3-2, y3);
+       c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3);
        h4.fancyLineH(x3, y4, x4-2, y4);
+       c4.fancyCircle(x3 + .5*(x4-x3), y4, 0, mute4, solo4);
        h5.fancyLineH(x4, y5, x+w-2, y5);
+       c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5);
     );
     
     //this.drawLineFFT(.5*f_trafo(F1));
@@ -675,11 +780,11 @@ file_var(0,placeholder);
 @slider
 
 @block
-!mute1 ? play1 = 1;
-!mute2 ? play2 = 1;
-!mute3 ? play3 = 1;
-!mute4 ? play4 = 1;
-!mute5 ? play5 = 1;
+!mute1 ? play1 = 1 : play1 = 0;
+!mute2 ? play2 = 1 : play2 = 0;
+!mute3 ? play3 = 1 : play3 = 0;
+!mute4 ? play4 = 1 : play4 = 0;
+!mute5 ? play5 = 1 : play5 = 0;
 
 ( solo1 || solo2 || solo3 || solo4 || solo5 ) ? ( play1 = play2 = play3 = play4 = play5 = 0; );
 solo1 ? play1 = 1;
@@ -1343,4 +1448,9 @@ solo5 ? play5 = 1;
   
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
-  gfx_printf("THIS PLUGIN IS *NOT* READY FOR USE. CHECK BACK LATER");
+  gfx_set(1,0,0,1);
+  gfx_printf("THIS PLUGIN IS *NOT* READY FOR USE. CHECK BACK LATER...");
+  gfx_x = 30;
+  gfx_y = 60;
+  gfx_printf("ALL SLIDER MAPPINGS *WILL* CHANGE.");
+  
