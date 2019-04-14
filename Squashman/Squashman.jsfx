@@ -1,10 +1,11 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.04
+version: 0.06
 author: Joep Vanlier
 changelog: 
-+ Added mute / solo button
-+ Enforced minimum distance of 0 between bands
++ Added ability to add bands with outer mouse button (band removal still incomplete).
++ Bugfix w.r.t. solo/mute behaviour.
++ Added zero drive line.
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -21,27 +22,84 @@ slider2:Freq1=0.5<0,1,.0001>-Frequency 1
 slider3:Freq2=0.5<0,1,.0001>-Frequency 2
 slider4:Freq3=0.5<0,1,.0001>-Frequency 3
 slider5:Freq4=0.5<0,1,.0001>-Frequency 4
+slider6:Test=-1<-1,-1,-1>-Test
+slider7:Drive1=0<-40,60,.1>-Drive 1 (dB)
+slider8:Drive2=0<-40,60,.1>-Drive 2 (dB)
+slider9:Drive3=0<-40,60,.1>-Drive 3 (dB)
+slider10:Drive4=0<-40,60,.1>-Drive 4 (dB)
+slider11:Drive5=0<-40,60,.1>-Drive 5 (dB)
+slider12:Test=-1<-1,-1,-1>-Test
+slider13:Ceil1=0<-26,0,.1>-Ceiling 1 (dB)
+slider14:Ceil2=0<-26,0,.1>-Ceiling 2 (dB)
+slider15:Ceil3=0<-26,0,.1>-Ceiling 3 (dB)
+slider16:Ceil4=0<-26,0,.1>-Ceiling 4 (dB)
+slider17:Ceil5=0<-26,0,.1>-Ceiling 5 (dB)
 
-slider10:Drive1=0<-40,60,1>-Drive 1 (dB)
-slider11:Drive2=0<-40,60,1>-Drive 2 (dB)
-slider12:Drive3=0<-40,60,1>-Drive 3 (dB)
-slider13:Drive4=0<-40,60,1>-Drive 4 (dB)
-slider14:Drive5=0<-40,60,1>-Drive 5 (dB)
-
-slider20:Ceil1=0<-26,0,1>-Ceiling 1 (dB)
-slider21:Ceil2=0<-26,0,1>-Ceiling 2 (dB)
-slider22:Ceil3=0<-26,0,1>-Ceiling 3 (dB)
-slider23:Ceil4=0<-26,0,1>-Ceiling 4 (dB)
-slider24:Ceil5=0<-26,0,1>-Ceiling 5 (dB)
+slider19:Mode1=0<0,5,1>-Mode 1
+slider20:Mode2=0<0,5,1>-Mode 2
+slider21:Mode3=0<0,5,1>-Mode 3
+slider22:Mode4=0<0,5,1>-Mode 4
+slider23:Mode5=0<0,5,1>-Mode 5
 
 slider63:2<0,1,1>Oversampling
 slider64:0<0,1,1>Fix DC?
 
 @init 
+maxCuts = 4;
 driveMax = 60;
 driveMin = -40;
 driveRange = driveMax - driveMin;
 
+/* Keep these updated with the slider locations */
+frequencyLocation = 2;
+driveLocation     = 7;
+ceilLocation      = 13;
+modeLocation      = 19;
+
+function shiftRight(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc + numElements;
+    loop(numElements-fromIdx,
+      slider(midx) = slider(midx-1);
+      midx = midx - 1;
+    );
+  );
+
+function shiftLeft(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc+fromIdx;
+    loop(numElements-fromIdx,
+      slider(midx) = slider(midx+1);
+      midx = midx + 1;
+    );
+  );
+
+function addBand(idx)
+  local(midx)
+  instance()
+  (
+    shiftRight( driveLocation,     idx, maxCuts );
+    shiftRight( ceilLocation,      idx, maxCuts );
+    shiftRight( modeLocation,      idx, maxCuts );
+    shiftRight( frequencyLocation, idx, maxCuts-1 );
+    cuts = cuts + 1;
+  );
+  
+function remBand(idx)
+  local(midx)
+  instance()
+  (
+    shiftLeft( driveLocation,     idx, maxCuts );
+    shiftLeft( ceilLocation,      idx, maxCuts );
+    shiftLeft( modeLocation,      idx, maxCuts );
+    shiftLeft( frequencyLocation, idx, maxCuts-1 );
+    cuts = cuts - 1;
+  );  
+  
 function feedSample(sample)
   global(fftSize)
   instance(recPtr, window, rStart, rEnd, fftLoc)
@@ -259,9 +317,28 @@ function clamp(value, mini, maxi)
     max(min(value,maxi),mini)
   );
 
+function overRect(x, y, w, h, mx, my)
+  local()
+  global()
+  (
+    ( (mx > x) && (mx < (x+w) ) && (my > y) && (my < (y+h) ) )
+  );
+
+function pixelToWindowRatio(x_loc)
+  instance(x, y, w, h, hzoffset)
+  global(fftSize)
+  local(lmin, wsc, hfft)
+  (
+    hfft  = 0.5*fftSize;
+    lmin  = log(20/22050);
+    wsc   = w/log(1+fftSize*0.5-hzoffset);
+    
+    1-log( (exp((x_loc)/wsc) + hzoffset)/hfft )/lmin
+  );
+
 function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
   instance(x, y, w, h, lx, ly, lcap, cap, thisUI, htime, hint,
-           x_over, dragging, hzoffset
+           x_over, dragging, lastLeftClick
            x1, x2, x3, x4, x5,
            v1, v2, v3, v4, v5,
            h1, h2, h3, h4, h5, 
@@ -272,13 +349,33 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          Drive1, Drive2, Drive3, Drive4, Drive5,
          mute1, mute2, mute3, mute4, mute5,
          solo1, solo2, solo3, solo4, solo5,
-         driveMin, driveMax )
+         driveMin, driveMax, maxCuts,
+         selectedBand, gfx_x, gfx_y )
   local(dx, dy, over,
         F1, F2, F3, F4,
-        hfft, lmin, wsc)
+        leftClick, rightClick, doubleClick,
+        cTime, mpos)
   (
     over = mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h);
+    leftClick   = ( mouse_cap & 1 == 1 && lcap & 1 == 0 );
+    rightClick  = ( mouse_cap & 2 == 2 && lcap & 2 == 0 );
+    doubleClick = 0;
+    
+    leftClick ? (
+       time_precise(cTime);
+       ( ( cTime - lastLeftClick ) < .25 ) ? (
+          leftClick = 0;
+          doubleClick = 1;
+       );
+       lastLeftClick = cTime;
+    );
+    
     x_over = -1;
+    
+    gfx_x = 0;
+    gfx_y = 0;
+    gfx_set(1,1,1,1);
+    gfx_printf("%g", this.pixelToWindowRatio(mouse_x));
     
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_y - ly;
@@ -298,29 +395,25 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       F3 = F2     + Freq3 * (1 - F2);
       F4 = F3     + Freq4 * (1 - F3);
       
-      hfft = 0.5*fftSize;
-      lmin = log(20/22050);
-      wsc = w/log(1+fftSize*0.5-hzoffset);
-      
       dragging == 1 ? ( 
-        F1 = 1-log( (exp((x1 - x + dx)/wsc) + hzoffset)/hfft )/lmin;
+        F1 = this.pixelToWindowRatio(x1 - x + dx);
         slider_automate( Freq1 = clamp( F1, 0, 1 ) );
         slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-F1), 0, 1 ) );
       );
       dragging == 2 ? ( 
-        F2 = 1-log( (exp((x2 - x + dx)/wsc) + hzoffset)/hfft )/lmin; 
+        F2 = this.pixelToWindowRatio(x2 - x + dx);
         slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-Freq1), 0, 1 ) );
         F2 = Freq1  + Freq2 * (1 - Freq1);
         slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1) );
       );
       dragging == 3 ? ( 
-        F3 = 1-log( (exp((x3 - x + dx)/wsc) + hzoffset)/hfft )/lmin; 
+        F3 = this.pixelToWindowRatio(x3 - x + dx);
         slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1 ) );
         F3 = F2     + Freq3 * (1 - F2);
         slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
       );
       dragging == 4 ? ( 
-        F4 = 1-log( (exp((x4 - x + dx)/wsc) + hzoffset)/hfft )/lmin; 
+        F4 = this.pixelToWindowRatio(x4 - x + dx);
         slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
       );
 
@@ -330,56 +423,111 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       dnoisefloor_freq < -15 ? dnoisefloor_freq = -15;
     ) : ( 
       // Not already capped
+      cap = 0;
+      
+      /* Toggle mute/solo */
       ( c1.isOver(mouse_x, mouse_y) == 1 ) ? (
         c1.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute1 = 1-mute1; solo1 ? (mute1 = 1; solo1 = 0;) );
-        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo1 = 1-solo1; );
+        leftClick ? ( mute1 = 1-mute1; solo1 ? (mute1 = 1; solo1 = 0;) );
+        rightClick ? ( solo1 = 1-solo1; );
       ) : ( c2.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
         c2.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute2 = 1-mute2; solo2 ? (mute2 = 1; solo2 = 0;) );
-        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo2 = 1-solo2; );
+        leftClick ? ( mute2 = 1-mute2; solo2 ? (mute2 = 1; solo2 = 0;) );
+        rightClick ? ( solo2 = 1-solo2; );
       ) : ( c3.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 1 ) ? (
         c3.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute3 = 1-mute3; solo3 ? (mute3 = 1; solo3 = 0;) );
-        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo3 = 1-solo3; );
+        leftClick ? ( mute3 = 1-mute3; solo3 ? (mute3 = 1; solo3 = 0;) );
+        rightClick ? ( solo3 = 1-solo3; );
       ) : ( c4.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 2 ) ? (
         c4.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute4 = 1-mute4; solo4 ? (mute4 = 1; solo4 = 0;) );
-        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo4 = 1-solo4; );
+        leftClick ? ( mute4 = 1-mute4; solo4 ? (mute4 = 1; solo4 = 0;) );
+        rightClick ? ( solo4 = 1-solo4; );
       ) : ( c5.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 3 ) ? (
         c5.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( mute5 = 1-mute5; solo5 ? (mute5 = 1; solo5 = 0;) );
-        ( mouse_cap & 2 == 2 && lcap & 2 == 0 ) ? ( solo5 = 1-solo5; );
+        leftClick ? ( mute5 = 1-mute5; solo5 ? (mute5 = 1; solo5 = 0;) );
+        rightClick ? ( solo5 = 1-solo5; );
+        
+      /* Drag frequency */
       ) : ( v1.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
         v1.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 2; dragging = 1; )
+        leftClick ? ( cap = 2; dragging = 1; );
+        rightClick ? ( remBand(0); );        
       ) : ( v2.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
         v2.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 2; dragging = 2; )
+        leftClick ? ( cap = 2; dragging = 2; );
+        rightClick ? ( remBand(1); );
       ) : ( v3.isOver(mouse_x, mouse_y) ) && ( cuts > 2 ) ? (
         v3.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 2; dragging = 3; )
+        leftClick ? ( cap = 2; dragging = 3; );
+        rightClick ? ( remBand(2); );
       ) : ( v4.isOver(mouse_x, mouse_y) ) && ( cuts > 3 ) ? (
         v4.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 2; dragging = 4; )
+        leftClick ? ( cap = 2; dragging = 4; );
+        rightClick ? ( remBand(3); );
       ) : ( v5.isOver(mouse_x, mouse_y) ) && ( cuts > 4 ) ? (
         v5.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 2; dragging = 5; )
+        leftClick ? ( cap = 2; dragging = 5; );
+        rightClick ? ( remBand(4); );
+      
+      /* Drag drive */
       ) : ( h1.isOver(mouse_x, mouse_y) ) ? (
         h1.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 3; dragging = 1; )
+        leftClick ? ( cap = 3; dragging = 1; );
+        doubleClick ? ( drive1 = 0; );
       ) : ( h2.isOver(mouse_x, mouse_y) ) && ( cuts > 0 ) ? (
         h2.over = 1;      
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 3; dragging = 2; )
+        leftClick ? ( cap = 3; dragging = 2; );
+        doubleClick ? ( drive2 = 0; );
       ) : ( h3.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
         h3.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 3; dragging = 3; )
+        leftClick ? ( cap = 3; dragging = 3; );
+        doubleClick ? ( drive3 = 0; );
       ) : ( h4.isOver(mouse_x, mouse_y) ) && ( cuts > 2 ) ? (
         h4.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 3; dragging = 4; )
+        leftClick ? ( cap = 3; dragging = 4; );
+        doubleClick ? ( drive4 = 0; );
       ) : ( h5.isOver(mouse_x, mouse_y) ) && ( cuts > 3 ) ? (
         h5.over = 1;
-        ( mouse_cap & 1 == 1 && lcap & 1 == 0 ) ? ( cap = 3; dragging = 5; )
+        leftClick ? ( cap = 3; dragging = 5; );
+        doubleClick ? ( drive5 = 0; );
+        
+      /* Handle clicks within the bands (creating a new band or selecting a band) */
+      ) : ( overRect( h1.x, y, h1.w, h, mouse_x, mouse_y ) ) ? (
+        leftClick ? selectedBand = 0;
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(0);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          Freq2 = ( Freq2 * (1-0) + 0 - mpos ) / ( 1 - mpos );
+          Freq1 = mpos;
+        );
+      ) : ( overRect( h2.x, y, h2.w, h, mouse_x, mouse_y ) && ( cuts > 0 )  ) ? (
+        leftClick ? selectedBand = 1;
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(1);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          Freq3 = ( Freq3 * (1-Freq1) + Freq1 - mpos ) / ( 1 - mpos );
+          Freq2 = ( mpos - Freq1 ) / ( 1 - Freq1 );
+        );
+      ) : ( overRect( h3.x, y, h3.w, h, mouse_x, mouse_y ) && ( cuts > 1 ) ) ? (
+        leftClick ? selectedBand = 2;
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(2);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          F2 = Freq1  + Freq2 * (1 - Freq1);
+          Freq4 = ( Freq4 * (1-F2) + F2 - mpos ) / ( 1 - mpos );
+          Freq3 = ( mpos - F2 ) / ( 1 - F2 );
+        );
+      ) : ( overRect( h4.x, y, h4.w, h, mouse_x, mouse_y ) && ( cuts > 2 ) ) ? (
+        leftClick ? selectedBand = 3;
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(3);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          F2 = Freq1  + Freq2 * (1 - Freq1);
+          F3 = F2     + Freq3 * (1 - F2);
+          Freq4 = ( mpos - F3 ) / ( 1 - F3 );
+        );
+      ) : ( overRect( h5.x, y, h5.w, h, mouse_x, mouse_y ) && ( cuts > 3 ) ) ? (
+        leftClick ? selectedBand = 4;
       ) : (
         cap = 0;
         ( mouse_cap & 1 == 1 && lcap & 1 == 0 && over ) ? (
@@ -645,8 +793,9 @@ function fancyLineH(x1, y1, x2, y2)
 function drawBands()
   global(Cuts, 
            mute1, mute2, mute3, mute4, mute5,
-           solo1, solo2, solo3, solo4, solo5,)
-  instance(x, y, w, h, 
+           solo1, solo2, solo3, solo4, solo5,
+           selectedBand )
+  instance(xc, dx, x, y, w, h, 
            x1, x2, x3, x4, x5, // Band frequency screen positions
            y1, y2, y3, y4, y5, // Band drive positions
            v1, v2, v3, v4, v5, // Frequency handles
@@ -655,12 +804,18 @@ function drawBands()
            x_over)
   local()
   (
-    //wsc = w/log(1+fftsize*0.5-hzoffset);
-    //tx = floor(x + log(1.0+F1-hzoffset)*wsc);
-    //hzoffset  = 20/srate;
-    //tx = x+w*(Freq1-hzoffset);
-    gfx_set(1,1,1,1);
+    xc = x;
+    dx = 5;
+    while(xc<x+w) (
+      gfx_set(0,0,0,1);
+      gfx_line(xc, y+.6*h+1, xc+dx, y+.6*h+1);
+      gfx_line(xc, y+.6*h-1, xc+dx, y+.6*h-1);
+      gfx_set(0.6,0.6,0.6,1);
+      gfx_line(xc, y+.6*h, xc+dx, y+.6*h);
+      xc = xc + 2*dx;
+    );
     
+    gfx_set(1,1,1,1);
     (Cuts > 0) ? (
       v1.fancyLineV(x1, y, x1, y+h);
     );
@@ -715,6 +870,12 @@ function drawBands()
        h5.fancyLineH(x4, y5, x+w-2, y5);
        c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5);
     );
+    
+    selectedBand == 0 ? gfx_muladdrect( h1.x, y, h1.w, h, 1, 1, 1, .6, .05, .05, .05 );
+    selectedBand == 1 ? gfx_muladdrect( h2.x, y, h2.w, h, 1, 1, 1, .6, .05, .05, .05 );
+    selectedBand == 2 ? gfx_muladdrect( h3.x, y, h3.w, h, 1, 1, 1, .6, .05, .05, .05 );
+    selectedBand == 3 ? gfx_muladdrect( h4.x, y, h4.w, h, 1, 1, 1, .6, .05, .05, .05 );
+    selectedBand == 4 ? gfx_muladdrect( h5.x, y, h5.w, h, 1, 1, 1, .6, .05, .05, .05 );
     
     //this.drawLineFFT(.5*f_trafo(F1));
     //this.drawLineFFT(.5*f_trafo(F2));
