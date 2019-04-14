@@ -1,11 +1,13 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.06
+version: 0.08
 author: Joep Vanlier
 changelog: 
-+ Added ability to add bands with outer mouse button (band removal still incomplete).
-+ Bugfix w.r.t. solo/mute behaviour.
-+ Added zero drive line.
++ Added logo (Squashman!)
++ Fixed band removal frequency recalculation
++ Added basic "cheapo" shapers
++ Added various shapers based on fitted amp model curves (order may still change)
++ Added wavefolders
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -35,16 +37,16 @@ slider15:Ceil3=0<-26,0,.1>-Ceiling 3 (dB)
 slider16:Ceil4=0<-26,0,.1>-Ceiling 4 (dB)
 slider17:Ceil5=0<-26,0,.1>-Ceiling 5 (dB)
 
-slider19:Mode1=0<0,5,1>-Mode 1
-slider20:Mode2=0<0,5,1>-Mode 2
-slider21:Mode3=0<0,5,1>-Mode 3
-slider22:Mode4=0<0,5,1>-Mode 4
-slider23:Mode5=0<0,5,1>-Mode 5
+slider19:Mode1=0<0,15,1>Mode 1
+slider20:Mode2=0<0,15,1>Mode 2
+slider21:Mode3=0<0,15,1>Mode 3
+slider22:Mode4=0<0,15,1>Mode 4
+slider23:Mode5=0<0,15,1>Mode 5
 
 slider63:2<0,1,1>Oversampling
 slider64:0<0,1,1>Fix DC?
 
-@init 
+@init
 maxCuts = 4;
 driveMax = 60;
 driveMin = -40;
@@ -223,23 +225,30 @@ function setWindowLocation(_x, _y, _w, _h)
     h = _h;
   );
 
-function drawGrid()  
-  global(   fftSize, srate,
-            grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
-            backface_color_r, backface_color_g, backface_color_b, backface_color_a )
-  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset )
-  local(xx, i, wsc, N)
-  (    
-    i = 0;
-    
+function drawBackface()
+  instance(x, y, w, h)
+  global(backface_color_r, backface_color_g, backface_color_b, backface_color_a,
+         grid_color_r, grid_color_g, grid_color_b, grid_color_a )
+  local()
+  (
     gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
     gfx_rect(x, y, w, h);
-
+    
     gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
     gfx_line(x, y, x+w, y);
     gfx_line(x, y+h, x+w, y+h);
     gfx_line(x, y, x, y+h);
     gfx_line(x+w, y, x+w, y+h);
+  );
+
+function drawGrid()  
+  global(   fftSize, srate,
+             )
+  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset )
+  local(xx, i, wsc, N)
+  (    
+    i = 0;
+    this.drawBackface();
     
     i = 0;
     wsc = w/log(1+fftSize*0.5-hzoffset);
@@ -372,10 +381,10 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     
     x_over = -1;
     
-    gfx_x = 0;
+    /*gfx_x = 0;
     gfx_y = 0;
     gfx_set(1,1,1,1);
-    gfx_printf("%g", this.pixelToWindowRatio(mouse_x));
+    gfx_printf("%g", this.pixelToWindowRatio(mouse_x));*/
     
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_y - ly;
@@ -451,15 +460,24 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       ) : ( v1.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
         v1.over = 1;
         leftClick ? ( cap = 2; dragging = 1; );
-        rightClick ? ( remBand(0); );        
+        rightClick ? ( 
+          Freq2 = ( Freq2 * ( 1 - Freq1 ) + ( Freq1 - 0 ) ) / ( 1 - 0 );
+          remBand(0);
+        );
       ) : ( v2.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
         v2.over = 1;
         leftClick ? ( cap = 2; dragging = 2; );
-        rightClick ? ( remBand(1); );
+        rightClick ? ( 
+          Freq3 = ( Freq3 * ( 1 - Freq2 ) + ( Freq2 - 0 ) ) / ( 1 - 0 );
+          remBand(1);
+        );
       ) : ( v3.isOver(mouse_x, mouse_y) ) && ( cuts > 2 ) ? (
         v3.over = 1;
         leftClick ? ( cap = 2; dragging = 3; );
-        rightClick ? ( remBand(2); );
+        rightClick ? ( 
+          Freq4 = ( Freq4 * ( 1 - Freq3 ) + ( Freq3 - 0 ) ) / ( 1 - 0 );
+          remBand(2);
+        );
       ) : ( v4.isOver(mouse_x, mouse_y) ) && ( cuts > 3 ) ? (
         v4.over = 1;
         leftClick ? ( cap = 2; dragging = 4; );
@@ -905,6 +923,280 @@ function initSpectrum(memoryOffset, fftSize, srate)
     
     this.initWindow(3)
   );
+  
+  
+  function F0(x, em2x)
+  local()
+  global()
+  instance()
+  (
+    x - log(2/(1 + em2x))
+  );
+  
+  function tanh_prec(x, em2x)
+  local() 
+  global()
+  instance()
+  (
+    (2/(1+em2x))-1
+  );
+  
+  function tanh(x)
+  local()
+  global()
+  instance()
+  (
+    (2/(1+exp(-2*x)))-1
+  );
+  
+  function antialiased_tanh_rect(x)
+  local(eps, em2x, F0_xn)
+  global(slider4)
+  instance(antialias, F0_xnm1, xnm1,diff)
+  (
+    354 < abs(x) ? (
+      antialias = sign(x);
+      x         = antialias * 354;
+      F0_xn     = 354 - log(2);
+    ) : (
+      em2x      = exp(-2*x);
+      F0_xn     = F0(x, em2x);
+      diff      = ( x - xnm1 );
+      eps       = 0.0000000001;
+      antialias = (abs(diff) > eps) ? ( F0_xn - F0_xnm1 ) / diff : tanh(.5*(x+xnm1));
+    );
+    
+    F0_xnm1   = F0_xn;
+    xnm1      = x;
+
+    antialias
+  );
+  
+  // Approximation to W(exp(x))
+  function lambertExpApprox(x)  
+    local(ex, approx, v, c, p, t, f)
+    global()
+    instance()
+    (
+      ex = exp(x);
+      
+      approx = sqrt(2*$e*ex + 2) - 1;
+      v = log(ex + 1);
+      v = v - log(v);
+      c = abs(ex + 1/$e);
+      c = (c > 1.45);
+      approx = (1 - c)*approx + c*v;
+      loop(2,
+        p = exp(approx);
+        t = approx*p - ex;
+        t = t/(p*(approx + 1) - 0.5*(approx + 2.0)*t/(approx + 1));
+        approx = approx - t;
+      );
+      
+      approx
+    );
+    
+  function folder_init(cutoff, reso)
+    local(R, RL, Vt, iVt)
+    instance(dc_scum, alpha, beta, delta)
+    global()
+    (
+      R       = 15000;
+      RL      = (8000+49000*cutoff);
+      iVt     = 1/.025864;
+      dc_scum = .1 * reso;
+      
+      alpha   = 2 * RL / R;
+      beta    = (alpha + 1) * iVt;
+      delta   = log( RL * .00000000000000001 * iVt );
+    );      
+    
+  function folder_eval(sample)
+    local(lambda)
+    instance(alpha, beta, delta)
+    global()
+    (
+      lambda = sign(sample);
+      .025864 * lambda * lambertExpApprox( lambda * beta * sample + delta ) - alpha * sample
+    );  
+  
+  function processBand(drive, inceil, play, mode)
+  global(antialiased_tanh_rect)
+  instance(l, r)
+  local(preamp, ceiling, inv_ceiling, t)
+  (
+    play ? (
+      preamp      = 10^(drive/20);
+      ceiling     = 10^(-inceil/20);
+      inv_ceiling = 10^(inceil/20);
+      
+      l *= preamp;
+      r *= preamp;
+      l *= ceiling;
+      r *= ceiling;
+      
+      //l = this.ch0.antialiased_tanh_rect(l);
+      //r = this.ch1.antialiased_tanh_rect(r);
+      ( mode == 0 ) ? (
+        l = tanh(l);
+        r = tanh(r);
+      ) : ( mode == 1 ) ? (
+        l = .5*l;
+        r = .5*r;
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
+      ) : ( mode == 2 ) ? (
+        l = 1.399 * l;
+        r = 1.399 * r;
+        l = sign(l)*(1-exp(-abs(l)));
+        r = sign(r)*(1-exp(-abs(r)));
+      ) : ( mode == 3 ) ? (
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+      
+        t = l*l;
+        l = l - 0.17 * t - 0.17 * t*l;
+        t = r*r;
+        r = r - 0.17 * t - 0.17 * t*r;
+      ) : ( mode == 4 ) ? (
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+        
+        t = l*l;
+        l = 1.23950091*l/(1+0.89322598*abs(l)-2.07339946*t+1.43974791*abs(l)*t);
+        t = r*r;
+        r = 1.23950091*r/(1+0.89322598*abs(r)-2.07339946*t+1.43974791*abs(r)*t);
+      ) : ( mode == 5 ) ? (
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+        
+        t = l*l;
+        l = 0.55054001*l/(1-1.27438856*abs(l)+0.84846189*t-0.01720815*abs(l)*t);
+        t = r*r;
+        r = 0.55054001*r/(1-1.27438856*abs(r)+0.84846189*t-0.01720815*abs(r)*t);
+      ) : ( mode == 6 ) ? (
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+        
+        t = l*l;
+        l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(-13.09587456*t));
+        t = r*r;
+        r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(-13.09587456*t));
+      ) : ( mode == 7 ) ? (
+        l = sin(1.5*l);
+        r = sin(1.5*r);
+      ) : ( mode == 8 ) ? (
+        l = sin(1.5*l);
+        r = sin(1.5*r);
+      ) : ( mode == 9 ) ? (
+        this.ch0.folder_init(0, 1);
+        this.ch1.folder_init(0, 1);
+        l = -this.ch0.folder_eval(l);
+        t = l*l;
+        l = l / (1+t*t);
+        r = -this.ch1.folder_eval(r);
+        t = r*r;
+        r = r / (1+t*t);
+      ) : ( mode == 10 ) ? (
+        this.ch0.folder_init(0, 1);
+        this.ch1.folder_init(0, 1);
+        l = -this.ch0.folder_eval(l);
+        l = this.ch0.folder_eval(l);
+        l = this.ch0.folder_eval(l);
+        t = l*l;
+        l = l / (1+t*t);
+        r = -this.ch1.folder_eval(r);
+        r = this.ch1.folder_eval(r);
+        r = this.ch1.folder_eval(r);
+        t = r*r;
+        r = r / (1+t*t);
+      ) : (
+        l = 0;
+        r = 0;
+      );
+      
+      l *= inv_ceiling;
+      r *= inv_ceiling;
+    ) : (
+      l = 0;
+      r = 0;
+    );
+  );
+  
+  function processBands()
+  local(BW2)
+  global( Drive1, Drive2, Drive3, Drive4, Drive5, 
+          Ceil1,  Ceil2,  Ceil3,  Ceil4,  Ceil5,
+          play1,  play2,  play3,  play4,  play5,
+          Mode1,  Mode2,  Mode3,  Mode4,  Mode5 )
+  instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5)
+  (
+    //F1, F2, F3, F4
+    b1.processBand(Drive1, Ceil1, play1, Mode1);
+    b2.processBand(Drive2, Ceil2, play2, Mode2);
+    b3.processBand(Drive3, Ceil3, play3, Mode3);
+    b4.processBand(Drive4, Ceil4, play4, Mode4);
+    b5.processBand(Drive5, Ceil5, play5, Mode5);
+  );
+  
+function drawShaper()
+  global( Drive1, Drive2, Drive3, Drive4, Drive5, 
+          Ceil1,  Ceil2,  Ceil3,  Ceil4,  Ceil5,
+          play1,  play2,  play3,  play4,  play5,
+          Mode1,  Mode2,  Mode3,  Mode4,  Mode5,
+          selectedBand
+          fft_out_r, fft_out_g, fft_out_b, fft_out_a )
+  instance(x, y, w, h, hm, calc)
+  local(steps, cx, dx, ds, s, ll, lr, drive, ceiling, mode, ol, or)
+  (
+    steps = 25;
+    s = -1;
+    dx = w / steps;
+    ds = 2 / steps;
+    hm = h - 2;
+    
+    ll = 0;
+    lr = 0;
+    cx = x;
+    gfx_set(fft_out_r, fft_out_g, fft_out_b, fft_out_a);
+    
+    drive = 5;
+    ceiling = 0;
+    ( selectedBand == 0 ) ? (
+      mode = Mode1;
+    ) : ( selectedBand == 1 ) ? (
+      mode = Mode2;
+    ) : ( selectedBand == 2 ) ? (
+      mode = Mode3;
+    ) : ( selectedBand == 3 ) ? (
+      mode = Mode4;
+    ) : ( selectedBand == 4 ) ? (    
+      mode = Mode5;
+    );
+    
+    calc.l = s;
+    calc.r = s;
+    calc.processBand(drive, ceiling, 1, mode);
+    ll = calc.l*.5 + .5;
+    lr = calc.r*.5 + .5;
+    loop( steps,
+      s += ds;
+      calc.l = s;
+      calc.r = s;
+      
+      calc.processBand(drive, ceiling, 1, mode);
+      ol = calc.l*.5 + .5;
+      or = calc.r*.5 + .5;
+      gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
+      gfx_line(cx, y+h-lr*hm, cx+dx, y+h-or*hm);
+      gfx_line(cx, y+h-ll*hm-1, cx+dx, y+h-ol*hm-1);
+      gfx_line(cx, y+h-lr*hm-1, cx+dx, y+h-or*hm-1);
+      
+      ll = ol;
+      lr = or;
+      cx += dx;
+    );
+  );  
 
 bpos=0;
 
@@ -1133,54 +1425,7 @@ solo5 ? play5 = 1;
   
       loc += 100;
       out
-    );
-
-  function F0(x, em2x)
-  local()
-  global()
-  instance()
-  (
-    x - log(2/(1 + em2x))
-  );
-  
-  function tanh_prec(x, em2x)
-  local() 
-  global()
-  instance()
-  (
-    (2/(1+em2x))-1
-  );
-  
-  function tanh(x)
-  local()
-  global()
-  instance()
-  (
-    (2/(1+exp(-2*x)))-1
-  );
-  
-  function antialiased_tanh_rect(x)
-  local(eps, em2x, F0_xn)
-  global(slider4)
-  instance(antialias, F0_xnm1, xnm1,diff)
-  (
-    354 < abs(x) ? (
-      antialias = sign(x);
-      x         = antialias * 354;
-      F0_xn     = 354 - log(2);
-    ) : (
-      em2x      = exp(-2*x);
-      F0_xn     = F0(x, em2x);
-      diff      = ( x - xnm1 );
-      eps       = 0.0000000001;
-      antialias = (abs(diff) > eps) ? ( F0_xn - F0_xnm1 ) / diff : tanh(.5*(x+xnm1));
-    );
-    
-    F0_xnm1   = F0_xn;
-    xnm1      = x;
-
-    antialias
-  ); 
+    ); 
 
   function fix_dc(x)
   local()
@@ -1486,50 +1731,7 @@ solo5 ? play5 = 1;
       b4.r   = RF4.lp;
       b5.r   = RF4.hp;
     );
-  );
-  
-  function processBand(drive, inceil, play)
-  global(antialiased_tanh_rect)
-  instance(l, r)
-  local(preamp, ceiling, inv_ceiling)
-  (
-    play ? (
-      preamp      = 10^(drive/20);
-      ceiling     = 10^(-inceil/20);
-      inv_ceiling = 10^(inceil/20);
-      
-      l *= preamp;
-      r *= preamp;
-      l *= ceiling;
-      r *= ceiling;
-      
-      l = this.ch0.antialiased_tanh_rect(l);
-      r = this.ch1.antialiased_tanh_rect(r);
-      //l = tanh(l);
-      //r = tanh(r);
-      
-      l *= inv_ceiling;
-      r *= inv_ceiling;
-    ) : (
-      l = 0;
-      r = 0;
-    );
-  );
-  
-  function processBands()
-  local(BW2)
-  global( Drive1, Drive2, Drive3, Drive4, Drive5, 
-          Ceil1,  Ceil2,  Ceil3,  Ceil4,  Ceil5,
-          play1,  play2,  play3,  play4,  play5 )
-  instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5)
-  (
-    //F1, F2, F3, F4
-    b1.processBand(Drive1, Ceil1, play1);
-    b2.processBand(Drive2, Ceil2, play2);
-    b3.processBand(Drive3, Ceil3, play3);
-    b4.processBand(Drive4, Ceil4, play4);
-    b5.processBand(Drive5, Ceil5, play5);
-  );
+  );  
   
   spectrumIn.feedSample(.5*(spl0+spl1));
 
@@ -1562,6 +1764,7 @@ solo5 ? play5 = 1;
     spectrumH = gfx_h - 150 * (1+scaling);
     spectrumIn.setWindowLocation(spectrumX,  spectrumY, spectrumW, spectrumH);
     spectrumOut.setWindowLocation(spectrumX, spectrumY, spectrumW, spectrumH);
+    shaperWnd.setWindowLocation(25*(1+scaling), spectrumH + 25*(1+scaling), 100*(1+scaling), 100*(1+scaling));
   );
 
   bg_color_r = 47/255;
@@ -1594,8 +1797,12 @@ solo5 ? play5 = 1;
   gfx_gradrect(0, 0, gfx_w, spectrumH, gfx_r, gfx_g, gfx_b, gfx_a, .0001, .0001, .0001, .0001, -.0001, -.0001, .0001, .0001);
   gfx_gradrect(0, 0, gfx_w, spectrumH, gfx_r, gfx_g, gfx_b, .3, .0001, .0001, .0006, .0001, -.0001, -.0001, .0001, .0001);
   gfx_gradrect(0, 0, gfx_w, spectrumH, 0, 0, 0, 0, 0, -.001, -.0006, .0001, -.0001, -.0001, .001, -.00008);
+  gfx_gradrect(0, spectrumH, gfx_w, gfx_h-spectrumH, 0, 0, .0, 1.0, .0001, .0001, .0002, 0, 0, 0, .0005, 0);
   
-  createGUI();
+  createGUI();  
+  
+  shaperWnd.drawBackface();
+  shaperWnd.drawShaper();
   
   gfx_r = 1;
   spectrumIn.drawGrid();
@@ -1615,3 +1822,9 @@ solo5 ? play5 = 1;
   gfx_y = 60;
   gfx_printf("ALL SLIDER MAPPINGS *WILL* CHANGE.");
   
+  gfx_x = gfx_w-130;
+  gfx_y = spectrumH + 15;
+  gfx_mode = 4;
+  !loaded ? loaded = gfx_loadimg(5, "./squashman2.png");
+  
+  gfx_blit(5, 3.2, 0);
