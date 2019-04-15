@@ -1,10 +1,13 @@
 desc:Filther
 tags: Filther
-version: 2.78
+version: 2.79
 author: Joep Vanlier
 changelog: 
-+ Added some mute time for filters that had a pop upon loading.
-+ Added steady state equilibration for crybaby upon loading.
++ Added frequencies on UI.
++ Added axes on the Gonio.
++ Added CTRL + CLICK for envelopes.
++ Added optional envelope looping when there is no input.
++ Added decibels on frequency scope (note that there is a slope on by default!).
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -225,17 +228,27 @@ danger_list2[1] = 1;
 danger_list2[2] = 1;
 danger_list2[3] = 1;
 
+file_var(0,envWindow1.autoloop);
+file_var(0,envWindow2.autoloop);
+
 @init
 function resetEnvelope(vel, hard)
   global()
-  instance(curTime, memory, curveMemory, cpos, cpos2, tn, tnm1, yn, ynm1, dy, invdx, cnode, triggering, curvel, curCurve)
-  local()
+  instance(curTime, memory, curveMemory, cpos, cpos2, tn, tnm1, yn, ynm1, dy, invdx, cnode, triggering, curvel, curCurve, autoloop)
+  local(go)
   (
-    ( triggering == 1 || hard ) ?
-    (
-      curTime   = 0;
+    // If we do not respond to MIDI triggers, only go on a full reset
+    ( ( triggering == 2 ) && ( hard == 1 ) ) ? (
+      go = 1;
+    // If we _do_ respond to MIDI triggers, respond only when it is *not* a hard reset
+    ) : ( ( triggering == 1 ) && ( hard == 0 ) ) ? ( 
+      go = 1 
+    ) : (go = 0);
+    
+    ( go == 1 ) ? (
+      curTime = 0;
       cpos      = memory;
-      cpos2     = curveMemory; 
+      cpos2     = curveMemory;
       tnm1      = 0;
       ynm1      = 0;
       tn        = cpos[];
@@ -404,7 +417,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.78";
+plugname = "FILTHER 2.79";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -1025,7 +1038,7 @@ local(fx, fy, wx, wx2, wy)
 
   gfx_set(filter_description_r, filter_description_g, filter_description_b, filter_description_a);
 
-  gfx_setfont(2, fontface, 12*retina_scaling);
+  gfx_setfont(5, fontface, 12*retina_scaling);
   ( filteridx == 0 ) ? (
     gfx_printf("OFF")
   ) : ( filteridx == 1 ) ? (
@@ -7587,7 +7600,7 @@ function groupWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in)
     a       = a_in;
     label   = label_in;
     
-    gfx_setfont(1, fontface, widgetFontSize*retina_scaling);
+    gfx_setfont(6, fontface, widgetFontSize*retina_scaling);
     gfx_measurestr(label, siz, jnk);
     
     x + 8 + siz
@@ -7604,7 +7617,7 @@ function groupWidget_draw()
     gfx_set( group_color_r, group_color_g, group_color_b, group_color_a );
     gfx_rect( x, y, w, h );
         
-    gfx_setfont(1, fontface, widgetFontSize*retina_scaling);    
+    gfx_setfont(6, fontface, widgetFontSize*retina_scaling);    
     gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
     gfx_measurestr(label, siz, jnk);
     gfx_x = x + 8;
@@ -7727,7 +7740,7 @@ function drawHint_draw()
   global()
   (
     ( hintTime > .99 ) ? (
-      gfx_setfont(1, fontface, 14*retina_scaling);
+      gfx_setfont(7, fontface, 14*retina_scaling);
       gfx_measurestr(currentHint,w,h);
       
       gfx_x = mouse_x+15;
@@ -7788,7 +7801,7 @@ function selectionButton_draw()
     gfx_line(x+w, y, x+w, y+h);
     gfx_line(x+1, y+h, x+w-1, y+h);
     gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
-    retina_scaling > 1 ? gfx_setfont(1, fontface, buttonFontSize*retina_scaling);
+    retina_scaling > 1 ? gfx_setfont(8, fontface, buttonFontSize*retina_scaling);
     gfx_measurestr(label, siz, jnk);
     gfx_x = x + .5 * (w-siz);
     gfx_y = y - .5*(jnk-h) + 1;
@@ -7802,7 +7815,7 @@ function selectionButton_linkbutton()
          font_color_r, font_color_g, font_color_b, font_color_a )
   instance(x, y, w, h, r, g, b, a, active, label, lastleft, htime)
   (
-    retina_scaling > 1 ? gfx_setfont(1, fontface, buttonFontSize*retina_scaling);
+    retina_scaling > 1 ? gfx_setfont(8, fontface, buttonFontSize*retina_scaling);
     gfx_measurestr(label, siz, jnk);
     gfx_x = x + .5 * (w-siz);
     gfx_y = y - .5*(jnk-h) + 1;
@@ -9087,14 +9100,15 @@ function setWindowLocation(_x, _y, _w, _h)
   );
 
 function drawGrid()  
-  global(   fftSize, srate,
+  global(   fftSize, srate, gfx_x, gfx_y,
             grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
-            backface_color_r, backface_color_g, backface_color_b, backface_color_a )
+            backface_color_r, backface_color_g, backface_color_b, backface_color_a,
+            font_color_r, font_color_g, font_color_b, font_color_a )
   instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset )
-  local(xx, i, wsc, N)
+  local(xx, i, wsc, N, xl)
   (    
     i = 0;
-    
+
     gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
     gfx_rect(x, y, w, h);
 
@@ -9106,21 +9120,48 @@ function drawGrid()
     
     i = 0;
     wsc = w/log(1+fftSize*0.5-hzoffset);
-    loop(21,
+    xl = x;
+    gfx_y = y+h+2;
+    
+    gfx_setfont(1);
+    loop(16,
       xx = x + log(1+i*fftSize/srate-hzoffset)*wsc;
+      gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(xx, y, xx, y+h);
-      i < 10 ? i += 2 :
-      i < 100 ? i += 20 :
-      i < 1000 ? i += 200 :
-      i < 10000 ? i += 2000 :
-      i < 100000 ? i += 20000;
+      
+      ( (xx - xl) > 30 ) ? (
+        gfx_set( 1, 1, 1, 1 );
+        gfx_x = xx+2;
+        gfx_line(xx, y+h, xx, y+h+7);
+        (i>999) ? (
+          gfx_printf("%dk", .001*i);
+        ) : (
+          gfx_printf("%d", i);
+        );
+        xl = xx;
+      );
+      
+      ( i < 100 ) ? (i += 20) :
+      ( i < 1000 ) ? (i += 200) :
+      ( i < 10000 ) ? (i += 2000) :
+      ( i < 100000 ) ? (i += 20000);
     );
     
+    gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
     N = 8;
     xx = y;
+    i = 0;
+    gfx_measurestr("8", wsc, xl);
     loop(N,
-      xx += h/8;
+      gfx_set( 1, 1, 1, 1 );
+      gfx_x = x+w-20;
+      gfx_y = xx-.5*xl;
+      i > 0 ? gfx_printf("-%d", 4.41*i*floorLevel/N);
+      
+      xx += h/N;
+      gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(x, xx, x+w, xx);
+      i += 1;
     );
   );
   
@@ -9408,7 +9449,45 @@ function drawGonioWindow(recPtr)
     gfx_line(x+w, y, x+w, y+h);
   );
   
-  
+function drawGonioTop()
+  global( fft_out_r, fft_out_g, fft_out_b, fft_out_a, gfx_x, gfx_y, fontface, widgetFontSize, retina_scaling )
+  instance(x, y, w, h, fw, fh)
+  local(r)
+  (
+    r = .25;
+    gfx_set(fft_out_r, fft_out_g, fft_out_b, fft_out_a);
+    gfx_line( x-r*w+.5*w, y-r*w+.5*h+2, x+r*w+.5*w, y+r*w+.5*h+2 );
+    gfx_line( x-r*w+.5*w, y+r*w+.5*h+2, x+r*w+.5*w, y-r*w+.5*h+2 );
+
+    gfx_setfont(9, fontface, 14*retina_scaling);
+        
+    r = .29;
+    gfx_measurestr("L", fw, fh);
+    gfx_x = x-r*w+.5*w - .5*fw;
+    gfx_y = y-r*w+.5*h+2 - .5*fh;
+    gfx_printf( "L" ); 
+    
+    gfx_measurestr("R", fw, fh);
+    gfx_x = x+r*w+.5*w - .5*fw;
+    gfx_y = y-r*w+.5*h+2 - .5*fh;
+    gfx_printf( "R" );
+    
+    gfx_measurestr("R", fw, fh);
+    gfx_x = x + 10;
+    gfx_y = y + .5*h - .5*fh;
+    gfx_printf( "+S" ); 
+    
+    gfx_measurestr("R", fw, fh);
+    gfx_x = x + w - 10 - fw;
+    gfx_y = y + .5*h - .5*fh;
+    gfx_printf( "-S" );
+    
+    gfx_measurestr("M", fw, fh);
+    gfx_x = x + .5*w - .5*fw;
+    gfx_y = y + 5;
+    gfx_printf( "M" );
+  );
+
 function gonio_processMouse(mouse_x, mouse_y, mouse_cap)
   instance(x, y, w, h, ly, lcap, cap)
   local(over)
@@ -9755,7 +9834,7 @@ function updateEnvelopeSpeed()
   ); 
  
 function updateToggles()
-  instance(soften, midiTrigger, midiVel, snap, softening, triggering, useVelocities, snapping)
+  instance(soften, midiTrigger, midiVel, aLoop, snap, softening, triggering, useVelocities, snapping, autoloop)
   global()
   local()
   (
@@ -9763,11 +9842,13 @@ function updateToggles()
     !triggering     ? ( triggering = 1; midiTrigger.active = 1; );
     !useVelocities  ? ( useVelocities = 1; midiVel.active = 1; );
     !snapping       ? ( snapping = 2; snap.active == 0; );
+    !autoloop       ? ( autoloop = 2; aLoop.active = 0; );
     
     soften.active == 1      ? softening = 1 : softening = 2;
     midiTrigger.active == 1 ? triggering = 1 : triggering = 2;
     midiVel.active == 1     ? useVelocities = 1 : useVelocities = 2;
     snap.active == 1        ? snapping = 1 : snapping = 0;
+    aLoop.active == 1       ? autoloop = 1 : autoloop = 2;
   ); 
  
 function resetEnvelopeCurve()
@@ -9885,8 +9966,8 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_
           widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a,)
   instance(memory, curveMemory, nodes, thisUI, x, y, w, h, h_graph, h_total, invsrate, cpos, loopStart, loopEnd, loopType, ispeed, division, title,
            speedSlider, offset, zoom,
-           soften, midiTrigger, midiVel, snap, clear, random,
-           softening, triggering, useVelocities, snapping, wR, wG, wB, wA )
+           soften, midiTrigger, aLoop, midiVel, snap, clear, random,
+           softening, triggering, autoloop, useVelocities, snapping, wR, wG, wB, wA )
   local(xptr, bw, bh, cx)
   (
     wR = in_wR;
@@ -9907,12 +9988,11 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_
 
     soften.selectionButton(x+.5*bw, y-.5*bh, 2*bw, bh, "SOFT", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Soften envelope");
     midiTrigger.selectionButton(x+2.8*bw, y-.5*bh, 2*bw, bh, "TRIG", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Trigger on MIDI note");
-    midiVel.selectionButton(x+5.1*bw, y-.5*bh, 2*bw, bh, "VEL", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use MIDI Velocity");
-    snap.selectionButton(x+7.4*bw, y-.5*bh, 2*bw, bh, "SNAP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Snap to grid");
-    clear.selectionButton(x+9.7*bw, y-.5*bh, 2*bw, bh, "RESET", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Clear envelope back to standard");
-    random.selectionButton(x+12*bw, y-.5*bh, 2*bw, bh, "RAND", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Randomize envelope");
-    
-//    envelope1.resetEnvelopeCurve()
+    aLoop.selectionButton(x+5.1*bw, y-.5*bh, 2*bw, bh, "LOOP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "When reaching loop, loop independent of note status");
+    midiVel.selectionButton(x+7.4*bw, y-.5*bh, 2*bw, bh, "VEL", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use MIDI Velocity");
+    snap.selectionButton(x+9.7*bw, y-.5*bh, 2*bw, bh, "SNAP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Snap to grid");
+    clear.selectionButton(x+12*bw, y-.5*bh, 2*bw, bh, "RESET", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Clear envelope back to standard");
+    random.selectionButton(x+14.3*bw, y-.5*bh, 2*bw, bh, "RAND", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Randomize envelope");
     
     soften.style = 2;
     midiTrigger.style = 2;
@@ -9920,6 +10000,7 @@ function initEnvelope(x_in, y_in, w_in, h_in, envelopeMemory, typeMemory, nodes_
     snap.style = 2;
     clear.style = 2;
     random.style = 2;
+    aloop.style = 2;
     this.updateToggles();
     
     speedSlider.sliderWidget(x+2, y + h_graph - .5*cx*h_in, .9*w, 2*cx*h_in, "", widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a, 0, 0, 1, .36, " ", 0, "Envelope length (measures)");
@@ -9995,7 +10076,7 @@ function drawEnvelopeWindow()
           gfx_x, gfx_y, gfx_mode )
   instance(x, y, w, h, h_graph, h_total, nodes, memory, curveMemory, curTime, loopStart, loopEnd, grabbed, over, title, division,
            x4_1, x4_2, x4_3, x4_4, x3_1, x3_2, x5, bw, bh, offset, zoom, speedSlider, wR, wG, wB, wA, 
-           soften, midiTrigger, midiVel, snap, highlighted,
+           soften, midiTrigger, aLoop, midiVel, snap, highlighted,
            clear, random)
   local(xptr, xptr2, ctype, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx, idx, idt, tc, t, t2, t3, y1, y2
         lps, lpe, xmax)
@@ -10182,6 +10263,7 @@ function drawEnvelopeWindow()
     snap.selectionButton_draw();
     clear.selectionButton_draw();
     random.selectionButton_draw();
+    aLoop.selectionButton_draw();
   ); 
  
  
@@ -10310,11 +10392,31 @@ function getEnvY(idx)
     xptr[]
   );  
  
-N_CURVES = 3;
+N_CURVES = 3; 
+ 
+function rotateCurves(cidx, my)
+  instance(curveMemory, cy)
+  local(chg)
+  global(N_CURVES)
+  (
+    chg = .1*(cy - my);
+    // Toggle curves
+    (chg > 1) ?
+    (
+      curveMemory[cidx] += 1;
+      cy = my;
+    ) : (chg < -1) ? (
+      curveMemory[cidx] -= 1;
+      cy = my;
+    );
+    
+    ( curveMemory[cidx] > N_CURVES ) ? curveMemory[cidx] = 0;
+    ( curveMemory[cidx] < 0 ) ? curveMemory[cidx] = N_CURVES;  
+  ); 
  
 function processMouse()
   instance(x, y, w, h, h_graph, nodes, memory, curveMemory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
-           speedSlider, soften, midiTrigger, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime, clear, random )
+           speedSlider, soften, midiTrigger, aLoop, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime, clear, random )
   local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx, now)
   global(mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y, dbl, N_CURVES)
   (
@@ -10355,14 +10457,29 @@ function processMouse()
             // Nothing grabbed?
             ( grabbed == 0 ) ? (
               (mouse_cap & 16) ? (
-                grabbed = -4;
-                cidx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
-                cy = my;
+                (mouse_cap & 4) ? (
+                  grabbed = -5;
+                  cidx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
+                  cy = my;
+                ) : (
+                  grabbed = -4;
+                  cidx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
+                  cy = my;
+                );
               ) : ( (now - lastLeftTime) < .3 ) ? (
                 // Double click? Change envelope shape
                 idx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
                 curveMemory[idx] += 1;
                 ( curveMemory[idx] > N_CURVES ) ? curveMemory[idx] = 0;
+                
+                // Control held, change all of them.
+                (mouse_cap & 4) ? (
+                  xptr = curveMemory;
+                  loop(N_CURVES,
+                    xptr[] = curveMemory[cidx];
+                    xptr += 1;
+                   );
+                );
                 
                 dbl = idx;
               ) : (
@@ -10385,24 +10502,25 @@ function processMouse()
         );
         ex = min(max(0.001,ex),1-.001);
         this.setEnvPt( grabbed, ex, ey );
+      ) : ( grabbed == -5 ) ? (
+        // Changing all curve shapes
+        this.rotateCurves(cidx, my);
+        xptr = curveMemory;
+        loop(N_CURVES,
+          xptr[] = curveMemory[cidx];
+          xptr += 1;
+        );
       ) : ( grabbed == -4 ) ?
       (
-        (.1*(cy - my) > 1) ?
-        (
-          curveMemory[cidx] += 1;
-          cy = my;
-        ) : (.1*(cy - my) < -1) ? (
-          curveMemory[cidx] -= 1;
-          cy = my;
-        );
-                
-        ( curveMemory[cidx] > N_CURVES ) ? curveMemory[cidx] = 0;
-        ( curveMemory[cidx] < 0 ) ? curveMemory[cidx] = N_CURVES;
+        // Change one curve shape
+        this.rotateCurves(cidx, my);
       ) : ( grabbed == -3 ) ? 
       (
+        // Pan
         offset = min( zoom-1, max( 0, offset - this.envTrafoX(mx) + this.envTrafoX(lx) ) );
       ) : ( grabbed == -2 ) ?
-      (     
+      (
+        // Move loop end
         ex = this.envTrafoX(mx);
         ( snapping == 1 ) ? ex = floor(ex * cuts + .5) / cuts;
         
@@ -10410,6 +10528,7 @@ function processMouse()
         loopStart = ex;
       ) : ( grabbed == -1 ) ?
       (
+        // Move loop start
         ex = this.envTrafoX(mx);
         ( snapping == 1 ) ? ex = floor(ex * cuts + .5) / cuts;
         
@@ -10419,17 +10538,6 @@ function processMouse()
     ) : (
       grabbed = 0;
     );
-    
-    /*
-    gfx_x = 0;
-    gfx_y = y-10;
-    idx = 0;
-    loop(nodes,
-      gfx_printf( "%d", curveMemory[idx] );
-      gfx_x += 10;
-      idx += 1;
-    );
-    */
     
     ( right > 0 ) ?
     (
@@ -10465,6 +10573,7 @@ function processMouse()
     midiTrigger.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
     midiVel.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
     snap.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    aLoop.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
     
     clear.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
       this.resetEnvelopeCurve();
@@ -10523,7 +10632,7 @@ function calcEnvelope(t)
 
 function evaluateEnvelope(notesOn)
   global(test, env_buf1)
-  instance(ret, curTime, invsrate, cpos, cpos2, memory, curveMemory, tn, tnm1, yn, ynm1, dy, invdx, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel, curCurve)
+  instance(autoloop, triggering, ret, curTime, invsrate, cpos, cpos2, memory, curveMemory, tn, tnm1, yn, ynm1, dy, invdx, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel, curCurve)
   local(xptr,t2, t3, tmp)
   (
     //ret = this.calcEnvelope(curTime);
@@ -10567,8 +10676,10 @@ function evaluateEnvelope(notesOn)
       
       ( useVelocities == 1 ) ? ret = curvel * ret;
       
+      
+      
       curTime = curTime + invsrate;
-      ( notesOn && (curTime > loopEnd) ) ? ( 
+      ( (((triggering == 1) && notesOn) || (autoloop == 1)) && (curTime > loopEnd) ) ? ( 
         curTime = loopStart; 
         cnode = 0; 
         cpos = memory; 
@@ -14658,7 +14769,7 @@ updateActiveFilters(1);
     ang2 += (2/3)*$pi;
     gfx_arc(x, y, t3, ang2 - range, ang2 + range );
     
-    gfx_setfont(1, fontface, 10*retina_scaling);
+    gfx_setfont(2, fontface, 10*retina_scaling);
     gfx_measurestr( "FILTHER", t1, t2 );
     gfx_x = x + 18*retina_scaling;
     gfx_y = y - .5*t2;
@@ -14724,10 +14835,10 @@ updateActiveFilters(1);
       window3.draw_buffer(dynBuf.scopeptr, dynBuf.scopebuffer, dynBuf.scopebuffermax, 1); 
     );  
       
-    retina_scaling > 1 ? gfx_setfont(1, fontface, 10*retina_scaling) : gfx_setfont(0);
+    retina_scaling > 1 ? gfx_setfont(3, fontface, 10*retina_scaling) : gfx_setfont(0);
     window3.draw_dynamics(dyn_thresh);
     
-    retina_scaling > 1 ? gfx_setfont(1, fontface, 10*retina_scaling) : gfx_setfont(0);
+    retina_scaling > 1 ? gfx_setfont(3, fontface, 10*retina_scaling) : gfx_setfont(0);
     //window3.draw_text("Dynamics", .025, .025);
     
     // Display spectra
@@ -14824,6 +14935,7 @@ updateActiveFilters(1);
       gonioIn.drawGonioWindow();
       gonioIn.drawGonioMeter(0);
       gonioOut.drawGonioMeter(1);
+      gonioIn.drawGonioTop();
       gonioOut.gonio_processMouse(mouse_x, mouse_y, mouse_cap);      
     );
     
@@ -15498,7 +15610,7 @@ updateActiveFilters(1);
       gfx_x = 10;
       gfx_y = 2*helpy;
       
-      gfx_setfont(1, fontface, 15*retina_scaling);
+      gfx_setfont(4, fontface, 15*retina_scaling);
       gfx_set( .7, .7, .9, .8 ); gfx_x = helpx; 
       gfx_printf( "F1 - Help" ); gfx_x = helpx; gfx_y += helpy;
       gfx_printf( "SHIFT + R - Randomize everything" ); gfx_x = helpx; gfx_y += helpy;
