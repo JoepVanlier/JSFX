@@ -1,13 +1,10 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.08
+version: 0.1
 author: Joep Vanlier
 changelog: 
-+ Added logo (Squashman!)
-+ Fixed band removal frequency recalculation
-+ Added basic "cheapo" shapers
-+ Added various shapers based on fitted amp model curves (order may still change)
-+ Added wavefolders
++ Added frequency axis. 
++ Added more distortion modes (some grittier crossovers (overdrive these!)
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -58,6 +55,7 @@ driveLocation     = 7;
 ceilLocation      = 13;
 modeLocation      = 19;
 
+/* Shift slider data right (for different bands) */
 function shiftRight(loc, fromIdx, numElements)
   local(midx)
   global()
@@ -69,6 +67,7 @@ function shiftRight(loc, fromIdx, numElements)
     );
   );
 
+/* Shift slider data left  (for different bands) */
 function shiftLeft(loc, fromIdx, numElements)
   local(midx)
   global()
@@ -80,6 +79,7 @@ function shiftLeft(loc, fromIdx, numElements)
     );
   );
 
+/* Make room for a new band in the slider data */
 function addBand(idx)
   local(midx)
   instance()
@@ -91,6 +91,7 @@ function addBand(idx)
     cuts = cuts + 1;
   );
   
+/* Remove a band and move other slider data accordingly */  
 function remBand(idx)
   local(midx)
   instance()
@@ -102,6 +103,20 @@ function remBand(idx)
     cuts = cuts - 1;
   );  
   
+/* Strings for the comboboxes */
+function comboStrings(stridx, curitem)
+  local(str)
+  global()
+  instance()
+  (
+    str = "";
+    (stridx == 1) ?
+    (
+      "Tanh"
+    )
+  );
+
+/* Feed sample to FFT */
 function feedSample(sample)
   global(fftSize)
   instance(recPtr, window, rStart, rEnd, fftLoc)
@@ -111,6 +126,7 @@ function feedSample(sample)
     recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
   );
 
+/* Initialize FFT windowing function */
 function initWindow(windowtype)
   global(fftSize)
   instance(recPtr, window, rStart, rEnd, fftLoc)
@@ -141,7 +157,8 @@ function setToFFTLoc()
  ( 
     recPtr = rStart + fftSize;
  ); 
-  
+
+/* Calculate current spectrum */
 function calcFFT()
   global(fftSize)
   instance(recPtr, window, rStart, rEnd, fftLoc, slope, yshift)
@@ -187,33 +204,7 @@ function calcFFT()
     );
   );  
 
-function calcIncrementalFFT()
-  global(fftSize)
-  instance(recPtr, window, rStart, rEnd, fftLoc, mxpos, lastpeak)
-  local(mx, buf1, buf2, buf3, yOut, i, ty, buf4, buf5, mf, c, x0, y1, y2, y3, mxtmp, sum, N_use, peak, tpeak)
-  (
-    buf1=recPtr-fftSize;
-    buf1<rStart ? buf1+=(rEnd-rStart);
-    buf2=window;
-    buf3=fftLoc;
-    loop(fftSize/2 + 1,
-      buf3[] = buf1[]*buf2[];
-      buf3+=1;
-    
-      buf2+=1;
-      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
-    );
-    buf2-=1;
-    loop(fftSize/2 - 1,
-      buf3[] = buf1[]*(buf2-=1)[];
-      buf3+=1;
-      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
-    );
-    
-    fft_real(fftLoc,fftSize);
-    fft_permute(fftLoc,fftSize/2);
-  );
-
+/* Set location of a window */
 function setWindowLocation(_x, _y, _w, _h)
   global()
   instance(x, y, w, h, cap)
@@ -225,6 +216,7 @@ function setWindowLocation(_x, _y, _w, _h)
     h = _h;
   );
 
+// Draws the basic box for the FFT
 function drawBackface()
   instance(x, y, w, h)
   global(backface_color_r, backface_color_g, backface_color_b, backface_color_a,
@@ -241,32 +233,60 @@ function drawBackface()
     gfx_line(x+w, y, x+w, y+h);
   );
 
+// Draws the FFT Grid, frequency axis and dB axis
 function drawGrid()  
-  global(   fftSize, srate,
+  global(   fftSize, srate, gfx_x, gfx_y,
              )
-  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset )
-  local(xx, i, wsc, N)
+  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset,
+           grid_color_r, grid_color_g, grid_color_b, grid_color_a )
+  local(xx, i, wsc, N, xl)
   (    
-    i = 0;
     this.drawBackface();
     
     i = 0;
     wsc = w/log(1+fftSize*0.5-hzoffset);
-    loop(21,
+    xl = x;
+    gfx_y = y+h+2;
+    
+    gfx_setfont(1, "Arial", 14);
+    loop(16,
       xx = x + log(1+i*fftSize/srate-hzoffset)*wsc;
+      gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(xx, y, xx, y+h);
-      i < 10 ? i += 2 :
-      i < 100 ? i += 20 :
-      i < 1000 ? i += 200 :
-      i < 10000 ? i += 2000 :
-      i < 100000 ? i += 20000;
+      
+      ( (xx - xl) > 30 ) ? (
+        gfx_set( 1, 1, 1, 1 );
+        gfx_x = xx+2;
+        gfx_line(xx, y+h, xx, y+h+7);
+        (i>999) ? (
+          gfx_printf("%dk", .001*i);
+        ) : (
+          gfx_printf("%d", i);
+        );
+        xl = xx;
+      );
+      
+      ( i < 100 ) ? (i += 20) :
+      ( i < 1000 ) ? (i += 200) :
+      ( i < 10000 ) ? (i += 2000) :
+      ( i < 100000 ) ? (i += 20000);
     );
     
+    gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
     N = 8;
     xx = y;
+    i = 0;
+    gfx_measurestr("8", wsc, xl);
     loop(N,
-      xx += h/8;
+      gfx_set( 1, 1, 1, 1 );
+      gfx_x = x+w-20;
+      gfx_y = xx-.5*xl;
+      i > 0 ? gfx_printf("-%d", 4.41*i*floorLevel/N);
+      
+      xx += h/N;
+      gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(x, xx, x+w, xx);
+      i += 1;
     );
   );
   
@@ -490,24 +510,24 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       /* Drag drive */
       ) : ( h1.isOver(mouse_x, mouse_y) ) ? (
         h1.over = 1;
-        leftClick ? ( cap = 3; dragging = 1; );
-        doubleClick ? ( drive1 = 0; );
+        leftClick ? ( cap = 3; dragging = 1; selectedBand = 0; );
+        doubleClick ? ( drive1 = 0; selectedBand = 0; );
       ) : ( h2.isOver(mouse_x, mouse_y) ) && ( cuts > 0 ) ? (
-        h2.over = 1;      
-        leftClick ? ( cap = 3; dragging = 2; );
-        doubleClick ? ( drive2 = 0; );
+        h2.over = 1;
+        leftClick ? ( cap = 3; dragging = 2; selectedBand = 1; );
+        doubleClick ? ( drive2 = 0; selectedBand = 1;);
       ) : ( h3.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
         h3.over = 1;
-        leftClick ? ( cap = 3; dragging = 3; );
-        doubleClick ? ( drive3 = 0; );
+        leftClick ? ( cap = 3; dragging = 3; selectedBand = 2; );
+        doubleClick ? ( drive3 = 0; selectedBand = 2; );
       ) : ( h4.isOver(mouse_x, mouse_y) ) && ( cuts > 2 ) ? (
         h4.over = 1;
-        leftClick ? ( cap = 3; dragging = 4; );
-        doubleClick ? ( drive4 = 0; );
+        leftClick ? ( cap = 3; dragging = 4; selectedBand = 3; );
+        doubleClick ? ( drive4 = 0; selectedBand = 3; );
       ) : ( h5.isOver(mouse_x, mouse_y) ) && ( cuts > 3 ) ? (
         h5.over = 1;
-        leftClick ? ( cap = 3; dragging = 5; );
-        doubleClick ? ( drive5 = 0; );
+        leftClick ? ( cap = 3; dragging = 5; selectedBand = 4; );
+        doubleClick ? ( drive5 = 0; selectedBand = 4; );
         
       /* Handle clicks within the bands (creating a new band or selecting a band) */
       ) : ( overRect( h1.x, y, h1.w, h, mouse_x, mouse_y ) ) ? (
@@ -1020,6 +1040,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
       .025864 * lambda * lambertExpApprox( lambda * beta * sample + delta ) - alpha * sample
     );  
   
+  
+  /* TO DO: Merge crossovers with control */
   function processBand(drive, inceil, play, mode)
   global(antialiased_tanh_rect)
   instance(l, r)
@@ -1041,16 +1063,19 @@ function initSpectrum(memoryOffset, fftSize, srate)
         l = tanh(l);
         r = tanh(r);
       ) : ( mode == 1 ) ? (
+        /* Tanh */
         l = .5*l;
         r = .5*r;
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
       ) : ( mode == 2 ) ? (
+        /* Smooth */
         l = 1.399 * l;
         r = 1.399 * r;
         l = sign(l)*(1-exp(-abs(l)));
         r = sign(r)*(1-exp(-abs(r)));
       ) : ( mode == 3 ) ? (
+        /* Rapid saturation */
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
       
@@ -1059,6 +1084,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
         t = r*r;
         r = r - 0.17 * t - 0.17 * t*r;
       ) : ( mode == 4 ) ? (
+        /* Asymmetric */
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
         
@@ -1067,6 +1093,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
         t = r*r;
         r = 1.23950091*r/(1+0.89322598*abs(r)-2.07339946*t+1.43974791*abs(r)*t);
       ) : ( mode == 5 ) ? (
+        /* Almost linear */
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
         
@@ -1075,6 +1102,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
         t = r*r;
         r = 0.55054001*r/(1-1.27438856*abs(r)+0.84846189*t-0.01720815*abs(r)*t);
       ) : ( mode == 6 ) ? (
+        /* Crossover distortion */
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
         
@@ -1082,22 +1110,70 @@ function initSpectrum(memoryOffset, fftSize, srate)
         l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(-13.09587456*t));
         t = r*r;
         r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(-13.09587456*t));
-      ) : ( mode == 7 ) ? (
-        l = sin(1.5*l);
-        r = sin(1.5*r);
+      ) : ( mode == 7 ) ? ( 
+        /* Chunky crossover distortion */
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+        
+        t = l*l;
+        l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(-4.09587456*t));
+        t = r*r;
+        r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(-4.09587456*t));
       ) : ( mode == 8 ) ? (
+        /* Heavy crossover distortion */
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+        
+        t = l*l;
+        l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-sin(15*t)*exp(-6.09587456*t));
+        t = r*r;
+        r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-sin(15*t)*exp(-6.09587456*t));
+      ) : ( mode == 9 ) ? (
+        /* Very heavy crossover distortion */
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+        
+        t = l*l;
+        l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-sin(45*t)*sin(5*l)*exp(-5.09587456*t));
+        t = r*r;
+        r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-sin(45*t)*sin(5*r)*exp(-5.09587456*t));
+      ) : ( mode == 10 ) ? (
+        /* Sine */
         l = sin(1.5*l);
         r = sin(1.5*r);
-      ) : ( mode == 9 ) ? (
+      ) : ( mode == 11 ) ? (
+        /* Octaver up */
+        //l = 2*sin(1.5*l)*sin(1.5*l)-1;
+        //r = 2*sin(1.5*r)*sin(1.5*r)-1;
+        l = 2*abs(l)-0.5; // <== This dip automateable?
+        r = 2*abs(r)-0.5;
+        l = 1.399 * l;
+        r = 1.399 * r;
+        l = sign(l)*(1-exp(-abs(l)));
+        r = sign(r)*(1-exp(-abs(r)));
+      ) : ( mode == 12 ) ? (
+        /* Fuzz */
+        l = l + .5;
+        r = r + .5;
+        ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+        ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+      
+        t = l*l;
+        l = l - 0.17 * t - 0.17 * t*l;
+        t = r*r;
+        r = r - 0.17 * t - 0.17 * t*r;
+      ) : ( mode == 13 ) ? (
+        /* Wavefolder */
         this.ch0.folder_init(0, 1);
         this.ch1.folder_init(0, 1);
-        l = -this.ch0.folder_eval(l);
+        l = -this.ch0.folder_eval(l );
         t = l*l;
         l = l / (1+t*t);
         r = -this.ch1.folder_eval(r);
         t = r*r;
         r = r / (1+t*t);
-      ) : ( mode == 10 ) ? (
+      ) : ( mode == 14 ) ? (
+        /* Serge wavefolder */
         this.ch0.folder_init(0, 1);
         this.ch1.folder_init(0, 1);
         l = -this.ch0.folder_eval(l);
