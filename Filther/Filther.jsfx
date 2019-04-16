@@ -1,13 +1,9 @@
 desc:Filther
 tags: Filther
-version: 2.79
+version: 2.80
 author: Joep Vanlier
 changelog: 
-+ Added frequencies on UI.
-+ Added axes on the Gonio.
-+ Added CTRL + CLICK for envelopes.
-+ Added optional envelope looping when there is no input.
-+ Added decibels on frequency scope (note that there is a slope on by default!).
++ Increased node range a little bit and added some visual feedback of when the cursor is in range.
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -417,7 +413,7 @@ MAXBUFFERSIZE = MAXOVERSAMPLING*10000;
 
 !gfx_ext_retina ? gfx_ext_retina = 1;
 
-plugname = "FILTHER 2.79";
+plugname = "FILTHER 2.80";
 //fontface = "Sans Serif";
 fontface = "Arial";
 newUI = 1;
@@ -7220,15 +7216,16 @@ function evalSplineAudioDiff(x)
 
 // Plot the spline nodes
 function plot_spline(x, y, w, h)
-  instance(ldyn, ldyn2, ldyn3, ldyn4, N_gfx, splineIdx, xloc_gfx, yloc_gfx, indices, cap_mode, drag_node)
+  instance(ldyn, ldyn2, ldyn3, ldyn4, N_gfx, splineIdx, xloc_gfx, yloc_gfx, indices, cap_mode, drag_node,
+           hoveridx, hoverSize)
   local(dhere, xx, res, lastx, lasty, dx, yout, nx, ny, epsx, epsy, xc, yc, yout,
         ptr_from_X, ptr_from_Y, ptr_from_Z, ptr_to_X, ptr_to_Y, ptr_to_Z)
   global(block_analyzers, gfx_x, gfx_y, distortPlot, slider56, dynval, distortionDynamics
          spline_r, spline_g, spline_b, spline_a
          dyn_color_r, dyn_color_g, dyn_color_b, dyn_color_a)
   (
-    epsx = 6;
-    epsy = 6;
+    epsx = 5;
+    epsy = 5;
     ptr_from_X = xloc_gfx;
     ptr_from_Y = yloc_gfx;
     ptr_from_Z = indices;
@@ -7237,10 +7234,17 @@ function plot_spline(x, y, w, h)
     gfx_x = 0;
     gfx_y = 0;
     ( slider56 == 0 ) ? (
+      ( hoveridx > -1 ) ? (
+        xc = x + w*ptr_from_X[hoveridx] - epsx;
+        yc = y + h*(1-ptr_from_Y[hoveridx]) - epsy;
+        gfx_circle(floor(xc+.5*epsx+1), floor(yc+.5*epsx)+1, hoverSize);
+      );
+    
       loop(N_gfx,
         xc = x + w*ptr_from_X[] - epsx;
         yc = y + h*(1-ptr_from_Y[]) - epsy;
-        gfx_rect(xc+.5*epsx-1, yc+.5*epsx-1, epsx, epsy);
+        gfx_rect(floor(xc+.5*epsx-1), floor(yc+.5*epsx-1), epsx, epsy);        
+        
         gfx_x = xc;
         gfx_y = yc-14;
         gfx_printf("%d", ptr_from_Z[]);
@@ -7432,7 +7436,7 @@ function findNearest(x, y)
      );
              
     // Found a point, then we change the capture mode
-    ( minDist < .001 ) ? ( drag_node = best; ) : -1;
+    ( minDist < .0015 ) ? ( drag_node = best; ) : -1;
 );
 
 //NODE_PROXIMITY = 5;
@@ -7476,8 +7480,9 @@ function addNode(x, y)
 
 //NODE_PROXIMITY = 5;
 function processMouse(x, y, dx, dy, mc, lmc, th)
-  instance(offs, N_gfx, splineIdx, indices, cap_mode, drag_node)
-  local(left, right, lastleft, lastright, i, numberloc)
+  instance(offs, N_gfx, splineIdx, indices, cap_mode, drag_node,
+           hoveridx, hoverSize)
+  local(left, right, lastleft, lastright, i, numberloc, nearest)
   global(manipulateXYSliders, gfx_x, gfx_y, slider35, maxNodes)
   (
     left      = mc & 1;
@@ -7486,12 +7491,19 @@ function processMouse(x, y, dx, dy, mc, lmc, th)
     lastright = lmc & 2;
   
     numberloc = 14/th;
+    
+    nearest = this.findNearest(x,y);
+    ( nearest > -1 ) ? (
+      hoverIdx = nearest;
+      hoverSize += .5 * (8-hoverSize);
+    ) : hoverSize = .75*hoverSize;
+    
     ( left ) ? 
     (
       ( cap_mode == 0 && !lastleft ) ?
       (
         drag_node = -1;
-        this.findNearest(x, y) > -1 ? offs = 0;
+        this.findNearest(x,y) > -1 ? offs = 0;
         this.findNearest(x, y+numberloc) > -1 ? offs = numberloc;
         ( drag_node > -1 ) ? ( drag_node = indices[drag_node]; cap_mode = 1; )
       ) : ( cap_mode == 1 ) ? (
@@ -7506,7 +7518,7 @@ function processMouse(x, y, dx, dy, mc, lmc, th)
         ( cap_mode == 0 ) ?
         (
           drag_node = -1;
-          this.findNearest(x, y);
+          this.findNearest(x,y);
           this.findNearest(x, y+numberloc);
           
           // Are we clicking an existing one?
@@ -10077,7 +10089,7 @@ function drawEnvelopeWindow()
   instance(x, y, w, h, h_graph, h_total, nodes, memory, curveMemory, curTime, loopStart, loopEnd, grabbed, over, title, division,
            x4_1, x4_2, x4_3, x4_4, x3_1, x3_2, x5, bw, bh, offset, zoom, speedSlider, wR, wG, wB, wA, 
            soften, midiTrigger, aLoop, midiVel, snap, highlighted,
-           clear, random)
+           clear, random, hoveridx, hoverSize )
   local(xptr, xptr2, ctype, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx, idx, idt, tc, t, t2, t3, y1, y2
         lps, lpe, xmax)
   (    
@@ -10108,6 +10120,11 @@ function drawEnvelopeWindow()
     xptr2 = curveMemory;
     tnm1 = - w*offset;
     ynm1 = 0;
+    
+    (hoveridx > 0 && hoveridx < (nodes-1)) ? (
+      gfx_circle(x+zoom*xptr[2*(hoveridx-1)]*xs - xs*offset, ym-xptr[2*(hoveridx-1)+1]*ys-1, hoverSize);
+    );
+    
     loop(nodes-1,
       tn = zoom*xptr[]*xs - xs*offset; xptr += 1;
       yn = xptr[]*ys; xptr += 1;
@@ -10305,17 +10322,20 @@ function enviTrafoY(my)
     my = ym - my*(h-4)
   );   
  
+envelopeDist = 0.15; 
+ 
 function selectEnvelopePoint(ex, ey)
-  instance(x, y, w, h, nodes, memory, zoom)
+  instance(x, y, w, h, ar, nodes, memory, zoom)
   local(xptr, dx, dy, ndist, dist, i, cur)
   (
     xptr = memory;
     dist = 10000000000000000;
     cur = 0;
     i = 0;
+    ar = w/h;
     loop(nodes,
       i += 1;
-      dx = (ex - xptr[])*zoom;
+      dx = (ex - xptr[])*zoom*ar;
       xptr += 1;
       dy = ey - xptr[];
       xptr += 1;
@@ -10328,7 +10348,7 @@ function selectEnvelopePoint(ex, ey)
       );
     );
     
-    (dist < 0.05) ? cur : -1;
+    (dist < envelopeDist) ? cur : -1;
   );
   
 function selectEnvelopePointByX(ex)
@@ -10416,9 +10436,10 @@ function rotateCurves(cidx, my)
  
 function processMouse()
   instance(x, y, w, h, h_graph, nodes, memory, curveMemory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
-           speedSlider, soften, midiTrigger, aLoop, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime, clear, random )
+           speedSlider, soften, midiTrigger, aLoop, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime, clear, random,
+           hoveridx, hoverSize )
   local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx, now)
-  global(mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y, dbl, N_CURVES)
+  global(retina_scaling, mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y, dbl, N_CURVES)
   (
     mx = mouse_x;
     my = mouse_y;
@@ -10437,6 +10458,17 @@ function processMouse()
     
     // If nearest is not close enough, reset selection
     min(ex,ey) > 10/zoom ? over = 0;
+    
+    // Check if we are close to an envelope
+    ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+    (
+      idx = this.selectEnvelopePoint(this.envTrafoX(mx), this.envTrafoY(my));
+      ( idx > 0 ) ? 
+      (
+        hoveridx = idx;
+        hoverSize += .5 * (8*retina_scaling-hoverSize);
+      ) : ( hoverSize = .75*hoverSize; );
+    ) : ( hoverSize = .75*hoverSize; );
     
     time_precise(now);
     cuts = 1;
