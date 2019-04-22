@@ -1,0 +1,291 @@
+desc:Tight Compressor
+tags: Tight Compressor
+version: 0.05
+author: Joep Vanlier
+changelog: 
++ Started work...
+
+Copyright (C) 2019 Joep Vanlier
+License: MIT
+Based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
+
+slider1:Treshold1=-20<-60,0,.1>Threshold (dB)
+slider2:Ratio1=.85<0,2,.0001>Ratio (-)
+slider3:Attack1=25<0,300,1>Attack (ms)
+slider4:Decay1=50<0,300,1>Decay (ms)
+slider5:Knee1=0<0,30,0.1>Knee (dB)
+slider6:MakeUp1=0<0,1,1{No,Yes}>Auto make-up gain
+slider7:PreGain=0<-24,12,0.01>Pre-Gain
+slider8:PostGain=0<-24,12,0.01>Post-Gain
+slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
+
+@init
+/* Set location of a window */
+function setWindowLocation(_x, _y, _w, _h)
+  global()
+  instance(x, y, w, h, cap)
+  local()
+  ( 
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+  );
+
+function draw_buffer_db(scopeptr, scopebuffer, scopebuffermax, floorLevel)
+  instance(x, y, w, h)
+  globals(gfx_r, gfx_g, gfx_b, gfx_x, gfx_y, scrolls)
+  local(skipFactor, xx, yy, ybase, dx, lptr, lastx, lasty, scale)
+  (
+    skipFactor = 16;
+    scale = h / abs(floorLevel);
+    ybase = y;
+    xx    = x;
+    dx    = skipFactor*w/(scopebuffermax-scopebuffer);
+    
+    scrolls ? (
+      lptr  = scopeptr;
+      gfx_x = xx;
+      gfx_y = ybase;
+      loop((scopebuffermax-scopeptr)/skipFactor,
+        yy = ybase - scale*max(floorLevel,lptr[]);
+        gfx_lineto(xx, yy);
+        lptr += skipFactor;
+        xx += dx;
+      );
+      
+      lptr = scopebuffer;
+      loop((scopeptr - scopebuffer)/skipFactor,
+        yy = ybase - scale*max(floorLevel,lptr[]);
+        gfx_lineto(xx, yy);
+        lptr += skipFactor;
+        xx += dx;
+      );
+    ) : (
+      lptr  = scopebuffer;
+      
+      gfx_x = xx;
+      gfx_y = ybase;
+      loop(scopebuffermax/skipFactor,
+        yy = ybase - scale*max(floorLevel,lptr[]);
+        gfx_lineto(xx, yy);
+        lptr += skipFactor;
+        xx += dx;
+      );
+    );
+  );
+
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );
+  
+function initBufferNoReset(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+/* Gain computer */
+function calcGain(xG)
+  instance(kWidth, quadF, thresh, ratio)
+  local(diff, tmp)
+  global()
+  (
+    diff = xG - thresh;
+    
+    // With knee?
+    (kWidth > 0) ? (
+      ( 2*diff < -kWidth ) ? (
+        xG
+      ) : ( (2 * abs(diff)) <= kWidth ) ? (
+        tmp = (diff + 0.5*kWidth);
+        xG + tmp*tmp*quadF
+      ) : (
+        thresh + diff / ratio
+      );
+    ) : (
+      ( xG >= thresh ) ? (
+        thresh + diff / ratio
+      ) : (
+        xG
+      );
+    );
+  );
+  
+function setCompressorOptions( thr, rat, atk, release, knee, makeupToggle )
+  instance( rt, at, thresh, ratio, kWidth, makeUp, quadF )
+  global(srate)
+  local()
+  (
+    thresh        = thr;
+    ratio         = exp(rat*rat);
+    at            = exp(-1/(.0001*atk*srate));
+    rt            = exp(-1/(.0001*release*srate));
+    kWidth        = knee;
+    quadF         = ((1/ratio)-1)/(2*kWidth);
+    makeUp        = makeupToggle ? -this.calcGain(0) : 0;
+  );  
+
+/* Topology that performs attack and decay in log-space */
+/* Topology 3 from Figure 7                             */
+function compressor(mx)
+  instance( rt, at, yL, makeUp, 
+            xG, c, ya )
+  global()
+  local(xL, yG)
+  (
+    xG  = 20 * log10(abs(mx)); /* Peak */
+   
+    /* Calculate the gain curve */
+    yG = this.calcGain(xG);
+    xL  = xG - yG;
+   
+    // Update smooth peak detector (peak)
+    xL > yL ? (
+      yL = at * yL + (1.0-at) * xL;
+    ) : (
+      // yL = rt * yL + (1-rt) * mx;
+      ya = max( xL, rt * ya + (1.0-rt) * xL );
+      yL = at * yL + (1.0-at) * ya;
+    );
+   
+    // Calculate gain correction
+    c   = -yL + makeUp;
+   
+    // Apply current gain correction
+    mx * 10^(c/20);
+  );  
+  
+function drawGainCurve(floorLevel, current)
+  instance(x, y, w, h)
+  global(dcx, )
+  local(N, cx, in, dIn, lastIn, out, lastOut)
+  (
+    N   = 120;
+    in  = floorLevel;
+    cx  = x;
+    dIn = - floorLevel / N;
+    dcx = h / abs(floorLevel);
+    lastIn  = 0;
+    lastOut = y - dcx * floorLevel;
+    loop(N-1,
+      in += dIn;
+      cx += .5*dcx;
+      out = y - dcx * this.calcGain(in);
+      current > in ? gfx_set(0.4,1.0,.4,1) : gfx_set(0,0,0,1);
+      gfx_line(lastIn, lastOut+1, cx, out+2);
+      gfx_line(lastIn, lastOut+1, cx, out+1);
+      gfx_line(lastIn, lastOut-2, cx, out-2);
+      gfx_line(lastIn, lastOut-2, cx, out-3);
+      gfx_set(1,1,1,1);
+      gfx_line(lastIn, lastOut, cx, out);
+      gfx_line(lastIn, lastOut-1, cx, out-1);
+      lastOut = out;
+      lastIn = cx;
+    );
+    
+    gfx_set(0.4,1.0,.4,1);
+    gfx_circle(h + dcx*current-1, y - dcx * this.calcGain(current)-1, 4, 1, 1);
+    gfx_set(1,1,1,1);
+    gfx_circle(h + dcx*current-1, y - dcx * this.calcGain(current)-1, 2, 1, 1);
+  );  
+  
+DYNAMICS_IN         = 100000;
+DYNAMICS_OUT        = 200000;
+DYNAMICS_GAIN       = 300000;
+DYNAMICS_BUFSIZE    = 100000;  
+  
+inBuf.initBufferNoReset(DYNAMICS_IN, DYNAMICS_IN+DYNAMICS_BUFSIZE-1);
+outBuf.initBufferNoReset(DYNAMICS_OUT, DYNAMICS_OUT+DYNAMICS_BUFSIZE-1);
+gainBuf.initBufferNoReset(DYNAMICS_GAIN, DYNAMICS_GAIN+DYNAMICS_BUFSIZE-1);
+
+@slider
+preGainLin      = 10^(PreGain/20);
+postGainLin     = 10^(PostGain/20);
+
+@block
+cL.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
+cR.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
+
+@sample
+/* Zolzer RMS compressor (deprecated) */
+/*function prepareCompressor()
+  global()
+  instance(rt, at, CT, CS, g, tav)
+  local()
+  (
+    tav = 0.01;             // RMS averaging level
+    at = 0.1;               // Attack time constant
+    rt = 0.003;             // Release time constant
+    CT = -25;               // Thresholdl (dB)
+    CS = 2.6;               // Slope
+  );
+
+function compressSignal(s1)
+  global()
+  instance(rms_est, rt, at, CT, CS, g, tav)
+  local(g_now, f, coeff, rms_log)
+  (
+    // Compressor unit
+    rms_est = (1-tav)*rms_est + tav * s1*s1;
+    rms_log = 10*log10(rms_est);
+    g_now = min(0, CS*(CT-rms_log));
+    f = 10^(g_now/20);
+    coeff = (f < g_now) ? at : rt;
+    g = (1-coeff)*g + coeff*f;
+    g * s1;
+  );*/
+
+spl0 = spl0 *= preGainLin;
+spl1 = spl1 *= preGainLin;
+
+spl0 = cL.compressor(spl0);
+spl1 = cR.compressor(spl1);
+
+bufSmoothing = .995;
+movIn = movIn * bufSmoothing + cL.xG * (1-bufSmoothing);
+inBuf.updateBuffer( movIn );
+gainBuf.updateBuffer( cL.c );
+movOut = movOut * bufSmoothing + (cL.xG + cL.c) * (1-bufSmoothing);
+outBuf.updateBuffer( movOut );
+
+tmptmp = cL.xG;
+
+spl0 *= postGainLin;
+spl1 *= postGainLin;
+
+@gfx 800 300
+gfx_set(0,0,0,0);
+gfx_rect(0,0,400,400);
+
+cL.setWindowLocation(0, 0, gfx_w, gfx_h);
+gfx_set(.3, .3, .3, 1);
+floorLevel = -60;
+cL.draw_buffer_db(inBuf.scopeptr,   inBuf.scopebuffer,    inBuf.scopebuffermax,     floorLevel);
+gfx_set(1, 0, 1, 1);
+cL.draw_buffer_db(gainBuf.scopeptr, gainBuf.scopebuffer,  gainBuf.scopebuffermax,   floorLevel);
+gfx_set(.7, .3, .3, 1);
+cL.draw_buffer_db(outBuf.scopeptr,  outBuf.scopebuffer,   outBuf.scopebuffermax,    floorLevel);
+
+cL.drawGainCurve(floorLevel, movIn);
+
+gfx_x=gfx_y=0;
+gfx_setfont(1, "Arial", 16);
+gfx_printf("Ratio: %g", cL.ratio);
+
+
