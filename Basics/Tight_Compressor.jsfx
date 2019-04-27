@@ -1,40 +1,90 @@
 desc:Saike Tight Compressor
 tags: Tight Compressor
-version: 0.07
+version: 0.08
 author: Joep Vanlier
 changelog: 
++ Fix bugs that resulted in incorrect time constants.
++ Add gain reduction meter.
++ Moved ratio display.
++ Added second topology from paper (linear space).
 + Allow longer decays. 
-+ Rename plug.
++ Small cosmetic changes.
 
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 Based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
 
-slider1:Treshold1=-20<-60,0,.1>Threshold (dB)
+slider1:Treshold1=-20<-40,0,.1>Threshold (dB)
 slider2:Ratio1=.85<0,2,.0001>Ratio (-)
 slider3:Attack1=25<0,300,1>Attack (ms)
-slider4:Decay1=50<0,1000,1>Decay (ms)
+slider4:Decay1=50<50,1000,1>Decay (ms)
 slider5:Knee1=0<0,30,0.1>Knee (dB)
-slider6:MakeUp1=0<0,1,1{No,Yes}>Auto make-up gain
+slider6:MakeUp1=1<0,1,1{No,Yes}>Auto make-up gain
 slider7:PreGain=0<-24,12,0.01>Pre-Gain
 slider8:PostGain=0<-24,12,0.01>Post-Gain
 slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
+slider10:Topology=<0,2,1{LogDetect (Softer),LinDetect (Harsher)}>Topology
 
 @init
 /* Set location of a window */
 function setWindowLocation(_x, _y, _w, _h)
   global()
-  instance(x, y, w, h, cap)
+  instance(x, y, w, h, cap, meterSpace)
   local()
   ( 
     x = _x;
     y = _y;
     w = _w;
     h = _h;
+    meterSpace = 40;
+  );
+
+function draw_compressor_window(floorLevel, compression)
+  instance(x, y, w, h, meterSpace)
+  global(gfx_x, gfx_y, tester)
+  local(stepsize, steps, dy, yc, xs, xe, cStep, ww, hh)
+  (
+//    gfx_gradrect(x, y, w, h, 0, 0, 0, 0, .0001, .0001, .0001, .0001, -.0001, -.0001, .0001, .0001);
+    gfx_gradrect(x, y, w, h, 0, 0, 0, .3, .0001, .0001, .0006, .0001, -.0001, -.0001, .0001, .0001);
+    gfx_gradrect(x, y, w, h, 0, 0, 0, 0, 0, .0, 0, .0001, .008, .0001, .001, .0004);
+//    gfx_gradrect(x, h, w, h-h, 0, 0, .0, 1.0, .0001, .0001, .0002, 0, 0, 0, .0005, 0);
+    
+  
+    stepsize = 3;
+    cStep = 0;
+    dy = stepsize*h/floorLevel;
+    
+    gfx_set(1,.3,.3,.6);
+    steps = floor( h * (compression/floorLevel) / 2 );
+    yc = y;
+    xs = x+(w-meterSpace)+4;
+    xe = x+w-4;
+    loop(-steps,
+      gfx_line(xs, floor(yc), xe, floor(yc));
+      yc += 2;
+    );
+   
+    steps = floor(-floorLevel/stepsize); 
+    yc = y;
+    gfx_setfont(1, "Arial", 16);
+    loop(steps,
+      gfx_set(1,1,1,.7);
+      sprintf(0, "-%2d", cStep);
+      gfx_measurestr(0, ww, hh);
+      gfx_x = x+w-.5*meterSpace-.5*ww;
+      gfx_y = yc-.5*hh-1;
+      gfx_drawstr(0);
+      gfx_set(1,1,1,.2);
+      gfx_line(x, floor(yc), x+w-.8*meterSpace, floor(yc));
+      gfx_line(x+w-.2*meterSpace, floor(yc), x+w, floor(yc));
+      //gfx_line(0, 50, 150, 5);
+      yc -= dy;
+      cStep += stepsize;
+    );
   );
 
 function draw_buffer_db(scopeptr, scopebuffer, scopebuffermax, floorLevel)
-  instance(x, y, w, h)
+  instance(x, y, w, h, meterSpace)
   globals(gfx_r, gfx_g, gfx_b, gfx_x, gfx_y, scrolls)
   local(skipFactor, xx, yy, ybase, dx, lptr, lastx, lasty, scale)
   (
@@ -42,7 +92,7 @@ function draw_buffer_db(scopeptr, scopebuffer, scopebuffermax, floorLevel)
     scale = h / abs(floorLevel);
     ybase = y;
     xx    = x;
-    dx    = skipFactor*w/(scopebuffermax-scopebuffer);
+    dx    = (skipFactor)*(w-meterSpace)/(scopebuffermax-scopebuffer);
     
     scrolls ? (
       lptr  = scopeptr;
@@ -67,7 +117,7 @@ function draw_buffer_db(scopeptr, scopebuffer, scopebuffermax, floorLevel)
       
       gfx_x = xx;
       gfx_y = ybase;
-      loop(scopebuffermax/skipFactor,
+      loop((scopebuffermax-scopebuffer)/skipFactor,
         yy = ybase - scale*max(floorLevel,lptr[]);
         gfx_lineto(xx, yy);
         lptr += skipFactor;
@@ -103,7 +153,7 @@ function initBufferNoReset(scopebuffer_in, scopebuffermax_in)
   
 /* Gain computer */
 function calcGain(xG)
-  instance(kWidth, quadF, thresh, ratio)
+  instance(kWidth, quadF, thresh, ratio, iratio)
   local(diff, tmp)
   global()
   (
@@ -117,11 +167,11 @@ function calcGain(xG)
         tmp = (diff + 0.5*kWidth);
         xG + tmp*tmp*quadF
       ) : (
-        thresh + diff / ratio
+        thresh + diff * iratio
       );
     ) : (
       ( xG >= thresh ) ? (
-        thresh + diff / ratio
+        thresh + diff * iratio
       ) : (
         xG
       );
@@ -129,28 +179,29 @@ function calcGain(xG)
   );
   
 function setCompressorOptions( thr, rat, atk, release, knee, makeupToggle )
-  instance( rt, at, thresh, ratio, kWidth, makeUp, quadF )
+  instance( rt, at, thresh, ratio, iratio, kWidth, makeUp, quadF )
   global(srate)
   local()
   (
     thresh        = thr;
     ratio         = exp(rat*rat);
-    at            = exp(-1/(.0001*atk*srate));
-    rt            = exp(-1/(.0001*release*srate));
+    iratio        = 1/ratio;
+    at            = exp(-1/(.5*.001*atk*srate));
+    rt            = exp(-1/(.5*.001*release*srate));
     kWidth        = knee;
     quadF         = ((1/ratio)-1)/(2*kWidth);
     makeUp        = makeupToggle ? -this.calcGain(0) : 0;
   );  
 
-/* Topology that performs attack and decay in log-space */
-/* Topology 3 from Figure 7                             */
+// Topology 3:
+/* Level detection log domain */
 function compressor(mx)
   instance( rt, at, yL, makeUp, 
             xG, c, ya )
   global()
   local(xL, yG)
   (
-    xG  = 20 * log10(abs(mx)); /* Peak */
+    xG  = 20 * log10(max(abs(mx), 0.000001)); /* Peak */
    
     /* Calculate the gain curve */
     yG = this.calcGain(xG);
@@ -172,9 +223,34 @@ function compressor(mx)
     mx * 10^((c + makeUp)/20);
   );  
   
+  
+// Topology 3:
+// Level detection linear domain
+function compressor2(mx)
+  instance(rt, at, c, xG, yL, ratio, makeUp)
+  global()
+  local(xL, yG, ya)
+  (
+    xG = 20*log10(yL);
+    yG = this.calcGain(xG);
+    
+    xL = max(abs(mx), 0.000001);
+    xL > yL ? (
+      yL = at * yL + (1.0-at) * xL;
+    ) : (
+      //yL = rt * yL + (1.0-rt) * xL;
+      ya = max( xL, rt * ya + (1.0-rt) * xL );
+      yL = at * yL + (1.0-at) * ya;
+    );
+    
+    c = yG - xG;
+    
+    mx * 10^((c + makeUp)/20);
+  );  
+  
 function drawGainCurve(floorLevel, current)
   instance(x, y, w, h)
-  global(dcx, )
+  global(dcx)
   local(N, cx, in, dIn, lastIn, out, lastOut)
   (
     N   = 120;
@@ -186,7 +262,7 @@ function drawGainCurve(floorLevel, current)
     lastOut = y - dcx * floorLevel;
     loop(N-1,
       in += dIn;
-      cx += .5*dcx;
+      cx += .25*dcx;
       out = y - dcx * this.calcGain(in);
       current > in ? gfx_set(0.4,1.0,.4,1) : gfx_set(0,0,0,1);
       gfx_line(lastIn, lastOut+1, cx, out+2);
@@ -201,9 +277,9 @@ function drawGainCurve(floorLevel, current)
     );
     
     gfx_set(0.4,1.0,.4,1);
-    gfx_circle(h + dcx*current-1, y - dcx * this.calcGain(current)-1, 4, 1, 1);
+    gfx_circle(.25*dcx*(current - floorLevel)/dIn, y - dcx * this.calcGain(current)-1, 4, 1, 1);
     gfx_set(1,1,1,1);
-    gfx_circle(h + dcx*current-1, y - dcx * this.calcGain(current)-1, 2, 1, 1);
+    gfx_circle(.25*dcx*(current - floorLevel)/dIn, y - dcx * this.calcGain(current)-1, 2, 1, 1);
   );  
   
 DYNAMICS_IN         = 100000;
@@ -255,38 +331,53 @@ function compressSignal(s1)
 spl0 = spl0 *= preGainLin;
 spl1 = spl1 *= preGainLin;
 
-spl0 = cL.compressor(spl0);
-spl1 = cR.compressor(spl1);
-
-bufSmoothing = .995;
-movIn = movIn * bufSmoothing + cL.xG * (1-bufSmoothing);
-inBuf.updateBuffer( movIn );
-gainBuf.updateBuffer( cL.c );
-movOut = movOut * bufSmoothing + (cL.xG + cL.c) * (1-bufSmoothing);
-outBuf.updateBuffer( movOut );
-
-tmptmp = cL.xG;
+in  = 20*log10(.5*(abs(spl0)+abs(spl1)));
+( Topology == 0 ) ? (
+  spl0 = cL.compressor(spl0);
+  spl1 = cR.compressor(spl1);
+) : (
+  spl0 = cL.compressor2(spl0);
+  spl1 = cR.compressor2(spl1);
+);
 
 spl0 *= postGainLin;
 spl1 *= postGainLin;
+
+out = 20*log10(.5*(abs(spl0)+abs(spl1)));
+
+bufSmoothing = .995;
+movIn = movIn * bufSmoothing + in * (1-bufSmoothing);
+inBuf.updateBuffer( movIn );
+gainBuf.updateBuffer( cL.c );
+
+ol4 = ol3;
+ol3 = ol2;
+ol2 = ol1;
+ol1 = out;
+
+movOut = movOut * bufSmoothing + out * (1-bufSmoothing);
+outBuf.updateBuffer( movOut );
 
 @gfx 800 300
 gfx_set(0,0,0,0);
 gfx_rect(0,0,400,400);
 
+floorLevel = -40;
 cL.setWindowLocation(0, 0, gfx_w, gfx_h);
-gfx_set(.3, .3, .3, 1);
-floorLevel = -60;
+cL.draw_compressor_window(floorLevel, -cL.c);
+gfx_set(.3, .3, .5, .8);
 cL.draw_buffer_db(inBuf.scopeptr,   inBuf.scopebuffer,    inBuf.scopebuffermax,     floorLevel);
-gfx_set(1, 0, 1, 1);
+gfx_set(1, 0, 1, .8);
 cL.draw_buffer_db(gainBuf.scopeptr, gainBuf.scopebuffer,  gainBuf.scopebuffermax,   floorLevel);
-gfx_set(.7, .3, .3, 1);
+gfx_set(.9, .3, .3, .8);
 cL.draw_buffer_db(outBuf.scopeptr,  outBuf.scopebuffer,   outBuf.scopebuffermax,    floorLevel);
 
 cL.drawGainCurve(floorLevel, movIn);
 
 gfx_x=gfx_y=0;
-gfx_setfont(1, "Arial", 16);
-gfx_printf("Ratio: %g", cL.ratio);
+gfx_x = .8*cL.w;
+gfx_y = .8*cL.h;
+gfx_setfont(1, "Arial", 24);
+gfx_printf("Ratio: %.3g", cL.ratio);
 
 
