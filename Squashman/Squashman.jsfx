@@ -1,12 +1,13 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.13
+version: 0.15
 author: Joep Vanlier
 changelog: 
++ Added band indicator.
++ Added amplitude meters on waveshaper display.
 + Implemented more waveshapers.
-+ Added modifiers for several waveshapers.
-+ Added modifier knob.
-+ Added waveshaper selection box.
++ Improved graphics performance (only draw gradient once).
++ Added optional feedback for each band.
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -36,17 +37,28 @@ slider15:Ceil3=0<-26,0,.1>-Ceiling 3 (dB)
 slider16:Ceil4=0<-26,0,.1>-Ceiling 4 (dB)
 slider17:Ceil5=0<-26,0,.1>-Ceiling 5 (dB)
 slider12:Test=-1<-1,-1,-1>-Test
-slider19:Mode1=0<0,16,1>-Mode 1
-slider20:Mode2=0<0,16,1>-Mode 2
-slider21:Mode3=0<0,16,1>-Mode 3
-slider22:Mode4=0<0,16,1>-Mode 4
-slider23:Mode5=0<0,16,1>-Mode 5
+slider19:Mode1=0<0,17,1>-Mode 1
+slider20:Mode2=0<0,17,1>-Mode 2
+slider21:Mode3=0<0,17,1>-Mode 3
+slider22:Mode4=0<0,17,1>-Mode 4
+slider23:Mode5=0<0,17,1>-Mode 5
 slider24:Test=-1<-1,-1,-1>-Test
 slider25:Modifier1=0<0,1,.001>-Modifier1
 slider26:Modifier2=0<0,1,.001>-Modifier2
 slider27:Modifier3=0<0,1,.001>-Modifier3
 slider28:Modifier4=0<0,1,.001>-Modifier4
 slider29:Modifier5=0<0,1,.001>-Modifier5
+slider30:Test=-1<-1,-1,-1>-Test
+slider31:Delay1=0<0,1,.001>-Delay1
+slider32:Delay2=0<0,1,.001>-Delay2
+slider33:Delay3=0<0,1,.001>-Delay3
+slider34:Delay4=0<0,1,.001>-Delay4
+slider35:Delay5=0<0,1,.001>-Delay5
+slider36:Feedback1=0<0,.99,.001>-Feedback1
+slider37:Feedback2=0<0,.99,.001>-Feedback2
+slider38:Feedback3=0<0,.99,.001>-Feedback3
+slider39:Feedback4=0<0,.99,.001>-Feedback4
+slider40:Feedback5=0<0,.99,.001>-Feedback5
 
 slider63:2<0,1,1>-Oversampling
 slider64:0<0,1,1>-Fix DC?
@@ -63,6 +75,8 @@ driveLocation     = 7;
 ceilLocation      = 13;
 modeLocation      = 19;
 modifierLocation  = 25;
+delayLocation     = 31;
+feedbackLocation  = 36;
 
 /* Shift slider data right (for different bands) */
 function shiftRight(loc, fromIdx, numElements)
@@ -97,6 +111,8 @@ function addBand(idx)
     shiftRight( ceilLocation,      idx, maxCuts );
     shiftRight( modeLocation,      idx, maxCuts );
     shiftRight( modifierLocation,  idx, maxCuts );
+    shiftRight( delayLocation,     idx, maxCuts );
+    shiftRight( feedbackLocation,  idx, maxCuts );
     shiftRight( frequencyLocation, idx, maxCuts-1 );
     cuts = cuts + 1;
   );
@@ -110,11 +126,13 @@ function remBand(idx)
     shiftLeft( ceilLocation,      idx, maxCuts );
     shiftLeft( modeLocation,      idx, maxCuts );
     shiftLeft( modifierLocation,  idx, maxCuts );
+    shiftLeft( delayLocation,     idx, maxCuts );
+    shiftLeft( feedbackLocation,  idx, maxCuts );
     shiftLeft( frequencyLocation, idx, maxCuts-1 );
     cuts = cuts - 1;
   );  
   
-nShapers = 17;  
+nShapers = 18;  
   
 /* Strings for the comboboxes */
 function comboStrings(stridx, curitem)
@@ -142,6 +160,7 @@ function comboStrings(stridx, curitem)
       : ( curitem == 14 ) ? ( "Nuker (M)" )
       : ( curitem == 15 ) ? ( "Bitcrusher (M)" )
       : ( curitem == 16 ) ? ( "Bitmorpher (M)" )
+      : ( curitem == 17 ) ? ( "Bad connection (M)" )
     )
   );
 
@@ -183,6 +202,7 @@ function hasShapeMod(curitem)
     : ( curitem == 14 ) ? ( 1 )
     : ( curitem == 15 ) ? ( 1 )
     : ( curitem == 16 ) ? ( 1 )
+    : ( curitem == 17 ) ? ( 1 )
   );
 
 function updateHintTime(hint, hoverType)
@@ -679,7 +699,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
 
 function drawFFT(fill, oversamplingFactor, r, g, b, a)
   global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft )
-  instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset, highlighted)
+  instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
   local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
   (
     this.calcFFT();
@@ -859,6 +879,84 @@ function fancyCircle(x1, y1, rin, mute, solo)
     
     over = 0;
   );
+  
+function drawGroupRect(x, y, w, h, r, g, b, a)  
+  local()
+  instance()
+  global()
+  (
+    gfx_set(r, g, b, a);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+    
+    gfx_set(r, g, b, a*.5);
+    gfx_line(x, y+h+1, x+w, y+h+1);
+    gfx_line(x+w+1, y, x+w+1, y+h);
+  );
+ 
+function processMouseToggle(mx, my, mousecap)
+  instance(x, y, w, h, on, lastleft)
+  local(left, slack)
+  global()
+  (
+    slack = 5;
+    left = mousecap & 1;
+    
+    ( (left == 1) && (lastleft == 0) ) ?  (
+      ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) ) ? (
+        on = 1 - on;
+      );
+    );
+    
+    lastleft = left;
+    
+    on
+  );
+ 
+function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a)
+  local()
+  instance(x, y, w, h, on)
+  global(gfx_a, gfx_mode)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    on = _on;
+
+    gfx_set(0, 0, 0, 0);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(r, g, b, a*.2);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(wr, wg, wb, wa);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+    
+    on ? (
+      gfx_set(r, g, b, a);
+      gfx_rect(x, y, w, h);
+      gfx_a *= .6;
+      gfx_rect(x-1, y-1, w+2, h+2);
+      gfx_a *= .6;
+      gfx_rect(x-2, y-2, w+4, h+4);
+      gfx_a *= .6;
+      gfx_rect(x-3, y-3, w+6, h+6);
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 2*max(w,h), 2*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 3*max(w,h), 3*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 4*max(w,h), 4*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 5*max(w,h), 5*max(w,h));
+    );
+  );
  
 function drawKnob(_x, _y, _r, text)
   local(ang, dang, r0, r1, r2, r3, rk, tw, th)
@@ -924,16 +1022,20 @@ function drawKnob(_x, _y, _r, text)
   );
   
 function processMouse(mx, my, mousecap)
-  local(left, dx, dy, change)
+  local(left, dx, dy, change, mul)
   instance(value, x, y, r, cap, lleft, lx, ly, active)
   global()
   (
     change = 0;
+    mul = 1;
+    
+    (mousecap&4) ? mul = mul * 0.1666666666667; /* CTRL */
+    (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
     active ? (
       left = mousecap & 1;
       
       ( left && cap == 1 ) ? (
-        value = value - .01*(my - ly);
+        value = value - .01*mul*(my - ly);
         value = clamp(value, 0, 1);
         change = 1;
       ) : ( cap = 0; );
@@ -1205,6 +1307,64 @@ function combobox_processMouse(xx, yy, mc)
     );
   );
 
+function initBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+function setOffset(offset)
+  local()
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac)
+  (
+    readptr   = scopeptr;
+    frac      = offset - floor(offset);
+    readptr  -= floor(offset);
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+1);
+  );
+  
+function readBuffer()
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac)
+  (
+    c1 = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c2 = readptr[];
+    c2 * (1.0-frac) + c1 * frac
+  );
+  
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );  
+  
+function clearBuffer()
+  local()
+  global(MAXBUFFERSIZE)
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    memset( scopebuffer, 0, MAXBUFFERSIZE );
+    scopeptr = scopebuffer;
+  );  
+  
 function fancyLineV(x1, y1, x2, y2)
   local(dx)
   global()
@@ -1340,11 +1500,11 @@ function drawBands()
        c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5);
     );
     
-    selectedBand == 0 ? gfx_muladdrect( h1.x, y, h1.w, h, 1, 1, 1, .6, .05, .05, .05 );
-    selectedBand == 1 ? gfx_muladdrect( h2.x, y, h2.w, h, 1, 1, 1, .6, .05, .05, .05 );
-    selectedBand == 2 ? gfx_muladdrect( h3.x, y, h3.w, h, 1, 1, 1, .6, .05, .05, .05 );
-    selectedBand == 3 ? gfx_muladdrect( h4.x, y, h4.w, h, 1, 1, 1, .6, .05, .05, .05 );
-    selectedBand == 4 ? gfx_muladdrect( h5.x, y, h5.w, h, 1, 1, 1, .6, .05, .05, .05 );
+    selectedBand == 0 ? gfx_muladdrect( h1.x, y, h1.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 1 ? gfx_muladdrect( h2.x, y, h2.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 2 ? gfx_muladdrect( h3.x, y, h3.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 3 ? gfx_muladdrect( h4.x, y, h4.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 4 ? gfx_muladdrect( h5.x, y, h5.w, h, 1, 1, 1, .6, .05, .05, .105 );
     
     //this.drawLineFFT(.5*f_trafo(F1));
     //this.drawLineFFT(.5*f_trafo(F2));
@@ -1469,24 +1629,39 @@ function initSpectrum(memoryOffset, fftSize, srate)
     (
       lambda = sign(sample);
       .025864 * lambda * lambertExpApprox( lambda * beta * sample + delta ) - alpha * sample
-    );  
+    );    
   
+  function resetBandMeter()
+  local()
+  global()
+  instance(in, pre, post)
+  (
+    in = pre = post = 0;
+  );
   
   /* TO DO: Merge crossovers with control */
-  function processBand(drive, inceil, play, mode, modifier)
+  function processBand(drive, inceil, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect)
-  instance(l, r)
-  local(preamp, ceiling, inv_ceiling, t, factor, depth, idepth)
+  instance(l, r, in, pre, post)
+  local(preamp, ceiling, inv_ceiling, t, factor, depth, idepth, tl, tr)
   (
     play ? (
       preamp      = 10^(drive/20);
-      ceiling     = 10^(-inceil/20);
+      //ceiling     = 10^(-inceil/20);
       inv_ceiling = 10^(inceil/20);
+      
+      in = max(in, abs(l+r));
       
       l *= preamp;
       r *= preamp;
-      l *= ceiling;
-      r *= ceiling;
+      
+      l += fbl;
+      r += fbr;
+      
+      pre = max(pre, abs(l+r));
+      
+      //l *= ceiling;
+      //r *= ceiling;
       
       //l = this.ch0.antialiased_tanh_rect(l);
       //r = this.ch1.antialiased_tanh_rect(r);
@@ -1570,11 +1745,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-sin(45*t*t)*sin(5*r)*exp(factor*t));
       ) : ( mode == 9 ) ? (
         /* Sine */
-        l = sin(1.5*l*(1+modifier));
-        r = sin(1.5*r*(1+modifier));
+        l = sin(1.5*l*(1+2*modifier));
+        r = sin(1.5*r*(1+2*modifier));
       ) : ( mode == 10 ) ? (
         /* Octaver up */
-        l = 2*abs(l)-1+modifier; // <== This dip automateable?
+        l = 2*abs(l)-1+modifier;
         r = 2*abs(r)-1+modifier;
         l = 1.399 * l;
         r = 1.399 * r;
@@ -1660,13 +1835,20 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = .5*r;
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
+      ) : ( mode == 17 ) ? (
+        tl = tanh(1.5*l);
+        tr = tanh(1.5*r);
+        l = (abs(l*20^(1-modifier))>.5) * tl*tl*tr;
+        r = (abs(r*20^(1-modifier))>.5) * tr*tr*tr;
       ) : (
         l = 0;
         r = 0;
       );
       
-      l *= inv_ceiling;
-      r *= inv_ceiling;
+      post = max(post, abs(l+r));
+      
+      //l *= inv_ceiling;
+      //r *= inv_ceiling;
     ) : (
       l = 0;
       r = 0;
@@ -1679,18 +1861,94 @@ function initSpectrum(memoryOffset, fftSize, srate)
           Ceil1,     Ceil2,     Ceil3,      Ceil4,      Ceil5,
           play1,     play2,     play3,      play4,      play5,
           Mode1,     Mode2,     Mode3,      Mode4,      Mode5,
-          Modifier1, Modifier2, Modifier3,  Modifier4,  Modifier5 )
-  instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5)
+          Feedback1, Feedback2, Feedback3,  Feedback4,  Feedback5,
+          Modifier1, Modifier2, Modifier3,  Modifier4,  Modifier5,
+          fbToggle1, fbToggle2, fbToggle3,  fbToggle4,  fbToggle5 )
+  instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5, 
+           bufferL1, bufferL2, bufferL3, bufferL4, bufferL5, 
+           bufferR1, bufferR2, bufferR3, bufferR4, bufferR5,
+           fbL1,     fbL2,     fbL3,     fbL4,     fbL5
+           fbR1,     fbR2,     fbR3,     fbR4,     fbR5 )
   (
     //F1, F2, F3, F4
-    b1.processBand(Drive1, Ceil1, play1, Mode1, Modifier1);
-    b2.processBand(Drive2, Ceil2, play2, Mode2, Modifier2);
-    b3.processBand(Drive3, Ceil3, play3, Mode3, Modifier3);
-    b4.processBand(Drive4, Ceil4, play4, Mode4, Modifier4);
-    b5.processBand(Drive5, Ceil5, play5, Mode5, Modifier5);
+    fbToggle1 ? ( fbL1 = Feedback1 * bufferL1.readBuffer();
+                  fbR1 = Feedback1 * bufferR1.readBuffer(); ) : ( fbL1 = fbR1 = 0; );
+    fbToggle2 ? ( fbL2 = Feedback2 * bufferL2.readBuffer();
+                  fbR2 = Feedback2 * bufferR2.readBuffer(); ) : ( fbL2 = fbR2 = 0; );
+    fbToggle3 ? ( fbL3 = Feedback3 * bufferL3.readBuffer();
+                  fbR3 = Feedback3 * bufferR3.readBuffer(); ) : ( fbL3 = fbR3 = 0; );
+    fbToggle4 ? ( fbL4 = Feedback4 * bufferL4.readBuffer();
+                  fbR4 = Feedback4 * bufferR4.readBuffer(); ) : ( fbL4 = fbR4 = 0; );
+    fbToggle5 ? ( fbL5 = Feedback5 * bufferL5.readBuffer();
+                  fbR5 = Feedback5 * bufferR5.readBuffer(); ) : ( fbL5 = fbR5 = 0; );
+    
+    b1.processBand(Drive1, Ceil1, play1, Mode1, Modifier1, fbL1, fbR1);
+    b2.processBand(Drive2, Ceil2, play2, Mode2, Modifier2, fbL2, fbR2);
+    b3.processBand(Drive3, Ceil3, play3, Mode3, Modifier3, fbL3, fbR3);
+    b4.processBand(Drive4, Ceil4, play4, Mode4, Modifier4, fbL4, fbR4);
+    b5.processBand(Drive5, Ceil5, play5, Mode5, Modifier5, fbL5, fbR5);
+    
+    fbToggle1 ? ( bufferL1.updateBuffer(b1.l);
+                  bufferR1.updateBuffer(b1.r); );
+    fbToggle2 ? ( bufferL2.updateBuffer(b2.l);
+                  bufferR2.updateBuffer(b2.r); );
+    fbToggle3 ? ( bufferL3.updateBuffer(b3.l);
+                  bufferR3.updateBuffer(b3.r); );
+    fbToggle4 ? ( bufferL4.updateBuffer(b4.l);
+                  bufferR4.updateBuffer(b4.r); );
+    fbToggle5 ? ( bufferL5.updateBuffer(b5.l);
+                  bufferR5.updateBuffer(b5.r); );
   );
   
-function drawShaper()
+  function resetMeters()
+  local()
+  global()
+  instance(b1, b2, b3, b4, b5)
+  (
+    b1.resetBandMeter();
+    b2.resetBandMeter();
+    b3.resetBandMeter();
+    b4.resetBandMeter();
+    b5.resetBandMeter();                
+  );
+  
+  function getBandPre(bandIdx)
+  local()
+  global()
+  instance( b1, b2, b3, b4, b5 )
+  (
+    ( bandIdx == 0 ) ? ( .5*b1.pre )
+    : ( bandIdx == 1 ) ? ( .5*b2.pre )
+    : ( bandIdx == 2 ) ? ( .5*b3.pre )
+    : ( bandIdx == 3 ) ? ( .5*b4.pre )
+    : ( bandIdx == 4 ) ? ( .5*b5.pre )
+  );
+  
+  function getBandPost(bandIdx)
+  local()
+  global()
+  instance( b1, b2, b3, b4, b5 )
+  (
+    ( bandIdx == 0 ) ? ( .5*b1.post )
+    : ( bandIdx == 1 ) ? ( .5*b2.post )
+    : ( bandIdx == 2 ) ? ( .5*b3.post )
+    : ( bandIdx == 3 ) ? ( .5*b4.post )
+    : ( bandIdx == 4 ) ? ( .5*b5.post )
+  );
+  
+  function getBandIn(bandIdx)
+  local()
+  global()
+  instance( b1, b2, b3, b4, b5 )
+  (
+    ( bandIdx == 0 ) ? ( .5*b1.in )
+    : ( bandIdx == 1 ) ? ( .5*b2.in )
+    : ( bandIdx == 2 ) ? ( .5*b3.in )
+    : ( bandIdx == 3 ) ? ( .5*b4.in )
+    : ( bandIdx == 4 ) ? ( .5*b5.in )
+  );
+  
+function drawShaper(drive)
   global( Drive1,       Drive2,     Drive3,     Drive4,     Drive5, 
           Ceil1,        Ceil2,      Ceil3,      Ceil4,      Ceil5,
           play1,        play2,      play3,      play4,      play5,
@@ -1698,21 +1956,21 @@ function drawShaper()
           Modifier1,    Modifier2,  Modifier3,  Modifier4,  Modifier5,
           selectedBand
           fft_out_r, fft_out_g, fft_out_b, fft_out_a )
-  instance(x, y, w, h, hm, calc)
-  local(steps, cx, dx, ds, s, ll, lr, drive, ceiling, mode, ol, or, modifier)
+  instance(x, y, w, h, hm, calc, displayDrive)
+  local(steps, cx, dx, ds, s, ll, lr, ceiling, mode, ol, or, modifier)
   (
     steps = 25;
     s = -1;
     dx = w / steps;
     ds = 2 / steps;
     hm = h - 2;
+    displayDrive = drive;
     
     ll = 0;
     lr = 0;
     cx = x;
     gfx_set(fft_out_r, fft_out_g, fft_out_b, fft_out_a);
     
-    drive = 5;
     ceiling = 0;
     ( selectedBand == 0 ) ? (
       mode = Mode1;
@@ -1733,7 +1991,7 @@ function drawShaper()
     
     calc.l = s;
     calc.r = s;
-    calc.processBand(drive, ceiling, 1, mode, modifier);
+    calc.processBand(displayDrive, ceiling, 1, mode, modifier, 0, 0);
     ll = calc.l*.5 + .5;
     lr = calc.r*.5 + .5;
     loop( steps,
@@ -1741,7 +1999,7 @@ function drawShaper()
       calc.l = s;
       calc.r = s;
       
-      calc.processBand(drive, ceiling, 1, mode, modifier);
+      calc.processBand(displayDrive, ceiling, 1, mode, modifier, 0, 0);
       ol = calc.l*.5 + .5;
       or = calc.r*.5 + .5;
       gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
@@ -1755,13 +2013,84 @@ function drawShaper()
     );
   );  
 
-bpos=0;
+function drawVolumes(pre, post)
+  local(thc, iDisplayDrive)
+  instance(x, y, w, h, displayDrive, hot1, hot2, xv, yv, xv2, yv2, xs, ys)
+  global()
+  (
+    iDisplayDrive = 10^(-displayDrive/20);
+    
+    thc = 3;
+    
+    xv = min(1,pre * iDisplayDrive);
+    yv = min(1,post);
+    
+    xv2 = max(xv2*.97, xv);
+    yv2 = max(yv2*.97, yv);
+    
+    hot1 = .8*hot1 + .2*2*xv*xv*(xv-0.5);
+    gfx_set(1, 1-hot1, 1-3*hot1, .5);
+    gfx_rect(floor(x+.5*w*(1-xv))-1, y+h+1, floor(w*xv)+2, thc+2);
+    gfx_set(1, 1-hot1, 1-3*hot1, 1);
+    gfx_rect(floor(x+.5*w*(1-xv)), y+h+2, floor(w*xv)+1, thc);
+    
+    hot2 = .8*hot2 + .2*2*yv*yv*(yv-0.5);
+    gfx_set(1, 1-hot2, 1-3*hot2, .5);
+    gfx_rect(x-thc-2, floor(y+.5*h*(1-yv))+1, thc+2, floor(h*yv)+2);
+    gfx_set(1, 1-hot2, 1-3*hot2, 1);
+    gfx_rect(x-thc-1, floor(y+.5*h*(1-yv))+2, thc, floor(h*yv));
+    
+    gfx_set(1, 1, 1, .1);
+    gfx_rect(floor(x+.5*w*(1-xv2))-1, y+h+1, floor(w*xv2)+2, thc+2);
+    
+    gfx_set(1, 1, 1, .1);
+    gfx_rect(x-thc-2, floor(y+.5*h*(1-yv2))-1, thc+2, floor(h*yv2)+2);
+    
+    gfx_set(1,1,1,.15);
+    gfx_rect(floor(x+.5*w*(1-xv)), y, 1, h);
+    gfx_rect(floor(x+.5*w*(1+xv)), y, 1, h);
+  );
+
+function initDelays()
+  local()
+  global(delayBuf1, delayBuf2, delayBuf3, delayBuf4, delayBuf5, 
+         delayBuf6, delayBuf7, delayBuf8, delayBuf9, delayBuf10,
+         bufferDist)
+  instance(bufferL1, bufferL2, bufferL3, bufferL4, bufferL5,
+           bufferR1, bufferR2, bufferR3, bufferR4, bufferR5)
+  (
+    bufferL1.initBuffer(delayBuf1, delayBuf1+bufferDist-1);
+    bufferL2.initBuffer(delayBuf2, delayBuf2+bufferDist-1);
+    bufferL3.initBuffer(delayBuf3, delayBuf3+bufferDist-1);
+    bufferL4.initBuffer(delayBuf4, delayBuf4+bufferDist-1);
+    bufferL5.initBuffer(delayBuf5, delayBuf5+bufferDist-1);
+    bufferR1.initBuffer(delayBuf6, delayBuf6+bufferDist-1);
+    bufferR2.initBuffer(delayBuf7, delayBuf7+bufferDist-1);
+    bufferR3.initBuffer(delayBuf8, delayBuf8+bufferDist-1);
+    bufferR4.initBuffer(delayBuf9, delayBuf9+bufferDist-1);
+    bufferR5.initBuffer(delayBuf10, delayBuf10+bufferDist-1);
+  );
+
+//bpos=0;
 
 // MEMORY LAYOUT
 fftSize     = 2*8192;
 bufferDist  = 65536;
 audioBufIn  = 0;
 audioBufOut = bufferDist;
+
+delayBuf1   = 2*bufferDist;
+delayBuf2   = 3*bufferDist;
+delayBuf3   = 4*bufferDist;
+delayBuf4   = 5*bufferDist;
+delayBuf5   = 6*bufferDist;
+delayBuf6   = 7*bufferDist;
+delayBuf7   = 8*bufferDist;
+delayBuf8   = 9*bufferDist;
+delayBuf9   = 10*bufferDist;
+delayBuf10  = 11*bufferDist;
+
+filterBank.initDelays();
 
 // INITIALIZATION
 spectrumIn.initSpectrum(audioBufIn, fftSize, srate);
@@ -1786,6 +2115,12 @@ file_var(0,mute4);
 file_var(0,mute5);
 file_var(0,placeholder);
 file_var(0,placeholder);
+
+file_var(0,fb1Toggle);
+file_var(0,fb2Toggle);
+file_var(0,fb3Toggle);
+file_var(0,fb4Toggle);
+file_var(0,fb5Toggle);
 
 @slider
 
@@ -2187,15 +2522,41 @@ solo5 ? play5 = 1;
         RA_F2.a2 = LA_F2.a2;
         RA_F2.a3 = LA_F2.a3;
       );
+  );  
+  
+  function updateDelays()
+  local(d1, d2, d3, d4, d5, scale)
+  global(Delay1, Delay2, Delay3, Delay4, Delay5,
+         fbToggle1, fbToggle2,  fbToggle3,  fbToggle4,  fbToggle5, srate)
+  instance(bufferL1,  bufferL2,   bufferL3,   bufferL4,   bufferL5,
+           bufferR1,  bufferR2,   bufferR3,   bufferR4,   bufferR5 )
+  (
+    scale = 0.04*srate;
+    d1 = scale * (exp(Delay1)-1);
+    d2 = scale * (exp(Delay2)-1);
+    d3 = scale * (exp(Delay3)-1);
+    d4 = scale * (exp(Delay4)-1);
+    d5 = scale * (exp(Delay5)-1);
+  
+    fbToggle1 ? ( bufferL1.setOffset(d1+2);
+                  bufferR1.setOffset(d1+2) );
+    fbToggle2 ? ( bufferL2.setOffset(d2+2);
+                  bufferR2.setOffset(d2+2) );
+    fbToggle3 ? ( bufferL3.setOffset(d3+2);
+                  bufferR3.setOffset(d3+2) );
+    fbToggle4 ? ( bufferL4.setOffset(d4+2);
+                  bufferR4.setOffset(d4+2) );
+    fbToggle5 ? ( bufferL5.setOffset(d5+2);
+                  bufferR5.setOffset(d5+2) );
   );
   
   function resetBands()
   local()
   global()
-  instance( b1, b2, b3, b4 )
+  instance( b1, b2, b3, b4, b5 )
   (
-    b1.r = b1.l = b2.r = b2.l = b3.r = b3.l = b4.r = b4.l = 0;
-  );
+    b1.r = b1.l = b2.r = b2.l = b3.r = b3.l = b4.r = b4.l = b5.l = 0;
+  );  
   
   // Make sure the delay is the same on all bands (identical number of filters)
   function splitBands(sl, sr)
@@ -2296,6 +2657,7 @@ solo5 ? play5 = 1;
   filterBank.updateCoeffs();
   filterBank.splitBands(spl0, spl1);
   filterBank.processBands();
+  filterBank.updateDelays();
   
   spl0 = filterBank.b1.l + filterBank.b2.l + filterBank.b3.l + filterBank.b4.l + filterBank.b5.l;
   spl1 = filterBank.b1.r + filterBank.b2.r + filterBank.b3.r + filterBank.b4.r + filterBank.b5.r;
@@ -2310,9 +2672,9 @@ solo5 ? play5 = 1;
   );
   
   spectrumOut.feedSample(.5*(spl0+spl1));
-  
+    
 @gfx 600 300
-  function createGUI()
+  function createGUI(stripStart)
   (
     scaling   = gfx_ext_retina;
     spectrumX = 0;
@@ -2321,7 +2683,92 @@ solo5 ? play5 = 1;
     spectrumH = gfx_h - 175 * (1+scaling);
     spectrumIn.setWindowLocation(spectrumX,  spectrumY, spectrumW, spectrumH);
     spectrumOut.setWindowLocation(spectrumX, spectrumY, spectrumW, spectrumH);
-    shaperWnd.setWindowLocation(25*(1+scaling), spectrumH + 25*(1+scaling), 125*(1+scaling), 125*(1+scaling));
+    shaperWnd.setWindowLocation(stripStart*(1+scaling), spectrumH + 25*(1+scaling), 125*(1+scaling), 125*(1+scaling));
+  );
+
+  /* Gradients are buffered to save rendering perf */
+  function drawGradients(w, h, spectrumH, gradient_bg)
+  instance(lw, lh)
+  global(gfx_mode, gfx_dest, bg_color_r, bg_color_g, bg_color_b, bg_color_a,
+         gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a )
+  local( oldDest, oldMode)
+  (
+    oldMode = gfx_mode;
+    gfx_mode = 0;
+    gfx_set(1,1,1,1);
+    ( ( lw != w ) || ( lh != h ) ) ? (
+      /* Only draw gradients when size changes */
+      gfx_x = gfx_y = 0;
+      lw = w;
+      lh = h;
+      oldDest = gfx_dest;
+      gfx_setimgdim(gradient_bg, w, h);
+      gfx_dest = gradient_bg;
+      gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);
+      gfx_rectto(w,spectrumH);
+      gfx_gradrect(0, 0, w, spectrumH, gfx_r, gfx_g, gfx_b, gfx_a, .0001, .001, .0001, .0001, -.0001, -.0001, .0001, .0001);
+      gfx_gradrect(0, 0, w, spectrumH, gfx_r, gfx_g, gfx_b, .3, .0001, .001, .0006, .0001, -.0001, -.0001, .0001, .0001);
+      gfx_gradrect(0, 0, w, spectrumH, 0, 0, 0, 0, 0, -.001, -.0006, .0001, -.0001, -.0001, .01, -.00008);
+      gfx_gradrect(0, spectrumH, w, h-spectrumH, 0, 0, .0, 1.0, .0001, .0001, .0002, 0, 0, 0, .0005, 0);
+      gfx_dest = oldDest;
+    );
+    
+    gfx_x = gfx_y = 0;
+    gfx_blit(gradient_bg, 1, 0);
+    gfx_mode = oldMode;
+  );
+
+  /* Draw a vertical label */
+  function drawVertLabel(x, y, stridx, labelW, fontSize, labelBuffer)
+  local(oldDest, oldMode, strw, strh)
+  global(gfx_dest, gfx_mode, gfx_x, gfx_y,
+         font_color_r, font_color_g, font_color_b, font_color_a)
+  instance()
+  (
+    labelBuffer = 3;
+    fontSize = 20;
+    oldDest = gfx_dest;
+    oldMode = gfx_mode;
+    gfx_setimgdim(labelBuffer, labelW, labelW);
+    gfx_dest = labelBuffer;
+    gfx_setfont(2, "ARIAL", fontSize);
+    gfx_measurestr(stridx, strw, strh);
+    gfx_set(0,0,0,1);
+    gfx_rect(0,0, labelW, strh);
+    gfx_set(font_color_r,font_color_g,font_color_b,font_color_a);
+    gfx_x = .5 * labelW - .5 * strw; gfx_y = 0;
+    gfx_drawstr(stridx);
+    gfx_dest = oldDest;
+    
+    gfx_x = x;
+    gfx_y = y;
+    gfx_mode = 1;
+    gfx_blit(labelBuffer, 1, 1.5*$pi);
+    gfx_mode = oldMode;
+  );
+  
+  function getFbToggle(band)
+  global(fbToggle1, fbToggle2, fbToggle3, fbToggle4, fbToggle5)
+  local()
+  instance()
+  (
+    ( band == 0 ) ? ( fbToggle1 )
+    : ( band == 1 ) ? ( fbToggle2 )
+    : ( band == 2 ) ? ( fbToggle3 )
+    : ( band == 3 ) ? ( fbToggle4 )
+    : ( band == 4 ) ? ( fbToggle5 )
+  );
+  
+  function setFbToggle(band, value)
+  global(fbToggle1, fbToggle2, fbToggle3, fbToggle4, fbToggle5)
+  local()
+  instance()
+  (
+    ( band == 0 ) ? ( fbToggle1 = value )
+    : ( band == 1 ) ? ( fbToggle2 = value )
+    : ( band == 2 ) ? ( fbToggle3 = value )
+    : ( band == 3 ) ? ( fbToggle4 = value )
+    : ( band == 4 ) ? ( fbToggle5 = value )
   );
 
   bg_color_r = 47/255;
@@ -2356,27 +2803,27 @@ solo5 ? play5 = 1;
   disabled_color_g = .4;
   disabled_color_b = .4;
   disabled_color_a = .8;
-
-  gfx_r=bg_color_r;
-  gfx_g=bg_color_g;
-  gfx_b=bg_color_b;
-  gfx_a=bg_color_a;
-  gfx_x=gfx_y=0;
-  gfx_rectto(gfx_w,spectrumH);
-  gfx_gradrect(0, 0, gfx_w, spectrumH, gfx_r, gfx_g, gfx_b, gfx_a, .0001, .0001, .0001, .0001, -.0001, -.0001, .0001, .0001);
-  gfx_gradrect(0, 0, gfx_w, spectrumH, gfx_r, gfx_g, gfx_b, .3, .0001, .0001, .0006, .0001, -.0001, -.0001, .0001, .0001);
-  gfx_gradrect(0, 0, gfx_w, spectrumH, 0, 0, 0, 0, 0, -.001, -.0006, .0001, -.0001, -.0001, .001, -.00008);
-  gfx_gradrect(0, spectrumH, gfx_w, gfx_h-spectrumH, 0, 0, .0, 1.0, .0001, .0001, .0002, 0, 0, 0, .0005, 0);
+  widget_r = .3;
+  widget_g = .3;
+  widget_b = .3;
+  widget_a = 1.0;
+  toggle_r = 1.0;
+  toggle_g = .3;
+  toggle_b = .3;
+  toggle_a = 1.0;
+  group_r = .2;
+  group_g = .3;
+  group_b = .4;
+  group_a = 1.0;
   
-  createGUI();
-  shaperWnd.drawBackface();
-  shaperWnd.drawShaper();
+  stripStart = 35;
+  createGUI(stripStart);
+  gradient.drawGradients(gfx_w, gfx_h, spectrumH, 2);
   
-  modifierKnob.active = hasShapeMod(slider(modeLocation+selectedBand));
-  modifierKnob.value = slider(modifierLocation+selectedBand);
-  modifierKnob.drawKnob(235*(1+scaling), spectrumH + 75*(1+scaling), 30*(1+scaling), "Shape Mod");
-  modifierKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(modifierLocation+selectedBand) = modifierKnob.value );
-    
+  //getBandPre  
+  //getBandPost  
+  //getBandIn
+  
   gfx_r = 1;
   spectrumIn.drawGrid();
   spectrumIn.floorLevel = 25 + dnoisefloor_freq;
@@ -2388,13 +2835,52 @@ solo5 ? play5 = 1;
   
   !shaperSelect.open ? spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);
   
-  shaperSelect.combobox(175*(1+scaling), spectrumH + 150*(1+scaling)-20, 120*(1+scaling), 20, .2, .2, .6, 1, nShapers, 1, 1, 1, "Waveshaper selection." );
+  /* Knob which controls shaper modifier */
+  modKnob = (210+stripStart)*(1+scaling);
+  modifierKnob.active = hasShapeMod(slider(modeLocation+selectedBand));
+  modifierKnob.value = slider(modifierLocation+selectedBand);
+  modifierKnob.drawKnob(modKnob, spectrumH + 75*(1+scaling), 30*(1+scaling), "Shape Mod");
+  modifierKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(modifierLocation+selectedBand) = modifierKnob.value );
+  
+  /* Combobox to select shaper */
+  shaperSelect.combobox(modKnob-60*(1+scaling), spectrumH + 150*(1+scaling)-20, 120*(1+scaling), 20, .2, .2, .6, 1, nShapers, 1, 1, 1, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(slider(modeLocation+selectedBand));
   shaperSelect.combobox_draw();  
   shaperSelect.combobox_draw_top();
   shaperSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
     slider_automate( slider(modeLocation+selectedBand)=shaperSelect.curitem; ); 
-  );  
+  );
+  
+  /* Delay section */
+  groupTop       = spectrumH + 25*(1+scaling);
+  postShaperKnob = modKnob*(1+scaling);
+  groupDistance = 85*(1+scaling);
+  miniknobWidth = 14*(1+scaling);
+  miniknobPad   = 5*(1+scaling);
+  buttonPad     = 6*(1+scaling);
+  buttonSize    = 6*(1+scaling);
+  delayKnob.active = 1;
+  delayKnob.value = slider(delayLocation+selectedBand);
+  drawGroupRect(postShaperKnob + groupDistance, groupTop, miniknobWidth*4+miniknobPad*2, miniknobWidth*8+miniknobPad*4, group_r, group_g, group_b, group_a);
+  delayKnob.drawKnob(postShaperKnob + groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 2*miniKnobWidth + miniKnobPad, miniknobWidth, "Delay");
+  delayKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(delayLocation+selectedBand) = delayKnob.value );
+
+  feedbackKnob.active = 1;
+  feedbackKnob.value = slider(feedbackLocation+selectedBand);
+  feedbackKnob.drawKnob(postShaperKnob + groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 6*miniKnobWidth + 2*miniKnobPad, miniknobWidth, "Feedback");
+  feedbackKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(feedbackLocation+selectedBand) = feedbackKnob.value );
+
+  delayToggle.drawToggle(postShaperKnob + groupDistance + buttonPad, groupTop + buttonPad, buttonSize, buttonSize, getFbToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a);
+  setFbToggle(selectedBand, delayToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap));
+
+  /* Band indicator */
+  sprintf(16,"Band %d", selectedBand+1);
+  vLabel.drawVertLabel(5, spectrumH, 16, gfx_h-spectrumH, 20, 3);
+  
+  /* Draw shaper curve */
+  shaperWnd.drawBackface();
+  shaperWnd.drawShaper(5);
+  shaperWnd.drawVolumes(filterBank.getBandPre(selectedBand), filterBank.getBandPost(selectedBand));
   
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
@@ -2410,3 +2896,5 @@ solo5 ? play5 = 1;
   !loaded ? loaded = gfx_loadimg(5, "./squashman2.png");
   
   gfx_blit(5, 3.2, 0);
+  
+  filterBank.resetMeters();
