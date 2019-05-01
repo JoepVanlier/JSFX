@@ -1,18 +1,18 @@
 desc:Saike Tight Compressor
 tags: Tight Compressor
-version: 0.09
+version: 0.10
 author: Joep Vanlier
 changelog: 
-+ Allow more precision attack
-
++ Lowered graphical load by only generating gradient when resizing window.
++ Logarithmic axis for attack and decay for increasing tweaking precision.
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 Based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
 
 slider1:Treshold1=-20<-40,0,.1>Threshold (dB)
 slider2:Ratio1=.85<0,2,.0001>Ratio (-)
-slider3:Attack1=25<0,120,.1>Attack (ms)
-slider4:Decay1=50<50,1000,1>Decay (ms)
+slider3:sAttack1=0.1<0,1,.00001>Attack (-)
+slider4:sDecay1=0.1<0,1,.00001>Decay (-)
 slider5:Knee1=0<0,30,0.1>Knee (dB)
 slider6:MakeUp1=1<0,1,1{No,Yes}>Auto make-up gain
 slider7:PreGain=0<-24,12,0.01>Pre-Gain
@@ -21,6 +21,12 @@ slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
 slider10:Topology=<0,2,1{LogDetect (Softer),LinDetect (Harsher)}>Topology
 
 @init
+MIN_ATTACK = 0;
+MAX_ATTACK = 120;
+
+MIN_DECAY = 15;
+MAX_DECAY = 500;
+
 /* Set location of a window */
 function setWindowLocation(_x, _y, _w, _h)
   global()
@@ -34,16 +40,27 @@ function setWindowLocation(_x, _y, _w, _h)
     meterSpace = 40;
   );
 
-function draw_compressor_window(floorLevel, compression)
-  instance(x, y, w, h, meterSpace)
-  global(gfx_x, gfx_y, tester)
-  local(stepsize, steps, dy, yc, xs, xe, cStep, ww, hh)
+function draw_compressor_window(floorLevel, compression, gradBlitTarget)
+  instance(x, y, w, h, meterSpace, lw, lh)
+  global(gfx_mode, gfx_dest, gfx_x, gfx_y, tester)
+  local(stepsize, steps, dy, yc, xs, xe, cStep, ww, hh, oldDest)
   (
-//    gfx_gradrect(x, y, w, h, 0, 0, 0, 0, .0001, .0001, .0001, .0001, -.0001, -.0001, .0001, .0001);
-    gfx_gradrect(x, y, w, h, 0, 0, 0, .3, .0001, .0001, .0006, .0001, -.0001, -.0001, .0001, .0001);
-    gfx_gradrect(x, y, w, h, 0, 0, 0, 0, 0, .0, 0, .0001, .008, .0001, .001, .0004);
-//    gfx_gradrect(x, h, w, h-h, 0, 0, .0, 1.0, .0001, .0001, .0002, 0, 0, 0, .0005, 0);
-    
+    gfx_mode = 0; gfx_set(1,1,1,1);
+    ( ( lw != w ) || ( lh != h ) ) ? (
+      /* Only draw new gradients when size changes */
+      lw = w;
+      lh = h;
+      oldDest = gfx_dest;
+      gfx_setimgdim(gradBlitTarget, w, h);
+      gfx_dest = gradBlitTarget;
+      gfx_set(0,0,0,1);
+      gfx_rect(x,y,w,h);
+      gfx_gradrect(x, y, w, h, 0, 0, 0, .3, .0001, .0001, .0006, .0001, -.0001, -.0001, .0001, .0001);
+      gfx_gradrect(x, y, w, h, 0, 0, 0, 0, 0, .0, 0, .0001, .008, .0001, .001, .0004);
+      gfx_dest = oldDest;
+    );
+    gfx_x = gfx_y = 0;
+    gfx_blit(gradBlitTarget, 1, 0);
   
     stepsize = 3;
     cStep = 0;
@@ -290,6 +307,13 @@ gainBuf.initBufferNoReset(DYNAMICS_GAIN, DYNAMICS_GAIN+DYNAMICS_BUFSIZE-1);
 preGainLin      = 10^(PreGain/20);
 postGainLin     = 10^(PostGain/20);
 
+beta            = log(MIN_ATTACK);
+alpha           = log(MAX_ATTACK)-beta;
+Attack1         = exp(alpha * sAttack1 + beta) - 1;
+beta            = log(MIN_DECAY);
+alpha           = log(MAX_DECAY)-beta;
+Decay1          = exp(alpha * sDecay1 + beta);
+
 @block
 cL.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
 cR.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
@@ -359,7 +383,7 @@ gfx_rect(0,0,400,400);
 
 floorLevel = -40;
 cL.setWindowLocation(0, 0, gfx_w, gfx_h);
-cL.draw_compressor_window(floorLevel, -cL.c);
+cL.draw_compressor_window(floorLevel, -cL.c, 1);
 gfx_set(.3, .3, .5, .8);
 cL.draw_buffer_db(inBuf.scopeptr,   inBuf.scopebuffer,    inBuf.scopebuffermax,     floorLevel);
 gfx_set(1, 0, 1, .8);
@@ -369,10 +393,21 @@ cL.draw_buffer_db(outBuf.scopeptr,  outBuf.scopebuffer,   outBuf.scopebuffermax,
 
 cL.drawGainCurve(floorLevel, movIn);
 
-gfx_x=gfx_y=0;
-gfx_x = .8*cL.w;
-gfx_y = .8*cL.h;
-gfx_setfont(1, "Arial", 24);
+writeX = cL.w - 200;
+writeY = cL.h - fSize*4;
+fSize = 24;
+gfx_set(0,0,0,.15);
+gfx_rect(writeX-12, writeY-7, 174, 3*fSize+14);
+gfx_set(0,0,0,.25);
+gfx_rect(writeX-10, writeY-5, 170, 3*fSize+10);
+gfx_set(1,1,1,1);
+gfx_x = writeX;
+gfx_y = writeY;
+gfx_setfont(1, "Arial", fSize);
 gfx_printf("Ratio: %.3g", cL.ratio);
-
-
+gfx_x = writeX;
+gfx_y += 24;
+gfx_printf("Attack: %.3g ms", Attack1);
+gfx_x = writeX;
+gfx_y += 24;
+gfx_printf("Decay: %.3g ms", Decay1);
