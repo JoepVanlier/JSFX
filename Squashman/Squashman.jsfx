@@ -1,13 +1,11 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.15
+version: 0.16
 author: Joep Vanlier
 changelog: 
-+ Added band indicator.
-+ Added amplitude meters on waveshaper display.
-+ Implemented more waveshapers.
-+ Improved graphics performance (only draw gradient once).
-+ Added optional feedback for each band.
++ Added per band gain control.
++ Added per band dry/wet control.
++ Added master gain control (location undecided for now).
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -31,11 +29,11 @@ slider9:Drive3=0<-40,60,.1>-Drive 3 (dB)
 slider10:Drive4=0<-40,60,.1>-Drive 4 (dB)
 slider11:Drive5=0<-40,60,.1>-Drive 5 (dB)
 slider12:Test=-1<-1,-1,-1>-Test
-slider13:Ceil1=0<-26,0,.1>-Ceiling 1 (dB)
-slider14:Ceil2=0<-26,0,.1>-Ceiling 2 (dB)
-slider15:Ceil3=0<-26,0,.1>-Ceiling 3 (dB)
-slider16:Ceil4=0<-26,0,.1>-Ceiling 4 (dB)
-slider17:Ceil5=0<-26,0,.1>-Ceiling 5 (dB)
+slider13:Gain1=0<-26,26,.1>-Gain 1 (dB)
+slider14:Gain2=0<-26,26,.1>-Gain 2 (dB)
+slider15:Gain3=0<-26,26,.1>-Gain 3 (dB)
+slider16:Gain4=0<-26,26,.1>-Gain 4 (dB)
+slider17:Gain5=0<-26,26,.1>-Gain 5 (dB)
 slider12:Test=-1<-1,-1,-1>-Test
 slider19:Mode1=0<0,17,1>-Mode 1
 slider20:Mode2=0<0,17,1>-Mode 2
@@ -59,7 +57,13 @@ slider37:Feedback2=0<0,.99,.001>-Feedback2
 slider38:Feedback3=0<0,.99,.001>-Feedback3
 slider39:Feedback4=0<0,.99,.001>-Feedback4
 slider40:Feedback5=0<0,.99,.001>-Feedback5
+slider41:DryWet1=0<0,1,.001>-Dry/Wet 1
+slider42:DryWet2=0<0,1,.001>-Dry/Wet 2
+slider43:DryWet3=0<0,1,.001>-Dry/Wet 3
+slider44:DryWet4=0<0,1,.001>-Dry/Wet 4
+slider45:DryWet5=0<0,1,.001>-Dry/Wet 5
 
+slider62:masterGainSlider=0<-26,26,.1>-Master Gain
 slider63:2<0,1,1>-Oversampling
 slider64:0<0,1,1>-Fix DC?
 
@@ -68,15 +72,22 @@ maxCuts = 4;
 driveMax = 60;
 driveMin = -40;
 driveRange = driveMax - driveMin;
+gainMin = -26;
+gainMax = 26;
+
+// Precompute some things
+gainRange = ( gainMax - gainMin );
+iGainRange = 1.0 / gainRange;
 
 /* Keep these updated with the slider locations */
 frequencyLocation = 2;
 driveLocation     = 7;
-ceilLocation      = 13;
 modeLocation      = 19;
 modifierLocation  = 25;
 delayLocation     = 31;
 feedbackLocation  = 36;
+gainLocation      = 13;
+drywetLocation    = 41;
 
 /* Shift slider data right (for different bands) */
 function shiftRight(loc, fromIdx, numElements)
@@ -108,12 +119,13 @@ function addBand(idx)
   instance()
   (
     shiftRight( driveLocation,     idx, maxCuts );
-    shiftRight( ceilLocation,      idx, maxCuts );
     shiftRight( modeLocation,      idx, maxCuts );
     shiftRight( modifierLocation,  idx, maxCuts );
     shiftRight( delayLocation,     idx, maxCuts );
     shiftRight( feedbackLocation,  idx, maxCuts );
     shiftRight( frequencyLocation, idx, maxCuts-1 );
+    shiftRight( gainLocation,      idx, maxCuts );
+    shiftRight( drywetLocation,    idx, maxCuts );
     cuts = cuts + 1;
   );
   
@@ -129,6 +141,8 @@ function remBand(idx)
     shiftLeft( delayLocation,     idx, maxCuts );
     shiftLeft( feedbackLocation,  idx, maxCuts );
     shiftLeft( frequencyLocation, idx, maxCuts-1 );
+    shiftLeft( gainLocation,      idx, maxCuts );
+    shiftLeft( drywetLocation,    idx, maxCuts );
     cuts = cuts - 1;
   );  
   
@@ -337,6 +351,39 @@ function drawBackface()
     gfx_line(x, y+h, x+w, y+h);
     gfx_line(x, y, x, y+h);
     gfx_line(x+w, y, x+w, y+h);
+  );
+
+function drawEq(_x, _y, _w, _h, _bands)
+  global( grid_color_r, grid_color_g, grid_color_b, grid_color_a
+          group_r, group_g, group_b, group_a, gfx_x )
+  instance(x, y, w, h, bands, dband)
+  local()
+  (
+    x       = _x;
+    y       = _y;
+    w       = _w;
+    h       = _h;
+    bands   = _bands;
+    
+    gfx_set( 0, 0, 0, grid_color_a );
+    gfx_rect( x, y, w, h );
+    
+    gfx_set( group_r, group_g, group_b, group_a );
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y+h, x+w, y+h);
+    gfx_line(x, y+h+1, x+w, y+h+1);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x+w+1, y, x+w+1, y+h);
+    gfx_line(x,y+.5*h,x+w,y+.5*h);
+     
+    dband = (w / bands);
+    
+    gfx_x = x;
+    loop(bands,
+      gfx_line(gfx_x, y, gfx_x, y+h);
+      gfx_x += dband;  
+    );
   );
 
 // Draws the FFT Grid, frequency axis and dB axis
@@ -1021,9 +1068,9 @@ function drawKnob(_x, _y, _r, text)
     gfx_printf(text);
   );
   
-function processMouse(mx, my, mousecap)
+function processMouse(mx, my, mousecap, default)
   local(left, dx, dy, change, mul)
-  instance(value, x, y, r, cap, lleft, lx, ly, active)
+  instance(value, x, y, r, cap, lleft, lx, ly, active, lastLeftClick, doubleClick, cTime)
   global()
   (
     change = 0;
@@ -1033,6 +1080,14 @@ function processMouse(mx, my, mousecap)
     (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
     active ? (
       left = mousecap & 1;
+      
+      doubleClick = 0;
+      (left && !lleft) ? (
+         time_precise(cTime);
+         ( ( cTime - lastLeftClick ) < .25 ) ? (
+            doubleClick = 1;
+         ) : lastLeftClick = cTime;
+      );
       
       ( left && cap == 1 ) ? (
         value = value - .01*mul*(my - ly);
@@ -1046,7 +1101,13 @@ function processMouse(mx, my, mousecap)
         dy = (my-y);
         ( (dx*dx + dy*dy) < (r*r) ) ?
         (
-          cap = 1;
+          doubleClick ? (
+            lastLeftClick = -100;
+            change = 1;
+            value = default;
+          ) : ( 
+            cap = 1;
+          );
         );
       );
       
@@ -1054,6 +1115,7 @@ function processMouse(mx, my, mousecap)
       lx = mx;
       ly = my;
     );
+    
     change
   );
 
@@ -1640,28 +1702,23 @@ function initSpectrum(memoryOffset, fftSize, srate)
   );
   
   /* TO DO: Merge crossovers with control */
-  function processBand(drive, inceil, play, mode, modifier, fbl, fbr)
+  function processBand(drive, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect)
-  instance(l, r, in, pre, post)
-  local(preamp, ceiling, inv_ceiling, t, factor, depth, idepth, tl, tr)
+  instance(l, r, inL, inR, in, pre, post)
+  local(preamp, inv_ceiling, t, factor, depth, idepth, tl, tr)
   (
     play ? (
-      preamp      = 10^(drive/20);
-      //ceiling     = 10^(-inceil/20);
-      inv_ceiling = 10^(inceil/20);
+      preamp = 10^(0.05*drive);
       
-      in = max(in, abs(l+r));
+      in = max(in, abs(inL+inR));
       
-      l *= preamp;
-      r *= preamp;
+      l = inL * preamp;
+      r = inR * preamp;
       
       l += fbl;
       r += fbr;
       
       pre = max(pre, abs(l+r));
-      
-      //l *= ceiling;
-      //r *= ceiling;
       
       //l = this.ch0.antialiased_tanh_rect(l);
       //r = this.ch1.antialiased_tanh_rect(r);
@@ -1846,9 +1903,6 @@ function initSpectrum(memoryOffset, fftSize, srate)
       );
       
       post = max(post, abs(l+r));
-      
-      //l *= inv_ceiling;
-      //r *= inv_ceiling;
     ) : (
       l = 0;
       r = 0;
@@ -1858,7 +1912,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
   function processBands()
   local(BW2)
   global( Drive1,    Drive2,    Drive3,     Drive4,     Drive5, 
-          Ceil1,     Ceil2,     Ceil3,      Ceil4,      Ceil5,
+          Gain1,     Gain2,     Gain3,      Gain4,      Gain5,
+          DryWet1,   DryWet2,   DryWet3,    DryWet4,    DryWet5,
           play1,     play2,     play3,      play4,      play5,
           Mode1,     Mode2,     Mode3,      Mode4,      Mode5,
           Feedback1, Feedback2, Feedback3,  Feedback4,  Feedback5,
@@ -1868,9 +1923,10 @@ function initSpectrum(memoryOffset, fftSize, srate)
            bufferL1, bufferL2, bufferL3, bufferL4, bufferL5, 
            bufferR1, bufferR2, bufferR3, bufferR4, bufferR5,
            fbL1,     fbL2,     fbL3,     fbL4,     fbL5
-           fbR1,     fbR2,     fbR3,     fbR4,     fbR5 )
+           fbR1,     fbR2,     fbR3,     fbR4,     fbR5,
+           g1,       g2,       g3,       g4,       g5,
+           lg1,      lg2,      lg3,      lg4,      lg5 )
   (
-    //F1, F2, F3, F4
     fbToggle1 ? ( fbL1 = Feedback1 * bufferL1.readBuffer();
                   fbR1 = Feedback1 * bufferR1.readBuffer(); ) : ( fbL1 = fbR1 = 0; );
     fbToggle2 ? ( fbL2 = Feedback2 * bufferL2.readBuffer();
@@ -1882,11 +1938,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
     fbToggle5 ? ( fbL5 = Feedback5 * bufferL5.readBuffer();
                   fbR5 = Feedback5 * bufferR5.readBuffer(); ) : ( fbL5 = fbR5 = 0; );
     
-    b1.processBand(Drive1, Ceil1, play1, Mode1, Modifier1, fbL1, fbR1);
-    b2.processBand(Drive2, Ceil2, play2, Mode2, Modifier2, fbL2, fbR2);
-    b3.processBand(Drive3, Ceil3, play3, Mode3, Modifier3, fbL3, fbR3);
-    b4.processBand(Drive4, Ceil4, play4, Mode4, Modifier4, fbL4, fbR4);
-    b5.processBand(Drive5, Ceil5, play5, Mode5, Modifier5, fbL5, fbR5);
+    b1.processBand(Drive1, play1, Mode1, Modifier1, fbL1, fbR1);
+    b2.processBand(Drive2, play2, Mode2, Modifier2, fbL2, fbR2);
+    b3.processBand(Drive3, play3, Mode3, Modifier3, fbL3, fbR3);
+    b4.processBand(Drive4, play4, Mode4, Modifier4, fbL4, fbR4);
+    b5.processBand(Drive5, play5, Mode5, Modifier5, fbL5, fbR5);
     
     fbToggle1 ? ( bufferL1.updateBuffer(b1.l);
                   bufferR1.updateBuffer(b1.r); );
@@ -1898,6 +1954,23 @@ function initSpectrum(memoryOffset, fftSize, srate)
                   bufferR4.updateBuffer(b4.r); );
     fbToggle5 ? ( bufferL5.updateBuffer(b5.l);
                   bufferR5.updateBuffer(b5.r); );
+
+    ( lg1 != Gain1 ) ? ( g1 = (10^(0.05*Gain1)); lg1 = Gain1; );
+    ( lg2 != Gain2 ) ? ( g2 = (10^(0.05*Gain2)); lg2 = Gain2; );
+    ( lg3 != Gain3 ) ? ( g3 = (10^(0.05*Gain3)); lg3 = Gain3; );
+    ( lg4 != Gain4 ) ? ( g4 = (10^(0.05*Gain4)); lg4 = Gain4; );
+    ( lg5 != Gain5 ) ? ( g5 = (10^(0.05*Gain5)); lg5 = Gain5; );
+
+    b1.l = g1*(b1.l*DryWet1+b1.inL*(1-DryWet1));
+    b1.r = g1*(b1.r*DryWet1+b1.inR*(1-DryWet1));
+    b2.l = g2*(b2.l*DryWet2+b2.inL*(1-DryWet2));
+    b2.r = g2*(b2.r*DryWet2+b2.inR*(1-DryWet2));
+    b3.l = g3*(b3.l*DryWet3+b3.inL*(1-DryWet3));
+    b3.r = g3*(b3.r*DryWet3+b3.inR*(1-DryWet3));
+    b4.l = g4*(b4.l*DryWet4+b4.inL*(1-DryWet4));
+    b4.r = g4*(b4.r*DryWet4+b4.inR*(1-DryWet4));
+    b5.l = g5*(b5.l*DryWet5+b5.inL*(1-DryWet5));
+    b5.r = g5*(b5.r*DryWet5+b5.inR*(1-DryWet5));
   );
   
   function resetMeters()
@@ -1950,14 +2023,13 @@ function initSpectrum(memoryOffset, fftSize, srate)
   
 function drawShaper(drive)
   global( Drive1,       Drive2,     Drive3,     Drive4,     Drive5, 
-          Ceil1,        Ceil2,      Ceil3,      Ceil4,      Ceil5,
           play1,        play2,      play3,      play4,      play5,
           Mode1,        Mode2,      Mode3,      Mode4,      Mode5,
           Modifier1,    Modifier2,  Modifier3,  Modifier4,  Modifier5,
           selectedBand
           fft_out_r, fft_out_g, fft_out_b, fft_out_a )
   instance(x, y, w, h, hm, calc, displayDrive)
-  local(steps, cx, dx, ds, s, ll, lr, ceiling, mode, ol, or, modifier)
+  local(steps, cx, dx, ds, s, ll, lr, mode, ol, or, modifier)
   (
     steps = 25;
     s = -1;
@@ -1971,7 +2043,6 @@ function drawShaper(drive)
     cx = x;
     gfx_set(fft_out_r, fft_out_g, fft_out_b, fft_out_a);
     
-    ceiling = 0;
     ( selectedBand == 0 ) ? (
       mode = Mode1;
       modifier = Modifier1;
@@ -1989,17 +2060,17 @@ function drawShaper(drive)
       modifier = Modifier5;
     );
     
-    calc.l = s;
-    calc.r = s;
-    calc.processBand(displayDrive, ceiling, 1, mode, modifier, 0, 0);
+    calc.inL = s;
+    calc.inR = s;
+    calc.processBand(displayDrive, 1, mode, modifier, 0, 0);
     ll = calc.l*.5 + .5;
     lr = calc.r*.5 + .5;
     loop( steps,
       s += ds;
-      calc.l = s;
-      calc.r = s;
+      calc.inL = s;
+      calc.inR = s;
       
-      calc.processBand(displayDrive, ceiling, 1, mode, modifier, 0, 0);
+      calc.processBand(displayDrive, 1, mode, modifier, 0, 0);
       ol = calc.l*.5 + .5;
       or = calc.r*.5 + .5;
       gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
@@ -2578,76 +2649,76 @@ solo5 ? play5 = 1;
     );
   
     (cuts==0) ? (
-      b1.l = sl;
-      b1.r = sr;
+      b1.inL = sl;
+      b1.inR = sr;
     ) : (cuts==1) ? (
       LF1.eval_LR2(sl);
-      b1.l = LF1.lp;
-      b2.l = LF1.hp;
+      b1.inL = LF1.lp;
+      b2.inL = LF1.hp;
       
       RF1.eval_LR2(sr);
-      b1.r = RF1.lp;
-      b2.r = RF1.hp;
+      b1.inR = RF1.lp;
+      b2.inR = RF1.hp;
     ) : (cuts==2) ? (
       LF1.eval_LR2(sl);
-      b1.l   = LA_F2.eval_LRAP(LF1.lp);
+      b1.inL   = LA_F2.eval_LRAP(LF1.lp);
       
       LF2.eval_LR2(LF1.hp);
-      b2.l   = LF2.lp;
-      b3.l   = LF2.hp;
+      b2.inL   = LF2.lp;
+      b3.inL   = LF2.hp;
       
       RF1.eval_LR2(sr);
-      b1.r   = RA_F2.eval_LRAP(RF1.lp);
+      b1.inR   = RA_F2.eval_LRAP(RF1.lp);
       
       RF2.eval_LR2(RF1.hp);
-      b2.r   = RF2.lp;
-      b3.r   = RF2.hp;
+      b2.inR   = RF2.lp;
+      b3.inR   = RF2.hp;
     ) : (cuts == 3) ? (
       LF1.eval_LR2(sl);
-      b1.l   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
+      b1.inL   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
       
       LF2.eval_LR2(LF1.hp);
-      b2.l   = LA_F3_2.eval_LRAP(LF2.lp);
+      b2.inL   = LA_F3_2.eval_LRAP(LF2.lp);
       
       LF3.eval_LR2(LF2.hp);
-      b3.l   = LF3.lp;
-      b4.l   = LF3.hp;
+      b3.inL   = LF3.lp;
+      b4.inL   = LF3.hp;
       
       RF1.eval_LR2(sr);
-      b1.r   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
+      b1.inR   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
       
       RF2.eval_LR2(RF1.hp);
-      b2.r   = RA_F3_2.eval_LRAP(RF2.lp);
+      b2.inR   = RA_F3_2.eval_LRAP(RF2.lp);
       
       RF3.eval_LR2(RF2.hp);
-      b3.r   = RF3.lp;
-      b4.r   = RF3.hp;
+      b3.inR   = RF3.lp;
+      b4.inR   = RF3.hp;
     ) : (cuts == 4) ? (
       LF1.eval_LR2(sl);
-      b1.l   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
+      b1.inL   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
       
       LF2.eval_LR2(LF1.hp);
-      b2.l   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
+      b2.inL   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
       
       LF3.eval_LR2(LF2.hp);
-      b3.l   = LA_F4_3.eval_LRAP(LF3.lp);
+      b3.inL   = LA_F4_3.eval_LRAP(LF3.lp);
       
       LF4.eval_LR2(LF3.hp);
-      b4.l   = LF4.lp;
-      b5.l   = LF4.hp;
+      b4.inL   = LF4.lp;
+      b5.inL   = LF4.hp;
       
       RF1.eval_LR2(sr);
-      b1.r   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
+      b1.inR   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
       
       RF2.eval_LR2(RF1.hp);
-      b2.r   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
+      b2.inR   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
       
       RF3.eval_LR2(RF2.hp);
-      b3.r   = RA_F4_3.eval_LRAP(RF3.lp);
+      b3.inR   = RA_F4_3.eval_LRAP(RF3.lp);
       
       RF4.eval_LR2(RF3.hp);
-      b4.r   = RF4.lp;
-      b5.r   = RF4.hp;
+      b4.inR   = RF4.lp;
+      b5.inR   = RF4.hp;
     );
   );  
   
@@ -2662,6 +2733,9 @@ solo5 ? play5 = 1;
   spl0 = filterBank.b1.l + filterBank.b2.l + filterBank.b3.l + filterBank.b4.l + filterBank.b5.l;
   spl1 = filterBank.b1.r + filterBank.b2.r + filterBank.b3.r + filterBank.b4.r + filterBank.b5.r;
   
+  gBoost = (10^(0.05*masterGainSlider));
+  spl0 *= gBoost;
+  spl1 *= gBoost;
   
   //spl0=spl1=filterBank.b2.l;
   //spl0 = spl1 = filterBank.b1.l;
@@ -2840,7 +2914,7 @@ solo5 ? play5 = 1;
   modifierKnob.active = hasShapeMod(slider(modeLocation+selectedBand));
   modifierKnob.value = slider(modifierLocation+selectedBand);
   modifierKnob.drawKnob(modKnob, spectrumH + 75*(1+scaling), 30*(1+scaling), "Shape Mod");
-  modifierKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(modifierLocation+selectedBand) = modifierKnob.value );
+  modifierKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(modifierLocation+selectedBand) = modifierKnob.value );
   
   /* Combobox to select shaper */
   shaperSelect.combobox(modKnob-60*(1+scaling), spectrumH + 150*(1+scaling)-20, 120*(1+scaling), 20, .2, .2, .6, 1, nShapers, 1, 1, 1, "Waveshaper selection." );
@@ -2850,28 +2924,52 @@ solo5 ? play5 = 1;
   shaperSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
     slider_automate( slider(modeLocation+selectedBand)=shaperSelect.curitem; ); 
   );
-  
-  /* Delay section */
+    
   groupTop       = spectrumH + 25*(1+scaling);
   postShaperKnob = modKnob*(1+scaling);
+  
   groupDistance = 85*(1+scaling);
   miniknobWidth = 14*(1+scaling);
   miniknobPad   = 5*(1+scaling);
   buttonPad     = 6*(1+scaling);
-  buttonSize    = 6*(1+scaling);
+  buttonSize    = 6*(1+scaling); 
+  
+  /* Gain dry/wet section */
+  drawGroupRect(postShaperKnob + groupDistance, groupTop, miniknobWidth*4+miniknobPad*2, miniknobWidth*8+miniknobPad*4, group_r, group_g, group_b, group_a);
+  gainKnob.active = 1;
+   
+  gainKnob.value = ( slider(gainLocation+selectedBand) - gainMin ) * iGainRange;
+  gainKnob.drawKnob(postShaperKnob + groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 2*miniKnobWidth + miniKnobPad, miniknobWidth, "Gain");
+  gainKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(gainLocation+selectedBand) = gainKnob.value * gainRange + gainMin );
+  drywetKnob.active = 1;
+  drywetKnob.value = slider(drywetLocation+selectedBand);
+  drywetKnob.drawKnob(postShaperKnob + groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 6*miniKnobWidth + 2*miniKnobPad, miniknobWidth, "Dry/Wet");
+  drywetKnob.processMouse(mouse_x, mouse_y, mouse_cap, 1) ? slider_automate( slider(drywetLocation+selectedBand) = drywetKnob.value );
+
+  /* Delay Section */
   delayKnob.active = 1;
   delayKnob.value = slider(delayLocation+selectedBand);
-  drawGroupRect(postShaperKnob + groupDistance, groupTop, miniknobWidth*4+miniknobPad*2, miniknobWidth*8+miniknobPad*4, group_r, group_g, group_b, group_a);
-  delayKnob.drawKnob(postShaperKnob + groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 2*miniKnobWidth + miniKnobPad, miniknobWidth, "Delay");
-  delayKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(delayLocation+selectedBand) = delayKnob.value );
+  drawGroupRect(postShaperKnob + 2*groupDistance, groupTop, miniknobWidth*4+miniknobPad*2, miniknobWidth*8+miniknobPad*4, group_r, group_g, group_b, group_a);
+  delayKnob.drawKnob(postShaperKnob + 2*groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 2*miniKnobWidth + miniKnobPad, miniknobWidth, "Delay");
+  delayKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(delayLocation+selectedBand) = delayKnob.value );
 
   feedbackKnob.active = 1;
   feedbackKnob.value = slider(feedbackLocation+selectedBand);
-  feedbackKnob.drawKnob(postShaperKnob + groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 6*miniKnobWidth + 2*miniKnobPad, miniknobWidth, "Feedback");
-  feedbackKnob.processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( slider(feedbackLocation+selectedBand) = feedbackKnob.value );
+  feedbackKnob.drawKnob(postShaperKnob + 2*groupDistance + 2*miniknobWidth + miniknobPad, groupTop + 6*miniKnobWidth + 2*miniKnobPad, miniknobWidth, "Feedback");
+  feedbackKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(feedbackLocation+selectedBand) = feedbackKnob.value );
 
-  delayToggle.drawToggle(postShaperKnob + groupDistance + buttonPad, groupTop + buttonPad, buttonSize, buttonSize, getFbToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a);
+  delayToggle.drawToggle(postShaperKnob + 2*groupDistance + buttonPad, groupTop + buttonPad, buttonSize, buttonSize, getFbToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a);
   setFbToggle(selectedBand, delayToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap));
+
+  /* Global gain control */
+  masterGain = (210+stripStart)*(1+scaling);
+  masterGain.active = 1;
+  masterGain.value = ( masterGainSlider - gainMin ) * iGainRange;
+  masterGain.drawKnob(gfx_w - 200, spectrumH + 75*(1+scaling), 30*(1+scaling), "Master Gain");
+  masterGain.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ?  slider_automate( masterGainSlider = masterGain.value * gainRange + gainMin );
+
+  /* Draw tiny EQ for gain control */
+  //outputGains.drawEq(gfx_w - 300, groupTop, 120*(1+scaling), miniknobWidth*8+miniknobPad*4, cuts+1);
 
   /* Band indicator */
   sprintf(16,"Band %d", selectedBand+1);
@@ -2880,7 +2978,7 @@ solo5 ? play5 = 1;
   /* Draw shaper curve */
   shaperWnd.drawBackface();
   shaperWnd.drawShaper(5);
-  shaperWnd.drawVolumes(filterBank.getBandPre(selectedBand), filterBank.getBandPost(selectedBand));
+  shaperWnd.drawVolumes(filterBank.getBandPre(selectedBand), filterBank.getBandPost(selectedBand));  
   
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
