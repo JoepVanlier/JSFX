@@ -1,0 +1,136 @@
+desc:Saike Stereoizer
+tags: comb stereoizer stereo
+version: 0.01
+author: Joep Vanlier
+changelog: 
+
+license: MIT
+
+slider1:Delay=15<4,25,1>Delay [ms]
+slider2:Strength=0.3<0,1,.0001>Strength [-]
+slider3:LowCut=0.4<0,1,.0001>Crossover [log(w)]
+slider4:SideLevel=1<0,2,.0001>Blend old side level [-]
+slider5:CheckMono=0<0,1,1{No, Yes}>Check Mono?
+
+@init
+function initBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+function setOffset(offset)
+  local()
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac)
+  (
+    readptr   = scopeptr;
+    frac      = offset - floor(offset);
+    readptr  -= floor(offset);
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+1);
+  );
+  
+function readBuffer()
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac)
+  (
+    c1 = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c2 = readptr[];
+    c2 * (1.0-frac) + c1 * frac
+  );
+  
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );  
+  
+function clearBuffer()
+  local()
+  global(MAXBUFFERSIZE)
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    memset( scopebuffer, 0, MAXBUFFERSIZE );
+    scopeptr = scopebuffer;
+  );
+  
+bufferDist  = 65536;
+delayBuf1   = 0;
+buffer.initBuffer(delayBuf1, delayBuf1+bufferDist-1);
+
+@slider
+function init_linearSVF(freq, res)
+  global(srate, slider54)
+  local(g)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    g = tan(.5 * freq);
+    k = 2 - 2*res;
+    
+    a1 = 1/(1+g*(g+k));
+    a2 = g*a1;
+    a3 = g*a2;
+  ); 
+
+chDelay=Delay*srate/2000;
+buffer.setOffset(chDelay);
+
+hp.init_linearSVF(  exp( (1-LowCut) * log(20/22050) ), 0 );
+hp2.init_linearSVF( exp( (1-LowCut) * log(20/22050) ), 0 );
+hp3.init_linearSVF( exp( (1-LowCut) * log(20/22050) ), 0 );
+hp4.init_linearSVF( exp( (1-LowCut) * log(20/22050) ), 0 );
+
+@block
+
+@sample
+buffer.setOffset( chDelay );
+
+function eval_linearSVF_HP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v0 - k*v1 - v2
+  );
+
+avg  = .5 * ( spl0 + spl1 );
+side = .5 * ( spl0 - spl1 );
+
+buffer.updateBuffer(avg);
+rb = buffer.readBuffer();
+
+rb = hp.eval_linearSVF_HP(rb);
+rb = hp2.eval_linearSVF_HP(rb);
+rb = hp3.eval_linearSVF_HP(rb);
+rb = hp4.eval_linearSVF_HP(rb);
+
+spl0 = avg + Strength * rb + sideLevel * side;
+spl1 = avg - Strength * rb - sideLevel * side;
+
+( CheckMono == 1 ) ? (
+  spl0 = spl1 = .5 * (spl0 + spl1);
+);
+
