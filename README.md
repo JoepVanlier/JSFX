@@ -26,7 +26,8 @@ There are two basic modes of operation:
 # Filther, a waveshaping filter / distortion plugin with dynamic processing.
 ![Filther](https://i.imgur.com/8ofYcFE.png)
 
-Filther is a waveshaping / filter plugin that allows for some dynamic processing as well.
+Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
+You can find a full manual for Filther here: https://joepvanlier.github.io/FiltherManual/
 
 #### What does it sound like?
 All the distortion/filtering on that track was done with this filter (mostly nonlin Kr0g and Rezzy):
@@ -39,7 +40,6 @@ https://soundcloud.com/saike/fm-modes-filther/s-KXwEQ
 The more experimental filters (such as "Experimental" and "Phase Mangler") can be used on pads to make eerie soundscapes: https://soundcloud.com/saike/filter-ambience/s-UxdLO
 
 Here's a short tutorial on how to use it: https://www.youtube.com/watch?v=jtc8kp57xpI
-You can find a full manual for Filther here: https://joepvanlier.github.io/FiltherManual/
 
 For more information, or to contact the author, see the forum thread here: https://forum.cockos.com/showthread.php?t=213269
 
