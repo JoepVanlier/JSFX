@@ -9,6 +9,18 @@ https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 to your reapack (https://reapack.com/) list of repositories. If you run 
 into issues with these, feel free to open an issue here on github.
 
+# Tight Compressor
+!(TightCompressor)(https://i.imgur.com/0rES8lF.jpg)
+This peak compressor is based on a paper by Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6). It seems to be a pretty decent at tight style compression, with pretty aggressive attack. The compression is continuously visualized to help you dial in the appropriate settings.
+
+# Stereo Bub II
+![StereoBub](https://i.imgur.com/a09HF51.jpg)
+A fairly basic stereo widening tool. Widens the sound, but makes sure that the mono-mix stays unaffected (unlike Haas). The crossover is basically a 12 pole HPF that cuts the bass of the widening to avoid widening the bass too much. The last slider allows you to mix in the original side channel (which can optionally also be run through the 12-pole highpass).
+
+There are two basic modes of operation:
+1. You can either add stereo sound from nothing, using the Strength slider. This adds a comb filtered version of the average signal with opposite polarity to the different channels. Be careful not to overdo it, or you get a flangey sound (unless that is what you want).
+2. You can manipulate the existing side channel that's in the input. The gain of the original side channel is scaled by the old "Old side" knob. Depending on the button "HP original side" this signal route will be highpassed (mono-izing the low frequencies).
+
 # Filther, a waveshaping filter / distortion plugin with dynamic processing.
 ![Filther](https://i.imgur.com/8ofYcFE.png)
 
@@ -79,6 +91,12 @@ The extent of modulation on the filter can be set with the outer mouse button. T
 - Feedback can be used to fatten up filters and in some cases regain control of the resonance. If you want some fatness/resonance fighting, _keep the delay firmly placed at zero_. The feedback delay chain has the exact opposite polarity of the resonance in most chains, so in this mode, it will fight with the resonance to sort of choke in on itself (see diode ladder or ms-20 for this effect). This can make the resonance less ringey, more chunky and a lot more pleasant to listen to. Note that the global feedback is not ZDF. Also note that using feedback, reduces the maximum number of spline nodes by two.
 - For phasey effects, use feedback with larger delays. Note however that then you're in the danger zone, because once resonance starts boosting resonance, things get real dicey. I would always recommend playing with this only if you have AGC on.
 - Morph mode (under routing) allows you to interpolate between filter A and B. Note however, that morph mode eats one node of the spline.
+
+# Tone Stacks
+![Tone Stacks](https://i.imgur.com/giyF29j.jpg)
+Based on the work of jatalahd and ~arph from diystompboxes.com forum.
+See their plugin here: http://www.guitarscience.net/tsc/info.htm
+I've made some bi-linearly transformed versions of these filters which emulate classic tone stacks.
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
