@@ -1,0 +1,633 @@
+desc:Saike Stereoizer
+tags: comb stereoizer stereo
+version: 0.02
+author: Joep Vanlier
+changelog: 
+  + Made a little GUI for it.
+
+license: MIT
+
+slider1:Delay=8<1,25,1>-Delay [ms]
+slider2:Strength=0.3<0,1,.0001>-Strength [-]
+slider3:LowCut=0.4<0,1,.0001>-Crossover [log(w)]
+slider4:SideLevel=1<0,2,.0001>-Blend old side level [-]
+slider5:CheckMono=0<0,1,1{No, Yes}>-Check Mono?
+slider6:SideHP=0<0,1,1{No,Yes}>-Pass side through HPF?
+
+@init
+/* Goniometer */
+function initGonioMeter(in, sampleCount)
+  global(sampleCount, srate, newUI)
+  instance(rStart, rEnd, recPtr, samples, thisUI)
+  local()
+  (
+    samples = sampleCount;
+    rStart = in;
+    rEnd = in + sampleCount - 1;
+    recPtr = in;
+    thisUI = newUI+=1;
+  );
+  
+function feedGonio(l1, r1)
+  global()
+  instance(rStart, rEnd, recPtr)
+  local()
+  (
+    recPtr[] = l1;
+    (recPtr+=1)[] = r1;
+    recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
+  );
+  
+function setWindow(_x, _y, _w, _h)
+  global()
+  instance(x, y, w, h)  
+  local()
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+  );
+ 
+function drawGonioTop(r, g, b, a)
+  global( gfx_x, gfx_y, fontface, scaling )
+  instance(x, y, w, h, fw, fh)
+  local(r)
+  (
+    r = .25;
+    gfx_set(r, g, b, a);
+    gfx_line( x-r*w+.5*w, y-r*w+.5*h+2, x+r*w+.5*w, y+r*w+.5*h+2 );
+    gfx_line( x-r*w+.5*w, y+r*w+.5*h+2, x+r*w+.5*w, y-r*w+.5*h+2 );
+
+    gfx_setfont(9, fontface, 12*(1+scaling));
+        
+    r = .29;
+    gfx_measurestr("L", fw, fh);
+    gfx_x = x-r*w+.5*w - .5*fw;
+    gfx_y = y-r*w+.5*h+2 - .5*fh;
+    gfx_printf( "L" ); 
+    
+    gfx_measurestr("R", fw, fh);
+    gfx_x = x+r*w+.5*w - .5*fw;
+    gfx_y = y-r*w+.5*h+2 - .5*fh;
+    gfx_printf( "R" );
+    
+    gfx_measurestr("R", fw, fh);
+    gfx_x = x + 10;
+    gfx_y = y + .5*h - .5*fh;
+    gfx_printf( "+S" ); 
+    
+    gfx_measurestr("R", fw, fh);
+    gfx_x = x + w - 10 - fw;
+    gfx_y = y + .5*h - .5*fh;
+    gfx_printf( "-S" );
+    
+    gfx_measurestr("M", fw, fh);
+    gfx_x = x + .5*w - .5*fw;
+    gfx_y = y + 5;
+    gfx_printf( "M" );
+  );
+
+function drawGonioMeter(r, g, b, a)
+  global( gfx_a )
+  local(step, ptr, sign0, sign1, s0, s1, angle, vert, horiz, radius, xx, yy, cx, cy)
+  instance(dgonio_zoom, x, y, w, h, recPtr, rStart, rEnd, samples)
+  (
+    ptr = recPtr+2;
+    
+    cx = x + 0.5*w;
+    cy = y + 0.5*h;    
+    
+    gfx_set( r, g, b, a );
+    loop(samples,
+      s0 = ptr[];
+      s1 = (ptr+=1)[];
+      sign0 = sign( s0 );
+      sign1 = sign( s1 );
+      angle = atan( s0 / s1 );
+      (sign0 == 1 && sign1 == -1) || (sign0 == -1 && sign1 == -1) ? angle += 3.141592654;
+      (sign0 == -1 && sign1 == 1) ? angle += 6.283185307;
+      s1 == 0 ? s0 > 0 ? angle = 1.570796327 : angle = 4.71238898;
+      s0 == 0 ? s1 > 0 ? angle = 0 : angle = 3.141592654;
+      radius = (1+dgonio_zoom) * sqrt( sqr(s0)+sqr(s1) ) ;
+      radius > 1 ? radius = 1;
+      angle -= .25*$pi;
+      xx = cx - .5*h*sin(angle)*radius;
+      yy = cy - .5*h*cos(angle)*radius;
+      gfx_a = .1 * a; 
+      gfx_circle(xx, yy, 1, 1);
+      
+      ptr += 1;
+      ptr > rEnd ? ptr = rStart;
+    );
+  );
+
+MinDelay = 1;
+MaxDelay = 25;
+MinStrength = 0;
+MaxStrength = 1;
+MinLowCut = 0;
+MaxLowCut = 1;
+MinSideLevel=0;
+MaxSideLevel=2;
+fontface = "Arial";
+
+function initBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+function setOffset(offset)
+  local()
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac)
+  (
+    readptr   = scopeptr;
+    frac      = offset - floor(offset);
+    readptr  -= floor(offset);
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+1);
+  );
+  
+function readBuffer()
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac)
+  (
+    c1 = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c2 = readptr[];
+    c2 * (1.0-frac) + c1 * frac
+  );
+  
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );  
+  
+function clearBuffer()
+  local()
+  global(MAXBUFFERSIZE)
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    memset( scopebuffer, 0, MAXBUFFERSIZE );
+    scopeptr = scopebuffer;
+  );
+  
+function init_linearSVF(freq, res)
+  global(srate, slider54)
+  local(g)
+  instance(k, a1, a2, a3)
+  (
+    g = tan(.5 * freq);
+    k = 2 - 2*res;
+    
+    a1 = 1/(1+g*(g+k));
+    a2 = g*a1;
+    a3 = g*a2;
+  ); 
+
+function sliderUpdate()
+(
+  chDelay=Delay*srate/2000;
+  buffer.setOffset(chDelay);
+  
+  lowCutFreq = exp( (1-LowCut) * log(20/22050) );
+  hp.init_linearSVF( lowCutFreq, 0 );
+
+  hp2.k   = hp.k;
+  hp2.a1  = hp.a1;
+  hp2.a2  = hp.a2;
+  hp2.a3  = hp.a3;
+  
+  displayFreq = .5 * srate * lowCutFreq;
+);  
+  
+bufferDist  = 65536;
+delayBuf1   = 0;
+buffer.initBuffer(delayBuf1, delayBuf1+bufferDist-1);
+gonioOut.initGonioMeter(bufferDist, 1000);
+
+@slider
+sliderUpdate();
+
+@block
+buffer.setOffset( chDelay );
+
+@sample
+( forceUpdate == 1 ) ? ( sliderUpdate(); forceUpdate = 0; );
+
+function eval_linearSVF_HP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq, ic7eq, ic8eq, ic9eq, ic10eq, ic11eq, ic12eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v0 = v0 - k*v1 - v2;
+    
+    v3 = v0 - ic4eq;
+    v1 = a1 * ic3eq + a2 * v3;
+    v2 = ic4eq + a2 * ic3eq + a3*v3;
+    ic3eq = 2*v1 - ic3eq;
+    ic4eq = 2*v2 - ic4eq;    
+    
+    v0 = v0 - k*v1 - v2;
+    
+    v3 = v0 - ic6eq;
+    v1 = a1 * ic5eq + a2 * v3;
+    v2 = ic6eq + a2 * ic5eq + a3*v3;
+    ic5eq = 2*v1 - ic5eq;
+    ic6eq = 2*v2 - ic6eq;    
+    
+    v0 = v0 - k*v1 - v2;
+    
+    v3 = v0 - ic8eq;
+    v1 = a1 * ic7eq + a2 * v3;
+    v2 = ic8eq + a2 * ic7eq + a3*v3;
+    ic7eq = 2*v1 - ic7eq;
+    ic8eq = 2*v2 - ic8eq;    
+    
+    v0 = v0 - k*v1 - v2;
+    
+    v3 = v0 - ic10eq;
+    v1 = a1 * ic9eq + a2 * v3;
+    v2 = ic10eq + a2 * ic9eq + a3*v3;
+    ic9eq = 2*v1 - ic9eq;
+    ic10eq = 2*v2 - ic10eq;
+    
+    v0 = v0 - k*v1 - v2;
+    
+    v3 = v0 - ic12eq;
+    v1 = a1 * ic11eq + a2 * v3;
+    v2 = ic12eq + a2 * ic11eq + a3*v3;
+    ic11eq = 2*v1 - ic11eq;
+    ic12eq = 2*v2 - ic12eq;
+    
+    v0 - k*v1 - v2;
+  );
+
+avg  = .5 * ( spl0 + spl1 );
+side = .5 * ( spl0 - spl1 );
+
+buffer.updateBuffer(avg);
+rb = buffer.readBuffer();
+rb = hp.eval_linearSVF_HP(rb);
+
+SideHP ? (
+  side = hp2.eval_linearSVF_HP(side);
+);
+
+spl0 = avg + Strength * rb + sideLevel * side;
+spl1 = avg - Strength * rb - sideLevel * side;
+
+( CheckMono == 1 ) ? (
+  spl0 = spl1 = .5 * (spl0 + spl1);
+);
+
+gonioOut.feedGonio(spl0, spl1);
+
+@gfx 667 160
+function clamp(value, mini, maxi)
+  local()
+  global()
+  (
+    max(min(value,maxi),mini)
+  );
+
+/* Hint handling */
+function drawHint_draw()
+  global(scaling, gfx_x, gfx_y, gfx_w, gfx_h, mouse_x, mouse_y, fontface)
+  local(w, h, globalTime)
+  instance(hintTime, currentHint, lastGlobalTime, delta_time)
+  (
+    globalTime = time_precise();
+    delta_time = globalTime - lastGlobalTime;
+    lastGlobalTime = globalTime;
+  
+    ( hintTime > .99 ) ? (
+      gfx_setfont(7, fontface, 14*(1+scaling));
+      gfx_measurestr(currentHint,w,h);
+      
+      gfx_x = mouse_x+15;
+      gfx_y = mouse_y+15;
+      ( gfx_x > 0.5*gfx_w ) ? gfx_x = mouse_x - w - 8;
+      ( gfx_y > 0.5*gfx_h ) ? gfx_y = mouse_y - h - 8;
+
+      gfx_set( 0.05, 0.05, 0.1, .8 );
+      gfx_rect(gfx_x-2, gfx_y-2, w+4, h+4);
+      gfx_set( .7, .7, .7, 1 );      
+      gfx_printf(currentHint);
+    );
+  );
+
+function updateHintTime(hint)
+  global(gfx_x, gfx_y, mouse_x, mouse_y)
+  local()
+  instance(lx, ly, hintTime, currentHint, delta_time)
+  (
+    ( ( abs(lx - mouse_x) + abs( ly - mouse_y ) ) > 0 ) ? (
+      hintTime = 0;
+    ) : (      
+      (hint != 0) ? (
+        currentHint = hint;
+        hintTime = hintTime + delta_time;
+        hintTime = min(1, hintTime)
+      ) : (
+        0
+      )
+    );
+    
+    lx = mouse_x;
+    ly = mouse_y;
+  );  
+
+/* Knob handling */
+function drawKnob(_x, _y, _r, text, _hint)
+  local(ang, dang, r0, r1, r2, r3, rk, tw, th)
+  instance(x, y, r, value, active, label, hint)
+  global(gfx_x, gfx_y, fontface)
+  (
+    x = _x;
+    y = _y;
+    r = _r;
+    
+    r0 = .5*r;
+    r1 = 1.2*r;
+    r2 = 1.4*r;
+    r3 = 1.7*r;
+    rk = .1*r;
+    
+    gfx_set(.3, .3, .7, 1);
+    gfx_circle(x, y, r, 1, 1);
+    gfx_set(0, 0, 0, 1);
+    gfx_circle(x, y, .9*r, 1, 1);
+    gfx_set(.2, .3, .6, 1);
+    gfx_circle(x, y, .8*r, 1, 1);
+    gfx_set(1, 1, 1, .04);
+    gfx_circle(x, y, .7*r, 1, 1);
+    hint = _hint;
+
+    !active ? (
+      gfx_set(0, 0, 0, .5);
+      gfx_circle(x, y, r, 1, 1);
+    );
+  
+    gfx_set(0, 0, 0, .2);
+    gfx_circle(x, y, .78*r, 0, 1);
+    gfx_circle(x, y, .76*r, 0, 1);
+    gfx_set(.3, .4, .8, 1);
+    
+    ang = .75*$pi;
+    dang = 1.5*$pi/30;
+    
+    // 31 segments
+    loop(6,
+      gfx_line(x + r1 * cos(ang), y + r1 * sin(ang), x + r3 * cos(ang), y + r3 * sin(ang) );
+      ang += dang;
+      loop(4,
+        gfx_line(x + r1 * cos(ang), y + r1 * sin(ang), x + r2 * cos(ang), y + r2 * sin(ang) );
+        ang += dang;
+      );
+    );
+    gfx_line(x + r1 * cos(ang), y + r1 * sin(ang), x + r3 * cos(ang), y + r3 * sin(ang) );
+    
+    ang = .75*$pi + 1.5*$pi*value;
+    active ? (
+      gfx_set(0, 0, 0, .9);
+      gfx_circle( x + r0 * cos(ang), y + r0 * sin(ang), rk, 1, 1 );
+    );
+    
+    gfx_set(.4, .6, .9, 1);
+    gfx_setfont(2, fontface, 13);
+    gfx_measurestr(text, tw, th);
+    gfx_x = x - .5*tw;
+    gfx_y = y + r + .25*th;
+    gfx_printf(text);
+    
+    label ? (
+      gfx_setfont(2, fontface, 13);
+      gfx_set(0,0,0,1);
+      gfx_measurestr(label, tw, th);
+      gfx_x = x - .5*tw;
+      gfx_y = y - .5*th + 1;
+      gfx_printf(label);
+    );
+  );
+
+function processMouse(mx, my, mousecap, default)
+  local(left, dx, dy, change, mul, over)
+  instance(hint, value, x, y, r, cap, lleft, lx, ly, active, lastLeftClick, doubleClick, cTime)
+  global(hinter.updateHintTime)
+  (
+    change = 0;
+    mul = 1;
+    
+    dx = (mx-x);
+    dy = (my-y);
+    over = (dx*dx + dy*dy) < (r*r);
+
+    (mousecap&4) ? mul = mul * 0.1666666666667; /* CTRL */
+    (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
+    active ? (
+      left = mousecap & 1;
+      
+      ( left == 0 ) ? (
+        ( over == 1 ) ? (
+          hinter.updateHintTime(hint);
+        ) : ( 
+          hinter.updateHintTime(0);
+        );
+      );
+      
+      doubleClick = 0;
+      (left && !lleft) ? (
+         time_precise(cTime);
+         ( ( cTime - lastLeftClick ) < .25 ) ? (
+            doubleClick = 1;
+         ) : lastLeftClick = cTime;
+      );
+      
+      ( left && cap == 1 ) ? (
+        value = value - .01*mul*(my - ly);
+        value = clamp(value, 0, 1);
+        change = 1;
+      ) : ( cap = 0; );
+      
+      ( left && !lleft ) ? 
+      (
+        ( over ) ?
+        (
+          doubleClick ? (
+            lastLeftClick = -100;
+            change = 1;
+            value = default;
+          ) : ( 
+            cap = 1;
+          );
+        );
+      );
+      
+      lleft = left;
+      lx = mx;
+      ly = my;
+    );
+    
+    change
+  );
+  
+/* Toggle handling */
+function processMouseToggle(mx, my, mousecap)
+  instance(x, y, w, h, on, lastleft, hint)
+  local(left, slack, over)
+  global(hinter.updateHintTime)
+  (
+    slack = 5;
+    left = mousecap & 1;
+    over = (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) );
+    
+    ( left == 0 ) ? (
+      ( over == 1 ) ? (
+        hinter.updateHintTime(hint);
+      ) : ( 
+        hinter.updateHintTime(0);
+      );
+    );
+    
+    ( (left == 1) && (lastleft == 0) ) ?  (
+      ( over ) ? (
+        on = 1 - on;
+      );
+    );
+    
+    lastleft = left;
+    
+    on
+  );
+ 
+function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _hint)
+  local()
+  instance(x, y, w, h, on, hint)
+  global(gfx_a, gfx_mode)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    on = _on;
+    hint = _hint;
+
+    gfx_set(0, 0, 0, 0);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(r, g, b, a*.2);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(wr, wg, wb, wa);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+    
+    on ? (
+      gfx_set(r, g, b, a);
+      gfx_rect(x, y, w, h);
+      gfx_a *= .6;
+      gfx_rect(x-1, y-1, w+2, h+2);
+      gfx_a *= .6;
+      gfx_rect(x-2, y-2, w+4, h+4);
+      gfx_a *= .6;
+      gfx_rect(x-3, y-3, w+6, h+6);
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 2*max(w,h), 2*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 3*max(w,h), 3*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 4*max(w,h), 4*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 5*max(w,h), 5*max(w,h));
+    );
+  );  
+
+x = 80*(1+scaling);
+y = 80*(1+scaling);
+ksize = 33*(1+scaling);
+dx = 130*(1+scaling);
+delayKnob.active = 1;
+strengthKnob.active = 1;
+crossOver.active = 1;
+blendSide.active = 1;
+
+delayKnob.value = ( Delay - MinDelay ) / (MaxDelay-MinDelay);
+strengthKnob.value = Strength;
+crossOver.value = LowCut;
+blendSide.value = ( SideLevel - MinSideLevel ) / (MaxSideLevel-MinSideLevel);
+
+delayKnob.drawKnob(x, y, ksize*(1+scaling), "Delay [ms]", "Delay in milliseconds.");  
+strengthKnob.drawKnob(x+dx, y, ksize*(1+scaling), "Strength", "Strength of the faux added width.\n\nA larger value will generate more stereo\nwidth, but risks hearing noticable comb\neffects. Be on the lookout for undesirable\nflanging.");
+crossOver.drawKnob(x+2*dx, y, ksize*(1+scaling), "Crossover", "Crossover frequency.\n\nDetermine above which frequency\nto apply the stereo widening.");
+blendSide.drawKnob(x+3*dx, y, ksize*(1+scaling), "Old side", "Side Level\n\nAmount of the original input's side signal\nto add back. Note that combining this with\nthe faux width may cause phase issues.\nHere 50%% represents the original width.\nThis slider has no effect on mono signals.");
+
+delayKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5)    ? ( slider_automate( Delay = delayKnob.value * (MaxDelay - MinDelay) + MinDelay ); forceUpdate = 1; );
+strengthKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( Strength = strengthKnob.value ); forceUpdate = 1; );
+crossOver.processMouse(mouse_x, mouse_y, mouse_cap, 0.5)    ? ( slider_automate( LowCut = crossOver.value ); forceUpdate = 1; );  
+blendSide.processMouse(mouse_x, mouse_y, mouse_cap, 0.5)    ? ( slider_automate( SideLevel = blendSide.value * (MaxSideLevel - MinSideLevel) + MinSideLevel ); forceUpdate = 1; );
+
+( displayFreq < 1000 ) ? (
+  sprintf(1, "%d Hz", displayFreq);
+) : (
+  sprintf(1, "%d kHz", displayFreq/1000);
+);
+crossOver.label = 1;
+
+( displayFreq < 1000 ) ? (
+  sprintf(2, "%d ms", Delay);
+);
+delayKnob.label = 2;
+
+gonio_r = .3;
+gonio_g = .2;
+gonio_b = .9;
+gonio_a = 1;
+gonioOut.setWindow(x+3.6*dx, y-1.7*ksize, ksize*3, ksize*3);
+gonioOut.drawGonioMeter(1, 1, 1, 1);
+gonioOut.drawGonioTop(gonio_r, gonio_g, gonio_b, gonio_a);
+
+buttonSize = 5;
+monoToggle.drawToggle(x+3.6*dx, y+1*ksize*(1+scaling), buttonSize, buttonSize, CheckMono, 1, 1, 1, 1, 1, 0, 0, 1, "Test output when left and right\nare mixed to mono.\n");
+gfx_set(1,1,1,1);
+gfx_x = x+3.6*dx+2*buttonSize;
+gfx_y = y+1*ksize*(1+scaling)-.5*buttonSize + 1;
+gfx_set(.4, .6, .9, 1);
+gfx_printf("Test mono");
+CheckMono = monoToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+sideHPToggle.drawToggle(x+3.6*dx, y+1.4*ksize*(1+scaling), buttonSize, buttonSize, SideHP, 1, 1, 1, 1, 1, 0, 0, 1, "Run old side channel through 10-pole HPF?\nThis is useful when using the plugin to clean up\nthe low frequency stereo image.\n");
+gfx_set(1,1,1,1);
+gfx_x = x+3.6*dx+2*buttonSize;
+gfx_y = y+1.4*ksize*(1+scaling)-.5*buttonSize+1;
+gfx_set(.4, .6, .9, 1);
+gfx_printf("HP original side?");
+SideHP = sideHPToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+hinter.drawHint_draw();
