@@ -1,12 +1,14 @@
 desc:Saike Tight Compressor
 tags: Tight Compressor
-version: 0.11
+version: 0.13
 author: Joep Vanlier
-changelog: 
-+ Added dry/wet control
+changelog: Added oversampling
+provides: saike_upsamplers.jsfx-inc
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 Based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
+
+import saike_upsamplers.jsfx-inc
 
 slider1:Treshold1=-20<-40,0,.1>Threshold (dB)
 slider2:Ratio1=.85<0,2,.0001>Ratio (-)
@@ -19,8 +21,10 @@ slider8:PostGain=0<-24,12,0.01>Post-Gain
 slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
 slider10:Topology=0<0,2,1{LogDetect (Softer),LinDetect (Harsher)}>Topology
 slider11:DryWet=1<0,1,.00001>Dry/Wet
+slider12:Oversampling=1<1,8,1>Oversampling factor
 
 @init
+
 MIN_ATTACK = 0;
 MAX_ATTACK = 120;
 
@@ -192,14 +196,15 @@ function calcGain(xG)
   
 function setCompressorOptions( thr, rat, atk, release, knee, makeupToggle )
   instance( rt, at, thresh, ratio, iratio, kWidth, makeUp, quadF )
-  global(srate)
-  local()
+  global(srate, Oversampling)
+  local(csrate)
   (
+    csrate        = Oversampling*srate;
     thresh        = thr;
     ratio         = exp(rat*rat);
     iratio        = 1/ratio;
-    at            = exp(-1/(.5*.001*atk*srate));
-    rt            = exp(-1/(.5*.001*release*srate));
+    at            = exp(-1/(.5*.001*atk*csrate));
+    rt            = exp(-1/(.5*.001*release*csrate));
     kWidth        = knee;
     quadF         = ((1/ratio)-1)/(2*kWidth);
     makeUp        = makeupToggle ? -this.calcGain(0) : 0;
@@ -319,45 +324,44 @@ cL.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
 cR.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
 
 @sample
-/* Zolzer RMS compressor (deprecated) */
-/*function prepareCompressor()
-  global()
-  instance(rt, at, CT, CS, g, tav)
-  local()
+function processSample()
+  global(inL, inR, Topology, outL, outR, cL.compressor, cR.compressor, cL.compressor2, cR.compressor2)
   (
-    tav = 0.01;             // RMS averaging level
-    at = 0.1;               // Attack time constant
-    rt = 0.003;             // Release time constant
-    CT = -25;               // Thresholdl (dB)
-    CS = 2.6;               // Slope
+    ( Topology == 0 ) ? (
+      outL = cL.compressor(inL);
+      outR = cR.compressor(inR);
+    ) : (
+      outL = cL.compressor2(inL);
+      outR = cR.compressor2(inR);
+    );
   );
-
-function compressSignal(s1)
-  global()
-  instance(rms_est, rt, at, CT, CS, g, tav)
-  local(g_now, f, coeff, rms_log)
-  (
-    // Compressor unit
-    rms_est = (1-tav)*rms_est + tav * s1*s1;
-    rms_log = 10*log10(rms_est);
-    g_now = min(0, CS*(CT-rms_log));
-    f = 10^(g_now/20);
-    coeff = (f < g_now) ? at : rt;
-    g = (1-coeff)*g + coeff*f;
-    g * s1;
-  );*/
-
-spl0 = spl0 *= preGainLin;
-spl1 = spl1 *= preGainLin;
+  
+inL = spl0 *= preGainLin;
+inR = spl1 *= preGainLin;
 
 in  = 20*log10(.5*(abs(spl0)+abs(spl1)));
-( Topology == 0 ) ? (
-  spl0 = spl0 * (1-DryWet) + cL.compressor(spl0) * DryWet;
-  spl1 = spl0 * (1-DryWet) + cR.compressor(spl1) * DryWet;
+
+( overSampling == 1 ) ? (
+  processSample();
 ) : (
-  spl0 = spl0 * (1-DryWet) + cL.compressor2(spl0) * DryWet;
-  spl1 = spl0 * (1-DryWet) + cR.compressor2(spl1) * DryWet;
+  upsampleL.updateUpHist(overSampling, inL);
+  upsampleR.updateUpHist(overSampling, inR);
+  loop(overSampling,
+    inL = overSampling*upsampleL.upSample(overSampling);
+    inR = overSampling*upsampleR.upSample(overSampling);
+    
+    processSample();
+    
+    downL.updateDownHist(overSampling, outL);
+    downR.updateDownHist(overSampling, outR);
+  );
+  
+  outL = downL.downSample(overSampling);
+  outR = downR.downSample(overSampling);
 );
+
+spl0 = spl0 * (1-DryWet) + outL * DryWet;
+spl1 = spl1 * (1-DryWet) + outR * DryWet;
 
 spl0 *= postGainLin;
 spl1 *= postGainLin;
