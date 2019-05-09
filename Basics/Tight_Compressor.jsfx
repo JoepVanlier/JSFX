@@ -323,9 +323,17 @@ Decay1          = exp(alpha * sDecay1 + beta);
 cL.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
 cR.setCompressorOptions( Treshold1, Ratio1, Attack1, Decay1, Knee1, MakeUp1 );
 
+curFIRdelay = getFIRdelay(overSampling);
+curFIRdelay = 32;
+( curpdc != curFIRdelay ) ? (
+  pdc_top_ch = 2;
+  pdc_delay = curFIRdelay;
+  curpdc = curFIRdelay;
+);
+
 @sample
 function processSample()
-  global(inL, inR, Topology, outL, outR, cL.compressor, cR.compressor, cL.compressor2, cR.compressor2)
+  global(inL, inR, Topology, outL, outR, cL.compressor, cR.compressor, cL.compressor2, cR.compressor2, DryWet)
   (
     ( Topology == 0 ) ? (
       outL = cL.compressor(inL);
@@ -334,6 +342,9 @@ function processSample()
       outL = cL.compressor2(inL);
       outR = cR.compressor2(inR);
     );
+    
+    outL = inL * (1-DryWet) + outL * DryWet;
+    outR = inR * (1-DryWet) + outR * DryWet;
   );
   
 inL = spl0 *= preGainLin;
@@ -343,25 +354,27 @@ in  = 20*log10(.5*(abs(spl0)+abs(spl1)));
 
 ( overSampling == 1 ) ? (
   processSample();
+  spl0 = outL;
+  spl1 = outR;
 ) : (
   upsampleL.updateUpHist(overSampling, inL);
   upsampleR.updateUpHist(overSampling, inR);
+
+  f = 0;
   loop(overSampling,
+    f += 1;
     inL = overSampling*upsampleL.upSample(overSampling);
     inR = overSampling*upsampleR.upSample(overSampling);
-    
+
     processSample();
-    
+    ( f == 2 ) ? (
+      spl0 = downL.downSample(overSampling);
+      spl1 = downR.downSample(overSampling);
+    );
     downL.updateDownHist(overSampling, outL);
     downR.updateDownHist(overSampling, outR);
   );
-  
-  outL = downL.downSample(overSampling);
-  outR = downR.downSample(overSampling);
 );
-
-spl0 = spl0 * (1-DryWet) + outL * DryWet;
-spl1 = spl1 * (1-DryWet) + outR * DryWet;
 
 spl0 *= postGainLin;
 spl1 *= postGainLin;
