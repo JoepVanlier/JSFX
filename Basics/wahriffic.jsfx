@@ -1,0 +1,205 @@
+desc:Saike Wahriffic
+tags: filter non-linear wah
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+provides: saike_upsamplers.jsfx-inc wah_models.jsfx-inc
+license: MIT
+
+Weeping Demon emulation based on code by Chet Gnegy (https://ccrma.stanford.edu/~chet/)
+Crybaby, based on paper: M. Holters et al, “Physical modelling of a wah-wah effect pedal as a case study for application of the nodal DK method to circuits with variable parts.”, Proc. Digital Audio Effects (DAFx-11), Paris, France (2011): 31-35
+
+import saike_upsamplers.jsfx-inc
+import wah_models.jsfx-inc
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+slider1:Model=0:<0,2,1{Weeping Demon Mode 1,Weeping Demon Mode 2,Crybaby (Warning: CPU intensive / high drive needs oversampling x2)>Model
+slider3:Drive=0<-6,24,1>Drive (dB)
+slider4:PostGain=0<-6,24,1>Post Gain (dB)
+slider13:Cutoff=1<0,1,.0001>Cutoff
+slider14:Resonance=0<0,1,.0001>Cutoff 2
+slider15:Grunge=0<0,1,.0001>Grunge
+slider17:Inertia=1<0,1,1<{Off,On}>Inertia
+slider60:Oversampling=2<1,3,1>Oversampling
+
+@init
+  function prepLerp(slideridx_in, memloc_in, currentValue, linear)
+    instance(slideridx, ptr, memloc, cur_x, cur_y, next, delta, nextVal, prevVal)
+    local(next_x, next_y, dx)
+    global(samplesblock)
+    (
+      ( linear ) ? (
+        slideridx = slideridx_in;
+        memloc = memloc_in;
+      
+        nextVal = currentValue;
+        (samplesblock > 0) && ( samplesblock < 44100 ) ? (
+          delta = (nextVal - prevVal) / (samplesblock);
+          cur_y = prevVal;
+        ) : (
+          delta = 0;
+          cur_y = nextVal;
+        );
+        
+        // This ensures we never change delta (curSample is never negative)
+        next = -10000;
+        prevVal = nextVal;
+      ) : (
+        slideridx = slideridx_in;
+        memloc = memloc_in;
+        
+        cur_x = 0;
+        cur_y = currentValue;
+        
+        // Fetch the points
+        ptr = memloc;
+        while( (next_x = slider_next_chg(slideridx, next_y)) > -1 )
+        (
+          ptr[] = cur_x;
+          ptr += 1;
+          ptr[] = (next_y - cur_y) / (next_x - cur_x);
+          ptr += 1;
+          
+          cur_x = next_x;
+          cur_y = next_y;
+        );
+        ptr[]  = samplesblock;
+        ptr[1] = 0;
+        ptr[2] = -100;
+              
+        ptr = memloc;
+        cur_y = currentValue;
+        delta = 0;
+        
+        next = ptr[];
+        prevVal = cur_y;
+      );
+    );
+
+  function lerpSample()
+    instance(slideridx, ptr, memloc, cur_x, cur_y, delta, next)
+    global(curSample, potato)
+    local()
+    (
+      ( next == curSample ) ? (
+        ptr += 1;
+        delta = ptr[];
+        ptr += 1;
+        next = ptr[];
+      );
+      
+      cur_y += delta
+    );
+
+cutoff_mem  = 0;
+reso_mem    = 10000;
+
+@slider
+preamp      = 10^(Drive/20);
+inv_preamp  = 10^(-Drive/20)*10^(PostGain/20);
+
+@block
+  function inertiaSmoothing(newval)
+    instance(prev, val, boost)
+    global()
+    local(error, diff)
+    (
+      error   = (val - newval);
+      diff    = val - prev;
+      prev    = val;
+      boost   = min(1, max(0, 15*abs(diff)-.1));
+      val     = val - .3 * error - .7 * error * boost;
+    );
+    
+  // Sample accurate lerp or inertial based?
+  slider6 ?
+  (
+    cutoffLerp.prepLerp(13, cutoff_mem, inertia_cutoff.inertiaSmoothing( Cutoff ), 1);
+    resoLerp.prepLerp(14, reso_mem, inertia_reso.inertiaSmoothing( Resonance ), 1);
+  ) :
+  (
+    cutoffLerp.prepLerp(13, cutoff_mem, Cutoff, 0);
+    resoLerp.prepLerp(14, reso_mem, Resonance, 0);
+  );
+
+@sample 
+  // The dunlop requires some heavy computation that we only do when the samplerate changes
+  ( lastSampleRate != overSampling*srate ) ? (
+    lastSampleRate = overSampling*srate;
+    dlopL.dlop_init_srate(overSampling*srate);
+    dlopR.dlop_init_srate(overSampling*srate);
+    s = 10;
+  );
+
+  function updateFilter()
+  (
+    ( Model == 0 ) ? (
+      weepingL1.weeping_init(sliderCutoff, sliderReso, 0);
+      weepingR1.weeping_init(sliderCutoff, sliderReso, 0);
+    ) : ( Model == 1 ) ? (
+      weepingL2.weeping_init(sliderCutoff, sliderReso, 1);
+      weepingR2.weeping_init(sliderCutoff, sliderReso, 1);
+    ) : ( Model == 2 ) ? (
+      dlopL.dlop_init_cutoff(sliderCutoff, sliderReso);
+      dlopR.dlop_init_cutoff(sliderCutoff, sliderReso);
+    );
+  );
+
+  function processSample()
+  (
+    ( Model == 0 ) ? (
+      outL = weepingL1.weeping_eval(inL+Grunge*inL*inL*inL);
+      outR = weepingR1.weeping_eval(inR+Grunge*inR*inR*inR);
+    ) : ( Model == 1 ) ? (
+      outL = weepingL2.weeping_eval(inL+Grunge*inL*inL*inL);
+      outR = weepingR2.weeping_eval(inR+Grunge*inR*inR*inR);        
+    ) : ( Model == 2 ) ? (
+      outL = dlopL.dlop_eval(inL+Grunge*inL*inL*inL);
+      outR = dlopR.dlop_eval(inR+Grunge*inR*inR*inR);
+    );
+  );
+
+  inL = spl0*preamp;
+  inR = spl1*preamp;
+  
+  sliderCutoff  = cutoffLerp.lerpSample();
+  sliderReso    = resoLerp.lerpSample();
+  
+  s = s + 1;
+  ( s > 4 ) ? (
+    updateFilter();
+    s = 0;
+  );
+
+  ( overSampling == 1 ) ? (
+    processSample();
+    spl0 = outL;
+    spl1 = outR;
+  ) : (
+    upsampleL.updateUpHist(overSampling, inL);
+    upsampleR.updateUpHist(overSampling, inR);
+  
+    f = 0;
+    loop(overSampling,
+      f += 1;
+      inL = overSampling*upsampleL.upSample(overSampling);
+      inR = overSampling*upsampleR.upSample(overSampling);
+  
+      processSample();
+      
+      downL.updateDownHist(overSampling, outL);
+      downR.updateDownHist(overSampling, outR);
+      
+      ( f == 1 ) ? (
+        spl0 = downL.downSample(overSampling);
+        spl1 = downR.downSample(overSampling);
+      );
+    );
+  );
+  
+  spl0 *= inv_preamp;
+  spl1 *= inv_preamp;
