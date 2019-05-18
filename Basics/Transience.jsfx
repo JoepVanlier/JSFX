@@ -1,0 +1,320 @@
+desc:Saike Transience (transient shaper)
+tags: Transient Shaper Saike
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+
+import saike_upsamplers.jsfx-inc
+
+slider1:sAttack=0.5<0,1,.000000001>Attack
+slider2:sDecay=0.5<0,1,.000000001>Decay
+slider3:strength=0<-1,1,.000000001>Reduce / Enhance Attack
+slider4:strength2=0<-1,1,.000000001>Reduce / Enhance Decay
+slider5:compensate=0<-20,20,0.0005>Gain compensation
+slider6:Mode=0<0,1,1>Peak/Squared
+slider7:Oversampling=1<1,4,1>Oversampling
+slider8:GainSmoothing=0<0,1,0.00001>Gain smoothing
+
+@init
+dbMax           = 12;
+FOLLOW_ATK      = 1;
+MIN_ATTACK      = 2;
+MAX_ATTACK      = 120;
+MIN_DECAY       = 130;
+MAX_DECAY       = 1000;
+
+function setWindowLocation(_x, _y, _w, _h)
+  global()
+  instance(x, y, w, h, cap, meterSpace)
+  local()
+  ( 
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    meterSpace = 40;
+  );
+  
+function draw_compressor_window(floorLevel, compression, gradBlitTarget)
+  instance(x, y, w, h, meterSpace, lw, lh)
+  global(gfx_mode, gfx_dest, gfx_x, gfx_y, tester, dbMax)
+  local(stepsize, steps, dy, yc, xs, xe, cStep, ww, hh, oldDest)
+  (
+    gfx_mode = 0; gfx_set(1,1,1,1);
+    ( ( lw != w ) || ( lh != h ) ) ? (
+      /* Only draw new gradients when size changes */
+      lw = w;
+      lh = h;
+      oldDest = gfx_dest;
+      gfx_setimgdim(gradBlitTarget, w, h);
+      gfx_dest = gradBlitTarget;
+      gfx_set(0,0,0,1);
+      gfx_rect(x,y,w,h);
+      gfx_gradrect(x, y, w, h, 0, 0, .3, .3, .0001, .0001, .0006, .0001, -.0001, -.0001, .001, .0001);
+      gfx_gradrect(x, y, w, h, 0, 0, 0, 0, 0, .0, 0, .0001, .008, .0001, .01, .0004);
+      gfx_dest = oldDest;
+    );
+    gfx_x = gfx_y = 0;
+    gfx_blit(gradBlitTarget, 1, 0);
+  
+    stepsize = 3;
+    cStep = dbMax;
+    dy = stepsize*h/floorLevel;
+    
+    gfx_set(1,.3,.3,.6);
+    steps = floor( h * (compression/floorLevel) / 2 );
+    yc = y;
+    xs = x+(w-meterSpace)+4;
+    xe = x+w-4;
+    loop(-steps,
+      gfx_line(xs, floor(yc), xe, floor(yc));
+      yc += 2;
+    );
+   
+    steps = floor(-floorLevel/stepsize); 
+    yc = y;
+    gfx_setfont(1, "Arial", 16);
+    loop(steps,
+      gfx_set(1,1,1,.7);
+      cStep > 0 ? (
+        sprintf(0, "%2d", cStep);
+      ) : (
+        sprintf(0, "-%2d", cStep);
+      );
+      gfx_measurestr(0, ww, hh);
+      gfx_x = x+w-.5*meterSpace-.5*ww;
+      gfx_y = yc-.5*hh-1;
+      gfx_drawstr(0);
+      gfx_set(1,1,1,.2);
+      gfx_line(x, floor(yc), x+w-.8*meterSpace, floor(yc));
+      gfx_line(x+w-.2*meterSpace, floor(yc), x+w, floor(yc));
+      //gfx_line(0, 50, 150, 5);
+      yc -= dy;
+      cStep -= stepsize;
+    );
+  );
+  
+function draw_buffer_db(scopeptr, scopebuffer, scopebuffermax, floorLevel, fill)
+  instance(x, y, w, h, meterSpace)
+  globals(gfx_r, gfx_g, gfx_b, gfx_x, gfx_y, scrolls, dbMax)
+  local(skipFactor, xx, yy, ybase, dx, lptr, lastx, lasty, scale, ly)
+  (
+    skipFactor = 1/((w-meterSpace)/(scopebuffermax-scopebuffer));  
+    dx = 1;
+    scale = h / abs(floorLevel);
+    ybase = y;
+    xx    = x;
+
+    scrolls ? (
+      lptr  = scopeptr;
+      gfx_x = xx;
+      gfx_y = ybase;
+      loop((scopebuffermax-scopeptr)/skipFactor,
+        yy = ybase - scale*max(floorLevel,lptr[]-dbMax);
+
+        fill ? (
+          gfx_triangle( xx-dx, y+h,
+                        xx-dx, ly,
+                        xx, y+h,
+                        xx, yy);
+        );
+        gfx_lineto(xx, yy);
+        
+        ly = yy;
+        lptr += skipFactor;
+        xx += dx;
+      );
+      
+      lptr = scopebuffer;
+      loop((scopeptr - scopebuffer)/skipFactor,
+        yy = ybase - scale*max(floorLevel,lptr[]-dbMax);
+
+        fill ? (
+          gfx_triangle( xx-dx, y+h,
+                        xx-dx, ly,
+                        xx, y+h,
+                        xx, yy);
+        );
+        gfx_lineto(xx, yy);
+
+
+        ly = yy;
+        lptr += skipFactor;
+        xx += dx;
+      );
+    ) : (
+      lptr  = scopebuffer;
+      
+      gfx_x = xx;
+      gfx_y = ybase;
+      loop((scopebuffermax-scopebuffer)/skipFactor,
+        yy = ybase - scale*max(floorLevel,lptr[]-dbMax);
+
+        fill ? (
+          gfx_triangle( xx-dx, y+h,
+                        xx-dx, ly,
+                        xx, y+h,
+                        xx, yy);
+        );
+        gfx_lineto(xx, yy);
+
+        ly= yy;
+        lptr += skipFactor;
+        xx += dx;
+      );
+    );
+  );  
+
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );
+  
+function initBufferNoReset(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+DYNAMICS_IN         = 100000;
+DYNAMICS_OUT        = 200000;
+DYNAMICS_GAIN       = 300000;
+DYNAMICS_BUFSIZE    = 100000;  
+  
+inBuf.initBufferNoReset(DYNAMICS_IN, DYNAMICS_IN+DYNAMICS_BUFSIZE-1);
+outBuf.initBufferNoReset(DYNAMICS_OUT, DYNAMICS_OUT+DYNAMICS_BUFSIZE-1);
+gainBuf.initBufferNoReset(DYNAMICS_GAIN, DYNAMICS_GAIN+DYNAMICS_BUFSIZE-1);  
+
+function init_follower(atk, release)
+  local(csrate)
+  instance(at, rt, LPF)
+  global(srate, Oversampling)
+  (
+    csrate = Oversampling*srate;
+    at = ( atk > 0 ) ? exp(-1/(.5*.001*atk*csrate)) : 0;
+    rt = exp(-1/(.5*.001*release*csrate));
+  );
+
+function eval_follower(x)
+  local()
+  instance(state, at, rt, x)
+  global()
+  (
+    x > state ? (
+      state = at * state + ( 1.0 - at ) * x;
+    ) : (
+      state = rt * state + ( 1.0 - rt ) * x;
+    );
+    
+    state
+  );
+
+@slider
+
+@block
+beta            = log(MIN_ATTACK);
+alpha           = log(MAX_ATTACK)-beta;
+attack          = exp(alpha * sAttack + beta) - 1;
+beta            = log(MIN_DECAY);
+alpha           = log(MAX_DECAY)-beta;
+decay           = exp(alpha * sDecay + beta);
+alpha_gain      = exp(-1/(.5*.015*GainSmoothing*Oversampling*srate)); // Max gain smoothing is 15 ms
+
+/* 20 Hz => ~50 ms period */
+envFollower.init_follower(FOLLOW_ATK, 120);
+envFollowerOut.init_follower(FOLLOW_ATK, 150);
+envDesiredAttack.init_follower(attack, 150);
+envDesiredDecay.init_follower(FOLLOW_ATK, decay);
+
+@sample
+function processSample()
+(
+  ( mode == 0 ) ? (
+    inputGain     = 20*log10(max(.001, .5*(abs(inL)+abs(inR))));
+  ) : (
+    inputGain     = 20*log10(max(.001, .5*(inL*inL+inR*inR)));
+  );
+  
+  cEnv          = envFollower.eval_follower(inputGain);
+  cTargetAtk    = envDesiredAttack.eval_follower(inputGain);
+  cTargetDecay  = envDesiredDecay.eval_follower(inputGain);
+  
+  /* Gain changes in dB space */
+  ldiffAtk   = strength*(cTargetAtk-cEnv);
+  ldiffRel   = strength2*(cTargetDecay-cEnv);
+  dbGainCur  = - ldiffAtk + ldiffRel + compensate;
+  dbGain     = alpha_gain * dbGain + (1-alpha_gain)*dbGainCur;
+  
+  /* Convert to linear */
+  linGain    = 10^(0.05*dbGain);
+  
+  outL = inL * linGain;
+  outR = inR * linGain;
+  
+  ( mode == 0 ) ? (
+    movOut     = 20*log10(max(.001, .5*(abs(outL)+abs(outR))));
+  ) : (
+    movOut     = 20*log10(max(.001, .5*(outL*outL+outR*outR)));
+  );
+  envOut = envFollowerOut.eval_follower(movOut);
+);
+
+inL = spl0;
+inR = spl1;
+
+( overSampling == 1 ) ? (
+  processSample();
+  spl0 = outL;
+  spl1 = outR;
+) : (
+  upsampleL.updateUpHist(overSampling, inL);
+  upsampleR.updateUpHist(overSampling, inR);
+
+  f = 0;
+  loop(overSampling,
+    f += 1;
+    inL = overSampling*upsampleL.upSample(overSampling);
+    inR = overSampling*upsampleR.upSample(overSampling);
+
+    processSample();
+    downL.updateDownHist(overSampling, outL);
+    downR.updateDownHist(overSampling, outR);
+    
+    ( f == 1 ) ? (
+      spl0 = downL.downSample(overSampling);
+      spl1 = downR.downSample(overSampling);
+    );
+  );
+);
+
+inBuf.updateBuffer( cEnv );
+gainBuf.updateBuffer( dbGain );
+outBuf.updateBuffer( envOut );
+
+@gfx
+gfx_set(0,0,0,0);
+gfx_rect(0,0,400,400);
+
+floorLevel = -58;
+cL.setWindowLocation(0, 0, gfx_w, gfx_h);
+cL.draw_compressor_window(floorLevel, -cL.c, 1);
+gfx_set(.3, .3, .7, .308);
+cL.draw_buffer_db(inBuf.scopeptr,   inBuf.scopebuffer,    inBuf.scopebuffermax,     floorLevel, 1);
+gfx_set(.9, .1, .4, .304);
+cL.draw_buffer_db(outBuf.scopeptr,  outBuf.scopebuffer,   outBuf.scopebuffermax,    floorLevel, 1);
+gfx_set(1, 0, 1, .8);
+cL.draw_buffer_db(gainBuf.scopeptr, gainBuf.scopebuffer,  gainBuf.scopebuffermax,   floorLevel, 0);
