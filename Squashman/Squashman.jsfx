@@ -1,8 +1,8 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.36
+version: 0.37
 author: Joep Vanlier
-changelog: Show location in LFO, add knob for drive, fix reset level for gain knob, fix bug in overtones, added a warm hug
+changelog: Optimization chebychev even, fixed obnoxious bug that selected band when actually selecting LFO from combobox, added slope amplifier distortion, added combo box when sync is on, added feedback toggle to serialization list (forgot this last time)
 license: MIT
 
 import saike_upsamplers.jsfx-inc
@@ -89,13 +89,14 @@ slider63:Oversampling=1<1,4,1>-Oversampling
 slider64:fixDC=1<0,1,1>-Fix DC?
 
 @init
-  COMBO_SMALL = 16;
-  COMBO_BIG = 11;
-  GRID_FONT = 15;
-  HINT_FONT = 14;
-  KNOB_FONT = 13;
-  KNOB_FONT2 = 12;
-  TOGGLE_FONT = 10;
+  COMBO_SMALL   = 16;
+  COMBO_BIG     = 11;
+  GRID_FONT     = 15;
+  HINT_FONT     = 14;
+  KNOB_FONT     = 13;
+  KNOB_FONT2    = 12;
+  TOGGLE_FONT   = 10;
+  BAND_FONT     = 9;
   gfx_ext_retina = 1;
 
   ///////////////////////
@@ -130,7 +131,7 @@ slider64:fixDC=1<0,1,1>-Fix DC?
   modulator2.modulator();
   modulator3.modulator();
   modulator4.modulator();
-
+  
   function getModRateSliderText(cTime)
   (
     ( cTime < 0.0196078 ) ? (
@@ -287,6 +288,71 @@ slider64:fixDC=1<0,1,1>-Fix DC?
       tempoLabel = "1/32";
     ) : (
       tempoLabel = "1/64";
+    );
+    
+    tempoLabel
+  );
+  
+  nTimeDivisions = 52;
+  function indexToTime(idx)
+  local()
+  instance()
+  global()
+  (
+    ( idx == 0 ) ? ( 0
+    ) : ( idx == 1  ) ? ( 0.0196078
+    ) : ( idx == 2  ) ? ( 0.0392157
+    ) : ( idx == 3  ) ? ( 0.0588235
+    ) : ( idx == 4  ) ? ( 0.0784314
+    ) : ( idx == 5  ) ? ( 0.0980392
+    ) : ( idx == 6  ) ? ( 0.117647
+    ) : ( idx == 7  ) ? ( 0.137255
+    ) : ( idx == 8  ) ? ( 0.156863
+    ) : ( idx == 9  ) ? ( 0.176471
+    ) : ( idx == 10 ) ? ( 0.196078
+    ) : ( idx == 11 ) ? ( 0.215686
+    ) : ( idx == 12 ) ? ( 0.235294
+    ) : ( idx == 13 ) ? ( 0.254902
+    ) : ( idx == 14 ) ? ( 0.27451
+    ) : ( idx == 15 ) ? ( 0.294118
+    ) : ( idx == 16 ) ? ( 0.313725
+    ) : ( idx == 17 ) ? ( 0.333333
+    ) : ( idx == 18 ) ? ( 0.352941
+    ) : ( idx == 19 ) ? ( 0.372549
+    ) : ( idx == 20 ) ? ( 0.392157
+    ) : ( idx == 21 ) ? ( 0.411765
+    ) : ( idx == 22 ) ? ( 0.431373
+    ) : ( idx == 23 ) ? ( 0.45098
+    ) : ( idx == 24 ) ? ( 0.470588
+    ) : ( idx == 25 ) ? ( 0.485196
+    ) : ( idx == 26 ) ? ( 0.495196
+    ) : ( idx == 27 ) ? ( 0.509804
+    ) : ( idx == 28 ) ? ( 0.529412
+    ) : ( idx == 29 ) ? ( 0.54902
+    ) : ( idx == 30 ) ? ( 0.568627
+    ) : ( idx == 31 ) ? ( 0.588235
+    ) : ( idx == 32 ) ? ( 0.607843
+    ) : ( idx == 33 ) ? ( 0.627451
+    ) : ( idx == 34 ) ? ( 0.647059
+    ) : ( idx == 35 ) ? ( 0.666667
+    ) : ( idx == 36 ) ? ( 0.686275
+    ) : ( idx == 37 ) ? ( 0.705882
+    ) : ( idx == 38 ) ? ( 0.72549
+    ) : ( idx == 39 ) ? ( 0.745098
+    ) : ( idx == 40 ) ? ( 0.764706
+    ) : ( idx == 41 ) ? ( 0.784314
+    ) : ( idx == 42 ) ? ( 0.803922
+    ) : ( idx == 43 ) ? ( 0.823529
+    ) : ( idx == 44 ) ? ( 0.843137
+    ) : ( idx == 45 ) ? ( 0.862745
+    ) : ( idx == 46 ) ? ( 0.882353
+    ) : ( idx == 47 ) ? ( 0.901961
+    ) : ( idx == 48 ) ? ( 0.921569
+    ) : ( idx == 49 ) ? ( 0.941176
+    ) : ( idx == 50 ) ? ( 0.960784
+    ) : ( idx == 51 ) ? ( 0.980392
+    ) : ( idx == 52 ) ? ( 0.999999
+    ) : ( idx == 53 ) ? ( 1.000000
     );
   );
 
@@ -1025,6 +1091,30 @@ function shiftLeft(loc, fromIdx, numElements)
       midx = midx + 1;
     );
   );
+  
+/* Shift slider data right (for different bands) */
+function shiftRightMem(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc + numElements;
+    loop(numElements-fromIdx,
+      midx[] = midx[-1];
+      midx -= 1;
+    );
+  );
+
+/* Shift slider data left  (for different bands) */
+function shiftLeftMem(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc+fromIdx;
+    loop(numElements-fromIdx,
+      midx[] = midx[1];
+      midx += 1;
+    );
+  );  
 
 /* Make room for a new band in the slider data */
 function addBand(idx)
@@ -1043,9 +1133,18 @@ function addBand(idx)
     shiftRight( modLocation,       idx, maxCuts );
     shiftRight( frequencyLocation, idx, maxCuts-1 );
     
-    /* shapeMod1Value shapeMod1Type shapeMod2Value shapeMod2Type
-       shapeDrive1Value shapeDrive1Type shapeDrive2Value shapeDrive2Type */
+    shiftRightMem(shapeMod1Value,   idx, maxCuts );
+    shiftRightMem(shapeMod1Type,    idx, maxCuts );
+    shiftRightMem(shapeMod2Value,   idx, maxCuts );
+    shiftRightMem(shapeMod2Type,    idx, maxCuts );
+    shiftRightMem(shapeDrive1Value, idx, maxCuts );
+    shiftRightMem(shapeDrive1Type,  idx, maxCuts );
+    shiftRightMem(shapeDrive2Value, idx, maxCuts );
+    shiftRightMem(shapeDrive2Type,  idx, maxCuts );
+    
+    
     /* drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5 */
+    /* fbToggle1 fbToggle2 fbToggle3 fbToggle4 fbToggle5 */
     
     cuts = cuts + 1;
   );
@@ -1067,13 +1166,25 @@ function remBand(idx)
     shiftLeft( modLocation,       idx, maxCuts );
     shiftLeft( frequencyLocation, idx, maxCuts-1 );
     
+    shiftLeftMem(shapeMod1Value,   idx, maxCuts );
+    shiftLeftMem(shapeMod1Type,    idx, maxCuts );
+    shiftLeftMem(shapeMod2Value,   idx, maxCuts );
+    shiftLeftMem(shapeMod2Type,    idx, maxCuts );
+    shiftLeftMem(shapeDrive1Value, idx, maxCuts );
+    shiftLeftMem(shapeDrive1Type,  idx, maxCuts );
+    shiftLeftMem(shapeDrive2Value, idx, maxCuts );
+    shiftLeftMem(shapeDrive2Type,  idx, maxCuts );
+    
+    /* drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5 */
+    /* fbToggle1 fbToggle2 fbToggle3 fbToggle4 fbToggle5 */
     
     cuts = cuts - 1;
   );  
   
-nShapers = 26;
-nModulators = 4;
+nShapers = 28;
+nModulators = 5;
 
+nLFOtypes = 26;
 /* Strings for the comboboxes */
 function comboStrings(stridx, curitem)
   local(str)
@@ -1109,6 +1220,8 @@ function comboStrings(stridx, curitem)
       : ( curitem == 23 ) ? ( "Soft Square (M)" )
       : ( curitem == 24 ) ? ( "Ripple (M)" )
       : ( curitem == 25 ) ? ( "Warm Hug (M)" )
+      : ( curitem == 26 ) ? ( "Slope amplifier (M+D)" )
+      : ( curitem == 27 ) ? ( "Satman (M)" )
     ) : ( stridx == 2 ) ?
     (
       ( curitem == 0 ) ? ( "-" )
@@ -1145,6 +1258,8 @@ function comboStrings(stridx, curitem)
       ) : ( curitem == 24 ) ? ( str = "Two harmonics"
       ) : ( curitem == 25 ) ? ( str = "Three harmonics"
       )
+    ) : ( stridx == 4 ) ? (
+      str = getModRateSliderText( indexToTime(curitem) );
     );
   );
 
@@ -1195,24 +1310,9 @@ function hasShapeMod(curitem)
     : ( curitem == 23 ) ? ( 1 ) /* Soft square */
     : ( curitem == 24 ) ? ( 1 ) /* Ripple */
     : ( curitem == 25 ) ? ( 1 ) /* Squeezy */
+    : ( curitem == 26 ) ? ( 1 ) /* Slope clamper */
+    : ( curitem == 27 ) ? ( 1 ) /* Sat man */
   );
-
-/*function updateHintTime(hint, hoverType)
-  global(gfx_x, gfx_y, mouse_x, mouse_y, hintTime, currentHint, delta_time, lx, ly, hover)
-  local()
-  global()
-  (
-    ( (lx - mouse_x) || ( ly - mouse_y ) ) > 0 ? hintTime = 0;
-    
-    hint != 0 ? (
-      currentHint = hint;
-      hintTime = hintTime + 1 * delta_time;
-      hover = hoverType;
-      hintTime = min(1, hintTime)
-    ) : (
-      0
-    )
-  );*/
 
 /* Feed sample to FFT */
 function feedSample(sample)
@@ -1329,39 +1429,6 @@ function drawBackface()
     gfx_line(x, y+h, x+w, y+h);
     gfx_line(x, y, x, y+h);
     gfx_line(x+w, y, x+w, y+h);
-  );
-
-function drawEq(_x, _y, _w, _h, _bands)
-  global( grid_color_r, grid_color_g, grid_color_b, grid_color_a
-          group_r, group_g, group_b, group_a, gfx_x )
-  instance(x, y, w, h, bands, dband)
-  local()
-  (
-    x       = _x;
-    y       = _y;
-    w       = _w;
-    h       = _h;
-    bands   = _bands;
-    
-    gfx_set( 0, 0, 0, grid_color_a );
-    gfx_rect( x, y, w, h );
-    
-    gfx_set( group_r, group_g, group_b, group_a );
-    gfx_line(x, y, x+w, y);
-    gfx_line(x, y+h, x+w, y+h);
-    gfx_line(x, y+h+1, x+w, y+h+1);
-    gfx_line(x, y, x, y+h);
-    gfx_line(x+w, y, x+w, y+h);
-    gfx_line(x+w+1, y, x+w+1, y+h);
-    gfx_line(x,y+.5*h,x+w,y+.5*h);
-     
-    dband = (w / bands);
-    
-    gfx_x = x;
-    loop(bands,
-      gfx_line(gfx_x, y, gfx_x, y+h);
-      gfx_x += dband;  
-    );
   );
 
 // Draws the FFT Grid, frequency axis and dB axis
@@ -2076,25 +2143,86 @@ function drawGroupRect(x, y, w, h, r, g, b, a)
     gfx_line(x, y+h+1, x+w, y+h+1);
     gfx_line(x+w+1, y, x+w+1, y+h);
   );
- 
+  
+  
+/*-----------*/
+/* BUTTON    */  
+/*-----------*/   
+  function drawButton( modButtonX, modButtonY, modButtonW, modButtonH, str, font, taper )
+  instance(x, y, w, h, over)
+  global(backface_color_r, backface_color_g, backface_color_b,
+         font_color_r, font_color_g, font_color_b, font_color_a,
+         gfx_x, gfx_y)
+  local(strw, strh)
+  (
+    gfx_set(backface_color_r, backface_color_g, backface_color_b, 0.9);
+    //gfx_rect( modButtonX, modButtonY, modButtonW, modButtonH );
+    
+    gfx_triangle(modButtonX+taper,              modButtonY, 
+                 modButtonX+modButtonW-taper,   modButtonY, 
+                 modButtonX+modButtonW,         modButtonY + modButtonH,
+                 modButtonX+modButtonW,         modButtonY + modButtonH,
+                 modButtonX,                    modButtonY + modButtonH
+                  );
+    
+    gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+    gfx_setfont(font);
+    gfx_measurestr(str, strw, strh);
+    gfx_x = modButtonX + .5*(modButtonW-strw);
+    gfx_y = modButtonY + .5*(modButtonH-strh);
+    gfx_printf(str);
+    
+    over ? (
+      gfx_set(font_color_r, font_color_g, font_color_b, .5*font_color_a);
+      gfx_x = modButtonX + .5*(modButtonW-strw) + 1;
+      gfx_printf(str);
+    );
+    
+    x = modButtonX;
+    y = modButtonY;
+    w = modButtonW;
+    h = modButtonH;
+  );
+  
+  function button_processMouse(mx, my, mc)
+  instance(x, y, w, h, over, lmc)
+  global()
+  local(clicked)
+  (
+    over = ( mx > x ) && ( mx < (x+w) ) && ( my > y ) && ( my < ( y + h ) );
+    
+    over ? (
+      clicked = ((mc & 1) && (lmc & 1 == 0)) ? 1 : 0;
+    ) : clicked = 0;
+    
+    lmc = mc;
+    
+    clicked
+  );
+  
+/*-----------*/
+/* TOGGLE    */  
+/*-----------*/ 
 function processMouseToggle(mx, my, mousecap)
   instance(x, y, w, h, on, lastleft, str)
   local(left, slack, over)
-  global(hinter.updateHintTime)
+  global(hinter.updateHintTime, comboboxOpen)
   (
-    slack = 5;
-    left = mousecap & 1;
-    
-    over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
-    
-    over ? (
-      ( (left == 1) && (lastleft == 0) ) ?  (
-        on = 1 - on;
+    !comboboxOpen ? (
+      slack = 5;
+      left = mousecap & 1;
+      
+      over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
+      
+      over ? (
+        ( (left == 1) && (lastleft == 0) ) ?  (
+          on = 1 - on;
+        );
+        hinter.updateHintTime(str);
       );
-      hinter.updateHintTime(str);
+      
+      lastleft = left;
     );
-    
-    lastleft = left;
     
     on
   );
@@ -2312,75 +2440,77 @@ function drawKnob(_x, _y, _r, text, _hint)
 function processMouse(mx, my, mousecap, default)
   local(left, dx, dy, change, mul, over)
   instance(hint, value, x, y, r, cap, lleft, lx, ly, active, lastLeftClick, doubleClick, cTime, hoverTime)
-  global(hinter.updateHintTime, mouse_wheel, delta_time)
+  global(hinter.updateHintTime, mouse_wheel, delta_time, comboboxOpen)
   (
     change = 0;
-    mul = 1;
-    
-    dx = (mx-x);
-    dy = (my-y);
-    over = (dx*dx + dy*dy) < (r*r);
-
-    (mousecap&4) ? mul = mul * 0.1666666666667; /* CTRL */
-    (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
-    
-    (over || (cap > 0)) ? (
-      hoverTime = hoverTime + delta_time;
-    ) : ( 
-      hoverTime = 0;
-    );
-    
-    active ? (
-      left = mousecap & 1;
+    !comboboxOpen ? (
+      mul = 1;
       
-      ( over == 1 ) ? (
-        (mouse_wheel ~= 0) ? (
-          value = value + 0.0001 * mul * mouse_wheel;
-          mouse_wheel = 0;
-          value = clamp(value, 0, 1);
-          change = 1;
-        );
+      dx = (mx-x);
+      dy = (my-y);
+      over = (dx*dx + dy*dy) < (r*r);
+  
+      (mousecap&4) ? mul = mul * 0.1666666666667; /* CTRL */
+      (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
+      
+      (over || (cap > 0)) ? (
+        hoverTime = hoverTime + delta_time;
+      ) : ( 
+        hoverTime = 0;
       );
       
-      ( left == 0 ) ? (
+      active ? (
+        left = mousecap & 1;
+        
         ( over == 1 ) ? (
-          hinter.updateHintTime(hint);
-        ) : ( 
-          hinter.updateHintTime(0);
-        );
-      );
-      
-      doubleClick = 0;
-      (left && !lleft) ? (
-         time_precise(cTime);
-         ( ( cTime - lastLeftClick ) < .25 ) ? (
-            doubleClick = 1;
-         ) : lastLeftClick = cTime;
-      );
-      
-      ( left && cap == 1 ) ? (
-        value = value - .01*mul*(my - ly);
-        value = clamp(value, 0, 1);
-        change = 1;
-      ) : ( cap = 0; );
-      
-      ( left && !lleft ) ? 
-      (
-        ( over ) ?
-        (
-          doubleClick ? (
-            lastLeftClick = -100;
+          (mouse_wheel ~= 0) ? (
+            value = value + 0.0001 * mul * mouse_wheel;
+            mouse_wheel = 0;
+            value = clamp(value, 0, 1);
             change = 1;
-            value = default;
-          ) : ( 
-            cap = 1;
           );
         );
+        
+        ( left == 0 ) ? (
+          ( over == 1 ) ? (
+            hinter.updateHintTime(hint);
+          ) : ( 
+            hinter.updateHintTime(0);
+          );
+        );
+        
+        doubleClick = 0;
+        (left && !lleft) ? (
+           time_precise(cTime);
+           ( ( cTime - lastLeftClick ) < .25 ) ? (
+              doubleClick = 1;
+           ) : lastLeftClick = cTime;
+        );
+        
+        ( left && cap == 1 ) ? (
+          value = value - .01*mul*(my - ly);
+          value = clamp(value, 0, 1);
+          change = 1;
+        ) : ( cap = 0; );
+        
+        ( left && !lleft ) ? 
+        (
+          ( over ) ?
+          (
+            doubleClick ? (
+              lastLeftClick = -100;
+              change = 1;
+              value = default;
+            ) : ( 
+              cap = 1;
+            );
+          );
+        );
+        
+        lleft = left;
+        lx = mx;
+        ly = my;
       );
-      
-      lleft = left;
-      lx = mx;
-      ly = my;
     );
     
     change
@@ -2616,8 +2746,12 @@ function combobox_draw_top()
   local(i, i_internal, j, xtxt, x1, x2, x3, y1, y2, y3, pad, wi, delta, ny, hasMarked)
   global(gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, font_color_r, font_color_g, font_color_b, font_color_a )
   instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols, dangerousElements, yTxtShift)
-  (    
+  ( 
     xtxt = x+3;
+    ((xtxt - w*(cols-1)) < 0) ? (
+      xtxt += w*(cols-1);
+    );
+    
     delta = goup ? (nitems/cols+1)*h : 0;
     gfx_x = xtxt;
     gfx_y = y + 4 - delta;
@@ -2627,10 +2761,10 @@ function combobox_draw_top()
     open ?
     (
       gfx_set( r*.3, g*.3, b*.3, 1 );
-      gfx_rect( x - (cols-1)*w, y-delta+h-1, cols*w+2, h * ny + 2 );
+      gfx_rect( xtxt - (cols-1)*w, y-delta+h-1, cols*w+2, h * ny + 2 );
           
       gfx_set( r*.1, g*.1, b*.1, 1 );
-      gfx_rect( x - (cols-1)*w+1, y-delta+h, cols*w, h * ny );
+      gfx_rect( xtxt - (cols-1)*w+1, y-delta+h, cols*w, h * ny );
       i = 0; j = 0;
       loop( cols, 
         loop( ny,
@@ -2662,7 +2796,7 @@ function combobox_draw_top()
 function combobox_processMouse(xx, yy, mc)
   local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny, hasMarked, olditem)
   global(gfx_x, gfx_y, lastUI, lastChar, mouse_wheel, comboboxOpen)
-  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled, dangerousElements)  
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled, dangerousElements, thisWasOpen)  
   (
     disabled == 0 ? (
       delta   = goup ? (nitems/cols+1)*h : 0;
@@ -2677,8 +2811,18 @@ function combobox_processMouse(xx, yy, mc)
       ny      = ceil(nitems/cols);
       ymax    = ymin + ny*h;
       
+      /* Don't let it go offscreen */
+      (xmin < 0) ? (
+        xmin += w*(cols-1);
+        xmax += w*(cols-1);
+      );
+      
       hasMarked = dangerousElements > 0;
       over = xx > x && xx < ( x+w ) && yy > y && yy < ( y + h );
+      
+      ( ( thisWasOpen == 1 ) && !left && !open ) ? (
+        comboboxOpen = 0;
+      );
       
       ( lastUI == thisUI ) ?
       (
@@ -2747,7 +2891,7 @@ function combobox_processMouse(xx, yy, mc)
       
       over ? (
         htime = updateHintTime(hint);
-      ) : htime = updateHintTime(0);
+      ) : htime = updateHintTime(0);      
       
       open ? 
       (
@@ -2757,7 +2901,7 @@ function combobox_processMouse(xx, yy, mc)
         hover = min( nitems-1, max( 0, xl * ny + max(0, min(ny-1, yl)) ) );
         
         ( !lastleft && left ) ? (
-          open = 0; comboboxOpen = 0;
+          open = 0; thisWasOpen = 1;
           ( xx > xmin && xx < xmax && yy > (y+h-delta) && yy < ( ymax ) ) ? ( curitem = hover; change = 1 );
         ) : ( !lastright && right ) ? (
           hover > 0 ? dangerousElements[comboMapping(stridx, hover)] = 1 - dangerousElements[comboMapping(stridx, hover)];
@@ -2780,7 +2924,7 @@ function combobox_processMouse(xx, yy, mc)
 function combomodulator_processMouse(xx, yy, mc)
   local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny, olditem, mul)
   global(gfx_x, gfx_y, lastUI, lastChar, mouse_wheel, comboboxOpen)
-  instance(lastclick, value, dragging, lx, ly, x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled)  
+  instance(lastclick, value, dragging, lx, ly, x, y, w, h, r, g, b, a, thisWasOpen, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled)  
   (
     disabled == 0 ? (
       delta   = goup ? (nitems/cols+1)*h : 0;
@@ -2796,6 +2940,10 @@ function combomodulator_processMouse(xx, yy, mc)
       ymax    = ymin + ny*h;
       
       ( dragging && !left ) ? dragging = 0;
+      
+      ( ( thisWasOpen == 1 ) && !left && !open ) ? (
+        comboboxOpen = 0;
+      );
       
       dragging ? (
         mul = 1;
@@ -2862,7 +3010,7 @@ function combomodulator_processMouse(xx, yy, mc)
           hover = min( nitems-1, max( 0, xl * ny + max(0, min(ny-1, yl)) ) );
           
           ( !lastleft && left ) ? (
-            open = 0; comboboxOpen = 0;
+            open = 0; thisWasOpen = 1;
             ( xx > xmin && xx < xmax && yy > (y+h-delta) && yy < ( ymax ) ) ? ( curitem = hover; change = 1 );
           ) : ( !lastright && right ) ? (
             1//hover > 0 ? dangerousElements[comboMapping(stridx, hover)] = 1 - dangerousElements[comboMapping(stridx, hover)];
@@ -3335,16 +3483,15 @@ function initSpectrum(memoryOffset, fftSize, srate)
     );
     
   function folder_init(cutoff, reso)
-    local(R, RL, Vt, iVt)
+    local(RL, Vt, iVt)
     instance(dc_scum, alpha, beta, delta)
     global()
     (
-      R       = 15000;
       RL      = (8000+49000*cutoff);
-      iVt     = 1/.025864;
+      iVt     = 38.663779771110423755026291370244; //1/.025864;
       dc_scum = .1 * reso;
       
-      alpha   = 2 * RL / R;
+      alpha   = 0.0001333333333333333397 * RL;
       beta    = (alpha + 1) * iVt;
       delta   = log( RL * .00000000000000001 * iVt );
     );      
@@ -3393,19 +3540,33 @@ function initSpectrum(memoryOffset, fftSize, srate)
   
   side = 0;
   
+  function sinh(x)
+  local(ex)
+  (
+    ex = exp(x);
+    .5 * ( exp(x) - 1/ex )
+  );
+  
+  function cosh(x)
+  local(ex)
+  (
+    ex = exp(x);
+    .5 * ( exp(x) + 1/ex )
+  );
+  
   /* TO DO: Merge crossovers with control */
   function processBand(drive, play, mode, modifier, fbl, fbr)
-  global(antialiased_tanh_rect, side)
-  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive)
+  global(antialiased_tanh_rect, side, bjt, overSampling, srate)
+  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive, lastl, lastr)
   local(inv_ceiling, factor, depth, idepth, 
-        tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc)
+        tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg)
   (
     play ? (
       in = max(in, abs(inL+inR));
       
       l = inL;
       r = inR;
-      
+
       side ? (
         tc = l;
         l = (l + r)*.5;
@@ -3625,10 +3786,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
         /* Chebychev odd
         /* t2l and t2r contain current chevychev polynomial */
         /* tl and tr contains the current tally */
-        l = .5*l;
-        r = .5*r;
-        tl = l;
-        tr = r;
+        l = l;
+        r = r;
         t3l = 1;
         t3r = 1;
         ll = t4l = 0;
@@ -3641,8 +3800,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
         modifier = 10*modifier;
         modifier = modifier + 2;
         loop(modifier,
-          t2l = 2 * l * t3l - t4l;
-          t2r = 2 * r * t3r - t4r;
+          t2l = l * t3l - t4l;
+          t2r = r * t3r - t4r;
           
           t4l = t3l;
           t4r = t3r;
@@ -3653,8 +3812,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
           tl = t2l*loc + (1-loc)*ll;
           tr = t2r*loc + (1-loc)*rr;
           
-          t2l = 2 * l * t3l - t4l;
-          t2r = 2 * r * t3r - t4r;
+          t2l = l * t3l - t4l;
+          t2r = r * t3r - t4r;
           
           t4l = t3l;
           t4r = t3r;
@@ -3665,9 +3824,6 @@ function initSpectrum(memoryOffset, fftSize, srate)
           rr = t4r;
         );
         
-        /* Triangle */
-        //loc = 2 - abs( 2*modifier - 2 * floor( modifier ) - 1 ) - 1;
-        
         l = tanh(tl);
         r = tanh(tr);
  
@@ -3675,10 +3831,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
         /* Chebychev even
         /* t2l and t2r contain current chevychev polynomial */
         /* tl and tr contains the current tally */
-        l = .5*l;
-        r = .5*r;
-        tl = l;
-        tr = r;
+        l = l;
+        r = r;
         t3l = 1;
         t3r = 1;
         ll = t4l = 0;
@@ -3691,8 +3845,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
         modifier = 10*modifier;
         modifier = modifier + 2;
         loop(modifier,
-          t2l = 2 * l * t3l - t4l;
-          t2r = 2 * r * t3r - t4r;
+          t2l = l * t3l - t4l;
+          t2r = r * t3r - t4r;
           
           t4l = t3l;
           t4r = t3r;
@@ -3702,18 +3856,18 @@ function initSpectrum(memoryOffset, fftSize, srate)
           ll = t4l;
           rr = t4r;
           
-          t2l = 2 * l * t3l - t4l;
-          t2r = 2 * r * t3r - t4r;
+          t2l = l * t3l - t4l;
+          t2r = r * t3r - t4r;
           
           t4l = t3l;
           t4r = t3r;
           t3l = t2l;
           t3r = t2r;
-
-          loc = (modifier-floor(modifier));
-          tl = t2l*loc + (1-loc)*(ll);
-          tr = t2r*loc + (1-loc)*(rr);
         );
+        
+        loc = (modifier-floor(modifier));
+        tl = t2l*loc + (1-loc)*ll;
+        tr = t2r*loc + (1-loc)*rr;
         
         loc = 4*((modifier*.5)-floor(modifier*.5));
         loc >= 2 ?
@@ -3723,8 +3877,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
           t = (loc-1);
         );
 
-        l = tanh((tl-t+l));
-        r = tanh((tr-t+r));
+        l = tanh((tl-t+.5*l));
+        r = tanh((tr-t+.5*r));
  
       ) : ( mode == 22 ) ?
       (
@@ -3767,6 +3921,39 @@ function initSpectrum(memoryOffset, fftSize, srate)
         /* Warm hug */
         l = tanh(l - modifier*tanh(6*l+modifier) + tanh(4*modifier*l-modifier));
         r = tanh(r - modifier*tanh(6*r+(1-side)*modifier) + tanh(4*modifier*r-(1-side)*modifier));
+      ) : ( mode == 26 ) ? (
+        tl = l;
+        tr = r;
+        t2l = 44100*overSampling/(srate);
+        l = tanh(lastl+.3*tanh((150+5000*modifier)*(l-lastl)*t2l));
+        r = tanh(lastr+.3*tanh((150+5000*modifier)*(r-lastr)*t2l));
+        
+        lastl = tl;
+        lastr = tr;
+      ) : ( mode == 27 ) ? (
+        l = 8*l;
+        r = 8*r;
+        
+        modifier = 5-5*modifier;
+         
+        loop(6,
+          t3r = l - modifier * lastl;
+          t2r = .6*atan(t3r);
+          dg = 1 + .6*modifier / ( 1 + t2r*t2r );
+          g = lastl - t2r;
+          lastl = lastl - g / dg;
+        );
+        l = lastl;
+
+        loop(6,
+          t3r = r - modifier * lastr;
+          t2r = .6*atan(t3r);
+          dg = 1 + .6*modifier / ( 1 + t2r*t2r );
+          g = lastr - t2r;
+          lastr = lastr - g / dg;
+        );
+        r = lastr;
+        
       ) : (
         l = 0;
         r = 0;
@@ -4135,6 +4322,14 @@ file_mem(0,shapeDrive1Type, 16);
 file_mem(0,shapeDrive2Value, 16);
 file_mem(0,shapeDrive2Type, 16);
 
+file_var(0,fbToggle1);
+file_var(0,fbToggle2);
+file_var(0,fbToggle3);
+file_var(0,fbToggle4);
+file_var(0,fbToggle5);
+
+file_var(0,modVisible);
+
 @slider
 
 @block
@@ -4313,7 +4508,6 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     );
   );
 
-
   /* LFO Modulators */
   function fetchModulationAmount(ref, type, value)
   local()
@@ -4345,17 +4539,17 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   
   m1_value = LFO_amnt1 * modulator1.updateModulator(.7);
   m2_value = LFO_amnt2 * modulator2.updateModulator(.7);
-  //m3_value = LFO_amnt3 * modulator3.updateModulator(.7);
-  //m4_value = LFO_amnt4 * modulator4.updateModulator(.7);    
+  m3_value = LFO_amnt3 * modulator3.updateModulator(.7);
+  m4_value = LFO_amnt4 * modulator4.updateModulator(.7);    
   
-  modulator1.updateModRate(LFO_freq1);
   modulator1.updateScale(LFO_amnt1);
-  modulator2.updateModRate(LFO_freq2);
   modulator2.updateScale(LFO_amnt2);
-  /*modulator3.updateModRate(LFO_freq3);
   modulator3.updateScale(LFO_amnt3);
-  modulator4.updateModRate(LFO_freq4);
-  modulator4.updateScale(LFO_amnt4);*/
+  modulator4.updateScale(LFO_amnt4);  
+  modulator1.updateModRate(LFO_freq1);
+  modulator2.updateModRate(LFO_freq2);
+  modulator3.updateModRate(LFO_freq3);
+  modulator4.updateModRate(LFO_freq4);  
 
   Modifier1 = modifierLerp1.lerpSample();
   Modifier2 = modifierLerp2.lerpSample();
@@ -4836,9 +5030,12 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     spectrumX = 0;
     spectrumY = 0;
     spectrumW = gfx_w - 200*0;
-    spectrumH = gfx_h - 175 * (1+scaling);
+    spectrumH = gfx_h - 175 * ( 1 + modVisible ) * (1+scaling);
+    bottomRow = gfx_h - 175 * (1+scaling);
+    topRow    = spectrumH;
     
     fontface = "Arial";
+    gfx_setfont(BAND_FONT, fontface, 20*(1+scaling));
     gfx_setfont(COMBO_SMALL, fontface, 11*(1+scaling));
     gfx_setfont(COMBO_BIG, fontface, 14*(1+scaling));  
     gfx_setfont(GRID_FONT, fontface, 14*(1+scaling));
@@ -4849,12 +5046,12 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     
     spectrumIn.setWindowLocation(spectrumX,  spectrumY, spectrumW, spectrumH);
     spectrumOut.setWindowLocation(spectrumX, spectrumY, spectrumW, spectrumH);
-    shaperWnd.setWindowLocation(stripStart*(1+scaling), spectrumH + 25*(1+scaling), 125*(1+scaling), 125*(1+scaling));
+    shaperWnd.setWindowLocation(stripStart*(1+scaling), bottomRow + 25*(1+scaling), 125*(1+scaling), 125*(1+scaling));
   );
 
   /* Gradients are buffered to save rendering perf */
   function drawGradients(w, h, spectrumH, gradient_bg)
-  instance(lw, lh)
+  instance(lw, lh, lSpectrumH)
   global(gfx_mode, gfx_dest, bg_color_r, bg_color_g, bg_color_b, bg_color_a,
          gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a )
   local( oldDest, oldMode)
@@ -4862,11 +5059,12 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     oldMode = gfx_mode;
     gfx_mode = 0;
     gfx_set(1,1,1,1);
-    ( ( lw != w ) || ( lh != h ) ) ? (
+    ( ( lw != w ) || ( lh != h ) || (spectrumH != lSpectrumH) ) ? (
       /* Only draw gradients when size changes */
       gfx_x = gfx_y = 0;
       lw = w;
       lh = h;
+      lSpectrumH = spectrumH;
       oldDest = gfx_dest;
       gfx_setimgdim(gradient_bg, w, h);
       gfx_dest = gradient_bg;
@@ -4885,20 +5083,19 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   );
 
   /* Draw a vertical label */
-  function drawVertLabel(x, y, stridx, labelW, fontSize, labelBuffer)
+  function drawVertLabel(x, y, stridx, labelW, font, labelBuffer)
   local(oldDest, oldMode, strw, strh)
   global(gfx_dest, gfx_mode, gfx_x, gfx_y,
          font_color_r, font_color_g, font_color_b, font_color_a)
   instance()
   (
     labelBuffer = 3;
-    fontSize = 20;
     oldDest = gfx_dest;
     oldMode = gfx_mode;
     gfx_setimgdim(labelBuffer, labelW, labelW);
     gfx_dest = labelBuffer;
         
-    gfx_setfont(2, "ARIAL", fontSize);
+    gfx_setfont(font);
     gfx_measurestr(stridx, strw, strh);
     gfx_set(0,0,0,1);
     gfx_rect(0,0, labelW, strh);
@@ -5044,7 +5241,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   mod2_color_g = 1;
   mod2_color_a = 1;
   
-  stripStart = 35;
+  stripStart = 35; 
   createGUI(stripStart);
   gradient.drawGradients(gfx_w, gfx_h, spectrumH, 2);
   
@@ -5061,7 +5258,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   spectrumIn.updateBands();
   spectrumIn.drawBands();  
   
-  !comboboxOpen ? spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);
+  !comboboxOpen ? spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);  
   
   ////////////
   /* Shaper */
@@ -5073,7 +5270,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   /* Combobox to select envelope for shaper */
   comboModulatorYSize = 11*(1+scaling);
   comboModulatorXSize = 9*(1+scaling);
-  shaperModulator1.combobox(shaperLocationX+2, spectrumH + 25*(1+scaling), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
+  shaperModulator1.combobox(shaperLocationX+2, bottomRow + 25*(1+scaling), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
   shaperModulator1.combobox_setcuritem(shapeMod1Type[selectedBand]);
   shaperModulator1.value = shapeMod1Value[selectedBand];
   shaperModulator1.combomodulator_draw();
@@ -5084,7 +5281,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   );
 
   /* Combobox to select envelope for shaper */
-  shaperModulator2.combobox(shaperLocationX+2, spectrumH + (25+comboModulatorYSize), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
+  shaperModulator2.combobox(shaperLocationX+2, bottomRow + (25+comboModulatorYSize), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
   shaperModulator2.combobox_setcuritem(shapeMod2Type[selectedBand]);
   shaperModulator2.value = shapeMod2Value[selectedBand];
   shaperModulator2.combomodulator_draw();
@@ -5099,12 +5296,12 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   modifierKnob.value = slider(modifierLocation+selectedBand);
   modifierKnob.value2 = shaperModulator1.value;
   modifierKnob.value3 = shaperModulator2.value;
-  modifierKnob.drawKnob(currentPos, spectrumH + 75*(1+scaling), 30*(1+scaling), "Shape Mod", "Modify shaper curve.");
+  modifierKnob.drawKnob(currentPos, bottomRow + 75*(1+scaling), 30*(1+scaling), "Shape Mod", "Modify shaper curve.");
   modifierKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(modifierLocation+selectedBand) = modifierKnob.value );
   
   /* Combobox to select shaper */
   shaperSelect.dangerousElements=block_list;
-  shaperSelect.combobox(currentPos-60*(1+scaling), spectrumH + 150*(1+scaling)-20*(1+scaling), 120*(1+scaling), 20*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, "Waveshaper selection." );
+  shaperSelect.combobox(currentPos-60*(1+scaling), bottomRow + 150*(1+scaling)-20*(1+scaling), 120*(1+scaling), 20*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(slider(modeLocation+selectedBand));
   shaperSelect.combobox_draw();  
   shaperSelect.combobox_draw_top();
@@ -5112,7 +5309,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     slider_automate( slider(modeLocation+selectedBand)=shaperSelect.curitem; ); 
   );
   
-  groupTop       = spectrumH + 25*(1+scaling);
+  groupTop       = bottomRow + 25*(1+scaling);
   mod2Top        = groupTop + 4*miniKnobWidth + miniKnobPadY + 4;
   
   bigKnobDist   = 130*(1+scaling);
@@ -5130,7 +5327,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   ////////////
   currentPos = currentPos + bigKnobDist;
   /* Combobox to select envelope for drive */
-  driveModulator1.combobox(currentPos+2 - 60*(1+scaling), spectrumH + 25*(1+scaling), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
+  driveModulator1.combobox(currentPos+2 - 60*(1+scaling), bottomRow + 25*(1+scaling), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
   driveModulator1.combobox_setcuritem(shapeDrive1Type[selectedBand]);
   driveModulator1.value = shapeDrive1Value[selectedBand];
   driveModulator1.combomodulator_draw();
@@ -5141,7 +5338,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   );
   
   /* Combobox to select envelope for drive */
-  driveModulator2.combobox(currentPos+2 - 60*(1+scaling), spectrumH + (25+comboModulatorYSize), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
+  driveModulator2.combobox(currentPos+2 - 60*(1+scaling), bottomRow + (25+comboModulatorYSize), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
   driveModulator2.combobox_setcuritem(shapeDrive2Type[selectedBand]);
   driveModulator2.value = shapeDrive2Value[selectedBand];
   driveModulator2.combomodulator_draw();
@@ -5156,7 +5353,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   driveKnob.value = (slider(driveLocation+selectedBand) - driveMin)*iDriveRange;
   driveKnob.value2 = driveModulator1.value;
   driveKnob.value3 = driveModulator2.value;
-  driveKnob.drawKnob(currentPos, spectrumH + 75*(1+scaling), 30*(1+scaling), "Drive", "Modify band drive.");
+  driveKnob.drawKnob(currentPos, bottomRow + 75*(1+scaling), 30*(1+scaling), "Drive", "Modify band drive.");
   driveKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(driveLocation+selectedBand) = driveKnob.value * driveRange + driveMin );  
   
   /*panSlider.value = getPan(selectedBand)*.5+.5;
@@ -5271,50 +5468,111 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   /////////////////
   /* LFO Section */
   /////////////////
-  function drawLFOGroup( LFO_loc, lfoIdx, tcur )
+  function drawLFOGroup( yLocation, LFO_loc, lfoIdx, tcur )
+  instance()//tempoSync, midiTrigger)
+  local(mc, strw, strh)
+  global(groupWidth, miniknobWidth, miniKnobPadX, miniKnobPadY, buttonSize, scaling, BAND_FONT,
+         group_r, group_g, group_b, group_a,
+         widget_r, widget_g, widget_b, widget_a,
+         toggle_r, toggle_g, toggle_b, toggle_a,
+         mod_r, mod_g, mod_b, mod_a,
+         mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y,
+         nTimeDivisions, nLFOtypes, 
+         LFO_types, LFO_tsync, LFO_retrig, LFO_frequencies, LFO_amounts,
+         )
   (
-    drawGroupRect(LFO_loc, groupTop, 2*groupWidth, miniknobWidth*8+miniknobPadY*4, group_r, group_g, group_b, group_a);
-    lfo1FreqKnob.value = slider(LFO_frequencies+lfoIdx);
-    lfo1FreqKnob.active = 1;
-    lfo1FreqKnob.drawKnob(LFO_loc + 2*miniknobWidth + miniknobPadX, groupTop + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Rate", "Set LFO 1 frequency.\n");
-    lfo1FreqKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(LFO_frequencies+lfoIdx) = lfo1FreqKnob.value );
+    drawGroupRect(LFO_loc, yLocation, 2*groupWidth, miniknobWidth*8+miniknobPadY*4, group_r, group_g, group_b, group_a);
     
-    lfo1FreqKnob.label = getModRateSliderText(slider(LFO_frequencies+lfoIdx));
-    lfo1AmntKnob.value = slider(LFO_amounts+lfoIdx);
-    lfo1AmntKnob.active = 1;
-    lfo1AmntKnob.drawKnob(LFO_loc + 6*miniknobWidth + 3*miniknobPadX, groupTop + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Amount", "Set LFO 1 frequency.\n");
-    lfo1AmntKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(LFO_amounts+lfoIdx) = lfo1AmntKnob.value );
-    
-    /* Window */
-    mod_r = .3; mod_g = .45; mod_b = .9; mod_a = 1;
-    mwnd.create_mod_window(LFO_loc + 2*miniknobPadX, groupTop + 4*miniKnobWidth + 4*miniKnobPadY, 4*miniknobWidth, 3*miniknobWidth, mod_r, mod_g, mod_b, mod_a);
-    mwnd.draw_modulator(LFO_types[lfoIdx], tcur);
-    
-    /* Hidden combobox */
-    lfo1TypeSelect.combobox(LFO_loc + 2*miniknobPadX, groupTop + 4*miniKnobWidth + 4*miniKnobPadY, 4*miniknobWidth, 3*miniknobWidth, .4, .4, .8, 1, nShapers, 3, 1, 1, "LFO selection." );
-    lfo1TypeSelect.combobox_setcuritem( LFO_types[lfoIdx] );
-    lfo1TypeSelect.open ? (
-      lfo1TypeSelect.w = 8*miniknobWidth;
-      lfo1TypeSelect.h = 20*(1+scaling);
-    );
-    lfo1TypeSelect.combobox_draw_top();
-    lfo1TypeSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
-      LFO_types[lfoIdx] = lfo1TypeSelect.curitem; 
-    );
-    
+    /*----------------*/
+    /* LFO toggles    */
+    /*----------------*/
     /* Temposync and retrigger buttons */
-    tempoSync.label = "Sync";
-    tempoSync.drawToggle(LFO_loc + 4*miniknobWidth + 4*miniknobPadX, groupTop + 4*miniKnobWidth + 5.5*miniKnobPadY, buttonSize, buttonSize, LFO_tsync[lfoIdx], widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync to host tempo");
-    LFO_tsync[lfoIdx] = tempoSync.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    this.tempoSync.label = "Sync";
+    this.tempoSync.drawToggle(LFO_loc + 4*miniknobWidth + 4*miniknobPadX, yLocation + 4*miniKnobWidth + 5.5*miniKnobPadY, buttonSize, buttonSize, LFO_tsync[lfoIdx], widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync to host tempo");
+    LFO_tsync[lfoIdx] = this.tempoSync.processMouseToggle(mouse_x, mouse_y, mouse_cap);
       
     /* Temposync and retrigger buttons */
-    midiTrigger.label = "Trigger";
-    midiTrigger.drawToggle(LFO_loc + 4*miniknobWidth + 4*miniknobPadX, groupTop + 4*miniKnobWidth + 9.5*miniKnobPadY, buttonSize, buttonSize, LFO_retrig[lfoIdx], widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Retrigger on MIDI");
-    LFO_retrig[lfoIdx] = midiTrigger.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    this.midiTrigger.label = "Trigger";
+    this.midiTrigger.drawToggle(LFO_loc + 4*miniknobWidth + 4*miniknobPadX, yLocation + 4*miniKnobWidth + 9.5*miniKnobPadY, buttonSize, buttonSize, LFO_retrig[lfoIdx], widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Retrigger on MIDI");
+    LFO_retrig[lfoIdx] = this.midiTrigger.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    /*----------------*/
+    /* Freq select    */
+    /*----------------*/
+    /* Hidden combobox for selecting tempo */
+    LFO_tsync[lfoIdx] ? (
+      this.lfo1TempoSelect.combobox(LFO_loc + miniknobWidth + miniknobPadX, yLocation + miniKnobWidth + miniKnobPadY, 2*miniknobWidth, 2*miniknobWidth, .4, .4, .8, 1, nTimeDivisions, 4, 1, 4, "LFO selection." );
+      this.lfo1TempoSelect.open ? (
+        this.lfo1TempoSelect.w = 8*miniknobWidth;
+        this.lfo1TempoSelect.h = 20*(1+scaling);
+      );
+      //this.lfo1TempoSelect.combobox_draw();
+      this.lfo1TempoSelect.combobox_draw_top();
+      mc = 0;
+      ( this.lfo1TempoSelect.open ) ? mc = mouse_cap;
+      ( mouse_cap & 2 ) ? ( mc = mc | 1 );
+      this.lfo1TempoSelect.combobox_processMouse(mouse_x, mouse_y, mc) ? ( 
+        slider_automate( slider(LFO_frequencies+lfoIdx) = indexToTime(this.lfo1TempoSelect.curitem) );
+      );
+    );
+    
+    this.lfo1FreqKnob.value = slider(LFO_frequencies+lfoIdx);
+    this.lfo1FreqKnob.active = 1;
+    this.lfo1FreqKnob.drawKnob(LFO_loc + 2*miniknobWidth + miniknobPadX, yLocation + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Rate", "Set LFO 1 frequency.\n");
+    this.lfo1FreqKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(LFO_frequencies+lfoIdx) = this.lfo1FreqKnob.value );
+    
+    LFO_tsync[lfoIdx] ? (
+      this.lfo1FreqKnob.label = getModRateSliderText(slider(LFO_frequencies+lfoIdx));
+    ) : (
+      this.lfo1FreqKnob.label = "";
+    );
+
+    /*----------------*/
+    /* LFO Amount     */
+    /*----------------*/
+    this.lfo1AmntKnob.value = slider(LFO_amounts+lfoIdx);
+    this.lfo1AmntKnob.active = 1;
+    this.lfo1AmntKnob.drawKnob(LFO_loc + 6*miniknobWidth + 3*miniknobPadX, yLocation + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Amount", "Set LFO 1 frequency.\n");
+    this.lfo1AmntKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(LFO_amounts+lfoIdx) = this.lfo1AmntKnob.value );
+    
+    /*----------------*/
+    /* LFO type       */
+    /*----------------*/
+    mod_r = .3; mod_g = .45; mod_b = .9; mod_a = 1;
+    this.mwnd.create_mod_window(LFO_loc + 2*miniknobPadX, yLocation + 4*miniKnobWidth + 4*miniKnobPadY, 4*miniknobWidth, 3*miniknobWidth, mod_r, mod_g, mod_b, mod_a);
+    this.mwnd.draw_modulator(LFO_types[lfoIdx], tcur);
+    
+    /* Hidden combobox */
+    this.lfo1TypeSelect.combobox(LFO_loc + 2*miniknobPadX, yLocation + 4*miniKnobWidth + 4*miniKnobPadY, 4*miniknobWidth, 3*miniknobWidth, .4, .4, .8, 1, nLFOtypes, 3, 1, 2, "LFO selection." );
+    this.lfo1TypeSelect.combobox_setcuritem( LFO_types[lfoIdx] );
+    this.lfo1TypeSelect.open ? (
+      this.lfo1TypeSelect.w = 8*miniknobWidth;
+      this.lfo1TypeSelect.h = 20*(1+scaling);
+    );
+    this.lfo1TypeSelect.combobox_draw_top();
+    this.lfo1TypeSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
+      LFO_types[lfoIdx] = this.lfo1TypeSelect.curitem; 
+    );
+    
+    gfx_x = LFO_loc + 8*miniKnobWidth + 8*(1+scaling);
+    gfx_y = yLocation + 2*(1+scaling);
+    
+    gfx_set(widget_r, widget_g, widget_b, widget_a);
+    gfx_setfont(BAND_FONT);
+    gfx_printf("%d", lfoIdx+1);
   );
   
   LFO_loc = masterLoc - groupDistance - groupWidth;
-  drawLFOGroup(LFO_loc, 0, modulator1.t);
+  //drawLFOGroup(groupTop, LFO_loc, 0, modulator1.t);
+  
+  modVisible ? (
+    lfoDist = 155*(1+scaling);
+    panel1.drawLFOGroup(topRow + 35*(1+scaling), 32*(1+scaling), 0, modulator1.t);
+    panel2.drawLFOGroup(topRow + 35*(1+scaling), 32*(1+scaling) + lfoDist, 1, modulator2.t);
+    panel3.drawLFOGroup(topRow + 35*(1+scaling), 32*(1+scaling) + lfoDist*2, 2, modulator3.t);
+    panel4.drawLFOGroup(topRow + 35*(1+scaling), 32*(1+scaling) + lfoDist*3, 3, modulator4.t);
+  );
+  
   //LFO_loc = masterLoc - 2*groupDistance - 2*groupWidth;
   //drawLFOGroup(LFO_loc, 1, modulator2.t);  
   
@@ -5335,12 +5593,9 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   oversamplingKnob.drawKnob(masterLoc + 2*miniknobWidth + miniknobPadX, groupTop + 6*miniKnobWidth + 2*miniKnobPadY, miniknobWidth, "Over", "Set oversampling factor.\nNote that high levels\nof oversampling will\nresult in high CPU usage.");
   oversamplingKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ?  slider_automate( overSampling = floor( oversamplingKnob.value * overSamplingRange + oversamplingMin + .5 ) );
 
-  /* Draw tiny EQ for gain control */
-  //outputGains.drawEq(gfx_w - 300, groupTop, 120*(1+scaling), miniknobWidth*8+miniknobPadY*4, cuts+1);
-
   /* Band indicator */
   sprintf(16,"Band %d", selectedBand+1);
-  vLabel.drawVertLabel(5, spectrumH, 16, gfx_h-spectrumH, 20, 3);
+  vLabel.drawVertLabel(5, bottomRow, 16, gfx_h-bottomRow, BAND_FONT, 3);
   
   /* Draw shaper curve */
   shaperWnd.drawBackface();
@@ -5356,11 +5611,22 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   gfx_printf("STILL SUBJECT TO CHANGE.");
   
   gfx_x = gfx_w-130*(1+scaling);
-  gfx_y = spectrumH + 30*(1+scaling);
+  gfx_y = bottomRow + 30*(1+scaling);
   gfx_mode = 4;
-  !loaded ? loaded = gfx_loadimg(5, "./squashman2.png");
+  
+  !loaded || (modVisible != lastModVisible) ? (
+    ( modVisible == 0 ) ? (
+      loaded = gfx_loadimg(5, "./squashman2.png");
+    ) : (
+      loaded = gfx_loadimg(5, "./squashman3.png");
+    );
+    lastModVisible = modVisible;
+  );
   
   gfx_blit(5, 3.2*(1+scaling), 0);
+  
+  modPanelButton.drawButton(gfx_w-130*(1+scaling), spectrumH-25*(1+scaling), 120*(1+scaling), 25*(1+scaling), "Modulation", BAND_FONT, 14);
+  modPanelButton.button_processMouse(mouse_x, mouse_y, mouse_cap) ? modVisible = 1 - modVisible;
   
   lastChar = gfx_getchar();
   filterBank.resetMeters();
