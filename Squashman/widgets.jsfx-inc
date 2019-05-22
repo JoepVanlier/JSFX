@@ -1,0 +1,1413 @@
+import widgetdata.jsfx-inc
+
+@init
+
+// Available Functions:
+//   circ.fancyCircle(x1, y1, rin, mute, solo, bypass)
+//		Generates and draws circle widget
+//	 butt.drawButton( X, Y, W, H, string, fontindex, taper )
+// 		Draws button with optional tapering
+//	 butt.button_processMouse(mousex, mousey, mousecap)
+//		Processes mouse events for button. Returns clicked.
+// 	 knob.drawKnob(_x, _y, _r, text, _hint)
+//		Draws knob and generates instance
+//	 knob.knob_processMouse(mousex, mousey, mouse_cap)
+//		Generates a knob
+//		Fields: value, value2, value3
+//		User has control over field value. Others must be set by code.
+//		Returns value when changed.
+//	 simpleSlider.drawSimpleSlider(_x, _y, _w, _h, r, g, b, a, _hint)
+//	 simpleSlider.simpleSlider_processMouse(mx, my, mc, default)
+// 	 hinter.updateHintTime(hintString)
+//		queue a hint...
+//	 hinter.drawHint_draw()
+//		call this at the end of gfx
+//	 combobox(x_in, y_in, w_in, h_in, r_in, g_in, b_in, a_in, nitems_in, stridx_in, goup_in, cols_in, font, hint_in )
+//   combobox_setcuritem( item )
+//	 combobox_draw()
+//		Draw the base box
+//	 combobox_draw_top()
+//		Draw the elements that should go on the top layer of a UI.
+//	 combobox_processMouse(xx, yy, mc)
+//		Process mouse events. Returns 1 when there was a change.
+// 	 combobox_getCurItem()
+//	 combomodulator_draw()
+// 	 combomodulator_processMouse(xx, yy, mc)
+//		A modulator that holds and modifiers a value when dragged. Outer mouse opens the options menu.
+
+
+function clamp(value, mini, maxi)
+  local()
+  global()
+  (
+    max(min(value,maxi),mini)
+  );
+
+/*-----------*/
+/* HINTS     */  
+/*-----------*/ 
+function updateHintTime(hint)
+  global(gfx_x, gfx_y, mouse_x, mouse_y)
+  local()
+  instance(lx, ly, hintTime, currentHint, delta_time)
+  (
+    ( ( abs(lx - mouse_x) + abs( ly - mouse_y ) ) > 0 ) ? (
+      hintTime = 0;
+    ) : (      
+      (hint != 0) ? (
+        currentHint = hint;
+        hintTime = hintTime + delta_time;
+        hintTime = min(1, hintTime)
+      ) : (
+        0
+      )
+    );
+    
+    lx = mouse_x;
+    ly = mouse_y;
+  );   
+  
+function drawHint_draw()
+  global(scaling, gfx_x, gfx_y, gfx_w, gfx_h, mouse_x, mouse_y, fontface, HINT_FONT)
+  local(w, h, globalTime)
+  instance(hintTime, currentHint, lastGlobalTime, delta_time)
+  (
+    globalTime = time_precise();
+    delta_time = globalTime - lastGlobalTime;
+    lastGlobalTime = globalTime;
+  
+    ( hintTime > .99 ) ? (
+      gfx_setfont(HINT_FONT);
+      gfx_measurestr(currentHint,w,h);
+      
+      gfx_x = mouse_x+15;
+      gfx_y = mouse_y+15;
+      ( gfx_x > 0.5*gfx_w ) ? gfx_x = mouse_x - w - 8;
+      ( gfx_y > 0.5*gfx_h ) ? gfx_y = mouse_y - h - 8;
+
+      gfx_set( 0.05, 0.05, 0.1, .8 );
+      gfx_rect(gfx_x-2, gfx_y-2, w+4, h+4);
+      gfx_set( .7, .7, .7, 1 );      
+      gfx_printf(currentHint);
+    );
+  );    
+  
+  
+/*------------------*/
+/* Slider widget 	*/
+/*------------------*/  
+function sliderWidget(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, two_values, minval_in, maxval_in, default_in, unit_in, isInteger_in, hint_in )
+  local()
+  global(newUI)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, unit, isInteger, thisUI, htime, hint, onmarker)
+  (
+      !thisUI ? thisUI = newUI+=1;
+      x             = x_in+2;
+      y             = y_in;
+      w             = w_in-4;
+      h             = h_in;
+      r             = r_in;
+      g             = g_in;
+      b             = b_in;
+      a             = a_in;
+      yslidercenter = y + 0.3 * h;
+
+      !label ? label = label_in;
+      !hint ? hint  = hint_in;
+      !unit ? unit  = unit_in;
+      twoval        = two_values; /* Do we have two values? */
+      minval        = minval_in;
+      maxval        = maxval_in;
+      default       = ( default_in - minval ) / ( maxval - minval );
+      isInteger     = isInteger_in;
+  );
+  
+function sliderWidget_setValue(value_in)
+  local()
+  global(gfx_x, gfx_y)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval)
+  (
+    value = ( value_in - minval ) / ( maxval - minval )
+  );
+  
+function sliderWidget_getValue()
+  local(v)
+  global(gfx_x, gfx_y)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval, isInteger)
+  (
+    v = value * ( maxval - minval ) + minval;
+    v = isInteger ? floor(v+0.499999) : v;
+    v
+  );  
+  
+function sliderWidget_draw()
+  local(cscale, tmp, siz, q, str, modmax, modmin, modoffset)
+  global(	slider38, gfx_x, gfx_y, lastUI, scaling, widgetFontSize, mlevel, SLIDER_FONT, 
+			font_color_r, font_color_g, font_color_b, font_color_a,
+			slider_marker_r, slider_marker_g, slider_marker_b, slider_marker_a,
+			highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a,
+			disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a, 
+			modrange_r, modrange_g, modrange_b, modrange_a )
+  instance(	x, y, w, h, 
+			r, g, b, a, 
+			default, minval, maxval, 
+			value, value2, 
+			label, unit, 
+			overridevalue, overrideunit,
+			lastleft, lastclick, yslidercenter, cap, twoval, thisUI, onmarker, 
+			disabled, dynval, postMeter)
+  (
+	cscale = 1+scaling;
+    gfx_setfont(SLIDER_FONT);
+  
+    ( disabled == 0 ) ? (
+      gfx_rect( x-3*(1+scaling), yslidercenter-.25*h, w+6*cscale, h*.5 );
+        
+      lastUI == thisUI ? gfx_set( highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a ) : gfx_set( r, g, b, 0.8 );
+      gfx_line(x, yslidercenter, x+w, yslidercenter);
+      gfx_set( r*.3, g*.3, b*.3, 0.8 );
+      gfx_line(x + cscale, yslidercenter + 1, x+w + cscale, yslidercenter + 1);
+
+      gfx_set( r, g, b, .2 );    
+      gfx_rect( x-2*cscale + value*w+5, yslidercenter - .3*h, 1, h*.6+1 );
+      gfx_rect( x-2*cscale + value*w-2, yslidercenter - .3*h, 1, h*.6+1 );
+      gfx_rect( x-2*cscale + value*w-1, yslidercenter - .3*h, 6, 1 );
+      gfx_rect( x-2*cscale + value*w-1, yslidercenter + .3*h-1, 6, 1 );
+      
+      gfx_set( r, g, b, 1.0 );
+      gfx_rect( x-2*cscale + value*w, yslidercenter - .2*h, 4*cscale, h*.4 );
+      gfx_set( r*.2, g*.2, b*.2, 0.4 );
+      gfx_rect( x-cscale + value*w, yslidercenter - .2*h + 1, 2*cscale, h*.4-2 );
+      
+      onmarker == 1 ? 
+      (
+        gfx_set( 1, 1, 1, 0.4 );
+        gfx_rect( x-2*cscale + value*w-1, yslidercenter - .2*h-1, 4*cscale+2, h*.4+2 );
+      );
+      
+      gfx_set( modrange_r, modrange_g, modrange_b, modrange_a );
+      value2 > 0 ? gfx_rect( x + value*w, yslidercenter - .1*h, value2*w+1, h*.3 ) : gfx_rect( x + (value+value2)*w, yslidercenter - .1*h, abs(value2)*w, h*.3 );
+  
+      gfx_set( slider_marker_r, slider_marker_g, slider_marker_b, slider_marker_a );
+    ) : (
+      // Look of disabled widget
+      gfx_set( disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a*.2 );
+      gfx_rect( x-3*cscale, yslidercenter-.25*h, w+6*cscale, h*.5 );
+      gfx_set( disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a );
+      gfx_line(x + cscale, yslidercenter, x+w + cscale, yslidercenter);
+    );
+    
+    disabled == 0 ? gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
+    gfx_x = x;
+    gfx_y = y + 11*cscale;
+    gfx_printf( label );
+    
+    ( overridevalue == 0 ) ? (
+      sprintf( str, "%2.3g%s", this.sliderWidget_getValue(), unit );
+    ) : (
+      ( overridevalue == -2000 ) ? (
+        sprintf( str, "%s", overrideunit );
+      ) : ( overridevalue == -1000 ) ? (
+        sprintf( str, "%2.3g (%s)", this.sliderWidget_getValue(), overrideunit );
+      ) : (
+        ( overridevalue > 1000 ) ? (
+          sprintf( str, "%2.3g (%2.3g k%s)", this.sliderWidget_getValue(), overridevalue/1000, overrideunit );
+        ) : (
+          sprintf( str, "%2.3g (%2.3g %s)", this.sliderWidget_getValue(), overridevalue, overrideunit );      
+        )
+      );
+    );
+    gfx_measurestr(str, siz, tmp);
+    !postMeter ? (
+      gfx_x = x + w - siz;
+      gfx_y = y + 11*cscale;
+    ) : (
+      gfx_x = postMeter < 2 ? x + w + 4 : postMeter - siz - 2;
+      gfx_y = y + 0.5*tmp;// + tmp;
+    );
+    gfx_printf( str );
+  );
+  
+function sliderWidget_setValue2(value_in)
+   local()
+   global(gfx_x, gfx_y)
+   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval)
+   (
+    value2 = value_in;
+   );
+   
+// Set value in a non-normalized manner
+function sliderWidget_setValue2_nn(value_in)
+   local()
+   global(gfx_x, gfx_y)
+   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval)
+   (
+    value2 = ( value_in > 0 ) ? value_in * (1.0 - value) : value_in * value;
+   );
+  
+function sliderWidget_getValue2()
+   local()
+   global(gfx_x, gfx_y)
+   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval)
+   (
+    value2
+   ); 
+   
+function sliderWidget_getValue2_nn()
+   local()
+   global(gfx_x, gfx_y)
+   instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastclick, yslidercenter, cap, twoval)
+   (
+    value2 > 0 ? value2 / (1.0 - value) : value2 / value
+   );    
+  
+function sliderWidget_processMouse(xx, yy, dx, dy, mc)
+  local(left, right, change, newcap, onslider, shft, ctrl, mul, ym)
+  global(gfx_x, gfx_y, mouse_wheel, scaling, mouse_cap, lastUI, lastChar, hinter.updateHintTime)
+  instance(x, y, w, h, r, g, b, a, default, minval, maxval, value, value2, label, lastleft, lastright, lastclick, yslidercenter, cap, twoval, thisUI, hint, onmarker, lastrightclick, disabled)
+  (
+    disabled == 0 ? 
+    (
+      left  = mc & 1;
+      right = mc & 2;
+      ctrl  = mc & 4;
+      shft  = mc & 8;
+      
+      change = 0;
+      newcap = 0;
+      ym = .5*h;
+      onslider = ( ( xx > x ) && ( xx < (x+w) ) && ( yy > (yslidercenter-ym) ) && ( yy < (yslidercenter+ym) ) );
+      onmarker = abs( value * w + x - xx ) < 8*(1+scaling) && ( yy > (yslidercenter-ym) ) && ( yy < (yslidercenter+ym) );
+      
+      onslider ? (
+        hinter.updateHintTime(hint);
+      );
+      
+      ( lastUI == thisUI ) ?
+      (
+        ( lastChar == 1919379572 ) ? value = value + .001;
+        ( lastChar == 1818584692 ) ? value = value - .001;      
+      );
+      
+      left ? (
+        ( ( lastleft == 0 ) && ( time_precise() - lastclick ) < .2 ) ?
+        (
+          value       = default;
+          change      = 1;
+        ) : ( ( cap == 1 ) || ( ( onslider || onmarker ) && lastleft == 0 ) ) ? ( 
+          ((shft == 0) && (ctrl == 0)) ? (
+            value       = (xx-x)/w;
+          ) : (
+            mul         = 1;
+            shft ? mul *= 0.125;
+            ctrl ? mul *= 0.1666666666667;
+            value       = value - mul*dx/w;
+          );
+          change      = 1;
+          newcap      = 1;
+          lastclick   = time_precise();
+          lastUI      = thisUI;
+        );
+      ) : ( 
+        twoval && right ? 
+        (
+          ( ( cap == 2 ) || ((onmarker || onslider) && lastright == 0) ) ? ( 
+            ( ( lastright == 0 ) && ( time_precise() - lastrightclick ) < .15 ) ?
+            (
+              value2 = 0;
+              change = 2;
+              lastrightclick = time_precise();
+            ) : (
+              value2 = (xx-x)/w - value;
+              change = 2;
+              newcap = 2;
+              lastrightclick = time_precise();
+            )
+          );
+        ) : ( (mouse_wheel ~= 0) && onslider ) ? (
+          ( shft && twoval ) ? (
+            value2 = value2 + .00001 * mouse_wheel; change = 1;
+          ) : (
+            value = value + .00001 * mouse_wheel;  change = 1;
+          );
+          mouse_wheel = 0;
+        );
+      );
+      
+      lastleft  = left;
+      lastright = right;
+      cap       = newcap;
+      value     = value > 1.0 ? 1 : value;
+      value     = value < 0.0 ? 0 : value;
+      twoval ? (
+        value2 = (value2+value) > 1.0 ? 1.0-value : value2;
+        value2 = (value2+value) < 0.0 ? -value : value2;    
+      );
+      
+      change
+    ) : 0;
+  );  
+  
+/*------------------*/
+/* Selection button */
+/*------------------*/
+function selectionButton(x_in, y_in, w_in, h_in, label_in, r_in, g_in, b_in, a_in, hint_in)
+  local()
+  global()
+  instance(x, y, w, h, r, g, b, a, active, label, lastleft, hint)
+  (
+      x       = x_in;
+      y       = y_in;
+      w       = w_in;
+      h       = h_in;
+      r       = r_in;
+      g       = g_in;
+      b       = b_in;
+      a       = a_in;
+      !label  ? label = label_in;
+      !hint   ? hint = hint_in;
+  );  
+  
+function selectionButton_draw()
+  local(jnk, siz, hln)
+  global(gfx_x, gfx_y, buttonFontSize, BUTTON_FONT,
+         font_color_r, font_color_g, font_color_b, font_color_a,
+         bg_color_r, bg_color_g, bg_color_b )
+  instance(x, y, w, h, r, g, b, a, active, label, lastleft, htime, style, mode)
+  (
+    style == 2 ? (
+      hln = (.17 + .3*(1-active))*htime;
+      gfx_set( bg_color_r, bg_color_g, bg_color_b, 1 );
+      gfx_rect( x, y, ceil(w), ceil(h) );
+    );
+    
+    hln = (.17 + .3*(1-active))*htime;
+    gfx_set( min(1,r + hln), min(1,g + hln), min(1,b + hln), .1 + .5*active );
+    ( mode == 0 ) ? (
+      gfx_rect( x, y, ceil(w), ceil(h) );
+    ) : ( mode == 1 ) ? (
+      gfx_rect( x, y, ceil(w*.5), ceil(h) );
+    ) : (
+      gfx_rect( ceil(x+.5*w), y, ceil(w*.5), ceil(h) );
+    );
+	gfx_set( min(1,r + hln), min(1,g + hln), min(1,b + hln), .1 + .5*active );
+    
+    gfx_set( r, g, b, a );
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+1, y, x+w-1, y);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x+1, y+h, x+w-1, y+h);
+    gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
+    gfx_setfont(BUTTON_FONT);
+    gfx_measurestr(label, siz, jnk);
+    gfx_x = x + .5 * (w-siz);
+    gfx_y = y - .5*(jnk-h) + 1;
+    gfx_printf( label );
+  );
+  
+function selectionButton_processMouse(xx, yy, mc)
+  local(left, right, change)
+  global(hinter.updateHintTime, gfx_x, gfx_y, delta_time)
+  instance(x, y, w, h, r, g, b, a, active, label, align, lastright, lastleft, htime, hint, modes, mode, hoverType)
+  (
+    change = 0;
+    left = mc & 1;
+    right = mc & 2;
+    ( xx > x ) && ( xx < (x+w) ) && ( yy > y ) && ( yy < (y+h) ) ?
+    (
+      left ? (
+        ( (lastleft ~= 1 ) ) ? ( 
+          active = 1 - active;
+          change = 1;
+        );
+      );
+      
+      right ? (
+        ( (lastright ~= 2 ) ) ? ( 
+          change = 2;
+          
+          mode = mode + 1;
+          mode > modes ? mode = 0;
+        );        
+      );
+      
+      hinter.updateHintTime(hint);
+    );
+    
+    lastleft = left;
+    lastright = right;
+    change
+  );  
+  
+/*----------------*/
+/* Combo box      */
+/*----------------*/
+function combobox(x_in, y_in, w_in, h_in, r_in, g_in, b_in, a_in, nitems_in, stridx_in, goup_in, cols_in, font_in, hint_in )
+  local()
+  global(newUI)
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, hasfocus, goup, cols, thisUI, htime, hint, font)
+  (
+      !thisUI ?     thisUI = newUI += 1;
+      x             = x_in;
+      y             = y_in+1;
+      w             = w_in;
+      h             = ceil(h_in-2);
+      r             = r_in;
+      g             = g_in;
+      b             = b_in;
+      a             = a_in;
+      nitems        = nitems_in;
+      stridx        = stridx_in;
+      goup          = goup_in;
+      cols          = cols_in;
+      hint          = hint_in;
+	  font 			= font_in;
+      //cap           = 0;
+      //curitem       = 0;
+      //open          = 0;
+      //lastleft      = 0;
+      //hasfocus      = 0;
+      //htime         = 0;
+      //hover         = 8;
+  );
+  
+function combobox_setcuritem( item )
+  local(i, xtxt)
+  global(gfx_x, gfx_y)
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, lastset)
+  (
+    curitem = inverseComboMapping(stridx, item);
+  );  
+
+function combobox_draw()
+  local(i, xtxt, x1, x2, x3, y1, y2, y3, pad, wi)
+  global(gfx_x, gfx_y, lastUI, scaling,
+         highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a,
+         font_color_r, font_color_g, font_color_b, font_color_a,
+         disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a )
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols, thisUI, htime, disabled, font)
+  (
+    gfx_set( min(1,r + .15*htime), min(1,g + .15*htime), min(1,b + .25*htime), .1 );
+    gfx_rect( x, y, w, h );
+    
+    disabled == 1 ? gfx_set( disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a ) :
+    ( 
+      lastUI == thisUI ? gfx_set( highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a ) : gfx_set( r, g, b, a );
+    );
+     
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+1, y, x+w-1, y);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x+1, y+h, x+w-1, y+h);
+    
+    pad = .3*h;
+    wi = .5 * (h-pad);
+    x1 = x+w-wi-pad;
+    x2 = x+w-pad;
+    x3 = x+w-.5*wi-pad;
+    
+    y1 = y+pad;
+    y2 = y+pad;
+    y3 = y+h-pad;
+    
+    gfx_line(x1, y1, x2, y2);
+    gfx_line(x2, y2, x3, y3);
+    gfx_line(x3, y3, x1, y1);
+     
+    xtxt = x+3*(1+scaling);
+    gfx_x = xtxt;
+    gfx_y = y+4*(1+scaling);
+    
+    disabled == 0 ? gfx_set( font_color_r, font_color_g, font_color_b, font_color_a ) : gfx_set( disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a );
+    gfx_setfont(font);
+    gfx_printf(comboStrings(stridx, comboMapping(stridx, curitem)));
+  );
+  
+function combomodulator_draw()
+  local(i, xtxt, x1, y1, pad, wi, str)
+  global(gfx_x, gfx_y, lastUI, scaling, 
+         highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a,
+         font_color_r, font_color_g, font_color_b, font_color_a, 
+         disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a )
+  instance(x, y, w, h, r, g, b, a, micro, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols, thisUI, htime, disabled, yTxtShift, font)
+  (
+    gfx_set( min(1,r + .15*htime), min(1,g + .15*htime), min(1,b + .25*htime), .1 );
+    gfx_rect( x, y, w, h );
+    yTxtShift = 4;
+    
+    disabled == 1 ? gfx_set( disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a ) :
+    ( 
+      lastUI == thisUI ? gfx_set( highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a ) : gfx_set( r, g, b, a );
+    );
+     
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+1, y, x+w-1, y);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x+1, y+h, x+w-1, y+h);    
+    
+    gfx_setfont(font);
+    xtxt = x+3*(1+scaling);
+    str = comboStrings(stridx, comboMapping(stridx, curitem));
+    gfx_measurestr(str, x1, y1);
+    gfx_x = x + .5*(w-x1)+1;
+    gfx_y = y;
+    
+    disabled == 0 ? gfx_set( font_color_r, font_color_g, font_color_b, font_color_a ) : gfx_set( disabled_color_r, disabled_color_g, disabled_color_b, disabled_color_a );
+    gfx_printf(str);
+  );  
+  
+function combobox_getCurItem()
+  instance(stridx, curitem)
+  global()
+  local()
+  (
+    comboMapping(stridx, curitem)
+  );
+  
+function combobox_draw_top()
+  local(i, i_internal, j, xtxt, x1, x2, x3, y1, y2, y3, pad, wi, delta, ny, hasMarked)
+  global(gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, font_color_r, font_color_g, font_color_b, font_color_a )
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, hasfocus, goup, cols, dangerousElements, yTxtShift, font)
+  ( 
+	gfx_setfont(font);
+    xtxt = x+2;
+    ((xtxt - w*(cols-1)) < 0) ? (
+      xtxt += w*(cols-1);
+    );
+    
+    delta = goup ? (nitems/cols+1)*h : 0;
+    gfx_x = xtxt;
+    gfx_y = y + 4 - delta;
+    ny = ceil(nitems/cols);
+    
+    hasMarked = dangerousElements > 0;
+    open ?
+    (
+      gfx_set( r*.3, g*.3, b*.3, 1 );
+      gfx_rect( xtxt - (cols-1)*w - 3, y-delta+h-1, cols*w+2, h * ny + 2 );
+          
+      gfx_set( r*.1, g*.1, b*.1, 1 );
+      gfx_rect( xtxt - (cols-1)*w+1 - 3, y-delta+h, cols*w, h * ny );
+      i = 0; j = 0;
+      loop( cols, 
+        loop( ny,
+          gfx_x = xtxt - (cols-1-j)*w + 1;
+          gfx_y += h;
+          hover == i ? (
+            gfx_set( r, g, b, a, 0.95 );
+            gfx_rect( gfx_x-3, gfx_y - 3, w, h );
+            gfx_set( 0, 0, 0, a, 0.95 );
+          ) : gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
+
+          i_internal = comboMapping(stridx, i);
+          gfx_y -= yTxtShift;
+          ( hasMarked && dangerousElements[i_internal] ) ? (
+            gfx_set( gfx_r+.3, gfx_g-.5, gfx_b-.5, .75*gfx_a );
+            gfx_printf("[%s]", comboStrings(stridx, i_internal));
+            gfx_set( gfx_r-.3, gfx_g+.5, gfx_b+.5, gfx_a/.75 );
+          ) : gfx_printf(comboStrings(stridx, i_internal));
+          gfx_y += yTxtShift;
+          i += 1;
+        );
+        gfx_y = y + 4 - delta;
+        j += 1;
+      );
+      gfx_set( r, g, b, a, 0.95 );
+    )
+  );
+
+function combobox_processMouse(xx, yy, mc)
+  local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny, hasMarked, olditem)
+  global(gfx_x, gfx_y, lastUI, lastChar, mouse_wheel, comboboxOpen)
+  instance(x, y, w, h, r, g, b, a, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled, dangerousElements, thisWasOpen)  
+  (
+    disabled == 0 ? (
+      delta   = goup ? (nitems/cols+1)*h : 0;
+      change  = 0;
+      left    = mc & 1;
+      right   = mc & 2;
+      
+      olditem = curitem;
+      xmin    = x - (cols-1)*w;
+      ymin    = y + h - delta;
+      xmax    = x + w;
+      ny      = ceil(nitems/cols);
+      ymax    = ymin + ny*h;
+      
+      /* Don't let it go offscreen */
+      (xmin < 0) ? (
+        xmin += w*(cols-1);
+        xmax += w*(cols-1);
+      );
+      
+      hasMarked = dangerousElements > 0;
+      over = xx > x && xx < ( x+w ) && yy > y && yy < ( y + h );
+      
+      ( ( thisWasOpen == 1 ) && !left && !open ) ? (
+        comboboxOpen = 0;
+      );
+      
+      ( lastUI == thisUI ) ?
+      (
+        ( lastChar == 1685026670 ) ? 
+        ( 
+          curitem = curitem + 1;
+          curitem > nitems - 1 ? curitem = 0;
+          while( hasMarked && (dangerousElements[comboMapping(stridx, curitem)]==1) && (curitem != olditem) )
+          (
+            curitem = curitem + 1;
+            curitem > nitems - 1 ? curitem = 0;
+          );
+          
+          change = 1;
+          mouse_wheel = 0;
+        ) : (
+          ( lastChar == 30064 ) ? 
+          (
+            curitem = curitem - 1;
+            curitem < 0 ? curitem = nitems-1;
+            while( hasMarked && (dangerousElements[comboMapping(stridx, curitem)]==1) && (curitem != olditem) )
+            (
+              curitem = curitem - 1;
+              curitem < 0 ? curitem = nitems-1;
+            );
+            
+            change = 1;
+            mouse_wheel = 0;
+          );
+        );
+      );
+      
+      ( over ) ?
+      (
+        ( mouse_wheel < 0 ) ? 
+        ( 
+          curitem = curitem + 1;
+          curitem > nitems - 1 ? curitem = 0;
+          
+          while( hasMarked && (dangerousElements[comboMapping(stridx, curitem)]==1) && (curitem != olditem) )
+          (
+            curitem = curitem + 1;
+            curitem > nitems - 1 ? curitem = 0;
+          );
+          
+          change = 1;
+          mouse_wheel = 0;
+        ) : 
+        (
+          ( mouse_wheel > 0 ) ? 
+          (
+            curitem = curitem - 1;
+            curitem < 0 ? curitem = nitems-1;
+            
+            while( hasMarked && (dangerousElements[comboMapping(stridx, curitem)]==1) && (curitem != olditem) )
+            (
+              curitem = curitem - 1;
+              curitem < 0 ? curitem = nitems-1;
+            );
+            
+            change = 1;
+            mouse_wheel = 0;
+          );
+        );
+      );
+      
+      over ? (
+        htime = updateHintTime(hint);
+      ) : htime = updateHintTime(0);      
+      
+      open ? 
+      (
+        xl = min( max( 0, floor((xx - xmin)/w)), cols-1 );
+        yl = floor((yy-ymin)/h);
+         
+        hover = min( nitems-1, max( 0, xl * ny + max(0, min(ny-1, yl)) ) );
+        
+        ( !lastleft && left ) ? (
+          open = 0; thisWasOpen = 1;
+          ( xx > xmin && xx < xmax && yy > (y+h-delta) && yy < ( ymax ) ) ? ( curitem = hover; change = 1 );
+        ) : ( !lastright && right ) ? (
+          hover > 0 ? dangerousElements[comboMapping(stridx, hover)] = 1 - dangerousElements[comboMapping(stridx, hover)];
+        )
+      ) : (
+        ( lastleft == 0 && left && over && !comboboxOpen ) ? (
+          open = 1; hasfocus = 1; lastUI = thisUI; comboboxOpen = 1;
+        )
+      );
+      
+      ( !left && !open ) ? hasfocus = 0;
+      
+      lastleft = left;
+      lastright = right;
+      
+      change
+    );
+  );
+
+function combomodulator_processMouse(xx, yy, mc)
+  local(over, left, right, change, delta, xmin, xmax, ymin, ymax, xl, yl, ny, olditem, mul)
+  global(gfx_x, gfx_y, lastUI, lastChar, mouse_wheel, comboboxOpen)
+  instance(lastclick, value, dragging, lx, ly, x, y, w, h, r, g, b, a, thisWasOpen, open, curitem, nitems, cap, hover, stridx, lastleft, lastright, hasfocus, goup, cols, thisUI, htime, hint, disabled)  
+  (
+    disabled == 0 ? (
+      delta   = goup ? (nitems/cols+1)*h : 0;
+      change  = 0;
+      left    = mc & 1;
+      right   = mc & 2;
+      
+      olditem = curitem;
+      xmin    = x - (cols-1)*w;
+      ymin    = y + h - delta;
+      xmax    = x + w + 3;
+      ny      = ceil(nitems/cols);
+      ymax    = ymin + ny*h;
+      
+      ( dragging && !left ) ? dragging = 0;
+      
+      ( ( thisWasOpen == 1 ) && !left && !open ) ? (
+        comboboxOpen = 0;
+      );
+      
+      dragging ? (
+        mul = 1;
+        (mc&4) ? mul = mul * 0.1666666666667; /* CTRL */
+        (mc&8) ? mul = mul * 0.125; /* SHIFT */
+        
+        value = value - .01*mul*(yy - ly);
+        value = clamp(value, -1, 1);
+      ) : (
+        over = xx > x && xx < ( xmax ) && yy > y && yy < ( y + h );
+        
+        ( lastUI == thisUI ) ?
+        (
+          ( lastChar == 1685026670 ) ? 
+          ( 
+            curitem = curitem + 1;
+            curitem > nitems - 1 ? curitem = 0;
+            
+            change = 1;
+            mouse_wheel = 0;
+          ) : (
+            ( lastChar == 30064 ) ? 
+            (
+              curitem = curitem - 1;
+              curitem < 0 ? curitem = nitems-1;
+              
+              change = 1;
+              mouse_wheel = 0;
+            );
+          );
+        );
+        
+        ( over ) ?
+        (
+          ( mouse_wheel < 0 ) ? 
+          ( 
+            curitem = curitem + 1;
+            curitem > nitems - 1 ? curitem = 0;
+            
+            change = 1;
+            mouse_wheel = 0;
+          ) : 
+          (
+            ( mouse_wheel > 0 ) ? 
+            (
+              curitem = curitem - 1;
+              curitem < 0 ? curitem = nitems-1;
+              
+              change = 1;
+              mouse_wheel = 0;
+            );
+          );
+        );
+        
+        over ? (
+          htime = updateHintTime(hint);
+        ) : htime = updateHintTime(0);
+        
+        open ? 
+        (
+          xl = min( max( 0, floor((xx - xmin)/w)), cols-1 );
+          yl = floor((yy-ymin)/h);
+           
+          hover = min( nitems-1, max( 0, xl * ny + max(0, min(ny-1, yl)) ) );
+          
+          ( !lastleft && left ) ? (
+            open = 0; thisWasOpen = 1;
+            ( xx > xmin && xx < xmax && yy > (y+h-delta) && yy < ( ymax ) ) ? ( curitem = hover; change = 1 );
+          ) : ( !lastright && right ) ? (
+            1//hover > 0 ? dangerousElements[comboMapping(stridx, hover)] = 1 - dangerousElements[comboMapping(stridx, hover)];
+          )
+        ) : (
+          ( lastright == 0 && right && over && !comboboxOpen ) ? (
+            open = 1; hasfocus = 1; lastUI = thisUI; comboboxOpen = 1;
+          ) : ( lastleft == 0 && left == 1 && over ) ? (
+            ( (time_precise() - lastclick) > .2) ? (
+              dragging = 1; hasfocus = 1; lastUI = thisUI;
+            ) : (
+              value = 0;
+            );
+            lastclick = time_precise();
+          );
+        );
+        
+        ( !left && !open ) ? hasfocus = 0;
+        change
+      );
+    );
+    
+    lastleft  = left;
+    lastright = right;
+    ly        = yy;
+    lx        = xx;
+  );  
+  
+/*----------------*/
+/* Slider         */
+/*----------------*/
+  function drawSimpleSlider(_x, _y, _w, _h, r, g, b, a, _hint)
+  local()
+  instance(thisUI, value, x, y, w, h, over, cap, hint)
+  global(lastUI)
+  (
+    !hint ? hint = _hint;
+    
+    x = _x; y = _y; w = _w; h = _h;
+    gfx_set( .12, .12, .2, .1 );  
+    gfx_rect(x, y, w, h);
+  
+    gfx_set( r, g, b, a );
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+1, y, x+w-1, y);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x+1, y+h, x+w-1, y+h);
+
+    gfx_line(x+value*w, y, x+value*w, y+h);
+    gfx_set( r, g, b, .3*a );
+    gfx_line(x+value*w+2, y, x+value*w+2, y+h);
+    gfx_line(x+value*w-2, y, x+value*w-2, y+h);
+    
+    (over || cap) ? (
+      gfx_set( r*2, g*2, b*2, a );
+      gfx_line(x+value*w, y, x+value*w, y+h);
+      gfx_set( r, g, b, .5*a );
+      gfx_line(x+value*w+2, y, x+value*w+2, y+h);
+      gfx_line(x+value*w-2, y, x+value*w-2, y+h);
+      gfx_line(x+value*w+3, y, x+value*w+3, y+h);
+      gfx_line(x+value*w-3, y, x+value*w-3, y+h);
+    );
+  );
+  
+  function simpleSlider_processMouse(mx, my, mc, default)
+  local(xmi, xma, mul, left, lleft, doubleClick, cTime, change)
+  instance(x, y, w, h, over, hint, lastLeftClick, cap, value, lx)
+  global(hinter.updateHintTime)
+  (
+    xmi = (x+value*w-5);
+    xma = (x+value*w+5);
+    
+    mul = 1;
+    over = ( mx > xmi ) && ( mx < xma ) && ( my > y ) && ( my < (y+h) );
+    (mc&4) ? mul = mul * 0.1666666666667; /* CTRL */
+    (mc&8) ? mul = mul * 0.125; /* SHIFT */
+    
+    left = mc & 1;
+    
+    /*( over == 1 ) ? (
+      (mouse_wheel ~= 0) ? (
+        value = value + 0.0001 * mul * mouse_wheel;
+        mouse_wheel = 0;
+        value = clamp(value, 0, 1);
+        change = 1;
+      );
+    );*/
+    
+    ( left == 0 ) ? (
+      ( over == 1 ) ? (
+        hinter.updateHintTime(hint);
+      );
+    );
+    
+    doubleClick = 0;
+    (left && !lleft) ? (
+       time_precise(cTime);
+       ( ( cTime - lastLeftClick ) < .25 ) ? (
+          doubleClick = 1;
+       ) : lastLeftClick = cTime;
+    );
+    
+    ( left && cap == 1 ) ? (
+      value = value + .01*mul*(mx - lx);
+      value = clamp(value, 0, 1);
+      change = 1;
+    ) : ( cap = 0; );
+    
+    ( left && !lleft ) ? 
+    (
+      ( over ) ?
+      (
+        doubleClick ? (
+          lastLeftClick = -100;
+          change = 1;
+          value = default;
+        ) : ( 
+          cap = 1;
+        );
+      );
+    );
+    
+    lleft = left;
+    lx = mx;
+    
+    change
+  );  
+  
+/*-----------*/
+/* KNOB      */  
+/*-----------*/   
+/* Knob handling */
+function drawKnob(_x, _y, _r, text, _hint)
+  local(ang, tang, dang, r0, r1, r2, r3, rk, tw, th, hc, vstart, vend)
+  instance(x, y, r, value, value2, value3, active, label, hint, hovertime, bipolarValue2, bipolarValue3)
+  global(gfx_a, gfx_x, gfx_y, scaling, KNOB_FONT, KNOB_FONT2,
+         mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a,
+         mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a,
+         knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a )
+  (
+    x = _x;
+    y = _y;
+    r = _r;
+    
+    r0 = .5*r;
+    r1 = 1.2*r;
+    r2 = 1.4*r;
+    r3 = 1.7*r;
+    rk = .1*r;
+    
+    hc = min(hovertime, 1);
+    
+    gfx_set(.3, .3+.2*hc*abs(sin(2*hovertime)), .7+hc, 1);
+    gfx_circle(x, y, r, 1, 1);
+    gfx_set(0, 0, 0, 1);
+    gfx_circle(x, y, .9*r, 1, 1);
+    gfx_set(.2, .3, .6, 1);
+    gfx_circle(x, y, .8*r, 1, 1);
+    gfx_set(1, 1, 1, .04);
+    gfx_circle(x, y, .7*r, 1, 1);
+    hint = _hint;
+
+    !active ? (
+      gfx_set(0, 0, 0, .5);
+      gfx_circle(x, y, r, 1, 1);
+    );    
+  
+  
+    gfx_set(0, 0, 0, .2);
+    gfx_circle(x, y, .78*r, 0, 1);
+    gfx_circle(x, y, .76*r, 0, 1);
+    gfx_set(.3, .4, .8, 1);
+    
+    // 31 segments
+    ang = .75*$pi;
+    tang = 1.5*$pi;
+    dang = tang/30;
+    loop(6,
+      gfx_line(x + r1 * cos(ang), y + r1 * sin(ang), x + r3 * cos(ang), y + r3 * sin(ang) );
+      ang += dang;
+      loop(4,
+        gfx_line(x + r1 * cos(ang), y + r1 * sin(ang), x + r2 * cos(ang), y + r2 * sin(ang) );
+        ang += dang;
+      );
+    );
+    gfx_line(x + r1 * cos(ang), y + r1 * sin(ang), x + r3 * cos(ang), y + r3 * sin(ang) );
+    
+    ang = .75*$pi + 1.5*$pi*value;
+    active ? (
+      gfx_set(0, 0, 0, .9);
+      gfx_circle( x + r0 * cos(ang), y + r0 * sin(ang), rk, 1, 1 );
+    );
+    
+    gfx_set(.4, .6, .9, 1);    
+    gfx_setfont(KNOB_FONT);
+    gfx_measurestr(text, tw, th);
+    gfx_x = x - .5*tw;
+    gfx_y = y + r + .25*th;
+    gfx_printf(text);
+    
+    ang = 1.25*$pi;
+    ( value2 != 0 ) ? (
+      gfx_set(mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a);
+      bipolarValue2 ? (
+        vstart  = clamp(value - .5*value2, 0, 1);
+        vend    = clamp(value + .5*value2, 0, 1);
+      ) : (
+        vstart  = clamp(value, 0, 1);
+        vend    = clamp(value + value2, 0, 1);
+      );
+    
+      ( vstart < vend ) ? (
+        gfx_a = .5 * gfx_a;
+        gfx_arc(x, y, r+5, ang + tang * vstart, ang + tang * vend, 1);
+        gfx_arc(x, y, r+1, ang + tang * vstart, ang + tang * vend, 1);
+        gfx_a = 2 * gfx_a;
+        gfx_arc(x, y, r+3, ang + tang * vstart, ang + tang * vend, 1);
+      ) : (
+        gfx_a = .5 * gfx_a;
+        gfx_arc(x, y, r+5, ang + tang * vend, ang + tang * vstart, 1);
+        gfx_arc(x, y, r+1, ang + tang * vend, ang + tang * vstart, 1);
+        gfx_a = 2 * gfx_a;
+        gfx_arc(x, y, r+3, ang + tang * vend, ang + tang * vstart, 1);
+      );
+    );
+    
+    ( value3 != 0 ) ? (
+      gfx_set(mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a);      
+      bipolarValue3 ? (
+        vstart  = clamp(value - .5*value3, 0, 1);
+        vend    = clamp(value + .5*value3, 0, 1);
+      ) : (
+        vstart  = clamp(value, 0, 1);
+        vend    = clamp(value + value3, 0, 1);
+      );
+      
+      ( vstart < vend ) ? (
+        gfx_a = .3333 * gfx_a;
+        gfx_arc(x, y, r+7, ang + tang * vstart, ang + tang * vend, 1);
+        gfx_arc(x, y, r+5, ang + tang * vstart, ang + tang * vend, 1);
+        gfx_a = 3 * gfx_a;
+        gfx_arc(x, y, r+6, ang + tang * vstart, ang + tang * vend, 1);
+      ) : (
+        gfx_a = .3333 * gfx_a;
+        gfx_arc(x, y, r+7, ang + tang * vend, ang + tang * vstart, 1);
+        gfx_arc(x, y, r+5, ang + tang * vend, ang + tang * vstart, 1);
+        gfx_a = 3 * gfx_a;
+        gfx_arc(x, y, r+6, ang + tang * vend, ang + tang * vstart, 1);
+      );
+    );
+    label ? (
+      gfx_setfont(KNOB_FONT2);
+      gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
+      gfx_measurestr(label, tw, th);
+      gfx_x = x - .5*tw;
+      gfx_y = y - .5*th + 1;
+      gfx_printf(label);
+    );
+  );  
+  
+function knob_processMouse(mx, my, mousecap, default)
+  local(left, dx, dy, change, mul, over)
+  instance(hint, value, x, y, r, cap, lleft, lx, ly, active, lastLeftClick, doubleClick, cTime, hoverTime)
+  global(hinter.updateHintTime, mouse_wheel, delta_time, comboboxOpen)
+  (
+    change = 0;
+    !comboboxOpen ? (
+      mul = 1;
+      
+      dx = (mx-x);
+      dy = (my-y);
+      over = (dx*dx + dy*dy) < (r*r);
+  
+      (mousecap&4) ? mul = mul * 0.1666666666667; /* CTRL */
+      (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
+      
+      (over || (cap > 0)) ? (
+        hoverTime = hoverTime + delta_time;
+      ) : ( 
+        hoverTime = 0;
+      );
+      
+      active ? (
+        left = mousecap & 1;
+        
+        ( over == 1 ) ? (
+          (mouse_wheel ~= 0) ? (
+            value = value + 0.0001 * mul * mouse_wheel;
+            mouse_wheel = 0;
+            value = clamp(value, 0, 1);
+            change = 1;
+          );
+        );
+        
+        ( left == 0 ) ? (
+          ( over == 1 ) ? (
+            hinter.updateHintTime(hint);
+          ) : ( 
+            hinter.updateHintTime(0);
+          );
+        );
+        
+        doubleClick = 0;
+        (left && !lleft) ? (
+           time_precise(cTime);
+           ( ( cTime - lastLeftClick ) < .25 ) ? (
+              doubleClick = 1;
+           ) : lastLeftClick = cTime;
+        );
+        
+        ( left && cap == 1 ) ? (
+          value = value - .01*mul*(my - ly);
+          value = clamp(value, 0, 1);
+          change = 1;
+        ) : ( cap = 0; );
+        
+        ( left && !lleft ) ? 
+        (
+          ( over ) ?
+          (
+            doubleClick ? (
+              lastLeftClick = -100;
+              change = 1;
+              value = default;
+            ) : ( 
+              cap = 1;
+            );
+          );
+        );
+        
+        lleft = left;
+        lx = mx;
+        ly = my;
+      );
+    );
+    
+    change
+  );
+
+/*-----------*/
+/* BUTTON    */  
+/*-----------*/   
+  function drawButton( modButtonX, modButtonY, modButtonW, modButtonH, str, font, taper )
+  instance(x, y, w, h, over)
+  global(backface_color_r, backface_color_g, backface_color_b,
+         font_color_r, font_color_g, font_color_b, font_color_a,
+         gfx_x, gfx_y)
+  local(strw, strh)
+  (
+    gfx_set(backface_color_r, backface_color_g, backface_color_b, 0.9);
+    //gfx_rect( modButtonX, modButtonY, modButtonW, modButtonH );
+    
+    gfx_triangle(modButtonX+taper,              modButtonY, 
+                 modButtonX+modButtonW-taper,   modButtonY, 
+                 modButtonX+modButtonW,         modButtonY + modButtonH,
+                 modButtonX+modButtonW,         modButtonY + modButtonH,
+                 modButtonX,                    modButtonY + modButtonH
+                  );
+    
+    gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+    gfx_setfont(font);
+    gfx_measurestr(str, strw, strh);
+    gfx_x = modButtonX + .5*(modButtonW-strw);
+    gfx_y = modButtonY + .5*(modButtonH-strh);
+    gfx_printf(str);
+    
+    over ? (
+      gfx_set(font_color_r, font_color_g, font_color_b, .5*font_color_a);
+      gfx_x = modButtonX + .5*(modButtonW-strw) + 1;
+      gfx_printf(str);
+    );
+    
+    x = modButtonX;
+    y = modButtonY;
+    w = modButtonW;
+    h = modButtonH;
+  );
+  
+  function button_processMouse(mx, my, mc)
+  instance(x, y, w, h, over, lmc)
+  global()
+  local(clicked)
+  (
+    over = ( mx > x ) && ( mx < (x+w) ) && ( my > y ) && ( my < ( y + h ) );
+    
+    over ? (
+      clicked = ((mc & 1) && (lmc & 1 == 0)) ? 1 : 0;
+    ) : clicked = 0;
+    
+    lmc = mc;
+    
+    clicked
+  );
+  
+/*-----------*/
+/* TOGGLE    */  
+/*-----------*/ 
+function processMouseToggle(mx, my, mousecap)
+  instance(x, y, w, h, on, lastleft, str)
+  local(left, slack, over)
+  global(hinter.updateHintTime, comboboxOpen)
+  (
+    !comboboxOpen ? (
+      slack = 5;
+      left = mousecap & 1;
+      
+      over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
+      
+      over ? (
+        ( (left == 1) && (lastleft == 0) ) ?  (
+          on = 1 - on;
+        );
+        hinter.updateHintTime(str);
+      );
+      
+      lastleft = left;
+    );
+    
+    on
+  );
+ 
+function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
+  local(ww, hh)
+  instance(x, y, w, h, str, on, invert, label)
+  global(gfx_x, gfx_y, gfx_a, gfx_mode, 
+         TOGGLE_FONT, knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    on = _on;
+    str = _str;
+
+    gfx_set(0, 0, 0, 0);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(r, g, b, a*.2);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(wr, wg, wb, wa);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+
+    ( label ) ? (
+      gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
+      gfx_setfont(TOGGLE_FONT);
+      gfx_measurestr(label, ww, hh);
+      gfx_x = floor(x+1.5*w);
+      gfx_y = floor(y-.5*hh+.5*h);
+      gfx_printf(label);
+    );
+    
+    ( (on && !invert) || (!on && invert) ) ? (
+      gfx_set(r, g, b, a);
+      gfx_rect(x, y, w, h);
+      gfx_a *= .6;
+      gfx_rect(x-1, y-1, w+2, h+2);
+      gfx_a *= .6;
+      gfx_rect(x-2, y-2, w+4, h+4);
+      gfx_a *= .6;
+      gfx_rect(x-3, y-3, w+6, h+6);
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 2*max(w,h), 2*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 3*max(w,h), 3*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 4*max(w,h), 4*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 5*max(w,h), 5*max(w,h));
+    );
+  );
+
+/*-----------*/
+/* CIRCLE    */  
+/*-----------*/
+function fancyCircle(x1, y1, rin, mute, solo, bypass)
+  local(dx)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB)
+  instance(hl, x, y, r, over, gfx_mode)
+  (
+    x = x1;
+    y = y1;
+    rin == 0 ? r = 10 : r = rin;
+    
+    over ? (
+      hl = abs(sin(2*globalTime));
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .1*hl);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .1*hl);
+      gfx_circle(x, y, 1.5*r, 1, 1);
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .05*hl);
+      gfx_circle(x, y, 1.9*r, 1, 1);
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .03*hl);
+      gfx_circle(x, y, 4*r, 1, 1);
+    ); 
+    
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, 1);
+    gfx_circle(x, y, r, 1, 1);
+    
+    gfx_set(lineR, lineG, lineB, lineA);    
+    gfx_circle(x, y, .92*r, 1, 1);
+    
+    gfx_set(.8*lineR, .8*lineG, .8*lineB, lineA);
+    gfx_circle(x, y, .8*r, 1, 1);
+    
+    gfx_set(.6*lineR, .6*lineG, .6*lineB, lineA);
+    gfx_circle(x, y, .75*r, 1, 1);
+    
+    gfx_set(.4*lineR, .4*lineG, .4*lineB, lineA);
+    gfx_circle(x, y, .7*r, 1, 1);
+    
+    ( solo == 1 ) ? (
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, .8*r, 1, 1);
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, .9*r, 1, 1);
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, r, 1, 1);
+      gfx_set(.2, 1, .2, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);    
+      
+      gfx_set(.7, 1, .7, .3);
+      gfx_circle(x, y, .7*r, 1, 1);
+      
+      gfx_set(.2, 1, .5, .08);
+      gfx_circle(x, y, 1.1*r, 1, 0);
+      gfx_set(.2, 1, .5, .08);
+      gfx_circle(x, y, 1.2*r, 1, 0);
+      gfx_set(.2, 1, .5, .08);
+      gfx_circle(x, y, 1.4*r, 1, 0);
+     ) : ( mute == 1 ) ? (
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, .8*r, 1, 1);
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, .9*r, 1, 1);
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, r, 1, 1);
+      gfx_set(1, .2, .2, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+      
+      gfx_set(1, .55, .55, 1);
+      gfx_circle(x, y, 1*r, 0, 1);
+      
+      gfx_set(1, .7, .7, .1);
+      gfx_circle(x, y, .7*r, 1, 1);
+      
+      gfx_set(1, .5, .5, .1);
+      gfx_circle(x, y, 1.1*r, 1, 0);
+      gfx_set(1, .5, .5, .1);
+      gfx_circle(x, y, 1.2*r, 1, 0);
+      gfx_set(1, .5, .5, .1);
+      gfx_circle(x, y, 1.4*r, 1, 0);
+    );    
+    
+    ( bypass == 1 ) ? (
+      gfx_set(1-mute, .2, .2, 1);
+      dx = .5*r;
+      gfx_line(x-dx, y-dx-1, x+dx, y+dx-1);
+      gfx_line(x-dx, y-dx+1, x+dx, y+dx+1);
+      gfx_line(x+dx, y-dx-1, x-dx, y+dx-1);
+      gfx_line(x+dx, y-dx+1, x-dx, y+dx+1);    
+      gfx_line(x+dx, y-dx,   x-dx, y+dx);
+      gfx_line(x-dx, y-dx,   x+dx, y+dx);
+    );
+    
+    over ? ( 
+      gfx_set(1,1,1,.4*hl);
+      gfx_circle(x, y, .6*r, 1, 1);
+      gfx_circle(x, y, 1.4*r, 0, 1);
+      gfx_circle(x, y, 1.5*r, 0, 1);
+    );
+    
+    over = 0;
+  );
