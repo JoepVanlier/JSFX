@@ -19,7 +19,7 @@ slider6:MakeUp1=1<0,1,1{No,Yes}>Auto make-up gain
 slider7:PreGain=0<-24,12,0.01>Pre-Gain
 slider8:PostGain=0<-24,12,0.01>Post-Gain
 slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
-slider10:Topology=0<0,2,1{LogDetect (Softer),LinDetect (Harsher)}>Topology
+slider10:Topology=0<0,4,1{LogDetect (Smoother),LinDetect (Harsher),LogDetect Decoupled (More Control),LinDetect Decoupled (More Control)}>Topology
 slider11:DryWet=1<0,1,.00001>Dry/Wet
 slider12:Oversampling=1<1,8,1>Oversampling factor
 
@@ -228,7 +228,6 @@ function compressor(mx)
     xL > yL ? (
       yL = at * yL + (1.0-at) * xL;
     ) : (
-      // yL = rt * yL + (1-rt) * mx;
       ya = max( xL, rt * ya + (1.0-rt) * xL );
       yL = at * yL + (1.0-at) * ya;
     );
@@ -255,7 +254,6 @@ function compressor2(mx)
     xL > yL ? (
       yL = at * yL + (1.0-at) * xL;
     ) : (
-      //yL = rt * yL + (1.0-rt) * xL;
       ya = max( xL, rt * ya + (1.0-rt) * xL );
       yL = at * yL + (1.0-at) * ya;
     );
@@ -264,6 +262,57 @@ function compressor2(mx)
     
     mx * 10^((c + makeUp)/20);
   );  
+  
+// Topology 3:
+/* Level detection log domain (decoupled) */
+function compressor_dc(mx)
+  instance( rt, at, yL, makeUp, 
+            xG, c, ya )
+  global()
+  local(xL, yG)
+  (
+    xG  = 20 * log10(max(abs(mx), 0.000001)); /* Peak */
+   
+    /* Calculate the gain curve */
+    yG = this.calcGain(xG);
+    xL = xG - yG;
+   
+    // Update smooth peak detector (peak)
+    xL > yL ? (
+      yL = at * yL + (1.0-at) * xL;
+    ) : (
+      yL = rt * yL + (1.0-rt) * xL;
+    );
+   
+    // Calculate gain correction
+    c   = -yL;
+   
+    // Apply current gain correction
+    mx * 10^((c + makeUp)/20);
+  );
+  
+  
+// Topology 3:
+// Level detection linear domain (decoupled)
+function compressor2_dc(mx)
+  instance(rt, at, c, xG, yL, ratio, makeUp)
+  global()
+  local(xL, yG, ya)
+  (
+    xG = 20*log10(yL);
+    yG = this.calcGain(xG);
+    
+    xL = max(abs(mx), 0.000001);
+    xL > yL ? (
+      yL = at * yL + (1.0-at) * xL;
+    ) : (
+      yL = rt * yL + (1.0-rt) * xL;
+    );
+    
+    c = yG - xG;
+    
+    mx * 10^((c + makeUp)/20);
+  );    
   
 function drawGainCurve(floorLevel, current)
   instance(x, y, w, h)
@@ -332,14 +381,23 @@ curFIRdelay = getFIRdelay(overSampling);
 
 @sample
 function processSample()
-  global(inL, inR, Topology, outL, outR, cL.compressor, cR.compressor, cL.compressor2, cR.compressor2, DryWet)
+  global(inL, inR, Topology, outL, outR, 
+         cL.compressor, cR.compressor, cL.compressor2, cR.compressor2, 
+         cL.compressor_dc, cR.compressor_dc, cL.compressor2_dc, cR.compressor2_dc, 
+         DryWet)
   (
     ( Topology == 0 ) ? (
       outL = cL.compressor(inL);
       outR = cR.compressor(inR);
-    ) : (
+    ) : ( Topology == 1 ) ? (
       outL = cL.compressor2(inL);
       outR = cR.compressor2(inR);
+    ) : ( Topology == 2 ) ? (
+      outL = cL.compressor_dc(inL);
+      outR = cR.compressor_dc(inR);
+    ) : ( Topology == 3 ) ? (
+      outL = cL.compressor2_dc(inL);
+      outR = cR.compressor2_dc(inR);
     );
     
     outL = inL * (1-DryWet) + outL * DryWet;
