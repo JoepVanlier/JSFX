@@ -42,7 +42,7 @@ There are two basic modes of operation:
 2. You can manipulate the existing side channel that's in the input. The gain of the original side channel is scaled by the old "Old side" knob. Depending on the button "HP original side" this signal route will be highpassed (mono-izing the low frequencies).
 
 # Filther, a waveshaping filter / distortion plugin with dynamic processing.
-![Filther](https://i.imgur.com/8ofYcFE.png)
+![Filther](https://i.imgur.com/oCkDyyz.png)
 
 Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
 You can find a full manual for Filther here: https://joepvanlier.github.io/FiltherManual/
