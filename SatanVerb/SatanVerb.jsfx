@@ -1,0 +1,676 @@
+desc:Satan verb
+tags: Satan verb (work in progress)
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+provides: SatanVerb_Dependencies/*
+license: MIT
+
+import widgets_satan.jsfx-inc
+
+slider1:sDamp=0<0,1,.001>-Spectral Bleed
+slider2:sPitch=0<0,1,.001>-Pitch drop
+slider3:mode=0<0,1,1{Maximum based,Growth/Decay (watch the volume!)}>Mode
+slider4:sCeiling=3<0,5,.001>-Spectral ceiling
+slider5:sDryWet=0.5<0,1,.001>-Dry/Wet
+slider6:sWidth=1.0<0,1,.0001>-Width
+slider7:uAmount=1<0,1,.0001>-Unshifted Amount
+slider8:sAmount=0<0,1,.0001>-Spectral Shift Amount
+slider9:sShift=0<-1.5,5,.0001>-Spectral Shift
+slider10:lowCut=1<0,1,.0001>-Lowpass
+slider11:highCut=0<0,1,.0001>-Highpass
+slider12:inputDistortion=0<-3,1,.001>-Input Distortion
+
+slider30:envActive=0<0,1,1{No,Yes}>Use Envelope
+slider31:sAttack=0.5<0,1,.001>Attack
+slider32:sDecay=.5<0,1,.001>Decay
+
+@init
+  MIN_ATTACK      = 2;
+  MAX_ATTACK      = 120;
+  MIN_DECAY       = 200;
+  MAX_DECAY       = 5000;
+  
+  MAX_SHIFT       = 5;
+  MIN_SHIFT       = -1.5;
+  
+  MIN_CEIL        = 0;
+  MAX_CEIL        = 5;
+  
+  MIN_DIST        = -3;
+  MAX_DIST        = 1;
+
+  lastLowCut        = -9999;
+  lastHighCut       = -9999;
+  lastUseEnvelope   = -9999;
+
+  KNOB_FONT = 14;
+  HINT_FONT = 12;
+  gfx_setfont(KNOB_FONT, fontface, 14*(1+scaling));
+  gfx_setfont(HINT_FONT, fontface, 12*(1+scaling));
+  
+  knob_highlightR = 1.0;
+  knob_highlightG = .2;
+  knob_highlightB = .7;
+
+  function initBuffer(_fft_mem, _nSamples, _fftSize, _mag_mem, _phase_mem)
+    instance(fft_mem, fft_end, ptr, fftSize, nSamples, mag_mem, phase_mem)
+    local()
+    global()
+    (
+      fft_mem   = _fft_mem;
+      nSamples  = _nSamples;
+      fft_end   = _fft_mem + _nSamples;
+      ptr       = _fft_mem;
+      fftSize   = _fftSize;
+      mag_mem   = _mag_mem;
+      phase_mem = _phase_mem;
+    );
+    
+  function init_follower(atk, release)
+    local(csrate)
+    instance(at, rt, LPF)
+    global(srate)
+    (
+      csrate = srate;
+      at = ( atk > 0 ) ? exp(-1/(.5*.001*atk*csrate)) : 0;
+      rt = exp(-1/(.5*.001*release*csrate));
+    );
+    
+  function eval_follower(x)
+    local()
+    instance(state, at, rt, x)
+    global()
+    (
+      x > state ? (
+        state = at * state + ( 1.0 - at ) * x;
+      ) : (
+        state = rt * state + ( 1.0 - rt ) * x;
+      );
+      
+      state
+    );    
+    
+  function initWindow(_window_mem, windowtype, fftSize)
+    global()
+    instance(pwr, window_mem)
+    local(i, dwindowpos, windowpos, windowSize)
+    (
+      windowSize = fftSize*.5;
+      window_mem = _window_mem;
+      windowpos = 0;
+      dwindowpos = $pi*2/windowSize;
+      i = 0; pwr = 0;
+      loop(fftSize/2+1,
+         pwr += (window_mem[i] = (
+           windowtype==0 ? ( 0.5 - cos(windowpos)*0.5 ) :
+           windowtype==1 ? ( 0.53836 - cos(windowpos)*0.46164 ) :
+           windowtype==2 ? ( 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) ) :
+           windowtype==3 ? ( 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) ) :
+           windowtype==4 ? ( 1.0 ) :
+           ( .21557895 - 0.41663158 * cos(windowpos) + 0.277263158 * cos(2*windowpos) - 0.083578947 * cos(3*windowpos) + 0.006947368 * cos(4*windowpos) )
+           ) );
+         i+=1;
+         windowpos+=dwindowpos;
+      );
+      
+      i = 0;
+      loop(fftSize*.5+1, 
+        window_mem[i] = sqrt(window_mem[i]);
+        i+=1; 
+      );
+   );  
+   
+  function windowBlock()
+    instance(window_mem, fft_mem, fftSize)
+    local(fftPtr, windowPtr)
+    global()
+    (
+      /* Window */
+      windowPtr = window_mem;
+      fftPtr = fft_mem;
+
+      loop(fftSize,
+        fftPtr[] *= windowPtr[];
+        fftPtr += 1;
+        fftPtr[] *= windowPtr[];
+        fftPtr += 1;
+        windowPtr += 1;
+      );
+    );  
+  
+  function tanh(x)
+  local()
+  global()
+  instance()
+  (
+    (2/(1+exp(-2*x)))-1
+  );
+  
+  function processBlock()
+    instance(fft_mem, fftSize, nSamples, mag_mem, phase_mem, offset)
+    local(ifftSize, fwd, bwd, 
+          r1, r2, i1, i2, re1, im1, re2, im2, 
+          cMag, cPhase, outPtr, fftPtr, fftPtr2, magPtr, magPtr2, phasePtr, 
+          i, last, new)
+    global(sharedBuffer, outputPtr, outputBufStart, outputBufEnd, 
+            dampFactor, pitchBend, ceiling, invCeiling, mode, sWidth, sShift, uAmount, sAmount)
+    (
+      ifftSize = 1;
+      
+      this.windowBlock();
+       
+      // FFT this block
+      ifftSize = 1/fftSize;
+      fft(fft_mem, fftSize);
+      fft_permute(fft_mem, fftSize);
+      
+      magPtr      = mag_mem;
+      phasePtr    = phase_mem;
+      
+      re1         = fft_mem[] + fft_mem[];
+      re2         = fft_mem[1] + fft_mem[1];
+      magPtr[]    = sqrt(re1*re1); magPtr += 1;
+      magPtr[]    = sqrt(re2*re2); magPtr += 1;
+      phasePtr[]  = atan2(0,re1); phasePtr += 1;
+      phasePtr[]  = atan2(0,re2); phasePtr += 1;
+      
+      // Decompose into magnitude and phase
+      fwd       = 2;
+      bwd       = fftSize;
+      loop(fftSize/2 - 1,
+        bwd = 2*fftSize - fwd;
+        r1  = fft_mem[fwd];
+        i1  = fft_mem[fwd + 1];
+        r2  = fft_mem[bwd];
+        i2  = fft_mem[bwd + 1];
+        
+        re1 = r1 + r2;
+        im1 = i1 - i2;
+        re2 = i1 + i2;
+        im2 = r2 - r1;
+        
+        magPtr[]    = sqrt(re1*re1 + im1*im1); magPtr += 1;
+        magPtr[]    = sqrt(re2*re2 + im2*im2); magPtr += 1;
+        
+        // Since we dump the phase anyway, don't compute it.
+        phasePtr[]  = atan2(im1,re1); phasePtr += 1;
+        phasePtr[]  = atan2(im2,re2); phasePtr += 1;
+        
+        fwd += 2;
+      );      
+      
+      /////////////////////////////
+      // Perform processing here //
+      /////////////////////////////
+      fftPtr = sharedBuffer;
+      magPtr = mag_mem;
+      loop( fftSize - 1,
+        mode == 1 ? (
+          ceiling > 0.0001 ? (
+            fftPtr[] = invCeiling*tanh(ceiling*(fftPtr[]*dampFactor + magPtr[]));
+          ) : (
+            fftPtr[] = fftPtr[]*dampFactor + magPtr[];
+          );
+        ) : (
+          ceiling > 0.0001 ? (
+            fftPtr[] = invCeiling*tanh(ceiling*max(fftPtr[]*dampFactor, magPtr[]));
+          ) : (
+            fftPtr[] = max(fftPtr[]*dampFactor, magPtr[]);
+          );
+        );
+        fftPtr += 1;
+        magPtr += 1;
+      );
+      
+      // Pitch bend
+      ( pitchBend > 0 ) ? (
+        fftPtr = sharedBuffer + fftSize;
+        last = 0;
+        loop( fftSize/2 - 1,
+          new = (1-pitchBend) * fftPtr[] + pitchBend * last;
+          last = fftPtr[];
+          fftPtr[] = new;
+          fftPtr -= 2;
+        );
+          
+        fftPtr = sharedBuffer + fftSize + 1;
+        last = 0;
+        loop( fftSize/2 - 1,
+          new = (1-pitchBend) * fftPtr[] + pitchBend * last;
+          last = fftPtr[];
+          fftPtr[] = new;
+          fftPtr -= 2;
+        );
+      );
+      
+      // Add basic verb from magnitude
+      fftPtr = sharedBuffer;
+      magPtr = mag_mem;
+      loop( fftSize - 1,
+        magPtr[] = uAmount * fftPtr[];
+        fftPtr += 1;
+        magPtr += 1;
+      );
+      
+      // Add pitch shifted version
+      ( sAmount > 0 ) ? (
+        fftPtr = sharedBuffer;
+        magPtr = mag_mem;
+        loop( fftSize - 1,
+          magPtr[] += sAmount*fftPtr[];
+          fftPtr += 1; magPtr += 1;
+          magPtr[] += sAmount*fftPtr[];
+          fftPtr += 1; magPtr += 1;
+            
+          magPtr += sShift;
+        );
+      );
+
+      /////////////////////////////
+      // End processing here     //
+      /////////////////////////////
+      
+      // Spectra at this point are interleaved                
+      // At this point magPtr contains interleaved magnitude  
+      // Phase contains interleaved phases                   
+      //      fft_mem[0] = 0;
+      //      fft_mem[1] = mag_mem[1] * cos(phase_mem[1]);
+       
+      fwd = 0;
+      bwd = fftSize;
+      magPtr = mag_mem;
+      phasePtr = phase_mem; 
+      loop(fftSize/2 - 1,
+        bwd = 2*fftSize - fwd;
+        
+        // Real parts are symmetric. Imaginary parts asymmetric
+        
+        // Spectrum 1
+        cMag        = magPtr[];
+        cPhase      = phasePtr[];
+        i = cPhase  = rand()*2*$pi;
+        
+        re1         = cMag * cos(cPhase); // Real
+        im1         = cMag * sin(cPhase); // Imaginary
+        magPtr += 1; phasePtr += 1;
+        
+        // Spectrum 2
+        cMag        = magPtr[];
+        cPhase      = phasePtr[];
+        
+        cPhase      = i+sWidth*(rand()-.5)*2*$pi;
+        
+        re2         = cMag * cos(cPhase); // Real
+        im2         = cMag * sin(cPhase); // Imaginary
+        magPtr += 1; phasePtr += 1;
+        
+        // Multiplex it back into the complex spectrum before backtrafo
+        fft_mem[fwd]      = re1 - im2;  // Real 1
+        fft_mem[bwd]      = re1 + im2;  // Real 2
+
+        fft_mem[fwd + 1]  = re2 + im1;  // Imag 1
+        fft_mem[bwd + 1]  = re2 - im1;  // Imag 2
+        
+        fwd += 2;
+      );
+      
+      fft_ipermute(fft_mem, fftSize);
+      ifft(fft_mem, fftSize);
+      
+      this.windowBlock();
+      
+      /* Render the result to the output buffer */
+      outPtr = outputPtr + offset;
+      fftPtr = fft_mem;
+      loop(nSamples,
+        ( outPtr > outputBufEnd ) ? outPtr = outputBufStart;
+      
+        outPtr[] += .5*ifftSize*fftPtr[]; outPtr += 1; fftPtr += 1;
+        outPtr[] += .5*ifftSize*fftPtr[]; outPtr += 1; fftPtr += 1;        
+      );
+    );
+  
+  function updateBuffer(left, right)
+    instance(fft_mem, fft_end, ptr)
+    local()
+    global()
+    (
+      (ptr >= fft_end) ? (
+        this.processBlock();
+        ptr = fft_mem;
+        memset(ptr, 0, 65536);
+      );
+      
+      ptr[]  = left;    ptr += 1;
+      ptr[]  = right;   ptr += 1;
+    );
+  
+  /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
+  function init_butter6(freq)
+    global(srate)
+    local(res)
+    instance(g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      g = tan( .5 * $pi * freq );
+      
+      k1  = 1.93185165257814; // sqrt(2+sqrt(3))
+      a1_1 = 1/(1+g*(g+k1));
+      
+      k2 = 1.41421356474619; // sqrt(2)
+      a1_2 = 1/(1+g*(g+k2));
+      
+      k3 = 0.517638090205042; // sqrt(2-sqrt(3))
+      a1_3 = 1/(1+g*(g+k3));
+      
+      a2_1 = g*a1_1;
+      a2_2 = g*a1_2;
+      a2_3 = g*a1_3;
+    ); 
+
+  function eval_butter_HP6(v0)
+    global()
+    local(v1, v2, hp)
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq,
+             g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      v1 = a1_1 * ic1eq + a2_1*(v0-ic2eq);
+      v2 = ic2eq + g*v1;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;
+      hp    = v0 - k1*v1 - v2;
+      
+      v1 = a1_2 * ic3eq + a2_2*(hp-ic4eq);
+      v2 = ic4eq + g*v1;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      hp    = hp - k2*v1 - v2;
+      
+      v1 = a1_3 * ic5eq + a2_3*(hp-ic6eq);
+      v2 = ic6eq + g*v1;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;
+      
+      hp    = hp - k3*v1 - v2;
+    );
+  
+  function eval_butter_LP6(v0)
+    global()
+    local(v1, v2, lp)
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq,
+             g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      v1 = a1_1 * ic1eq + a2_1*(v0-ic2eq);
+      v2 = ic2eq + g*v1;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;
+      lp    = v2;
+      
+      v1 = a1_2 * ic3eq + a2_2*(lp-ic4eq);
+      v2 = ic4eq + g*v1;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      lp    = v2;
+      
+      v1 = a1_3 * ic5eq + a2_3*(lp-ic6eq);
+      v2 = ic6eq + g*v1;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;
+      
+      lp    = v2;
+    );  
+  
+bufferDist  = 65536;
+fftSize     = 2048*8;
+nSamples    = 1024*8;
+
+outputBufStart = 2*bufferDist;
+outputBufEnd   = 3*bufferDist;
+
+bufMem         = 4*bufferDist;
+magMem         = 5*bufferDist;
+phaseMem       = 6*bufferDist;
+windowMem      = 7*bufferDist;
+
+bufMem2        = 8*bufferDist;
+magMem2        = 9*bufferDist;
+phaseMem2      = 10*bufferDist;
+
+sharedBuffer   = 11*bufferDist;
+
+dryBufStart    = 12*bufferDist;
+dryBufEnd      = 13*bufferDist;
+
+pixBuf         = 50*bufferDist;
+
+outputPtr      = outputBufStart;
+  
+windowType     = 0; /* Hann */
+
+function reInitializeBuffers()
+(
+  fftBuf.initBuffer(bufMem, nSamples, fftSize, magMem, phaseMem);  
+  fftBuf.initWindow(windowMem, windowType, nSamples);
+  fftBuf2.initBuffer(bufMem2, nSamples, fftSize, magMem2, phaseMem2); 
+  fftBuf2.initWindow(windowMem, windowType, nSamples);
+  fftBuf2.ptr += nSamples/2;
+  
+  dryPtr         = dryBufStart + nSamples;
+  dryPtrRead     = dryBufStart + .125*nSamples * envActive;
+);
+
+reInitializeBuffers();
+
+@slider
+
+@block
+/* Transient parameters */
+beta            = log(MIN_ATTACK);
+alpha           = log(MAX_ATTACK)-beta;
+attack          = exp(alpha * sAttack + beta) - 1;
+beta            = log(MIN_DECAY);
+alpha           = log(MAX_DECAY)-beta;
+decay           = exp(alpha * sDecay + beta);
+envelope.init_follower(attack, decay);
+
+dampFactor      = .99*sDamp;
+pitchBend       = .99*sPitch;
+dryWet          = sDryWet;
+iDryWet         = 1-dryWet;
+ceiling         = 10^(-sCeiling);
+invCeiling      = 1/ceiling;
+inputCeiling    = 10^(inputDistortion);
+
+( lastUseEnvelope != envActive ) ? (
+  lastUseEnvelope = envActive;
+  reInitializeBuffers();
+);
+
+( inputCeiling > 1 ) ? (
+  iInputCeiling = 1/sqrt(inputCeiling);
+) : (
+  iInputCeiling = 1/inputCeiling;
+);
+
+( lastLowCut != lowCut ) ? (
+  lastLowCut = lowCut;
+  LPFL.init_butter6( .99*exp( (1-lowCut) * log(20/22050) ) );
+  LPFR.init_butter6( .99*exp( (1-lowCut) * log(20/22050) ) );
+);
+
+( lastHighCut != highCut ) ? (
+  lastHighCut = highCut;
+  HPFL.init_butter6( .99*exp( (1-highCut) * log(20/22050) ) );
+  HPFR.init_butter6( .99*exp( (1-highCut) * log(20/22050) ) );
+);
+
+@sample
+inL = spl0;
+inR = spl1;
+
+( inputDistortion > -2.9 ) ? (
+  inL = iInputCeiling*tanh(inputCeiling*inL);
+  inR = iInputCeiling*tanh(inputCeiling*inR);
+);
+
+fftBuf.updateBuffer(inL,inR);
+fftBuf2.updateBuffer(inL,inR);
+
+outputPtr > outputBufEnd ? outputPtr = outputBufStart;
+
+dryPtr > dryBufEnd ? dryPtr = dryBufStart;
+dryPtrRead > dryBufEnd ? dryPtrRead = dryBufStart;
+
+dryPtr[] = spl0; dryPtr += 1;
+dryPtr[] = spl1; dryPtr += 1;
+
+outL = outputPtr[]; outputPtr[] = 0; outputPtr += 1; 
+outR = outputPtr[]; outputPtr[] = 0; outputPtr += 1;
+
+( lowCut < 1 ) ? (
+  outL = LPFL.eval_butter_LP6(outL);
+  outL = HPFL.eval_butter_HP6(outL);
+);
+
+( highCut > 0 ) ? (
+  outR = LPFR.eval_butter_LP6(outR);
+  outR = HPFR.eval_butter_HP6(outR);
+);
+
+dryL = dryPtrRead[]; dryPtrRead += 1;
+dryR = dryPtrRead[]; dryPtrRead += 1;
+
+/* Envelope follower */
+( envActive ) ? (
+  inputGain = 20*log10(max(.001, .5*(abs(dryL)+abs(dryR))));
+  cEnv = envelope.eval_follower(inputGain);
+  dbGain = cEnv;
+  linGain = 10^(0.05*dbGain);
+  outL = outL * linGain;
+  outR = outR * linGain;
+);
+
+spl0=dryL * iDryWet - outL * dryWet;
+spl1=dryR * iDryWet - outR * dryWet;
+
+@gfx  
+  knob_outerR = .4 + .6*abs(.5*sin(time_precise()));
+  knob_outerG = .3*abs(sin(time_precise()));
+  knob_outerB = .0*abs(sin(time_precise()));
+    
+  knob_baseR = .2;
+  knob_baseG = .1;
+  knob_baseB = .1;
+  
+  knob_notchesR = .5;
+  knob_notchesG = .3;
+  knob_notchesB = .3;
+  
+  knob_textR = .75;
+  knob_textG = .5;
+  knob_textB = .5;
+
+  pixPtr = pixBuf;
+  gfx_mode = 1;
+  top = 0;
+  yvel = 2*gfx_h/375;
+  HXS = .005*yvel*sin(.1*time_precise())*sin(.5*time_precise());
+  loop(.005*gfx_h*gfx_w,
+    HX = .5*gfx_w;
+    HY = .5*gfx_h;
+  
+    X = pixPtr[] += (rand()-.5) + yvel*sin(.03*X+.02*Y) + (X-HX)*HXS; pixPtr += 1;
+    Y = pixPtr[] -= 2+5*rand()  + yvel*cos(.01*X+.01*Y) + (X-HY)*HXS; pixPtr += 1;
+    F = pixPtr[] += rand();         pixPtr += 1;
+    
+    ( ( Y < top ) || ( X > gfx_w ) || ( X < 0 ) ) ? (
+      pixPtr -= 3;
+      X = pixPtr[] = rand() * gfx_w; pixPtr += 1;
+      Y = pixPtr[] = gfx_h + rand()*gfx_h; pixPtr += 1;
+      F = pixPtr[] = 0; pixPtr += 1;
+    );
+
+    gfx_set(1,1-.006*F*F+.07*F,1-.05*F,.1*(1-.025*F));
+    gfx_circle(X,Y,5-.1*F,1,1);
+    
+    gfx_set(1,1-.006*F*F+.07*F,1-.05*F,1-.025*F);
+    gfx_circle(X,Y,3-.1*F,1,1);
+    gfx_circle(X,Y,1-.1*F,1,1);
+  );
+  
+  gfx_set(.1+.2*sin(time_precise()),.1,.2,.3);
+  i = 0; dx = 15;
+  loop(2*gfx_w / dx,
+    gfx_line(gfx_w - gfx_w + dx*i, gfx_h, gfx_w, gfx_h-dx*i);
+    i += 1;
+  );
+  
+  knobRadius = 30 * (1+scaling);
+  
+  currentPos = 40 * (1+scaling) + knobRadius;
+  currentY = 60 * (1+scaling);
+  
+  kDryWet = 40*(1+scaling) + knobRadius;
+  kDryWet.active = 1;
+  kDryWet.value = sDryWet;
+  kDryWet.drawKnob(currentPos, bottomRow + currentY, knobRadius, "Dry/Wet", "How much of the effect is used?");
+  kDryWet.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sDryWet = kDryWet.value );
+  currentPos += 2.5*knobRadius;
+  
+  kLowPass.active = 1;
+  kLowPass.value = lowCut;
+  kLowPass.drawKnob(currentPos, bottomRow + currentY - knobRadius, .39*knobRadius, "LPF", "Lowpass frequency for reverb channel.\n");
+  kLowPass.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( lowCut = kLowPass.value );
+  
+  kHighPass.active = 1;
+  kHighPass.value = highCut;
+  kHighPass.drawKnob(currentPos, bottomRow + currentY + .6*knobRadius, .39*knobRadius, "HPF", "Highpass frequency for reverb channel.");
+  kHighPass.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( highCut = kHighPass.value );
+  currentPos += 3*knobRadius;
+  
+  kBleed.active = 1;
+  kBleed.value = sDamp;
+  kBleed.drawKnob(currentPos, bottomRow + currentY, knobRadius, "Bleed", "Modify how long the effect reverberates.");
+  kBleed.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sDamp = kBleed.value );
+  currentPos += 2.5*knobRadius;
+   
+  kBend.active = 1;
+  kBend.value = sPitch;
+  kBend.drawKnob(currentPos, bottomRow + currentY - knobRadius, .39*knobRadius, "Bend", "Lowpass frequency for reverb channel.\n");
+  kBend.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sPitch = kBend.value );
+  
+  kDist.active = 1;
+  kDist.value = ( inputDistortion - MIN_DIST ) / ( MAX_DIST - MIN_DIST );
+  kDist.drawKnob(currentPos, bottomRow + currentY + .6*knobRadius, .39*knobRadius, "Dist", "Highpass frequency for reverb channel.");
+  kDist.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( inputDistortion = kDist.value * (MAX_DIST - MIN_DIST) + MIN_DIST );
+  currentPos += 3*knobRadius;
+  
+  kWidth.active = 1;
+  kWidth.value = sWidth;
+  kWidth.drawKnob(currentPos, bottomRow + currentY, knobRadius, "Width", "Regulates phase coherence between left and right.");
+  kWidth.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sWidth = kWidth.value );
+  currentPos += 2.5*knobRadius;
+  
+  kCeiling.active = 1;
+  kCeiling.value = ( sCeiling - MIN_CEIL ) / ( MAX_CEIL - MIN_CEIL );
+  kCeiling.drawKnob(currentPos, bottomRow + currentY - knobRadius, .39*knobRadius, "Ceiling", "Ceiling in the frequency domain.\nThis tends to squeeze dominant frequencies away.\n");
+  kCeiling.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sCeiling = kCeiling.value * ( MAX_CEIL - MIN_CEIL ) + MIN_CEIL );
+  
+  kBaseAmount.active = 1;
+  kBaseAmount.value = uAmount;
+  kBaseAmount.drawKnob(currentPos, bottomRow + currentY + .6*knobRadius, .39*knobRadius, "Amount", "Amount of base verb.");
+  kBaseAmount.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( uAmount = kBaseAmount.value );
+  currentPos += 2*knobRadius;
+  
+  kShift.active = 1;
+  kShift.value = (sShift - MIN_SHIFT)/(MAX_SHIFT - MIN_SHIFT);
+  kShift.drawKnob(currentPos, bottomRow + currentY-knobRadius, .39*knobRadius, "Shift", "Shift of frequency shifted verb.");
+  kShift.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sShift = kShift.value * (MAX_SHIFT - MIN_SHIFT) + MIN_SHIFT );
+  
+  kShiftAmount.active = 1;
+  kShiftAmount.value = sAmount;
+  kShiftAmount.drawKnob(currentPos, bottomRow + currentY+.6*knobRadius, .39*knobRadius, "Amount", "Amount of frequency shifted verb in the mix.");
+  kShiftAmount.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sAmount = kShiftAmount.value );
+  currentPos += 4*knobRadius;
+  
+  hinter.drawHint_draw()
