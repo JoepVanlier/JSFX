@@ -9,6 +9,24 @@ https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 to your reapack (https://reapack.com/) list of repositories. If you run 
 into issues with these, feel free to open an issue here on github.
 
+# Squashman
+Squashman is a multi-band saturation / distortion plugin that allows modulation of several of its parameters.
+
+Features:
+- Optional high quality oversampling
+- Flexible band count, up to five bands can be used to manipulate sound
+- 24 db/oct Linkwitz Riley crossover filters
+- Graphical user interface
+- 25 modulatable waveshapers and 4 fixed ones.
+- Several modulation sources (4 LFOs, 2 MIDI triggered and/or loopable envelopes).
+
+![SquashmanUI](https://imgur.com/DPEquCN.png)
+
+![Shapers](https://imgur.com/X8Y18k2.png)
+
+A short demo here:
+https://www.youtube.com/watch?v=mK0xAhq4pK4
+
 # Tight Compressor
 ![TightCompressor](https://i.imgur.com/0rES8lF.jpg)
 
@@ -24,7 +42,7 @@ There are two basic modes of operation:
 2. You can manipulate the existing side channel that's in the input. The gain of the original side channel is scaled by the old "Old side" knob. Depending on the button "HP original side" this signal route will be highpassed (mono-izing the low frequencies).
 
 # Filther, a waveshaping filter / distortion plugin with dynamic processing.
-![Filther](https://i.imgur.com/8ofYcFE.png)
+![Filther](https://i.imgur.com/oCkDyyz.png)
 
 Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
 You can find a full manual for Filther here: https://joepvanlier.github.io/FiltherManual/
