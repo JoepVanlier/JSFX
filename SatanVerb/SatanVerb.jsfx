@@ -1,8 +1,8 @@
 desc:Satan verb
 tags: Satan verb (work in progress)
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Bugfix LPF/HPF, optimizations
+changelog: Various optimizations
 provides: SatanVerb_Dependencies/*
 license: MIT
 
@@ -20,6 +20,8 @@ slider9:sShift=0<-1.5,5,.0001>-Spectral Shift
 slider10:lowCut=1<0,1,.0001>-Lowpass
 slider11:highCut=0<0,1,.0001>-Highpass
 slider12:inputDistortion=0<-3,1,.001>-Input Distortion
+
+slider64:NoOptimization=0<0,1,1>-No optimization
 
 slider30:envActive=0<0,1,1{No,Yes}>Use Envelope
 slider31:sAttack=0.5<0,1,.001>Attack
@@ -149,12 +151,12 @@ slider32:sDecay=.5<0,1,.001>Decay
   
   function processBlock()
     instance(fft_mem, fftSize, nSamples, mag_mem, phase_mem, offset)
-    local(ifftSize, fwd, bwd, 
-          r1, r2, i1, i2, re1, im1, re2, im2, 
+    local(ifftSize, fwd, bwd, chnk1, 
+          r1, r2, i1, i2, re1, im1, re2, im2, x1, x2, x1sq, x2sq, sqlen, isqlen, ang1, ang2,
           cMag, cPhase, outPtr, fftPtr, fftPtr2, magPtr, magPtr2, phasePtr, 
           i, last, new)
     global(sharedBuffer, outputPtr, outputBufStart, outputBufEnd, 
-            dampFactor, pitchBend, ceiling, invCeiling, mode, sWidth, sShift, uAmount, sAmount)
+            dampFactor, pitchBend, ceiling, invCeiling, mode, sWidth, sShift, uAmount, sAmount, NoOptimization)
     (
       ifftSize = 1;
       
@@ -205,6 +207,7 @@ slider32:sDecay=.5<0,1,.001>Decay
       /////////////////////////////
       fftPtr = sharedBuffer;
       magPtr = mag_mem;
+      
       loop( fftSize - 1,
         mode == 1 ? (
           ceiling > 0.0001 ? (
@@ -280,39 +283,106 @@ slider32:sDecay=.5<0,1,.001>Decay
       fwd = 0;
       bwd = fftSize;
       magPtr = mag_mem;
-      phasePtr = phase_mem; 
-      loop(fftSize/2 - 1,
-        bwd = 2*fftSize - fwd;
+      phasePtr = phase_mem;
+      ifftSize = .5*ifftSize; /* Normalizing constant */
+      (NoOptimization == 1) ? (
+        // Original
+        loop(fftSize/2 - 1,
+          bwd = 2*fftSize - fwd;
+          
+          // Real parts are symmetric. Imaginary parts asymmetric
+          
+          // Spectrum 1
+          cMag        = ifftSize*magPtr[];
+          //cPhase      = phasePtr[];
+          
+          i = cPhase  = rand()*2*$pi;
+          re1         = cMag * cos(cPhase); // Real
+          im1         = cMag * sin(cPhase); // Imaginary        
+          
+          magPtr += 1; //phasePtr += 1;
+          
+          // Spectrum 2
+          cMag        = ifftSize*magPtr[];
+          //cPhase      = phasePtr[];
+  
+          cPhase      = i+sWidth*(rand()-.5)*2*$pi;
+          
+          re2         = cMag * cos(cPhase); // Real
+          im2         = cMag * sin(cPhase); // Imaginary
+          magPtr += 1; //phasePtr += 1;
+          
+          // Multiplex it back into the complex spectrum before backtrafo
+          fft_mem[fwd]      = re1 - im2;  // Real 1
+          fft_mem[bwd]      = re1 + im2;  // Real 2
+  
+          fft_mem[fwd + 1]  = re2 + im1;  // Imag 1
+          fft_mem[bwd + 1]  = re2 - im1;  // Imag 2
+          
+          fwd += 2;
+        );
+      ) : (
+        /* Optimized */
+        bwd = 2*fftSize;
+        loop(fftSize/2 - 1,
+          //bwd = 2*fftSize - fwd;
+          
+          // Spectrum 1
+          cMag        = ifftSize*magPtr[];
+          
+          // Generate random phase angle uniform on the circle without sin/cos (von Neumann1951)
+          // Note that technically for accurate uniformity, we should check whether x1sq+x2sq >= 1 and
+          // reject the sample if it is, but this is omitted. This leads to a slight bias in the angles 
+          // as this will be violated with a probability of 1-(pi/4).
+          x1 = 2*rand()-1;
+          x2 = 2*rand()-1;
+          x1sq = x1*x1;
+          x2sq = x2*x2;
+          sqlen = x1sq + x2sq;
+          
+          isqlen = 1 / sqlen;
+          ang1 = (x1sq - x2sq) * isqlen;
+          re1 = cMag * ang1; // Real
+          ang2 = (2 * x1 * x2) * isqlen;
+          im1 = cMag * ang2; // Imaginary   
+          
+          magPtr += 1;
+          
+          // Spectrum 2
+          cMag        = ifftSize*magPtr[];
+          
+          (sWidth == 1) ? (
+            x1 = 2*rand()-1;
+            x2 = 2*rand()-1;
+            x1sq = x1*x1;
+            x2sq = x2*x2;
+            sqlen = x1sq + x2sq;
+            
+            isqlen = 1 / sqlen;
+            ang1 = (x1sq - x2sq) * isqlen;
+            re2 = cMag * ang1; // Real
+            ang2 = (2 * x1 * x2) * isqlen;
+            im2 = cMag * ang2; // Imaginary
+          ) : (
+            x1          = sWidth*(rand()-.5)*2*$pi;
+            x1sq        = cos(x1);
+            x2sq        = sin(x1);
+            re2         = cMag * (x1sq * ang1 - x2sq * ang2); // Real
+            im2         = cMag * (x2sq * ang1 + x1sq * ang2); // Imaginary
+          );
+          
+          magPtr += 1;
+          
+          // Multiplex it back into the complex spectrum before backtrafo
+          fft_mem[fwd]      = re1 - im2;  // Real 1
+          fft_mem[bwd]      = re1 + im2;  // Real 2
         
-        // Real parts are symmetric. Imaginary parts asymmetric
-        
-        // Spectrum 1
-        cMag        = magPtr[];
-        cPhase      = phasePtr[];
-        i = cPhase  = rand()*2*$pi;
-        
-        re1         = cMag * cos(cPhase); // Real
-        im1         = cMag * sin(cPhase); // Imaginary
-        magPtr += 1; phasePtr += 1;
-        
-        // Spectrum 2
-        cMag        = magPtr[];
-        cPhase      = phasePtr[];
-        
-        cPhase      = i+sWidth*(rand()-.5)*2*$pi;
-        
-        re2         = cMag * cos(cPhase); // Real
-        im2         = cMag * sin(cPhase); // Imaginary
-        magPtr += 1; phasePtr += 1;
-        
-        // Multiplex it back into the complex spectrum before backtrafo
-        fft_mem[fwd]      = re1 - im2;  // Real 1
-        fft_mem[bwd]      = re1 + im2;  // Real 2
-
-        fft_mem[fwd + 1]  = re2 + im1;  // Imag 1
-        fft_mem[bwd + 1]  = re2 - im1;  // Imag 2
-        
-        fwd += 2;
+          fft_mem[fwd + 1]  = re2 + im1;  // Imag 1
+          fft_mem[bwd + 1]  = re2 - im1;  // Imag 2
+          
+          fwd += 2;
+          bwd -= 2;
+        );      
       );
       
       fft_ipermute(fft_mem, fftSize);
@@ -321,14 +391,21 @@ slider32:sDecay=.5<0,1,.001>Decay
       this.windowBlock();
       
       /* Render the result to the output buffer */
+      /*fftPtr  = fft_mem;
+      outPtr  = outputPtr + offset;
+      ( outPtr > outputBufEnd ) ? outPtr = outputBufStart;
+      chnk1   = outputBufEnd - outPtr;
+      memcpy(outPtr, fftPtr, chnk1);
+      memcpy(outputBufStart, fftPtr + chnk1, nSamples - chnk1);*/
+      
       outPtr = outputPtr + offset;
       fftPtr = fft_mem;
       loop(nSamples,
         ( outPtr > outputBufEnd ) ? outPtr = outputBufStart;
       
-        outPtr[] += .5*ifftSize*fftPtr[]; outPtr += 1; fftPtr += 1;
-        outPtr[] += .5*ifftSize*fftPtr[]; outPtr += 1; fftPtr += 1;        
-      );
+        outPtr[] += fftPtr[]; outPtr += 1; fftPtr += 1;
+        outPtr[] += fftPtr[]; outPtr += 1; fftPtr += 1;        
+      );     
     );
   
   function updateBuffer(left, right)
@@ -425,7 +502,7 @@ fftSize     = 2048*8;
 nSamples    = 1024*8;
 
 outputBufStart = 2*bufferDist;
-outputBufEnd   = 3*bufferDist;
+outputBufEnd   = 3*bufferDist-4;
 
 bufMem         = 4*bufferDist;
 magMem         = 5*bufferDist;
@@ -439,7 +516,7 @@ phaseMem2      = 10*bufferDist;
 sharedBuffer   = 11*bufferDist;
 
 dryBufStart    = 12*bufferDist;
-dryBufEnd      = 13*bufferDist;
+dryBufEnd      = 13*bufferDist-4;
 
 pixBuf         = 50*bufferDist;
 
