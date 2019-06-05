@@ -1,8 +1,8 @@
 desc:Satan verb
 tags: Satan verb (work in progress)
-version: 0.04
+version: 0.06
 author: Joep Vanlier
-changelog: More sensible knob defaults
+changelog: Add delay compensation, Add envelope visualization, Add buttons
 provides: SatanVerb_Dependencies/*
 license: MIT
 
@@ -10,7 +10,7 @@ import widgets_satan.jsfx-inc
 
 slider1:sDamp=0<0,1,.001>-Spectral Bleed
 slider2:sPitch=0<0,1,.001>-Pitch drop
-slider3:mode=0<0,1,1{Maximum based,Growth/Decay (watch the volume!)}>Mode
+slider3:mode=0<0,1,1{Maximum based,Growth/Decay (watch the volume!)}>-Mode
 slider4:sCeiling=3<0,5,.001>-Spectral ceiling
 slider5:sDryWet=0.5<0,1,.001>-Dry/Wet
 slider6:sWidth=1.0<0,1,.0001>-Width
@@ -23,13 +23,15 @@ slider12:inputDistortion=0<-3,1,.001>-Input Distortion
 
 slider64:NoOptimization=0<0,1,1>-No optimization
 
-slider30:envActive=0<0,1,1{No,Yes}>Use Envelope
-slider31:sAttack=0.5<0,1,.001>Attack
-slider32:sDecay=.5<0,1,.001>Decay
+slider29:pdcCompensation=1<0,1,1{No,Yes}>-Compensate delay
+slider30:envActive=0<0,1,1{No,Yes}>-Use Envelope
+slider31:sAttack=0.5<0,1,.001>-Attack
+slider32:sDecay=.5<0,1,.001>-Decay
+slider33:relativeEnvelope=1<0,1,1{No,Yes}>-Relative Envelope?
 
 @init
   MIN_ATTACK      = 2;
-  MAX_ATTACK      = 120;
+  MAX_ATTACK      = 300;
   MIN_DECAY       = 200;
   MAX_DECAY       = 5000;
   
@@ -45,11 +47,14 @@ slider32:sDecay=.5<0,1,.001>Decay
   lastLowCut        = -9999;
   lastHighCut       = -9999;
   lastUseEnvelope   = -9999;
+  lastPDC           = -9999;
 
   KNOB_FONT = 14;
   HINT_FONT = 12;
+  TOGGLE_FONT = 11;
   gfx_setfont(KNOB_FONT, fontface, 14*(1+scaling));
   gfx_setfont(HINT_FONT, fontface, 12*(1+scaling));
+  gfx_setfont(TOGGLE_FONT, fontface, 14*(1+scaling));
   
   knob_highlightR = 1.0;
   knob_highlightG = .2;
@@ -68,6 +73,69 @@ slider32:sDecay=.5<0,1,.001>Decay
       mag_mem   = _mag_mem;
       phase_mem = _phase_mem;
     );
+
+function gen_window(_x, _y, _w, _h)
+instance(x, y, w, h)
+local()
+global()
+(
+  x = _x;
+  y = _y;
+  w = _w;
+  h = _h;
+);
+
+
+function draw_buffer(scopeptr, scopebuffer, scopebuffermax, mul, fill)
+  instance(x, y, w, h)
+  globals(gfx_x, gfx_y)
+  local(lx, ly, xx, dx, lptr, yy, lastx, lasty, isc, yref)
+  (
+    xx = x;
+    dx = floor((scopebuffermax-scopebuffer)/w);
+    
+    lptr = floor((scopeptr)/dx)*dx;
+    gfx_x = xx;
+    gfx_y = y+h;
+    isc = h;
+    yref = y+h;
+    ly = y+h;
+    loop((scopebuffermax-scopeptr)/dx,
+      yy = yref - h*min(isc,lptr[]);
+      
+      lptr += dx;
+      
+      fill ? (
+        gfx_triangle( xx-1, y+h,
+                      xx-1, ly,
+                      xx, y+h,
+                      xx, yy);
+      ) : (
+        gfx_lineto(xx, yy);
+      );
+      
+      ly = yy;
+      xx += 1;
+    );
+    
+    lptr = floor((scopebuffer)/dx)*dx;
+    loop((scopeptr - scopebuffer)/dx,
+      yy = yref - h*min(isc,lptr[]);
+      
+      fill ? (
+        gfx_triangle( xx-1, y+h,
+                      xx-1, ly,
+                      xx, y+h,
+                      xx, yy);
+      ) : (
+        gfx_lineto(xx, yy);
+      );
+      
+      lptr += dx;
+      ly = yy;
+      xx += 1;
+    );
+  );    
     
   function init_follower(atk, release)
     local(csrate)
@@ -518,6 +586,14 @@ sharedBuffer   = 11*bufferDist;
 dryBufStart    = 12*bufferDist;
 dryBufEnd      = 13*bufferDist-4;
 
+sigBufStart    = 14*bufferDist;
+sigBufEnd      = 15*bufferDist-4;
+sigBufPtr      = sigBufStart;
+
+gainBufStart   = 16*bufferDist;
+gainBufEnd     = 17*bufferDist-4;
+gainBufPtr     = gainBufStart;
+
 pixBuf         = 50*bufferDist;
 
 outputPtr      = outputBufStart;
@@ -549,6 +625,7 @@ beta            = log(MIN_DECAY);
 alpha           = log(MAX_DECAY)-beta;
 decay           = exp(alpha * sDecay + beta);
 envelope.init_follower(attack, decay);
+envelope2.init_follower(attack, decay);
 
 dampFactor      = .99*sDamp;
 pitchBend       = .99*sPitch;
@@ -581,6 +658,19 @@ inputCeiling    = 10^(inputDistortion);
   HPFR.init_butter6( .99*exp( (1-highCut) * log(20/22050) ) );
 );
 
+pdcCompensation ? (
+  pdc = .5*nSamples - .0625*nSamples * envActive;
+) : ( 
+  pdc = 0;
+);
+
+( pdc != lastPDC ) ? (
+  lastPDC = pdc;
+  pdc_bot_ch=0; 
+  pdc_top_ch=2;
+  pdc_delay = pdc;
+);
+
 @sample
 inL = spl0;
 inR = spl1;
@@ -593,14 +683,12 @@ inR = spl1;
 fftBuf.updateBuffer(inL,inR);
 fftBuf2.updateBuffer(inL,inR);
 
-outputPtr > outputBufEnd ? outputPtr = outputBufStart;
-
-dryPtr > dryBufEnd ? dryPtr = dryBufStart;
+dryPtr     > dryBufEnd ? dryPtr = dryBufStart;
 dryPtrRead > dryBufEnd ? dryPtrRead = dryBufStart;
-
 dryPtr[] = spl0; dryPtr += 1;
 dryPtr[] = spl1; dryPtr += 1;
 
+outputPtr > outputBufEnd ? outputPtr = outputBufStart;
 outL = outputPtr[]; outputPtr[] = 0; outputPtr += 1; 
 outR = outputPtr[]; outputPtr[] = 0; outputPtr += 1;
 
@@ -617,11 +705,23 @@ outR = outputPtr[]; outputPtr[] = 0; outputPtr += 1;
 dryL = dryPtrRead[]; dryPtrRead += 1;
 dryR = dryPtrRead[]; dryPtrRead += 1;
 
+/* Input signal */
+absSig = .5*(abs(dryL)+abs(dryR));
+sigBufPtr > sigBufEnd ? sigBufPtr = sigBufStart;
+sigBufPtr[] = absSig; sigBufPtr += 1;
+
 /* Envelope follower */
-( envActive ) ? (
-  inputGain = 20*log10(max(.001, .5*(abs(dryL)+abs(dryR))));
+( envActive ) ? (  
+  inputGain = 20*log10( max( .001, absSig ) );
   cEnv = envelope.eval_follower(inputGain);
-  dbGain = cEnv;
+  
+  relativeEnvelope ? (
+    outputGain = 20*log10( max( .001, .5*(abs(outL)+abs(outR)) ) );
+    cTarget = envelope2.eval_follower(outputGain);
+    dbGain = cEnv-cTarget;
+  ) : (
+    dbGain = cEnv;
+  );
   linGain = 10^(0.05*dbGain);
   outL = outL * linGain;
   outR = outR * linGain;
@@ -630,7 +730,11 @@ dryR = dryPtrRead[]; dryPtrRead += 1;
 spl0=dryL * iDryWet - outL * dryWet;
 spl1=dryR * iDryWet - outR * dryWet;
 
-@gfx  
+absSigOut = 10.5*(abs(spl0)+abs(spl1));
+gainBufPtr > gainBufEnd ? gainBufPtr = gainBufStart;
+gainBufPtr[] = linGain; gainBufPtr += 1;
+
+@gfx 750 120
   knob_outerR = .4 + .6*abs(.5*sin(time_precise()));
   knob_outerG = .3*abs(sin(time_precise()));
   knob_outerB = .0*abs(sin(time_precise()));
@@ -646,6 +750,19 @@ spl1=dryR * iDryWet - outR * dryWet;
   knob_textR = .75;
   knob_textG = .5;
   knob_textB = .5;
+  
+  widget_r = 0.5;
+  widget_g = 0.3;
+  widget_b = 0.2;
+  widget_a = 1.0;
+  toggle_r = 1.0;
+  toggle_g = 0.2;
+  toggle_b = 0.2;
+  toggle_a = 0.2;
+  knob_font_color_r = 0.75;
+  knob_font_color_g = 0.5;
+  knob_font_color_b = 0.5;
+  knob_font_color_a = 1.0;
 
   pixPtr = pixBuf;
   gfx_mode = 1;
@@ -671,9 +788,12 @@ spl1=dryR * iDryWet - outR * dryWet;
     gfx_circle(X,Y,5-.1*F,1,1);
     
     gfx_set(1,1-.006*F*F+.07*F,1-.05*F,1-.025*F);
-    gfx_circle(X,Y,3-.1*F,1,1);
+    gfx_circle(X,Y,min(Y*.01,3-.1*F),1,1);
     gfx_circle(X,Y,1-.1*F,1,1);
   );
+  
+  gfx_set(0,0,0,.7);
+  gfx_rect(0, 0, 750, 120);
   
   gfx_set(.1+.2*sin(time_precise()),.1,.2,.3);
   i = 0; dx = 15;
@@ -683,11 +803,17 @@ spl1=dryR * iDryWet - outR * dryWet;
   );
   
   knobRadius = 30 * (1+scaling);
-  
   currentPos = 40 * (1+scaling) + knobRadius;
   currentY = 60 * (1+scaling);
+  top = 20 * (1+scaling);
   
   kDryWet = 40*(1+scaling) + knobRadius;
+  
+  buttonSize = .25 * knobRadius;
+  this.tPDC.label = "";
+  this.tPDC.drawToggle(currentPos+1.3*knobRadius, top-.16*knobRadius, buttonSize, buttonSize, pdcCompensation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable lag compensation.\n");
+  pdcCompensation = this.tPDC.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
   kDryWet.active = 1;
   kDryWet.value = sDryWet;
   kDryWet.drawKnob(currentPos, bottomRow + currentY, knobRadius, "Dry/Wet", "How much of the effect is used?");
@@ -705,12 +831,16 @@ spl1=dryR * iDryWet - outR * dryWet;
   kHighPass.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( highCut = kHighPass.value );
   currentPos += 3*knobRadius;
   
+  buttonSize = .25 * knobRadius;
+  this.tGrowth.drawToggle(currentPos+1.3*knobRadius, top-.16*knobRadius, buttonSize, buttonSize, mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable to switch plugin to growth/decay mode\nrather than maximum mode.\n\nGrow/decay can lead to sounds that swell, while \nmaximum is more controlled.\n\nIn both modes a buffered spectrum is used to \nsmear peaks over time. The peaks in this \nbuffered spectrum decay over time. In grow/decay \nmode, the current spectrum is added to \nthis buffered spectrum. In maximum mode the \nmaximum is taken between the current spectrum \nand the buffered spectrum.\n");
+  mode = this.tGrowth.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
   kBleed.active = 1;
   kBleed.value = sDamp;
   kBleed.drawKnob(currentPos, bottomRow + currentY, knobRadius, "Bleed", "Modify how long the effect reverberates.");
   kBleed.knob_processMouse(mouse_x, mouse_y, mouse_cap, .8) ? slider_automate( sDamp = kBleed.value );
   currentPos += 2.5*knobRadius;
-   
+  
   kBend.active = 1;
   kBend.value = sPitch;
   kBend.drawKnob(currentPos, bottomRow + currentY - knobRadius, .39*knobRadius, "Bend", "Lowpass frequency for reverb channel.\n");
@@ -748,6 +878,41 @@ spl1=dryR * iDryWet - outR * dryWet;
   kShiftAmount.value = sAmount;
   kShiftAmount.drawKnob(currentPos, bottomRow + currentY+.6*knobRadius, .39*knobRadius, "Amount", "Amount of frequency shifted verb in the mix.");
   kShiftAmount.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( sAmount = kShiftAmount.value );
+  currentPos += 2*knobRadius;
+  
+  kAttack.active = envActive;
+  kAttack.value = sAttack;
+  kAttack.drawKnob(currentPos, bottomRow + currentY-knobRadius, .39*knobRadius, "Attack", "Attack time of the envelope.");
+  kAttack.knob_processMouse(mouse_x, mouse_y, mouse_cap, .8) ? slider_automate( sAttack = kAttack.value );
+  
+  kDecay.active = envActive;
+  kDecay.value = sDecay;
+  kDecay.drawKnob(currentPos, bottomRow + currentY+.6*knobRadius, .39*knobRadius, "Decay", "Decay time of the envelope.");
+  kDecay.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( sDecay = kDecay.value );
+  currentPos += 1.15*knobRadius;
+  
+  buttonSize = .25 * knobRadius;
+  this.tEnvActive.label = "Enable envelope";
+  this.tEnvActive.drawToggle(currentPos, top, buttonSize, buttonSize, envActive, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable to switch plugin to growth/decay mode\nrather than maximum mode.\n\nGrow/decay can lead to sounds that swell, while \nmaximum is more controlled.\n\nIn both modes a buffered spectrum is used to \nsmear peaks over time. The peaks in this \nbuffered spectrum decay over time. In grow/decay \nmode, the current spectrum is added to \nthis buffered spectrum. In maximum mode the \nmaximum is taken between the current spectrum \nand the buffered spectrum.\n");
+  envActive = this.tEnvActive.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  buttonSize = .25 * knobRadius;
+  this.tRelativeEnv.label = "Relative gain mode";
+  this.tRelativeEnv.drawToggle(currentPos, top + 2*buttonSize, buttonSize, buttonSize, relativeEnvelope, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Have envelope modulate correct towards input level while correcting for reverb level (on) or not (off).\n");
+  relativeEnvelope = this.tRelativeEnv.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  wnd.gen_window(currentPos, top+4*buttonSize, 100, 50);
+  gfx_set(.75, .5, .2, .3);
+  wnd.draw_buffer(sigBufPtr, sigBufStart, sigBufEnd, 1, 1);
+  envActive ? (
+    gfx_set(.75, .5, .2, 1);
+    wnd.draw_buffer(gainBufPtr, gainBufStart, gainBufEnd, 1, 0);
+  );
+  
   currentPos += 4*knobRadius;
+  
+//  mode
+//  pdcCompensation
+//  envActive
   
   hinter.drawHint_draw()
