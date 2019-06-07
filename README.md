@@ -89,25 +89,25 @@ Here's a short tutorial on how to use it: https://www.youtube.com/watch?v=jtc8kp
 
 For more information, or to contact the author, see the forum thread here: https://forum.cockos.com/showthread.php?t=213269
 
-### Waveshaping
+#### Waveshaping
 Filther supports saturating soft clipping as well as drawing custom voltage curves using a spline. For the simpler filters, the distortion is simply applied before the filtering stage, but for some the filter is located in the filter scheme. In these cases, the distortion is either applied on the delayed or during solving the implicit equations for the supplied zero delay feedback filters (ZDF).
 
-### Filters
+#### Filters
 Filther contains _two filter modules_ which can be automated by dynamics and LFO. The routing of the A and B filter can be altered (serial, parallel modes, plus control over the number of times the waveshaper is applied), 
 
 Filther contains a large variety of filters, each with their own advantages and drawbacks. Most of the filters behave non-ideal and are intended for creative purposes rather than fidelity to specification. Note that not all filters are stable for all combinations of resonance and waveshaping. Using very sharp transitions in the spline waveshaper can result in filter instability for the filters where waveshaping is part of the filter. Filther contains a large array of filters listed below:
 
 ![Filtertypes](https://i.imgur.com/mmfv1rk.png)
 
-### Feedback section
+#### Feedback section
 There is an additional feedback section, which can be activated.  Feedback can be used to fatten up filters and in some cases regain control of the resonance. If you want some fatness/resonance fighting, _keep the delay firmly placed at zero_. The feedback delay chain has the exact opposite polarity of the resonance in most chains, so in this mode, it will fight with the resonance to sort of choke in on itself (see diode ladder or ms-20 for this effect). This can make the resonance less ringey, more chunky and a lot more pleasant to listen to. Note that the global feedback is not ZDF. Also note that using feedback, reduces the maximum number of spline nodes by two.
 
 For phasey effects, use feedback with larger delays. Note however that then you're in the danger zone, because once resonance starts boosting resonance, things get real dicey. I would always recommend playing with this only if you have AGC on.
 
-### Automatic Gain Control
+#### Automatic Gain Control
 When tweaking, enable Automatic Gain Control to protect your ears from resonance issues. This rescales the volume so that the RMS value post filter is the same as the input level (meaning that you can leave the post fader at 0 dB). You can transfer the estimated gain to the post-gain fader with the outer mouse once you've honed in on a preset you like.
 
-### Dynamics
+#### Dynamics
 Filther also supports dynamically modifying the filter and waveshaping settings, by checking "Filter" and/or "Shaping" in the Dynamics section. Dynamics can be monitored in the dynamics window. Here you will see the input RMS (red curve), output RMS (blue curve), dynamic variable and threshold (click and drag to zoom). The dynamic variable (yellow curve) will start accumulating when the input RMS is above the threshold. The threshold can be dragged with the mouse or set in the dynamics panel. Averaging can be increased by modifying the RMS time. This will smoothen out the RMS values that you see (and the dynamics will respond accordingly). Alternatively, dynamics can be triggered by MIDI note events. 
 
 #### Waveshaping Dynamics
