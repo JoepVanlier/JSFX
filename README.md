@@ -69,7 +69,7 @@ Tone stacks contains some bi-linearly transformed versions of these filters.
 # Bandsplitter/joiner
 4-pole band splitter that preserves phase between the bands. It has a UI and uses much steeper crossover filters than the default that ships with reaper providing sharper band transitions.
 
-# Filther, a waveshaping filter / distortion plugin with dynamic processing.
+# Filther
 ![Filther](https://i.imgur.com/oCkDyyz.png)
 
 Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
