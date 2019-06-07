@@ -10,19 +10,18 @@ to your reapack (https://reapack.com/) list of repositories. If you run
 into issues with these, feel free to open an issue here on github.
 
 # SatanVerb
+![SatanUI](https://i.imgur.com/JLXFrOH.png)
 Satan verb is a reverberation unit mostly meant for diffuse and gated style reverberation. It can either be used without an envelope, to generate large ambient spaces, or be modulated by an envelope based on the input sound to give a sound more body while not adding too much noise to the dead time.
 
 Features
 - FFT based reverberation algorithm.
 - Optional downward spectral smearing for creepy effects.
 - Optional spectrally shifted copy can be mixed in.
-- LPF/HPF filters for the verb.
-- Delay compensation
+- Steep IIR LPF/HPF filters for the verb.
+- Optional delay compensation.
 - Envelopes based on the input envelope.
 - Input non-linearity (dist), spectrum non-linearity (ceiling).
 - Dry/Wet controls.
-
-![SatanUI](https://i.imgur.com/JLXFrOH.png)
 
 # Squashman
 Squashman is a multi-band saturation / distortion plugin that allows modulation of several of its parameters.
@@ -56,12 +55,6 @@ There are two basic modes of operation:
 1. You can either add stereo sound from nothing, using the Strength slider. This adds a comb filtered version of the average signal with opposite polarity to the different channels. Be careful not to overdo it, or you get a flangey sound (unless that is what you want).
 2. You can manipulate the existing side channel that's in the input. The gain of the original side channel is scaled by the old "Old side" knob. Depending on the button "HP original side" this signal route will be highpassed (mono-izing the low frequencies).
 
-# Filther, a waveshaping filter / distortion plugin with dynamic processing.
-![Filther](https://i.imgur.com/oCkDyyz.png)
-
-Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
-You can find a full manual for Filther here: https://joepvanlier.github.io/FiltherManual/
-
 # Transience
 Transience is a plugin for enhancing or reducing transients. It works by using two envelopes. One is an envelope follower (short attack, longer decay; roughly follows the peaks of the sound), the other is a user specified envelope (with attack/decay). You can then shape the sound according to the difference between the two, making attacks or decays longer or shorter. The plugin operates in logarithmic space.
 
@@ -75,6 +68,12 @@ Tone stacks contains some bi-linearly transformed versions of these filters.
 
 # Bandsplitter/joiner
 4-pole band splitter that preserves phase between the bands. It has a UI and uses much steeper crossover filters than the default that ships with reaper providing sharper band transitions.
+
+# Filther, a waveshaping filter / distortion plugin with dynamic processing.
+![Filther](https://i.imgur.com/oCkDyyz.png)
+
+Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
+You can find a full manual for Filther here: https://joepvanlier.github.io/FiltherManual/
 
 #### What does it sound like?
 All the distortion/filtering on that track was done with this filter (mostly nonlin Kr0g and Rezzy):
@@ -116,12 +115,6 @@ For waveshaping, Filther will interpolate between the non-waveshaped and wavesha
 
 #### Filter Dynamics
 The extent of modulation on the filter can be set with the outer mouse button. This will showed a greyed area that will show the extent of the dynamics being applied. When the dynamics are at maximum, the parameter value will be at the full extent of this greyed area.
-
-# Tone Stacks
-![Tone Stacks](https://i.imgur.com/giyF29j.jpg)
-Based on the work of jatalahd and ~arph from diystompboxes.com forum.
-See their plugin here: http://www.guitarscience.net/tsc/info.htm
-I've made some bi-linearly transformed versions of these filters which emulate classic tone stacks.
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
