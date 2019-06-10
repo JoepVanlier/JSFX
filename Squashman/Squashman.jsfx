@@ -1,8 +1,8 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.49
+version: 0.50
 author: Joep Vanlier
-changelog: Bump version number
+changelog: Made oversampling slider easier to use. Added envelope modulators on the LFO parameters. Added dynamics section for modulation.
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -92,6 +92,7 @@ slider63:Oversampling=1<1,4,1>-Oversampling
 slider64:fixDC=1<0,1,1>-Fix DC?
 
 @init
+  logten        = log(10);
   COMBO_SMALL   = 16;
   COMBO_BIG     = 11;
   GRID_FONT     = 15;
@@ -107,6 +108,33 @@ slider64:fixDC=1<0,1,1>-Fix DC?
 
   envWindow1.resetEnvelope(1,1);
   envWindow2.resetEnvelope(1,1);
+
+  ///////////////////////////////
+  /* Envelope follower section */
+  ///////////////////////////////
+  function init_follower(atk, release)
+    local(csrate)
+    instance(at, rt, LPF)
+    global(srate)
+    (
+      csrate = srate;
+      at = ( atk > 0 ) ? exp(-1/(.5*.001*atk*csrate)) : 0;
+      rt = exp(-1/(.5*.001*release*csrate));
+    );
+  
+  function eval_follower(x)
+    local()
+    instance(state, at, rt, x)
+    global()
+    (
+      x > state ? (
+        state = at * state + ( 1.0 - at ) * x;
+      ) : (
+        state = rt * state + ( 1.0 - rt ) * x;
+      );
+      
+      state
+    );
 
   ///////////////////////
   /* Modulator section */
@@ -802,6 +830,17 @@ gainMax = 26;
 overSamplingMax = 4;
 overSamplingMin = 1;
 
+releaseMax = 5000;
+releaseMin = 200;
+attackMax = 300;
+attackMin = 2;
+
+attackRange = attackMax - attackMin;
+iAttackRange = 1/attackRange;
+
+releaseRange = releaseMax - releaseMin;
+iReleaseRange = 1/releaseRange;
+
 filterBank.initBands();
 
 // Precompute some things
@@ -944,7 +983,7 @@ function remBand(idx)
   );  
   
 nShapers = 29;
-nModulators = 7;
+nModulators = 9;
 
 function hasShapeMod(curitem)
   local()
@@ -1724,6 +1763,72 @@ function initBuffer(scopebuffer_in, scopebuffermax_in)
       scopeptr = scopebuffer 
     ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
   );
+  
+function initBufferLen(scopebuffer_in, bufferlen)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffer + bufferlen;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );  
+  
+function draw_buffer(x, y, w, h, mul, fill)
+  instance(scopeptr, scopebuffer, scopebuffermax)
+  globals(gfx_x, gfx_y)
+  local(len, scopeptr2, lx, ly, xx, dx, lptr, yy, lastx, lasty, isc, yref)
+  (
+    xx = x;
+    len = scopebuffermax-scopebuffer;
+    dx = floor(len/w);
+    scopeptr2 = scopeptr;
+    
+    lptr = floor((scopeptr2)/dx)*dx;
+    gfx_x = xx;
+    gfx_y = y+h;
+    isc = h;
+    yref = y+h;
+    ly = y+h;
+    loop((scopebuffermax-scopeptr2)/dx - 1,
+      yy = yref - h*min(1,lptr[]);
+      
+      lptr += dx;
+      
+      fill ? (
+        gfx_triangle( xx-1, y+h,
+                      xx-1, ly,
+                      xx, y+h,
+                      xx, yy);
+      ) : (
+        gfx_lineto(xx, yy);
+      );
+      
+      ly = yy;
+      xx += 1;
+    );
+    
+    lptr = floor((scopebuffer)/dx)*dx;
+    loop((scopeptr2 - scopebuffer)/dx - 1,
+      lptr += dx;
+      yy = yref - h*min(1,lptr[]);
+      
+      fill ? (
+        gfx_triangle( xx-1, y+h,
+                      xx-1, ly,
+                      xx, y+h,
+                      xx, yy);
+      ) : (
+        gfx_lineto(xx, yy);
+      );
+      
+      ly = yy;
+      xx += 1;
+    );
+  );  
   
 function setOffset(offset)
   local()
@@ -2946,10 +3051,20 @@ shapeDrive1Type   = shapeDrive1Value + 20;
 shapeDrive2Value  = shapeDrive1Type +20;
 shapeDrive2Type   = shapeDrive2Value + 20;
 
+lfoFModType       = shapeDrive2Type + 20;
+lfoFModValue      = lfoFModType + 20;
+
+lfoAModType       = lfoFModValue + 20;
+lfoAModValue      = lfoAModType + 20;
+
 block_list        = 16*65536;
 
 envWindow1.setEnvMemory(17*65536, 18*65536);
 envWindow2.setEnvMemory(19*65536, 20*65536);
+
+inBuf.initBufferLen(22*65536, 65532);
+dynBuf1.initBufferLen(23*65536, 65532);
+dynBuf2.initBufferLen(24*65536, 65532);
 
 filterBank.initDelays();
 
@@ -3025,6 +3140,21 @@ file_var(0,modVisible);
 envWindow1.serializeEnvelope();
 envWindow2.serializeEnvelope();
 
+file_mem(0,lfoFModType,16);
+file_mem(0,lfoFModValue,16);
+file_mem(0,lfoAModType,16);
+file_mem(0,lfoAModValue,16);
+file_var(0,viewDynamics);
+
+file_var(0, f1Attack);
+file_var(0, f1Decay);
+file_var(0, f2Attack);
+file_var(0, f2Decay);
+file_var(0, f1Threshold);
+file_var(0, f2Threshold);
+file_var(0, f1Thresholded);
+file_var(0, f2Thresholded);
+
 @slider
 
 @block
@@ -3042,6 +3172,9 @@ function inertiaSmoothing(newval)
 
 envWindow1.updateEnvRate();
 envWindow2.updateEnvRate();
+
+follow1.init_follower(f1Attack, f1Decay);
+follow2.init_follower(f2Attack, f2Decay);
 
 !mute1 ? play1 = 1 : play1 = 0;
 !mute2 ? play2 = 1 : play2 = 0;
@@ -3169,6 +3302,26 @@ shapeDrive1Value4  = shapeDrive1Value[4];
 shapeDrive2Type4   = shapeDrive2Type[4];
 shapeDrive2Value4  = shapeDrive2Value[4];
 
+lfoFModType1       = lfoFModType[0];
+lfoFModType2       = lfoFModType[1];
+lfoFModType3       = lfoFModType[2];
+lfoFModType4       = lfoFModType[3];
+
+lfoFModValue1      = lfoFModValue[0];
+lfoFModValue2      = lfoFModValue[1];
+lfoFModValue3      = lfoFModValue[2];
+lfoFModValue4      = lfoFModValue[3];
+
+lfoAModType1       = lfoAModType[0];
+lfoAModType2       = lfoAModType[1];
+lfoAModType3       = lfoAModType[2];
+lfoAModType4       = lfoAModType[3];
+
+lfoAModValue1      = lfoAModValue[0];
+lfoAModValue2      = lfoAModValue[1];
+lfoAModValue3      = lfoAModValue[2];
+lfoAModValue4      = lfoAModValue[3];
+
 @sample
   /* MIDI Handling */
   // Take notes from the stack until we hit the end marker -1
@@ -3209,7 +3362,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   /* LFO Modulators */
   function fetchModulationAmount(ref, type, value)
   local()
-  global(m1_value, m2_value, m3_value, m4_value, m5_value, m6_value)
+  global(m1_value, m2_value, m3_value, m4_value, m5_value, m6_value, m7_value, m8_value)
   instance()
   (
     (type == 1) ? ( ref += value * m1_value; )
@@ -3217,14 +3370,19 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     : (type == 3) ? ( ref += value * m3_value; )
     : (type == 4) ? ( ref += value * m4_value; )
     : (type == 5) ? ( ref += value * m5_value; )
-    : (type == 6) ? ( ref += value * m6_value; );
+    : (type == 6) ? ( ref += value * m6_value; )
+    : (type == 7) ? ( ref += value * m7_value; )
+    : (type == 8) ? ( ref += value * m8_value; );
 
-    min(max(ref, 0), 1)
+    ( ref > 1 ) ? ( ref = 1 )
+    : ( ref < 0 ) ? ( ref = 0 );
+    
+    ref
   );
  
   function fetchModulationAmountMinMax(ref, type, value, mini, maxi)
   local(range)
-  global(m1_value, m2_value, m3_value, m4_value, m5_value, m6_value)
+  global(m1_value, m2_value, m3_value, m4_value, m5_value, m6_value, m7_value, m8_value)
   instance()
   (
     range = maxi - mini;
@@ -3234,26 +3392,93 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     : (type == 3) ? ( ref += value * m3_value * range; )
     : (type == 4) ? ( ref += value * m4_value * range; )
     : (type == 5) ? ( ref += value * m5_value * range; )
-    : (type == 6) ? ( ref += value * m6_value * range; );
+    : (type == 6) ? ( ref += value * m6_value * range; )
+    : (type == 7) ? ( ref += value * m7_value * range; )
+    : (type == 8) ? ( ref += value * m8_value * range; );
 
-    min(max(ref, mini), maxi)
+    ( ref > maxi ) ? ( ref = maxi )
+    : ( ref < mini ) ? ( ref = mini );
+    
+    ref
   );      
   
-  m1_value = LFO_amnt1 * modulator1.updateModulator(.7);
-  m2_value = LFO_amnt2 * modulator2.updateModulator(.7);
-  m3_value = LFO_amnt3 * modulator3.updateModulator(.7);
-  m4_value = LFO_amnt4 * modulator4.updateModulator(.7);   
+  function fetchLFOModulationAmount(ref, type, value)
+  local()
+  global(m5_value, m6_value, m7_value, m8_value)
+  instance()
+  (
+    (type == 1)   ? ( ref += value * m5_value; )
+    : (type == 2) ? ( ref += value * m6_value; )
+    : (type == 3) ? ( ref += value * m7_value; )
+    : (type == 3) ? ( ref += value * m8_value; );
+    
+    ( ref > 1 ) ? ( ref = 1 )
+    : ( ref < 0 ) ? ( ref = 0 );
+    
+    ref
+  );
+  
+  signal = .5*(abs(spl0)+abs(spl1));
+  smoothedSignal = max(signal*.001 + smoothedSignal*0.999, signal);
+  inBuf.updateBuffer(smoothedSignal);
+  inputGain = log10(max(.001, signal));
+  
+  f1Thresholded ? (
+    m7_value = follow1.eval_follower((signal>f1Threshold) ? 1 : 0);
+  ) : (
+    m7_value = exp(logten*follow1.eval_follower(inputGain));
+  );
+  ( m7_value > 1 ) ? ( m7_value = 1 )
+  : ( m7_value < 0 ) ? ( m7_value = 0 );
+  
+  f2Thresholded ? (  
+    m8_value = follow2.eval_follower((signal>f2Threshold) ? 1 : 0);
+  ) : (
+    m8_value = exp(logten*follow2.eval_follower(inputGain));
+  );
+  ( m8_value > 1 ) ? ( m8_value = 1 )
+  : ( m8_value < 0 ) ? ( m8_value = 0 );
+  
   m5_value = envWindow1.evaluateEnvelope(notesOn);
   m6_value = envWindow2.evaluateEnvelope(notesOn);
   
-  modulator1.updateScale(LFO_amnt1);
-  modulator2.updateScale(LFO_amnt2);
-  modulator3.updateScale(LFO_amnt3);
-  modulator4.updateScale(LFO_amnt4);  
-  modulator1.updateModRate(LFO_freq1);
-  modulator2.updateModRate(LFO_freq2);
-  modulator3.updateModRate(LFO_freq3);
-  modulator4.updateModRate(LFO_freq4);  
+  dynBuf1.updateBuffer(m7_value);
+  dynBuf2.updateBuffer(m8_value);
+  
+  LFO_amount1 = LFO_amnt1;
+  LFO_amount2 = LFO_amnt2;
+  LFO_amount3 = LFO_amnt3;
+  LFO_amount4 = LFO_amnt4;
+  
+  lfoAModType1 ? LFO_amount1 = fetchLFOModulationAmount(LFO_amount1, lfoAModType1, lfoAModValue1);
+  lfoAModType2 ? LFO_amount2 = fetchLFOModulationAmount(LFO_amount2, lfoAModType2, lfoAModValue2);
+  lfoAModType3 ? LFO_amount3 = fetchLFOModulationAmount(LFO_amount3, lfoAModType3, lfoAModValue3);
+  lfoAModType4 ? LFO_amount4 = fetchLFOModulationAmount(LFO_amount4, lfoAModType4, lfoAModValue4);
+
+  m1_value = LFO_amount1 * modulator1.updateModulator(.7);
+  m2_value = LFO_amount2 * modulator2.updateModulator(.7);
+  m3_value = LFO_amount3 * modulator3.updateModulator(.7);
+  m4_value = LFO_amount4 * modulator4.updateModulator(.7);   
+  
+  LFO_F1 = LFO_freq1;
+  LFO_F2 = LFO_freq2;
+  LFO_F3 = LFO_freq3;
+  LFO_F4 = LFO_freq4;
+  
+  lfoFModType1 ? LFO_F1 = fetchLFOModulationAmount(LFO_F1, lfoFModType1, lfoFModValue1);
+  lfoFModType2 ? LFO_F2 = fetchLFOModulationAmount(LFO_F2, lfoFModType2, lfoFModValue2);
+  lfoFModType3 ? LFO_F3 = fetchLFOModulationAmount(LFO_F3, lfoFModType3, lfoFModValue3);
+  lfoFModType4 ? LFO_F4 = fetchLFOModulationAmount(LFO_F4, lfoFModType4, lfoFModValue4);
+  
+  modulator1.updateScale(LFO_amount1);
+  modulator2.updateScale(LFO_amount2);
+  modulator3.updateScale(LFO_amount3);
+  modulator4.updateScale(LFO_amount4);
+  
+  modulator1.updateModRate(LFO_F1);
+  modulator2.updateModRate(LFO_F2);
+  modulator3.updateModRate(LFO_F3);
+  modulator4.updateModRate(LFO_F4);  
 
   Modifier1 = modifierLerp1.lerpSample();
   Modifier2 = modifierLerp2.lerpSample();
@@ -3796,7 +4021,6 @@ shapeDrive2Value4  = shapeDrive2Value[4];
          font_color_r, font_color_g, font_color_b, font_color_a)
   instance()
   (
-    labelBuffer = 3;
     oldDest = gfx_dest;
     oldMode = gfx_mode;
     gfx_setimgdim(labelBuffer, labelW, labelW);
@@ -4191,7 +4415,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
   /////////////////
   function drawLFOGroup( yLocation, LFO_loc, lfoIdx, tcur )
   instance()//tempoSync, midiTrigger)
-  local(mc, strw, strh)
+  local(mc, strw, strh, comboModulatorXSize, comboModulatorYSize)
   global(groupWidth, miniknobWidth, miniKnobPadX, miniKnobPadY, buttonSize, scaling, BAND_FONT, COMBO_BIG, 
          group_r, group_g, group_b, group_a,
          widget_r, widget_g, widget_b, widget_a,
@@ -4200,9 +4424,20 @@ shapeDrive2Value4  = shapeDrive2Value[4];
          mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y,
          nTimeDivisions, nLFOtypes, 
          LFO_types, LFO_tsync, LFO_retrig, LFO_frequencies, LFO_amounts,
+         nModulators, COMBO_SMALL,
+         lfoFModType, lfoFModValue,
+         lfoAModType, lfoAModValue
          )
   (
     drawGroupRect(LFO_loc, yLocation, 2*groupWidth, miniknobWidth*8+miniknobPadY*4, group_r, group_g, group_b, group_a);
+    gfx_x = LFO_loc + 8*miniKnobWidth + 8*(1+scaling);
+    gfx_y = yLocation + 2*(1+scaling);
+    
+    gfx_set(widget_r, widget_g, widget_b, widget_a);
+    gfx_setfont(BAND_FONT);
+    gfx_printf("%d", lfoIdx+1);
+    
+    yLocation += 3*(1+scaling);
     
     /*----------------*/
     /* LFO toggles    */
@@ -4236,7 +4471,20 @@ shapeDrive2Value4  = shapeDrive2Value[4];
       );
     );
     
+    /* Combobox to select envelope for frequency */
+    comboModulatorYSize = 11*(1+scaling);
+    comboModulatorXSize = 9*(1+scaling);
+    this.lfoFModulator.combobox(LFO_loc+5*(1+scaling), yLocation + 25*(1+scaling) - miniKnobWidth - miniKnobPadY-2*(1+scaling), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators-4, 5, 1, 1, COMBO_SMALL, "Select modulator." );
+    this.lfoFModulator.combobox_setcuritem(lfoFModType[lfoIdx]);
+    this.lfoFModulator.value = lfoFModValue[lfoIdx];
+    this.lfoFModulator.combomodulator_draw();
+    this.lfoFModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+      lfoFModType[lfoIdx]  = this.lfoFModulator.curItem;
+      lfoFModValue[lfoIdx] = this.lfoFModulator.value;
+    );
+    
     this.lfo1FreqKnob.value = slider(LFO_frequencies+lfoIdx);
+    this.lfo1FreqKnob.value2 = lfoFModValue[lfoIdx];
     this.lfo1FreqKnob.active = 1;
     this.lfo1FreqKnob.drawKnob(LFO_loc + 2*miniknobWidth + miniknobPadX, yLocation + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Rate", "Set LFO 1 frequency.\n");
     this.lfo1FreqKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(LFO_frequencies+lfoIdx) = this.lfo1FreqKnob.value );
@@ -4250,7 +4498,18 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     /*----------------*/
     /* LFO Amount     */
     /*----------------*/
+    /* Combobox to select envelope for amount */
+    this.lfoAModulator.combobox(LFO_loc+5*(1+scaling)+4*miniKnobWidth+2*miniKnobPadY, yLocation + 25*(1+scaling) - miniKnobWidth - miniKnobPadY-2*(1+scaling), comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators-4, 5, 1, 1, COMBO_SMALL, "Select modulator." );
+    this.lfoAModulator.combobox_setcuritem(lfoAModType[lfoIdx]);
+    this.lfoAModulator.value = lfoAModValue[lfoIdx];
+    this.lfoAModulator.combomodulator_draw();
+    this.lfoAModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+      lfoAModType[lfoIdx]  = this.lfoAModulator.curItem;
+      lfoAModValue[lfoIdx] = this.lfoAModulator.value;
+    );
+    
     this.lfo1AmntKnob.value = slider(LFO_amounts+lfoIdx);
+    this.lfo1AmntKnob.value2 = lfoAModValue[lfoIdx];
     this.lfo1AmntKnob.active = 1;
     this.lfo1AmntKnob.drawKnob(LFO_loc + 6*miniknobWidth + 3*miniknobPadX, yLocation + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Amount", "Set LFO 1 frequency.\n");
     this.lfo1AmntKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( slider(LFO_amounts+lfoIdx) = this.lfo1AmntKnob.value );
@@ -4271,14 +4530,7 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     );
     this.lfo1TypeSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
       LFO_types[lfoIdx] = this.lfo1TypeSelect.curitem; 
-    );
-    
-    gfx_x = LFO_loc + 8*miniKnobWidth + 8*(1+scaling);
-    gfx_y = yLocation + 2*(1+scaling);
-    
-    gfx_set(widget_r, widget_g, widget_b, widget_a);
-    gfx_setfont(BAND_FONT);
-    gfx_printf("%d", lfoIdx+1);
+    );    
   );
   
   function drawLFOtops()
@@ -4297,6 +4549,9 @@ shapeDrive2Value4  = shapeDrive2Value[4];
       this.lfo1TempoSelect.h = 20*(1+scaling);
     );
     this.lfo1TempoSelect.combobox_draw_top();
+    
+    this.lfoFModulator.combobox_draw_top();
+    this.lfoAModulator.combobox_draw_top();
   );
   
   LFO_loc = masterLoc - groupDistance - groupWidth;
@@ -4315,19 +4570,116 @@ shapeDrive2Value4  = shapeDrive2Value[4];
     panel4.drawLFOtops();
   );
   
-  modVisible ? (
-    envX = 32*(1+scaling) + lfoDist*4;
-    envY = topRow + 35*(1+scaling);
-    envW = 6*groupWidth;
-    envH = miniknobWidth*8+miniknobPadY*4;//b
+  function vButton(x, y, w, h, text, active)
+  local()
+  global(BUTTON_FONT, mouse_cap, mouse_x, mouse_y)
+  instance()
+  (
+    active ? (
+      gfx_set(.5,.5,1,1);
+    ) : (
+      gfx_set(.05,.2,.5,1);
+    );
     
-    envWindow1.initEnvelope(envX, envY, envW, envH*.45, 6, "MODULATOR 5", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
-    envWindow1.drawEnvelopeWindow();
-    envWindow1.processMouseEnvelope();
+    gfx_rect(x, y, w, h, 0);
+    drawVertLabel(x + .15*w, y, text, h, BUTTON_FONT, 4);
+    
+    (mouse_cap & 1) && (mouse_x > x) && (mouse_x < (x+w)) && (mouse_y > y) && (mouse_y < (y+h))
+  );
   
-    envWindow2.initEnvelope(envX, envY+.555*envH, envW, envH*.45, 6, "MODULATOR 6", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
-    envWindow2.drawEnvelopeWindow();
-    envWindow2.processMouseEnvelope();
+  modVisible ? (
+    envX = 32*(1+scaling) + lfoDist*4 + offs;
+    envY = topRow + 35*(1+scaling);
+    envW = 6*groupWidth - offs;
+    envH = miniknobWidth*8+miniknobPadY*4;
+    
+    ( viewDynamics == 0 ) ? (          
+      str = 20; str2 = 21; owidth = 15*(1+scaling); offs = 10*(1+scaling) + owidth;  dist = envH*.05;
+      
+      vButton(envX-offs, envY + .5*dist + 1+scaling, owidth, envH*.5 - dist, "ENVELOPE", 1);
+      vButton(envX-offs, envY+envH*.5 + .5*dist + 1+scaling, owidth, envH*.5 - dist, "DYNAMICS", 0) ? ( viewDynamics = 1 );
+      
+      envWindow1.initEnvelope(envX, envY, envW, envH*.45, 6, "MODULATOR 5", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
+      envWindow1.drawEnvelopeWindow();
+      envWindow1.processMouseEnvelope();
+    
+      envWindow2.initEnvelope(envX, envY+.555*envH, envW, envH*.45, 6, "MODULATOR 6", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
+      envWindow2.drawEnvelopeWindow();
+      envWindow2.processMouseEnvelope();      
+    ) : (
+      vButton(envX-offs, envY + .5*dist + 1+scaling, owidth, envH*.5 - dist, "ENVELOPE", 0) ? ( viewDynamics = 0 );
+      vButton(envX-offs, envY+envH*.5 + .5*dist + 1+scaling, owidth, envH*.5 - dist, "DYNAMICS", 1);      
+      
+      gfx_set(.5,.5,1,.2);
+      inBuf.draw_buffer(envX, envY, envW, envH*.45, 0, 1);
+      gfx_set(mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a);
+      dynBuf1.draw_buffer(envX, envY, envW, envH*.45, 0, 0);
+      f1Thresholded ? ( gfx_line(envX, envY + envH*.45*(1-f1Threshold), envX + envW, envY + envH*.45*(1-f1Threshold)) );
+      
+      gfx_set(mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a);
+      dynBuf2.draw_buffer(envX, envY, envW, envH*.45, 0, 0);
+      f2Thresholded ? ( gfx_line(envX, envY + envH*.45*(1-f2Threshold), envX + envW, envY + envH*.45*(1-f2Threshold)) );
+      
+      dynCtrlY = envY + 6.5*miniKnobWidth + miniKnobPadY;
+      tinyKnobWidth = .85*miniKnobWidth;
+      bStart = envX + 2*tinyKnobWidth + miniknobPadX;
+      
+      drawGroupRect(envX, envY+.5*envH + .25*tinyKnobWidth, 13*tinyKnobWidth, 5*tinyKnobWidth, group_r, group_g, group_b, group_a);
+      gfx_x = envX+3; gfx_y = envY+.5*envH + .25*tinyKnobWidth;
+      gfx_set(widget_r, widget_g, widget_b, widget_a);
+      gfx_setfont(BAND_FONT);
+      gfx_printf("7");
+      
+      kAttack1.active = 1;
+      kAttack1.value = ( f1Attack - attackMin ) * iAttackRange;
+      kAttack1.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Attack", "Set attack");
+      kAttack1.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f1Attack = kAttack1.value * attackRange + attackMin );
+      bStart += 4*tinyKnobWidth;
+      
+      kDecay1.active = 1;
+      kDecay1.value = ( f1Decay - releaseMin ) * iReleaseRange;
+      kDecay1.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Decay", "Set decay");
+      kDecay1.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f1Decay = kDecay1.value * releaseRange + releaseMin );
+      bStart += 4*tinyKnobWidth;
+      
+      miniButtonSize = .65*buttonSize;
+      kThreshToggle1.drawToggle(bStart - 1.6*tinyKnobWidth, dynCtrlY - 1.6*tinyKnobWidth, miniButtonSize, miniButtonSize, f1Thresholded, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use threshold.");
+      f1Thresholded = kThreshToggle1.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+      
+      kThresh1.active = f1Thresholded;
+      kThresh1.value = f1Threshold;
+      kThresh1.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Thresh", "Set threshold");
+      kThresh1.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f1Threshold = kThresh1.value );
+      bStart += 6*tinyKnobWidth;
+      
+      drawGroupRect(envX + 14*tinyKnobWidth, envY+.5*envH + .25*tinyKnobWidth, 13*tinyKnobWidth, 5*tinyKnobWidth, group_r, group_g, group_b, group_a);
+      gfx_x = envX + 14*tinyKnobWidth+3; gfx_y = envY+.5*envH + .25*tinyKnobWidth;
+      gfx_set(widget_r, widget_g, widget_b, widget_a);
+      gfx_setfont(BAND_FONT);
+      gfx_printf("8");
+      
+      kAttack2.active = 1;
+      kAttack2.value = ( f2Attack - attackMin ) * iAttackRange;
+      kAttack2.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Attack", "Set attack");
+      kAttack2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f2Attack = kAttack2.value * attackRange + attackMin );
+      bStart += 4*tinyKnobWidth;
+      
+      kDecay2.active = 1;
+      kDecay2.value = ( f2Decay - releaseMin ) * iReleaseRange;
+      kDecay2.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Decay", "Set decay");
+      kDecay2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f2Decay = kDecay2.value * releaseRange + releaseMin );
+      bStart += 4*tinyKnobWidth;
+      
+      miniButtonSize = .65*buttonSize;
+      kThreshToggle2.drawToggle(bStart - 1.6*tinyKnobWidth, dynCtrlY - 1.6*tinyKnobWidth, miniButtonSize, miniButtonSize, f2Thresholded, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use threshold.");
+      f2Thresholded = kThreshToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+      
+      kThresh2.active = f2Thresholded;
+      kThresh2.value = f2Threshold;
+      kThresh2.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Thresh", "Set threshold");
+      kThresh2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f2Threshold = kThresh2.value );
+      bStart += 5*tinyKnobWidth;
+    );
   );
   
   /////////////////////
@@ -4343,9 +4695,11 @@ shapeDrive2Value4  = shapeDrive2Value[4];
 
   /* Oversampling control */
   oversamplingKnob.active = 1;
-  oversamplingKnob.value = (Oversampling - overSamplingMin) * iOverSamplingRange;
+  ( mouse_cap & 1 == 0 ) ? oversamplingKnob.value = (Oversampling - overSamplingMin) * iOverSamplingRange;
   oversamplingKnob.drawKnob(masterLoc + 2*miniknobWidth + miniknobPadX, groupTop + 6*miniKnobWidth + 2*miniKnobPadY, miniknobWidth, "Over", "Set oversampling factor.\nNote that high levels\nof oversampling will\nresult in high CPU usage.");
   oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ?  slider_automate( overSampling = floor( oversamplingKnob.value * overSamplingRange + oversamplingMin + .5 ) );
+  osString = 100;
+  oversamplingKnob.label = sprintf( osString, "%d", overSampling );
 
   /* Band indicator */
   sprintf(16,"Band %d", selectedBand+1);
