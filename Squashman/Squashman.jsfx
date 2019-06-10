@@ -1,8 +1,8 @@
 desc:Squashman (NOT READY FOR USE)
 tags: multiband saturation plugin (WORK IN PROGRESS)
-version: 0.52
+version: 0.56
 author: Joep Vanlier
-changelog: Some performance optimizations (pow versus exp).
+changelog: Add overdrive shaper. Added dry/wet modulation. Added gain modulation. Added feedback modulation. Added feedback delay modulation.
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -943,7 +943,14 @@ function addBand(idx)
     shiftRightMem(shapeDrive1Type,  idx, maxCuts );
     shiftRightMem(shapeDrive2Value, idx, maxCuts );
     shiftRightMem(shapeDrive2Type,  idx, maxCuts );
-    
+    shiftRightMem(drywetMod1Value,  idx, maxCuts );
+    shiftRightMem(drywetMod1Type,   idx, maxCuts );
+    shiftRightMem(gainMod1Value,    idx, maxCuts );
+    shiftRightMem(gainMod1Type,     idx, maxCuts );
+    shiftRightMem(delayMod1Value,   idx, maxCuts );
+    shiftRightMem(delayMod1Type,    idx, maxCuts );
+    shiftRightMem(fbMod1Value,      idx, maxCuts );
+    shiftRightMem(fbMod1Type,       idx, maxCuts );
     
     /* drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5 */
     /* fbToggle1 fbToggle2 fbToggle3 fbToggle4 fbToggle5 */
@@ -976,6 +983,14 @@ function remBand(idx)
     shiftLeftMem(shapeDrive1Type,  idx, maxCuts );
     shiftLeftMem(shapeDrive2Value, idx, maxCuts );
     shiftLeftMem(shapeDrive2Type,  idx, maxCuts );
+    shiftLeftMem(drywetMod1Value,  idx, maxCuts );
+    shiftLeftMem(drywetMod1Type,   idx, maxCuts );
+    shiftLeftMem(gainMod1Value,    idx, maxCuts );
+    shiftLeftMem(gainMod1Type,     idx, maxCuts );
+    shiftLeftMem(delayMod1Value,   idx, maxCuts );
+    shiftLeftMem(delayMod1Type,    idx, maxCuts );
+    shiftLeftMem(fbMod1Value,      idx, maxCuts );
+    shiftLeftMem(fbMod1Type,       idx, maxCuts );
     
     /* drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5 */
     /* fbToggle1 fbToggle2 fbToggle3 fbToggle4 fbToggle5 */
@@ -983,7 +998,7 @@ function remBand(idx)
     cuts = cuts - 1;
   );  
   
-nShapers = 29;
+nShapers = 30;
 nModulators = 9;
 
 function hasShapeMod(curitem)
@@ -1020,6 +1035,7 @@ function hasShapeMod(curitem)
     : ( curitem == 26 ) ? ( 1 ) /* Slope clamper */
     : ( curitem == 27 ) ? ( 1 ) /* Sat man */
     : ( curitem == 28 ) ? ( 1 ) /* Sloper */
+    : ( curitem == 29 ) ? ( 1 ) /* AC biaser */
   );
 
 /* Feed sample to FFT */
@@ -2336,7 +2352,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
   /* TO DO: Merge crossovers with control */
   function processBand(drive, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
-  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive, lastl, lastr)
+  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive, lastl, lastr, ttime)
   local(inv_ceiling, factor, depth, idepth, 
         tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg)
   (
@@ -2364,7 +2380,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
       r += fbr;
       
       pre = max(pre, abs(l+r));
-      
+
       //l = this.ch0.antialiased_tanh_rect(l);
       //r = this.ch1.antialiased_tanh_rect(r);
       ( mode == 0 ) ? (
@@ -2746,6 +2762,10 @@ function initSpectrum(memoryOffset, fftSize, srate)
         
         lastl = tl;
         lastr = tr;
+      )  : ( mode == 29 ) ? (
+        t2l = .2+modifier;
+        l=tanh(10*l)-exp(-10*(l-t2l)*(l-t2l))+exp(-10*(l+t2l)*(l+t2l));
+        r=l;
       ) : (
         l = 0;
         r = 0;
@@ -3066,6 +3086,18 @@ lfoFModValue      = lfoFModType + 20;
 lfoAModType       = lfoFModValue + 20;
 lfoAModValue      = lfoAModType + 20;
 
+drywetMod1Value   = lfoAModValue + 20;
+drywetMod1Type    = drywetMod1Value + 20;
+
+gainMod1Value     = drywetMod1Type + 20;
+gainMod1Type      = gainMod1Value + 20;
+
+delayMod1Value    = gainMod1Type + 20;
+delayMod1Type     = delayMod1Value + 20;
+
+fbMod1Value       = delayMod1Type + 20;
+fbMod1Type        = fbMod1Value + 20;
+
 block_list        = 16*65536;
 
 envWindow1.setEnvMemory(17*65536, 18*65536);
@@ -3163,6 +3195,15 @@ file_var(0, f1Threshold);
 file_var(0, f2Threshold);
 file_var(0, f1Thresholded);
 file_var(0, f2Thresholded);
+
+file_mem(0,drywetMod1Value,16);
+file_mem(0,drywetMod1Type,16);
+file_mem(0,gainMod1Value,16);
+file_mem(0,gainMod1Type,16);
+file_mem(0,delayMod1Value,16);
+file_mem(0,delayMod1Type,16);
+file_mem(0,fbMod1Value,16);
+file_mem(0,fbMod1Type,16);
 
 @slider
 
@@ -3311,25 +3352,73 @@ shapeDrive1Value4  = shapeDrive1Value[4];
 shapeDrive2Type4   = shapeDrive2Type[4];
 shapeDrive2Value4  = shapeDrive2Value[4];
 
-lfoFModType1       = lfoFModType[0];
-lfoFModType2       = lfoFModType[1];
-lfoFModType3       = lfoFModType[2];
-lfoFModType4       = lfoFModType[3];
+lfoFModType0       = lfoFModType[0];
+lfoFModType1       = lfoFModType[1];
+lfoFModType2       = lfoFModType[2];
+lfoFModType3       = lfoFModType[3];
 
-lfoFModValue1      = lfoFModValue[0];
-lfoFModValue2      = lfoFModValue[1];
-lfoFModValue3      = lfoFModValue[2];
-lfoFModValue4      = lfoFModValue[3];
+lfoFModValue0      = lfoFModValue[0];
+lfoFModValue1      = lfoFModValue[1];
+lfoFModValue2      = lfoFModValue[2];
+lfoFModValue3      = lfoFModValue[3];
 
-lfoAModType1       = lfoAModType[0];
-lfoAModType2       = lfoAModType[1];
-lfoAModType3       = lfoAModType[2];
-lfoAModType4       = lfoAModType[3];
+lfoAModType0       = lfoAModType[0];
+lfoAModType1       = lfoAModType[1];
+lfoAModType2       = lfoAModType[2];
+lfoAModType3       = lfoAModType[3];
 
-lfoAModValue1      = lfoAModValue[0];
-lfoAModValue2      = lfoAModValue[1];
-lfoAModValue3      = lfoAModValue[2];
-lfoAModValue4      = lfoAModValue[3];
+lfoAModValue0      = lfoAModValue[0];
+lfoAModValue1      = lfoAModValue[1];
+lfoAModValue2      = lfoAModValue[2];
+lfoAModValue3      = lfoAModValue[3];
+
+drywetMod1Type0    = drywetMod1Type[0];
+drywetMod1Type1    = drywetMod1Type[1];
+drywetMod1Type2    = drywetMod1Type[2];
+drywetMod1Type3    = drywetMod1Type[3];
+drywetMod1Type4    = drywetMod1Type[4];
+
+drywetMod1Value0   = drywetMod1Value[0];
+drywetMod1Value1   = drywetMod1Value[1];
+drywetMod1Value2   = drywetMod1Value[2];
+drywetMod1Value3   = drywetMod1Value[3];
+drywetMod1Value4   = drywetMod1Value[4];
+
+gainMod1Type0      = gainMod1Type[0];
+gainMod1Type1      = gainMod1Type[1];
+gainMod1Type2      = gainMod1Type[2];
+gainMod1Type3      = gainMod1Type[3];
+gainMod1Type4      = gainMod1Type[4];
+
+gainMod1Value0     = gainMod1Value[0];
+gainMod1Value1     = gainMod1Value[1];
+gainMod1Value2     = gainMod1Value[2];
+gainMod1Value3     = gainMod1Value[3];
+gainMod1Value4     = gainMod1Value[4];
+
+delayMod1Type0     = delayMod1Type[0];
+delayMod1Type1     = delayMod1Type[1];
+delayMod1Type2     = delayMod1Type[2];
+delayMod1Type3     = delayMod1Type[3];
+delayMod1Type4     = delayMod1Type[4];
+
+delayMod1Value0    = delayMod1Value[0];
+delayMod1Value1    = delayMod1Value[1];
+delayMod1Value2    = delayMod1Value[2];
+delayMod1Value3    = delayMod1Value[3];
+delayMod1Value4    = delayMod1Value[4];
+
+fbMod1Type0        = fbMod1Type[0];
+fbMod1Type1        = fbMod1Type[1];
+fbMod1Type2        = fbMod1Type[2];
+fbMod1Type3        = fbMod1Type[3];
+fbMod1Type4        = fbMod1Type[4];
+
+fbMod1Value0       = fbMod1Value[0];
+fbMod1Value1       = fbMod1Value[1];
+fbMod1Value2       = fbMod1Value[2];
+fbMod1Value3       = fbMod1Value[3];
+fbMod1Value4       = fbMod1Value[4];
 
 @sample
   /* MIDI Handling */
@@ -3459,10 +3548,10 @@ lfoAModValue4      = lfoAModValue[3];
   LFO_amount3 = LFO_amnt3;
   LFO_amount4 = LFO_amnt4;
   
-  lfoAModType1 ? LFO_amount1 = fetchLFOModulationAmount(LFO_amount1, lfoAModType1, lfoAModValue1);
-  lfoAModType2 ? LFO_amount2 = fetchLFOModulationAmount(LFO_amount2, lfoAModType2, lfoAModValue2);
-  lfoAModType3 ? LFO_amount3 = fetchLFOModulationAmount(LFO_amount3, lfoAModType3, lfoAModValue3);
-  lfoAModType4 ? LFO_amount4 = fetchLFOModulationAmount(LFO_amount4, lfoAModType4, lfoAModValue4);
+  lfoAModType0 ? LFO_amount1 = fetchLFOModulationAmount(LFO_amount1, lfoAModType0, lfoAModValue0);
+  lfoAModType1 ? LFO_amount2 = fetchLFOModulationAmount(LFO_amount2, lfoAModType1, lfoAModValue1);
+  lfoAModType2 ? LFO_amount3 = fetchLFOModulationAmount(LFO_amount3, lfoAModType2, lfoAModValue2);
+  lfoAModType3 ? LFO_amount4 = fetchLFOModulationAmount(LFO_amount4, lfoAModType3, lfoAModValue3);
 
   m1_value = LFO_amount1 * modulator1.updateModulator(.7);
   m2_value = LFO_amount2 * modulator2.updateModulator(.7);
@@ -3474,10 +3563,10 @@ lfoAModValue4      = lfoAModValue[3];
   LFO_F3 = LFO_freq3;
   LFO_F4 = LFO_freq4;
   
-  lfoFModType1 ? LFO_F1 = fetchLFOModulationAmount(LFO_F1, lfoFModType1, lfoFModValue1);
-  lfoFModType2 ? LFO_F2 = fetchLFOModulationAmount(LFO_F2, lfoFModType2, lfoFModValue2);
-  lfoFModType3 ? LFO_F3 = fetchLFOModulationAmount(LFO_F3, lfoFModType3, lfoFModValue3);
-  lfoFModType4 ? LFO_F4 = fetchLFOModulationAmount(LFO_F4, lfoFModType4, lfoFModValue4);
+  lfoFModType0 ? LFO_F1 = fetchLFOModulationAmount(LFO_F1, lfoFModType0, lfoFModValue0);
+  lfoFModType1 ? LFO_F2 = fetchLFOModulationAmount(LFO_F2, lfoFModType1, lfoFModValue1);
+  lfoFModType2 ? LFO_F3 = fetchLFOModulationAmount(LFO_F3, lfoFModType2, lfoFModValue2);
+  lfoFModType3 ? LFO_F4 = fetchLFOModulationAmount(LFO_F4, lfoFModType3, lfoFModValue3);
   
   modulator1.updateScale(LFO_amount1);
   modulator2.updateScale(LFO_amount2);
@@ -3531,23 +3620,53 @@ lfoAModValue4      = lfoAModValue[3];
   Gain4     = sGain4;
   Gain5     = sGain5;
   
+  gainMod1Type0 ? Gain1 = fetchModulationAmountMinMax(Gain1, gainMod1Type0, gainMod1Value0, gainMin, gainMax);
+  gainMod1Type1 ? Gain2 = fetchModulationAmountMinMax(Gain2, gainMod1Type1, gainMod1Value1, gainMin, gainMax);
+  gainMod1Type2 ? Gain3 = fetchModulationAmountMinMax(Gain3, gainMod1Type2, gainMod1Value2, gainMin, gainMax);
+  gainMod1Type3 ? Gain4 = fetchModulationAmountMinMax(Gain4, gainMod1Type3, gainMod1Value3, gainMin, gainMax);
+  gainMod1Type4 ? Gain5 = fetchModulationAmountMinMax(Gain5, gainMod1Type4, gainMod1Value4, gainMin, gainMax);
+  
+  DryWet1   = sDryWet1;
+  DryWet2   = sDryWet2;
+  DryWet3   = sDryWet3;
+  DryWet4   = sDryWet4;
+  DryWet5   = sDryWet5;
+  
+  drywetMod1Type0 ? DryWet1 = fetchModulationAmount(DryWet1, drywetMod1Type0, drywetMod1Value0);
+  drywetMod1Type1 ? DryWet2 = fetchModulationAmount(DryWet2, drywetMod1Type1, drywetMod1Value1);
+  drywetMod1Type2 ? DryWet3 = fetchModulationAmount(DryWet3, drywetMod1Type2, drywetMod1Value2);
+  drywetMod1Type3 ? DryWet4 = fetchModulationAmount(DryWet4, drywetMod1Type3, drywetMod1Value3);
+  drywetMod1Type4 ? DryWet5 = fetchModulationAmount(DryWet5, drywetMod1Type4, drywetMod1Value4);
+  
+  DryWet1   = DryWet1 * (1-bypassBand1);
+  DryWet2   = DryWet2 * (1-bypassBand2);
+  DryWet3   = DryWet3 * (1-bypassBand3); 
+  DryWet4   = DryWet4 * (1-bypassBand4);
+  DryWet5   = DryWet5 * (1-bypassBand5);
+  
   Delay1    = sDelay1;
   Delay2    = sDelay2;
   Delay3    = sDelay3;
   Delay4    = sDelay4;
   Delay5    = sDelay5;
   
-  DryWet1   = sDryWet1 * (1-bypassBand1);
-  DryWet2   = sDryWet2 * (1-bypassBand2);
-  DryWet3   = sDryWet3 * (1-bypassBand3); 
-  DryWet4   = sDryWet4 * (1-bypassBand4);
-  DryWet5   = sDryWet5 * (1-bypassBand5);
+  delayMod1Type0 ? Delay1 = fetchModulationAmount(Delay1, delayMod1Type0, delayMod1Value0);
+  delayMod1Type1 ? Delay2 = fetchModulationAmount(Delay2, delayMod1Type1, delayMod1Value1);
+  delayMod1Type2 ? Delay3 = fetchModulationAmount(Delay3, delayMod1Type2, delayMod1Value2);
+  delayMod1Type3 ? Delay4 = fetchModulationAmount(Delay4, delayMod1Type3, delayMod1Value3);
+  delayMod1Type4 ? Delay5 = fetchModulationAmount(Delay5, delayMod1Type4, delayMod1Value4);
   
   FeedBack1 = sFeedback1;
   FeedBack2 = sFeedback2;
   FeedBack3 = sFeedback3;
   FeedBack4 = sFeedback4;
   FeedBack5 = sFeedback5;
+  
+  fbMod1Type0 ? FeedBack1 = fetchModulationAmount(FeedBack1, fbMod1Type0, fbMod1Value0);
+  fbMod1Type1 ? FeedBack2 = fetchModulationAmount(FeedBack2, fbMod1Type1, fbMod1Value1);
+  fbMod1Type2 ? FeedBack3 = fetchModulationAmount(FeedBack3, fbMod1Type2, fbMod1Value2);
+  fbMod1Type3 ? FeedBack4 = fetchModulationAmount(FeedBack4, fbMod1Type3, fbMod1Value3);
+  fbMod1Type4 ? FeedBack5 = fetchModulationAmount(FeedBack5, fbMod1Type4, fbMod1Value4);
 
   /* Simple monopole */
   function fix_dc(x)
@@ -4321,43 +4440,44 @@ lfoAModValue4      = lfoAModValue[3];
   currentPos = currentPos + .8*groupDistance;
   drawGroupRect(currentPos, groupTop, groupWidth, miniknobWidth*8+miniknobPadY*4, group_r, group_g, group_b, group_a);
   gainKnob.active = 1;
-  
-  /* Gain modulator controls */
-  /*gainModulator1.combobox(baseSectionX + modulatorOff, groupTop+2, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  gainModulator1.combomodulator_draw();
-  gainModulator1.combobox_draw_top();
-  gainModulator1.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);
-  gainModulator2.combobox(baseSectionX + modulatorOff, groupTop + comboModulatorYSize+2, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  gainModulator2.combomodulator_draw();
-  gainModulator2.combobox_draw_top();
-  gainModulator2.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);*/
 
   bypassToggle.invert = 1;  
-  bypassToggle.drawToggle(currentPos + buttonPad, groupTop + buttonPad, buttonSize, buttonSize, getBypassToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable waveshaper for this band.");
+  bypassToggle.drawToggle(currentPos - 2*buttonPad + groupWidth, groupTop + buttonPad, buttonSize, buttonSize, getBypassToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable waveshaper for this band.");
   setBypassToggle( selectedBand, bypassToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap) );
+  
+  postGainModulator.value = gainMod1Value[selectedBand];
+  postGainModulator.combobox(currentPos + buttonPad, groupTop + miniKnobPadY, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, COMBO_SMALL, "Select modulator." );
+  postGainModulator.combobox_setcuritem(gainMod1Type[selectedBand]);
+  postGainModulator.value = gainMod1Value[selectedBand];
+  postGainModulator.combomodulator_draw();
+  postGainModulator.combobox_draw_top();
+  postGainModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    gainMod1Type[selectedBand]  = postGainModulator.curItem;
+    gainMod1Value[selectedBand] = postGainModulator.value;
+  );
   
   /* Gain controls */
   gainKnob.value = ( slider(gainLocation+selectedBand) - gainMin ) * iGainRange;
-  gainKnob.value2 = gainModulator1.value;
-  gainKnob.value3 = gainModulator2.value;
+  gainKnob.value2 = postGainModulator.value;
   gainKnob.drawKnob(currentPos + 2*miniknobWidth + miniknobPadX, groupTop + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Gain", "Set post-gain for this band.\nNote when dragging drive, hold shift\nto move this one in opposite direction.\n");
   gainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.7) ? slider_automate( slider(gainLocation+selectedBand) = gainKnob.value * gainRange + gainMin );
   
   /* Dry/wet modulator controls */
-  /*drywetModulator1.combobox(baseSectionX + modulatorOff, mod2Top, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
+  drywetModulator1.value = drywetMod1Value[selectedBand];
+  drywetModulator1.combobox(currentPos + buttonPad, mod2Top, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, COMBO_SMALL, "Select modulator." );
+  drywetModulator1.combobox_setcuritem(drywetMod1Type[selectedBand]);
+  drywetModulator1.value = drywetMod1Value[selectedBand];
   drywetModulator1.combomodulator_draw();
   drywetModulator1.combobox_draw_top();
-  drywetModulator1.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);
-  drywetModulator2.combobox(baseSectionX + modulatorOff, mod2Top + comboModulatorYSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  drywetModulator2.combomodulator_draw();
-  drywetModulator2.combobox_draw_top();
-  drywetModulator2.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);*/
-  
+  drywetModulator1.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    drywetMod1Type[selectedBand]  = drywetModulator1.curItem;
+    drywetMod1Value[selectedBand] = drywetModulator1.value;
+  );
+
   /* Dry/Wet controls */
   drywetKnob.active = 1;
   drywetKnob.value = slider(drywetLocation+selectedBand);
   drywetKnob.value2 = drywetModulator1.value;
-  drywetKnob.value3 = drywetModulator2.value;
   drywetKnob.drawKnob(currentPos + 2*miniknobWidth + miniknobPadX, groupTop + 6*miniKnobWidth + 2*miniKnobPadY, miniknobWidth, "Dry/Wet", "Modify dry/wet ratio for this band.");
   drywetKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? slider_automate( slider(drywetLocation+selectedBand) = drywetKnob.value );
 
@@ -4367,43 +4487,45 @@ lfoAModValue4      = lfoAModValue[3];
   currentPos = currentPos + groupDistance;
   drawGroupRect(currentPos, groupTop, groupWidth, miniknobWidth*8+miniknobPadY*4, group_r, group_g, group_b, group_a);
   
-  /* Gain modulator controls */
-  /*delayModulator1.combobox(delaySectionX + modulatorOff, groupTop+2, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  delayModulator1.combomodulator_draw();
-  delayModulator1.combobox_draw_top();
-  delayModulator1.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);
-  delayModulator2.combobox(delaySectionX + modulatorOff, groupTop + comboModulatorYSize+2, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  delayModulator2.combomodulator_draw();
-  delayModulator2.combobox_draw_top();
-  delayModulator2.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);*/
+  /* Delay modulator controls */
+  delayModulator.value = delayMod1Value[selectedBand];
+  delayModulator.combobox(currentPos + buttonPad, groupTop + miniKnobPadY, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, COMBO_SMALL, "Select modulator." );
+  delayModulator.combobox_setcuritem(delayMod1Type[selectedBand]);
+  delayModulator.value = delayMod1Value[selectedBand];
+  delayModulator.combomodulator_draw();
+  delayModulator.combobox_draw_top();
+  delayModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    delayMod1Type[selectedBand]  = delayModulator.curItem;
+    delayMod1Value[selectedBand] = delayModulator.value;
+  );
   
   /* Delay controls */
   delayKnob.active = 1;
   delayKnob.value = slider(delayLocation+selectedBand);
-  delayKnob.value2 = delayModulator1.value;
-  delayKnob.value3 = delayModulator2.value;
+  delayKnob.value2 = delayModulator.value;
   delayKnob.drawKnob(currentPos + 2*miniknobWidth + miniknobPadX, groupTop + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Delay", "Set delay time for feedback.");
   delayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(delayLocation+selectedBand) = delayKnob.value );
 
   /* Feedback modulator controls */
-  /*feedbackModulator1.combobox(delaySectionX + modulatorOff, mod2Top, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  feedbackModulator1.combomodulator_draw();
-  feedbackModulator1.combobox_draw_top();
-  feedbackModulator1.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);
-  feedbackModulator2.combobox(delaySectionX + modulatorOff, mod2Top + comboModulatorYSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, "Select modulator." );
-  feedbackModulator2.combomodulator_draw();
-  feedbackModulator2.combobox_draw_top();
-  feedbackModulator2.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap);*/
+  fbModulator.value = fbMod1Value[selectedBand];
+  fbModulator.combobox(currentPos + buttonPad, mod2Top, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 2, 1, 1, COMBO_SMALL, "Select modulator." );
+  fbModulator.combobox_setcuritem(fbMod1Type[selectedBand]);
+  fbModulator.value = fbMod1Value[selectedBand];
+  fbModulator.combomodulator_draw();
+  fbModulator.combobox_draw_top();
+  fbModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    fbMod1Type[selectedBand]  = fbModulator.curItem;
+    fbMod1Value[selectedBand] = fbModulator.value;
+  );
 
   /* Feedback control */
-  feedbackKnob.value2 = feedbackModulator1.value;
-  feedbackKnob.value3 = feedbackModulator2.value;
+  feedbackKnob.value2 = fbModulator.value;
   feedbackKnob.active = 1;
   feedbackKnob.value = slider(feedbackLocation+selectedBand);
   feedbackKnob.drawKnob(currentPos + 2*miniknobWidth + miniknobPadX, groupTop + 6*miniKnobWidth + 2*miniKnobPadY, miniknobWidth, "Feedback", "Set feedback gain for feedback");
   feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( slider(feedbackLocation+selectedBand) = feedbackKnob.value );
 
-  delayToggle.drawToggle(currentPos + buttonPad, groupTop + buttonPad, buttonSize, buttonSize, getFbToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable feedback system");
+  delayToggle.drawToggle(currentPos + - 2*buttonPad + groupWidth, groupTop + buttonPad, buttonSize, buttonSize, getFbToggle(selectedBand), widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable feedback system");
   setFbToggle(selectedBand, delayToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap));
 
   /* Widening Section */
