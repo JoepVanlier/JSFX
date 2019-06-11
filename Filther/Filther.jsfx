@@ -1,8 +1,8 @@
 desc:Filther
 tags: Filther
-version: 2.93
+version: 2.94
 author: Joep Vanlier
-changelog: Bugfix FB comb.
+changelog: Minor perf optimization upsampling.
 provides: Filther.jsfx.rpl
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -106,6 +106,8 @@ in_pin:right sidechain
 out_pin:left output
 out_pin:right output
 options:no_meter 
+
+/* import filther_upsampling.jsfx-inc */
 
 @serialize
 danger_list     = 960000-500; // List of dangerous filters
@@ -15355,27 +15357,47 @@ updateActiveFilters(1);
     // N>1 oversampling
     sli = sl;
     sri = sr;
-    FIR_upsampling ? (
+    
+    ( FIR_upsampling == 1 ) ? (
       sincFilterL.advanceSinc(sli);
       sincFilterR.advanceSinc(sri);
-    );
-    loop( slider54,
-      // Upsampling
-      FIR_upsampling ? (
+      loop( slider54,
         ssl = sincFilterL.getSubSample();
         ssr = sincFilterR.getSubSample();
-      ) : (
-        ssl = filterL.inputFilter(sli);
-        ssr = filterR.inputFilter(sri);
-      );
-      
-      processSamples();
-      
-      // IIR downsampling?
-      FIR_upsampling ? (
+       
+        processSamples();
+        
         sincDownL.advanceHist(ssl);
         sincDownR.advanceHist(ssr);  
-      ) : (
+      );
+      
+      sl = sincDownL.sincDownSample();
+      sr = sincDownR.sincDownSample();
+    ) /* : ( FIR_upsampling == 2 ) ? ( 
+      upsampleL.updateUpHist(slider54, sli);
+      upsampleR.updateUpHist(slider54, sri);
+      
+      f = 0;
+      loop(slider54,
+        f += 1;
+        ssl = slider54*upsampleL.upSample(slider54);
+        ssr = slider54*upsampleR.upSample(slider54);
+      
+        processSamples();
+        downL.updateDownHist(slider54, ssl);
+        downR.updateDownHist(slider54, ssr);
+        
+        ( f == 1 ) ? (
+          sl = downL.downSample(slider54);
+          sr = downR.downSample(slider54);
+        );
+      );
+    )*/ : (
+      loop( slider54,
+        ssl = filterL.inputFilter(sli);
+        ssr = filterR.inputFilter(sri);
+        processSamples();
+        
         (q += 1)==1 ? (
           sl = filterL.outputFilter(ssl);
           sr = filterR.outputFilter(ssr);
@@ -15384,13 +15406,6 @@ updateActiveFilters(1);
           filterR.outputFilter(ssr);
         );
       );
-    );
-    
-    // FIR downsampling?
-    FIR_upsampling ?
-    (
-      sl = sincDownL.sincDownSample();
-      sr = sincDownR.sincDownSample();
     );
   );
   
