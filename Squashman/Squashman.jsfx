@@ -1,8 +1,8 @@
-desc:Squashman
+desc:Squashman (work in progress! alpha)
 tags: multiband saturation plugin
-version: 0.58
+version: 0.59
 author: Joep Vanlier
-changelog: Got rid of the big warning
+changelog: Added linear phase DC blocker to avoid phase artefacts.
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -89,7 +89,7 @@ slider60:LFO_freq4=0<0,1,1>-LFO4 Frequency
 slider61:Inertia=1<0,1,1{No,Yes}>-Inertia
 slider62:masterGainSlider=0<-26,26,.1>-Master Gain
 slider63:Oversampling=1<1,4,1>-Oversampling
-slider64:fixDC=1<0,1,1>-Fix DC?
+slider64:fixDC=1<0,2,1>Fix DC options
 
 @init
   logten        = log(10);
@@ -791,7 +791,7 @@ function kot_lut(xloc, yloc)
       a2_1 = g*a1_1;
       a2_2 = g*a1_2;
       a2_3 = g*a1_3;
-    ); 
+    );
 
   function eval_HP6(v0)
     global()
@@ -821,7 +821,7 @@ function kot_lut(xloc, yloc)
 
 dc0.init_HP6(17/srate);
 dc1.init_HP6(17/srate);
-  
+
 maxCuts = 4;
 driveMax = 60;
 driveMin = -40;
@@ -1786,6 +1786,14 @@ function initBuffer(scopebuffer_in, scopebuffermax_in)
     ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
   );
   
+function resetBuffer()
+  local()
+  global()
+  instance(scopebuffermax, scopebuffer)
+  (
+    memset(scopebuffer, 0, scopebuffermax - scopebuffer + 1);
+  );
+  
 function initBufferLen(scopebuffer_in, bufferlen)
   local()
   global()
@@ -1876,6 +1884,18 @@ function readBuffer()
     c2 * (1.0-frac) + c1 * frac
   );
   
+function readBufferNoInterp()
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac)
+  (
+    c1 = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c1
+  );  
+  
 function updateBuffer(M)
   local()
   global()
@@ -1896,6 +1916,72 @@ function clearBuffer()
     memset( scopebuffer, 0, MAXBUFFERSIZE );
     scopeptr = scopebuffer;
   );   
+  
+  /* Linear phase DC blocker (WIP) */
+  /* Unfinished but based on: "DC Blocker Algorithms", R. G. Lyons et al. */
+  function init_blocker(dc_mem1, dc_mem2, dc_mem3, dc_mem4)
+  local()
+  instance(MA1, MA2, MA3, MA4, q1, q2, q3, q4, g1, g2, g3, g4)
+  global()
+  (
+    MA1.initBuffer(dc_mem1, dc_mem1+2048);
+    MA2.initBuffer(dc_mem2, dc_mem2+2048);
+    MA3.initBuffer(dc_mem3, dc_mem3+2048);
+    MA4.initBuffer(dc_mem4, dc_mem4+2048);
+    
+    MA1.resetBuffer();
+    MA2.resetBuffer();
+    MA3.resetBuffer();
+    MA4.resetBuffer();
+    
+    q1 = q2 = q3 = q4 = g1 = g2 = g3 = g4 = 0;
+    
+    MA1.setOffset(511);
+    MA2.setOffset(511);
+    MA3.setOffset(511);
+    MA4.setOffset(511);
+  );
+  
+function fix_dc_strong(x)
+local(f, x2, x3, x4, x5)
+global()
+instance(MA1, MA2, MA3, MA4, 
+         q1, g1,
+         q2, g2,
+         q3, g3,
+         q4, g4,
+         D,
+         )
+(
+  D = 1/512;
+
+  MA1.updateBuffer(x);
+  f = x - q1;
+  g1 = f + g1;
+  x2 = g1 * D;
+    
+  MA2.updateBuffer(x2);
+  f = x2 - q2;
+  g2 = f + g2;
+  x3 = g2 * D;
+  
+  MA3.updateBuffer(x3);
+  f = x3 - q3;
+  g3 = f + g3;
+  x4 = g3 * D;
+  
+  MA4.updateBuffer(x4);
+  f = x4 - q4;
+  g4 = f + g4;
+  x5 = g3 * D;
+    
+  q1 = MA1.readBufferNoInterp();
+  q2 = MA2.readBufferNoInterp();
+  q3 = MA3.readBufferNoInterp();
+  q4 = MA4.readBufferNoInterp();
+  
+  q1 - x5;
+);  
   
 function fancyLineV(x1, y1, x2, y2)
   local(dx)
@@ -2768,7 +2854,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
         lastl = tl;
         lastr = tr;
       )  : ( mode == 29 ) ? (
-        t2l = .2+modifier;
+        t2l = .2+(1-.5*modifier);
         l=tanh(10*l)-exp(-10*(l-t2l)*(l-t2l))+exp(-10*(l+t2l)*(l+t2l));
         r=l;
       ) : (
@@ -3111,6 +3197,11 @@ envWindow2.setEnvMemory(19*65536, 20*65536);
 inBuf.initBufferLen(22*65536, 65532);
 dynBuf1.initBufferLen(23*65536, 65532);
 dynBuf2.initBufferLen(24*65536, 65532);
+
+blockerMem = 25*65536; blockerStep = 4096;
+ma_dc0.init_blocker(blockerMem, blockerMem+blockerStep, blockerMem+2*blockerStep, blockerMem+3*blockerStep);
+blockerMem = 26*65536; 
+ma_dc1.init_blocker(blockerMem, blockerMem+blockerStep, blockerMem+2*blockerStep, blockerMem+3*blockerStep);
 
 filterBank.initDelays();
 
@@ -4082,10 +4173,13 @@ fbMod1Value4       = fbMod1Value[4];
   spl0 *= gBoost;
   spl1 *= gBoost;
    
-  fixDC ? (
+  ( fixDC == 2 ) ? (
     spl0 = dc0.eval_HP6(spl0);
     spl1 = dc1.eval_HP6(spl1);
-  );  
+  ) : ( fixDC == 1 ) ? (
+    spl0 = ma_dc0.fix_dc_strong(spl0);
+    spl1 = ma_dc1.fix_dc_strong(spl1);
+  );
   
   spectrumOut.feedSample(.5*(spl0+spl1));
     
@@ -4862,7 +4956,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 5 8");
+  gfx_printf("S Q U A S H M A N  v  0 . 5 9 [ALPHA]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
