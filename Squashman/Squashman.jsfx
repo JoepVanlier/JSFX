@@ -1,8 +1,8 @@
 desc:Squashman (work in progress! alpha)
 tags: multiband saturation plugin
-version: 0.59
+version: 0.60
 author: Joep Vanlier
-changelog: Added linear phase DC blocker to avoid phase artefacts.
+changelog: Added delay compensation for the FIR. Clamp squash meter against minimum rail. Add toggle for DC fixer on/off.
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -89,7 +89,7 @@ slider60:LFO_freq4=0<0,1,1>-LFO4 Frequency
 slider61:Inertia=1<0,1,1{No,Yes}>-Inertia
 slider62:masterGainSlider=0<-26,26,.1>-Master Gain
 slider63:Oversampling=1<1,4,1>-Oversampling
-slider64:fixDC=1<0,2,1>Fix DC options
+slider64:fixDC=1<0,2,1>-Fix DC options
 
 @init
   logten        = log(10);
@@ -2112,6 +2112,8 @@ function vGainMeter(x, y, h, diff)
     ww    = 12;
     offs  = 3;
     
+    diff < (-(h-y)/h) ? diff = -(h-y)/h;
+    
     gfx_set(1,0,0,.1);
     diff > 0 ? (
       y = y-h*diff;
@@ -3341,10 +3343,14 @@ solo4 ? play4 = 1;
 solo5 ? play5 = 1;
 
 curFIRdelay = getFIRdelay(overSampling); 
-( curpdc != curFIRdelay ) ? (
+
+( fixDC == 1 ) ? (
+  curFIRdelay = curFIRdelay + 511;
+);
+
+( pdc_delay != curFIRdelay ) ? (
   pdc_top_ch = 2;
   pdc_delay = curFIRdelay;
-  curpdc = curFIRdelay;
 );
 
 // Sample accurate lerp or inertial based?
@@ -4144,7 +4150,6 @@ fbMod1Value4       = fbMod1Value[4];
   
   ( Oversampling == 1 ) ? (
     processSample();
-    
     spl0 = outL;
     spl1 = outR;
   ) : (
@@ -4823,14 +4828,18 @@ fbMod1Value4       = fbMod1Value[4];
     (mouse_cap & 1) && (mouse_x > x) && (mouse_x < (x+w)) && (mouse_y > y) && (mouse_y < (y+h))
   );
   
+  
   modVisible ? (
     envX = 32*(1+scaling) + lfoDist*4 + offs;
     envY = topRow + 35*(1+scaling);
     envW = 6*groupWidth - offs;
     envH = miniknobWidth*8+miniknobPadY*4;
+    owidth = 15*(1+scaling); 
+    offs = 10*(1+scaling) + owidth;
+    dist = envH*.05;
     
     ( viewDynamics == 0 ) ? (          
-      str = 20; str2 = 21; owidth = 15*(1+scaling); offs = 10*(1+scaling) + owidth;  dist = envH*.05;
+      str = 20; str2 = 21;
       
       vButton(envX-offs, envY + .5*dist + 1+scaling, owidth, envH*.5 - dist, "ENVELOPE", 1);
       vButton(envX-offs, envY+envH*.5 + .5*dist + 1+scaling, owidth, envH*.5 - dist, "DYNAMICS", 0) ? ( viewDynamics = 1 );
@@ -4929,6 +4938,9 @@ fbMod1Value4       = fbMod1Value[4];
   masterGain.drawKnob(masterLoc + 2*miniknobWidth + miniknobPadX, groupTop + 2*miniKnobWidth + miniKnobPadY, miniknobWidth, "Master", "Set master volume");
   masterGain.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ?  slider_automate( masterGainSlider = masterGain.value * gainRange + gainMin );
 
+  dcToggle.drawToggle(masterLoc + 3.5*miniknobWidth + miniknobPadX, groupTop + buttonPad, buttonSize, buttonSize, fixDC, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Fix DC");
+  fixDC = dcToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
   /* Oversampling control */
   oversamplingKnob.active = 1;
   ( mouse_cap & 1 == 0 ) ? oversamplingKnob.value = (Oversampling - overSamplingMin) * iOverSamplingRange;
@@ -4956,7 +4968,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 5 9 [ALPHA]");
+  gfx_printf("S Q U A S H M A N  v  0 . 6 0 [ALPHA]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
