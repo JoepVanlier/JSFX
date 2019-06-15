@@ -1,12 +1,12 @@
 desc:Squashman (work in progress! alpha)
 tags: multiband saturation plugin
-version: 0.60
+version: 0.61
 author: Joep Vanlier
-changelog: Added delay compensation for the FIR. Clamp squash meter against minimum rail. Add toggle for DC fixer on/off.
+changelog: Reduced overhead when using fewer bands. Added gain slider for the envelope input. Added phaserdrive shaper. Bugfix envelopes.
 provides: Squashman_Dependencies/*
 license: MIT
 
-import saike_upsamplers.jsfx-inc
+import squashman_upsamplers.jsfx-inc
 import widgets.jsfx-inc
 import envelopes.jsfx-inc
 
@@ -135,6 +135,36 @@ slider64:fixDC=1<0,2,1>-Fix DC options
       );
       
       state
+    );
+
+  ///////////////////////
+  /* Allpass filter    */
+  ///////////////////////
+  function init_AP(freq, k_in)
+    global(Oversampling)
+    local(g, res)
+    instance(k, a1, a2, a3)
+    (
+      g = ( (1/Oversampling) * .5 * $pi * exp( (1-freq) * log(20/22050) ) );
+      k = k_in;
+      
+      a1 = 1/(1+g*(g+k));
+      a2 = g*a1;
+      a3 = g*a2;
+    ); 
+
+  function eval_AP(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic1eq, ic2eq, k, a1, a2, a3)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3 * v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;    
+      
+      v0 - 2*k*v1
     );
 
   ///////////////////////
@@ -1003,7 +1033,7 @@ function remBand(idx)
     cuts = cuts - 1;
   );  
   
-nShapers = 30;
+nShapers = 31;
 nModulators = 9;
 
 function hasShapeMod(curitem)
@@ -1040,7 +1070,8 @@ function hasShapeMod(curitem)
     : ( curitem == 26 ) ? ( 1 ) /* Slope clamper */
     : ( curitem == 27 ) ? ( 1 ) /* Sat man */
     : ( curitem == 28 ) ? ( 1 ) /* Sloper */
-    : ( curitem == 29 ) ? ( 1 ) /* AC biaser */
+    : ( curitem == 29 ) ? ( 1 ) /* Weird overdrive */
+    : ( curitem == 30 ) ? ( 1 ) /* Phase rotater */
   );
 
 /* Feed sample to FFT */
@@ -2859,6 +2890,27 @@ function initSpectrum(memoryOffset, fftSize, srate)
         t2l = .2+(1-.5*modifier);
         l=tanh(10*l)-exp(-10*(l-t2l)*(l-t2l))+exp(-10*(l+t2l)*(l+t2l));
         r=l;
+      ) : ( mode == 30 ) ? (
+        this.lF.init_AP(modifier, 1);
+        this.rF.init_AP(modifier, 1);
+        this.lF2.init_AP(modifier, .75);
+        this.rF2.init_AP(modifier, .75);
+        
+        t2l = (1/preamp);
+        l = t2l*atan(l);
+        r = t2l*atan(r);
+        
+        l = this.lF.eval_AP(l);
+        r = this.rF.eval_AP(r);
+        
+        l = t2l*atan(preamp*l);
+        r = t2l*atan(preamp*r);
+
+        l = this.lF2.eval_AP(l);
+        r = this.rF2.eval_AP(r);
+
+        l = atan(preamp*l);
+        r = atan(preamp*r);
       ) : (
         l = 0;
         r = 0;
@@ -3056,7 +3108,7 @@ function drawShaper(drive)
       calc.inL = s;
       calc.inR = s;
       
-      calc.processBand(displayDrive, 1, mode, modifier, 0, 0);
+      calc.processBand(displayDrive, 1, mode, modifier, 0, 0);      
       ol = calc.l*.5 + .5;
       or = calc.r*.5 + .5;
       gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
@@ -3195,6 +3247,8 @@ block_list        = 16*65536;
 
 envWindow1.setEnvMemory(17*65536, 18*65536);
 envWindow2.setEnvMemory(19*65536, 20*65536);
+envWindow1.initEnvelope(envX, envY, envW, envH*.45, 6, "MODULATOR 5", env_bg_r, env_bg_g, env_bg_b, env_bg_a );    
+envWindow2.initEnvelope(envX, envY+.555*envH, envW, envH*.45, 6, "MODULATOR 6", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
 
 inBuf.initBufferLen(22*65536, 65532);
 dynBuf1.initBufferLen(23*65536, 65532);
@@ -3278,6 +3332,8 @@ file_var(0,modVisible);
 
 envWindow1.serializeEnvelope();
 envWindow2.serializeEnvelope();
+envWindow1.initEnvelope(envX, envY, envW, envH*.45, 6, "MODULATOR 5", env_bg_r, env_bg_g, env_bg_b, env_bg_a );    
+envWindow2.initEnvelope(envX, envY+.555*envH, envW, envH*.45, 6, "MODULATOR 6", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
 
 file_mem(0,lfoFModType,16);
 file_mem(0,lfoFModValue,16);
@@ -3302,6 +3358,8 @@ file_mem(0,delayMod1Value,16);
 file_mem(0,delayMod1Type,16);
 file_mem(0,fbMod1Value,16);
 file_mem(0,fbMod1Type,16);
+
+file_var(0,envInputGain);
 
 f1Attack = max(attackMin,min(attackMax,f1Attack));
 f1Decay = max(releaseMin,min(releaseMax,f1Decay));
@@ -3370,6 +3428,8 @@ modulator1.updateModSettings(LFO_types[0], LFO_tsync[0], LFO_retrig[0]);
 modulator2.updateModSettings(LFO_types[1], LFO_tsync[1], LFO_retrig[1]);
 modulator3.updateModSettings(LFO_types[2], LFO_tsync[2], LFO_retrig[2]);
 modulator4.updateModSettings(LFO_types[3], LFO_tsync[3], LFO_retrig[3]);  
+
+linearEnvInputGain = exp(3.5*envInputGain);
 
 /* Store midi messages for use once they come up */
 notePtr = note_mem;
@@ -3623,7 +3683,7 @@ fbMod1Value4       = fbMod1Value[4];
     ref
   );
   
-  signal = .5*(abs(spl0)+abs(spl1));
+  signal = .5*linearEnvInputGain*(abs(spl0)+abs(spl1));
   smoothedSignal = max(signal*.001 + smoothedSignal*0.999, signal);
   inBuf.updateBuffer(smoothedSignal);
   inputGain = log10(max(.001, signal));
@@ -3664,7 +3724,7 @@ fbMod1Value4       = fbMod1Value[4];
   m2_value = LFO_amount2 * modulator2.updateModulator(.7);
   m3_value = LFO_amount3 * modulator3.updateModulator(.7);
   m4_value = LFO_amount4 * modulator4.updateModulator(.7);   
-  
+
   LFO_F1 = LFO_freq1;
   LFO_F2 = LFO_freq2;
   LFO_F3 = LFO_freq3;
@@ -3686,94 +3746,92 @@ fbMod1Value4       = fbMod1Value[4];
   modulator4.updateModRate(LFO_F4);  
 
   Modifier1 = modifierLerp1.lerpSample();
-  Modifier2 = modifierLerp2.lerpSample();
-  Modifier3 = modifierLerp3.lerpSample();
-  Modifier4 = modifierLerp4.lerpSample();
-  Modifier5 = modifierLerp5.lerpSample();
-
   shapeMod1Type0 ? Modifier1 = fetchModulationAmount(Modifier1, shapeMod1Type0, shapeMod1Value0);
-  shapeMod1Type1 ? Modifier2 = fetchModulationAmount(Modifier2, shapeMod1Type1, shapeMod1Value1);
-  shapeMod1Type2 ? Modifier3 = fetchModulationAmount(Modifier3, shapeMod1Type2, shapeMod1Value2);
-  shapeMod1Type3 ? Modifier4 = fetchModulationAmount(Modifier4, shapeMod1Type3, shapeMod1Value3);
-  shapeMod1Type4 ? Modifier5 = fetchModulationAmount(Modifier5, shapeMod1Type4, shapeMod1Value4);
-
   shapeMod2Type0 ? Modifier1 = fetchModulationAmount(Modifier1, shapeMod2Type0, shapeMod2Value0);
-  shapeMod2Type1 ? Modifier2 = fetchModulationAmount(Modifier2, shapeMod2Type1, shapeMod2Value1);
-  shapeMod2Type2 ? Modifier3 = fetchModulationAmount(Modifier3, shapeMod2Type2, shapeMod2Value2);
-  shapeMod2Type3 ? Modifier4 = fetchModulationAmount(Modifier4, shapeMod2Type3, shapeMod2Value3);
-  shapeMod2Type4 ? Modifier5 = fetchModulationAmount(Modifier5, shapeMod2Type4, shapeMod2Value4);
-
   Drive1 = sDrive1;
-  Drive2 = sDrive2;
-  Drive3 = sDrive3;
-  Drive4 = sDrive4;
-  Drive5 = sDrive5;
-
   shapeDrive1Type0 ? Drive1 = fetchModulationAmountMinMax(Drive1, shapeDrive1Type0, shapeDrive1Value0, driveMin, driveMax);
-  shapeDrive1Type1 ? Drive2 = fetchModulationAmountMinMax(Drive2, shapeDrive1Type1, shapeDrive1Value1, driveMin, driveMax);
-  shapeDrive1Type2 ? Drive3 = fetchModulationAmountMinMax(Drive3, shapeDrive1Type2, shapeDrive1Value2, driveMin, driveMax);
-  shapeDrive1Type3 ? Drive4 = fetchModulationAmountMinMax(Drive4, shapeDrive1Type3, shapeDrive1Value3, driveMin, driveMax);
-  shapeDrive1Type4 ? Drive5 = fetchModulationAmountMinMax(Drive5, shapeDrive1Type4, shapeDrive1Value4, driveMin, driveMax);
-
   shapeDrive2Type0 ? Drive1 = fetchModulationAmountMinMax(Drive1, shapeDrive2Type0, shapeDrive2Value0, driveMin, driveMax);
-  shapeDrive2Type1 ? Drive2 = fetchModulationAmountMinMax(Drive2, shapeDrive2Type1, shapeDrive2Value1, driveMin, driveMax);
-  shapeDrive2Type2 ? Drive3 = fetchModulationAmountMinMax(Drive3, shapeDrive2Type2, shapeDrive2Value2, driveMin, driveMax);
-  shapeDrive2Type3 ? Drive4 = fetchModulationAmountMinMax(Drive4, shapeDrive2Type3, shapeDrive2Value3, driveMin, driveMax);
-  shapeDrive2Type4 ? Drive5 = fetchModulationAmountMinMax(Drive5, shapeDrive2Type4, shapeDrive2Value4, driveMin, driveMax);
-
-  Gain1     = sGain1;
-  Gain2     = sGain2;
-  Gain3     = sGain3;
-  Gain4     = sGain4;
-  Gain5     = sGain5;
-  
+  Gain1 = sGain1;
   gainMod1Type0 ? Gain1 = fetchModulationAmountMinMax(Gain1, gainMod1Type0, gainMod1Value0, gainMin, gainMax);
-  gainMod1Type1 ? Gain2 = fetchModulationAmountMinMax(Gain2, gainMod1Type1, gainMod1Value1, gainMin, gainMax);
-  gainMod1Type2 ? Gain3 = fetchModulationAmountMinMax(Gain3, gainMod1Type2, gainMod1Value2, gainMin, gainMax);
-  gainMod1Type3 ? Gain4 = fetchModulationAmountMinMax(Gain4, gainMod1Type3, gainMod1Value3, gainMin, gainMax);
-  gainMod1Type4 ? Gain5 = fetchModulationAmountMinMax(Gain5, gainMod1Type4, gainMod1Value4, gainMin, gainMax);
-  
-  DryWet1   = sDryWet1;
-  DryWet2   = sDryWet2;
-  DryWet3   = sDryWet3;
-  DryWet4   = sDryWet4;
-  DryWet5   = sDryWet5;
-  
+  DryWet1 = sDryWet1;
   drywetMod1Type0 ? DryWet1 = fetchModulationAmount(DryWet1, drywetMod1Type0, drywetMod1Value0);
-  drywetMod1Type1 ? DryWet2 = fetchModulationAmount(DryWet2, drywetMod1Type1, drywetMod1Value1);
-  drywetMod1Type2 ? DryWet3 = fetchModulationAmount(DryWet3, drywetMod1Type2, drywetMod1Value2);
-  drywetMod1Type3 ? DryWet4 = fetchModulationAmount(DryWet4, drywetMod1Type3, drywetMod1Value3);
-  drywetMod1Type4 ? DryWet5 = fetchModulationAmount(DryWet5, drywetMod1Type4, drywetMod1Value4);
-  
-  DryWet1   = DryWet1 * (1-bypassBand1);
-  DryWet2   = DryWet2 * (1-bypassBand2);
-  DryWet3   = DryWet3 * (1-bypassBand3); 
-  DryWet4   = DryWet4 * (1-bypassBand4);
-  DryWet5   = DryWet5 * (1-bypassBand5);
-  
-  Delay1    = sDelay1;
-  Delay2    = sDelay2;
-  Delay3    = sDelay3;
-  Delay4    = sDelay4;
-  Delay5    = sDelay5;
-  
+  DryWet1 = DryWet1 * (1-bypassBand1);
+  Delay1 = sDelay1;
   delayMod1Type0 ? Delay1 = fetchModulationAmount(Delay1, delayMod1Type0, delayMod1Value0);
-  delayMod1Type1 ? Delay2 = fetchModulationAmount(Delay2, delayMod1Type1, delayMod1Value1);
-  delayMod1Type2 ? Delay3 = fetchModulationAmount(Delay3, delayMod1Type2, delayMod1Value2);
-  delayMod1Type3 ? Delay4 = fetchModulationAmount(Delay4, delayMod1Type3, delayMod1Value3);
-  delayMod1Type4 ? Delay5 = fetchModulationAmount(Delay5, delayMod1Type4, delayMod1Value4);
-  
   FeedBack1 = sFeedback1;
-  FeedBack2 = sFeedback2;
-  FeedBack3 = sFeedback3;
-  FeedBack4 = sFeedback4;
-  FeedBack5 = sFeedback5;
-  
   fbMod1Type0 ? FeedBack1 = fetchModulationAmount(FeedBack1, fbMod1Type0, fbMod1Value0);
-  fbMod1Type1 ? FeedBack2 = fetchModulationAmount(FeedBack2, fbMod1Type1, fbMod1Value1);
-  fbMod1Type2 ? FeedBack3 = fetchModulationAmount(FeedBack3, fbMod1Type2, fbMod1Value2);
-  fbMod1Type3 ? FeedBack4 = fetchModulationAmount(FeedBack4, fbMod1Type3, fbMod1Value3);
-  fbMod1Type4 ? FeedBack5 = fetchModulationAmount(FeedBack5, fbMod1Type4, fbMod1Value4);
+  
+  ( cuts > 0 ) ? (
+    Modifier2 = modifierLerp2.lerpSample();
+    shapeMod1Type1 ? Modifier2 = fetchModulationAmount(Modifier2, shapeMod1Type1, shapeMod1Value1);
+    shapeMod2Type1 ? Modifier2 = fetchModulationAmount(Modifier2, shapeMod2Type1, shapeMod2Value1);
+    Drive2 = sDrive2;
+    shapeDrive1Type1 ? Drive2 = fetchModulationAmountMinMax(Drive2, shapeDrive1Type1, shapeDrive1Value1, driveMin, driveMax);
+    shapeDrive2Type1 ? Drive2 = fetchModulationAmountMinMax(Drive2, shapeDrive2Type1, shapeDrive2Value1, driveMin, driveMax);
+    Gain2 = sGain2;
+    gainMod1Type1 ? Gain2 = fetchModulationAmountMinMax(Gain2, gainMod1Type1, gainMod1Value1, gainMin, gainMax);
+    DryWet2 = sDryWet2;
+    drywetMod1Type1 ? DryWet2 = fetchModulationAmount(DryWet2, drywetMod1Type1, drywetMod1Value1);
+    DryWet2 = DryWet2 * (1-bypassBand2);
+    Delay2 = sDelay2;
+    delayMod1Type1 ? Delay2 = fetchModulationAmount(Delay2, delayMod1Type1, delayMod1Value1);
+    FeedBack2 = sFeedback2;
+    fbMod1Type1 ? FeedBack2 = fetchModulationAmount(FeedBack2, fbMod1Type1, fbMod1Value1);
+
+    ( cuts > 1 ) ? (
+      Modifier3 = modifierLerp3.lerpSample();
+      shapeMod1Type2 ? Modifier3 = fetchModulationAmount(Modifier3, shapeMod1Type2, shapeMod1Value2);
+      shapeMod2Type2 ? Modifier3 = fetchModulationAmount(Modifier3, shapeMod2Type2, shapeMod2Value2);
+      Drive3 = sDrive3;
+      shapeDrive1Type2 ? Drive3 = fetchModulationAmountMinMax(Drive3, shapeDrive1Type2, shapeDrive1Value2, driveMin, driveMax);
+      shapeDrive2Type2 ? Drive3 = fetchModulationAmountMinMax(Drive3, shapeDrive2Type2, shapeDrive2Value2, driveMin, driveMax);
+      Gain3 = sGain3;
+      gainMod1Type2 ? Gain3 = fetchModulationAmountMinMax(Gain3, gainMod1Type2, gainMod1Value2, gainMin, gainMax);
+      DryWet3 = sDryWet3;
+      drywetMod1Type2 ? DryWet3 = fetchModulationAmount(DryWet3, drywetMod1Type2, drywetMod1Value2);
+      DryWet3 = DryWet3 * (1-bypassBand3); 
+      Delay3 = sDelay3;
+      delayMod1Type2 ? Delay3 = fetchModulationAmount(Delay3, delayMod1Type2, delayMod1Value2);
+      FeedBack3 = sFeedback3;
+      fbMod1Type2 ? FeedBack3 = fetchModulationAmount(FeedBack3, fbMod1Type2, fbMod1Value2);
+
+      ( cuts > 2 ) ? (
+        Modifier4 = modifierLerp4.lerpSample();
+        shapeMod1Type3 ? Modifier4 = fetchModulationAmount(Modifier4, shapeMod1Type3, shapeMod1Value3);
+        shapeMod2Type3 ? Modifier4 = fetchModulationAmount(Modifier4, shapeMod2Type3, shapeMod2Value3);
+        Drive4 = sDrive4;
+        shapeDrive1Type3 ? Drive4 = fetchModulationAmountMinMax(Drive4, shapeDrive1Type3, shapeDrive1Value3, driveMin, driveMax);
+        shapeDrive2Type3 ? Drive4 = fetchModulationAmountMinMax(Drive4, shapeDrive2Type3, shapeDrive2Value3, driveMin, driveMax);
+        Gain4 = sGain4;
+        gainMod1Type3 ? Gain4 = fetchModulationAmountMinMax(Gain4, gainMod1Type3, gainMod1Value3, gainMin, gainMax);
+        DryWet4 = sDryWet4;
+        drywetMod1Type3 ? DryWet4 = fetchModulationAmount(DryWet4, drywetMod1Type3, drywetMod1Value3);
+        DryWet4 = DryWet4 * (1-bypassBand4);
+        Delay4 = sDelay4;
+        delayMod1Type3 ? Delay4 = fetchModulationAmount(Delay4, delayMod1Type3, delayMod1Value3);
+        FeedBack4 = sFeedback4;
+        fbMod1Type3 ? FeedBack4 = fetchModulationAmount(FeedBack4, fbMod1Type3, fbMod1Value3);
+ 
+        ( cuts > 3 ) ? (
+          Modifier5 = modifierLerp5.lerpSample();
+          shapeMod1Type4 ? Modifier5 = fetchModulationAmount(Modifier5, shapeMod1Type4, shapeMod1Value4);
+          shapeMod2Type4 ? Modifier5 = fetchModulationAmount(Modifier5, shapeMod2Type4, shapeMod2Value4);
+          Drive5 = sDrive5;
+          shapeDrive1Type4 ? Drive5 = fetchModulationAmountMinMax(Drive5, shapeDrive1Type4, shapeDrive1Value4, driveMin, driveMax);
+          shapeDrive2Type4 ? Drive5 = fetchModulationAmountMinMax(Drive5, shapeDrive2Type4, shapeDrive2Value4, driveMin, driveMax);
+          Gain5 = sGain5;
+          gainMod1Type4 ? Gain5 = fetchModulationAmountMinMax(Gain5, gainMod1Type4, gainMod1Value4, gainMin, gainMax);
+          DryWet5 = sDryWet5;
+          drywetMod1Type4 ? DryWet5 = fetchModulationAmount(DryWet5, drywetMod1Type4, drywetMod1Value4);
+          DryWet5 = DryWet5 * (1-bypassBand5);
+          Delay5 = sDelay5;
+          delayMod1Type4 ? Delay5 = fetchModulationAmount(Delay5, delayMod1Type4, delayMod1Value4);
+          FeedBack5 = sFeedback5;
+          fbMod1Type4 ? FeedBack5 = fetchModulationAmount(FeedBack5, fbMod1Type4, fbMod1Value4);
+        );
+      );
+    );
+  );
 
   /* Simple monopole */
   function fix_dc(x)
@@ -4487,7 +4545,7 @@ fbMod1Value4       = fbMod1Value[4];
   
   /* Combobox to select shaper */
   shaperSelect.dangerousElements=block_list;
-  shaperSelect.combobox(currentPos-60*(1+scaling), bottomRow + 150*(1+scaling)-20*(1+scaling), 120*(1+scaling), 20*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, COMBO_BIG, "Waveshaper selection." );
+  shaperSelect.combobox(currentPos-60*(1+scaling), bottomRow + 150*(1+scaling)-20*(1+scaling), 120*(1+scaling), 20*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 2, COMBO_BIG, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(slider(modeLocation+selectedBand));
   shaperSelect.combobox_draw();  
   shaperSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
@@ -4828,7 +4886,6 @@ fbMod1Value4       = fbMod1Value[4];
     (mouse_cap & 1) && (mouse_x > x) && (mouse_x < (x+w)) && (mouse_y > y) && (mouse_y < (y+h))
   );
   
-  
   modVisible ? (
     envX = 32*(1+scaling) + lfoDist*4 + offs;
     envY = topRow + 35*(1+scaling);
@@ -4839,6 +4896,7 @@ fbMod1Value4       = fbMod1Value[4];
     dist = envH*.05;
     
     ( viewDynamics == 0 ) ? (          
+      // ENVELOPES
       str = 20; str2 = 21;
       
       vButton(envX-offs, envY + .5*dist + 1+scaling, owidth, envH*.5 - dist, "ENVELOPE", 1);
@@ -4852,6 +4910,7 @@ fbMod1Value4       = fbMod1Value[4];
       envWindow2.drawEnvelopeWindow();
       envWindow2.processMouseEnvelope();      
     ) : (
+      // DYNAMICS
       vButton(envX-offs, envY + .5*dist + 1+scaling, owidth, envH*.5 - dist, "ENVELOPE", 0) ? ( viewDynamics = 0 );
       vButton(envX-offs, envY+envH*.5 + .5*dist + 1+scaling, owidth, envH*.5 - dist, "DYNAMICS", 1);      
       
@@ -4864,6 +4923,23 @@ fbMod1Value4       = fbMod1Value[4];
       gfx_set(mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a);
       dynBuf2.draw_buffer(envX, envY, envW, envH*.45, 0, 0);
       f2Thresholded ? ( gfx_line(envX, envY + envH*.45*(1-f2Threshold), envX + envW, envY + envH*.45*(1-f2Threshold)) );
+      
+      ( dynWindowCap == 1 ) ? (
+        ( mouse_cap & 1 == 0 ) ? (
+          dynWindowCap = 0;
+        ) : (
+          envInputGain = clamp(envInputGain - 0.01 * ( mouse_y - dynWindowY ), -1, 1);
+          
+          dynWindowY = mouse_y;
+        );
+      ) : (
+        ( ( lastCap == 0 ) && ( mouse_cap & 1 ) ) ? (
+          ( ( mouse_x > envX ) && (mouse_y > envY) && ( mouse_x < ( envX+envW ) ) && ( mouse_y < ( envY + envH*.45 ) ) ) ? (
+            dynWindowCap = 1;
+            dynWindowY = mouse_y;
+          );
+        );
+      );
       
       dynCtrlY = envY + 6.5*miniKnobWidth + miniKnobPadY;
       tinyKnobWidth = .85*miniKnobWidth;
@@ -4924,6 +5000,12 @@ fbMod1Value4       = fbMod1Value[4];
       kThresh2.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Thresh", "Set threshold");
       kThresh2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? slider_automate( f2Threshold = kThresh2.value );
       bStart += 5*tinyKnobWidth;
+      
+      kEnvInputGain.active = 1;
+      kEnvInputGain.value = envInputGain*.5+.5;
+      kEnvInputGain.drawKnob(bStart, dynCtrlY, tinyKnobWidth, "Gain", "Envelope input gain");
+      kEnvInputGain.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( envInputGain =  ( kEnvInputGain.value - .5 ) * 2 );
+      bStart += 4*tinyKnobWidth;
     );
   );
   
@@ -4968,7 +5050,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 6 0 [ALPHA]");
+  gfx_printf("S Q U A S H M A N  v  0 . 6 1 [ALPHA]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
@@ -4990,5 +5072,6 @@ fbMod1Value4       = fbMod1Value[4];
   modPanelButton.button_processMouse(mouse_x, mouse_y, mouse_cap) ? modVisible = 1 - modVisible;
   
   lastChar = gfx_getchar();
+  lastCap = mouse_cap;
   filterBank.resetMeters();
   hinter.drawHint_draw();
