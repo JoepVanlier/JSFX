@@ -1,8 +1,8 @@
 desc:Squashman (work in progress! alpha)
 tags: multiband saturation plugin
-version: 0.61
+version: 0.62
 author: Joep Vanlier
-changelog: Reduced overhead when using fewer bands. Added gain slider for the envelope input. Added phaserdrive shaper. Bugfix envelopes.
+changelog: Added pamp
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -1033,7 +1033,7 @@ function remBand(idx)
     cuts = cuts - 1;
   );  
   
-nShapers = 31;
+nShapers = 32;
 nModulators = 9;
 
 function hasShapeMod(curitem)
@@ -1072,6 +1072,7 @@ function hasShapeMod(curitem)
     : ( curitem == 28 ) ? ( 1 ) /* Sloper */
     : ( curitem == 29 ) ? ( 1 ) /* Weird overdrive */
     : ( curitem == 30 ) ? ( 1 ) /* Phase rotater */
+    : ( curitem == 31 ) ? ( 1 ) /* Power */
   );
 
 /* Feed sample to FFT */
@@ -2476,9 +2477,9 @@ function initSpectrum(memoryOffset, fftSize, srate)
   /* TO DO: Merge crossovers with control */
   function processBand(drive, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
-  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive, lastl, lastr, ttime)
+  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive, lastl, lastr, ttime, lastrin, lastlin)
   local(inv_ceiling, factor, depth, idepth, 
-        tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg)
+        tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
   (
     play ? (
       in = max(in, abs(inL+inR));
@@ -2911,6 +2912,28 @@ function initSpectrum(memoryOffset, fftSize, srate)
 
         l = atan(preamp*l);
         r = atan(preamp*r);
+      ) : ( mode == 31 ) ? (
+        dt = 44100/overSampling/srate;
+        
+        // Find zero crossings
+        /* dl contains spikes corresponding to direction changes */
+        l = tanh(70*(l-.005));
+        dl = ((l - lastlin))*overSampling;
+        lastlin = l;
+        
+        r = tanh(70*(r-.005));
+        dr = ((r - lastrin))*overSampling;
+        lastrin = r;
+        
+        // Determine the slow and the fast response
+        lastl = lastl + .2*modifier*(dl-lastl)/overSampling;
+        intl = intl + .01625*dt*(.25*l-intl)*(1+5.5*abs(intl));
+
+        lastr = lastr + .2*modifier*(dr-lastr)/overSampling;
+        intr = intr + .01625*dt*(.25*r-intr)*(1+5.5*abs(intr));
+        
+        l = (2*lastl+intl);
+        r = (2*lastr+intr);
       ) : (
         l = 0;
         r = 0;
@@ -5050,7 +5073,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 6 1 [ALPHA]");
+  gfx_printf("S Q U A S H M A N  v  0 . 6 2 [ALPHA]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
