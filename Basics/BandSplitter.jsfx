@@ -1,8 +1,8 @@
 desc:Saike 4-pole BandSplitter
 tags: bandsplitter
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: Initial Commit
+changelog: Added FIR option
 license: MIT
 
 in_pin:left input
@@ -29,6 +29,8 @@ slider7:Drive2=0<-40,60,.1>-Drive 2 (dB)
 slider8:Drive3=0<-40,60,.1>-Drive 3 (dB)
 slider9:Drive4=0<-40,60,.1>-Drive 4 (dB)
 slider10:Drive5=0<-40,60,.1>-Drive 5 (dB)
+
+slider61:FIR=0<0,1,1>FIR mode
 
 slider62:masterGainSlider=0<-26,26,.1>-Master Gain
 
@@ -196,6 +198,7 @@ function fancyCircle(x1, y1, rin, mute, solo, bypass)
   (
     lg1 = lg2 = lg3 = lg4 = lg5 = -1000000;
     b1.ldrive = b2.ldrive = b3.ldrive = b4.ldrive = b5.ldrive = -1000000;
+    b1.initialized = b2.initialized = b3.initialized = b4.initialized = b5.initialized = 0;
   );
 
 maxCuts = 4;
@@ -204,6 +207,8 @@ driveMin = -40;
 driveRange = driveMax - driveMin;
 
 filterBank.initBands();
+firSize = 512*16;
+fftCalcSize = 1024*16;
 
 // Precompute some things
 gainRange = ( gainMax - gainMin );
@@ -795,7 +800,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
   );
 
 function drawFFT(fill, r, g, b, a)
-  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft )
+  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft, FIR1 )
   instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
   local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
   (
@@ -1254,6 +1259,27 @@ bufferDist  = 65536;
 audioBufIn  = 0;
 audioBufOut = bufferDist;
 
+FIR1        = 2*bufferDist;
+FIR2        = 3*bufferDist;
+FIR3        = 4*bufferDist;
+FIR4        = 5*bufferDist;
+FIR5        = 6*bufferDist;
+
+F1Block1    = 7*bufferDist;
+F1Block2    = 8*bufferDist;
+F2Block1    = 9*bufferDist;
+F2Block2    = 10*bufferDist;
+F3Block1    = 11*bufferDist;
+F3Block2    = 12*bufferDist;
+F4Block1    = 13*bufferDist;
+F4Block2    = 14*bufferDist;
+F5Block1    = 15*bufferDist;
+F5Block2    = 16*bufferDist;
+
+specBufferLoc = 17*bufferDist;
+
+specBuffer.initBuffer(specBufferLoc, specBufferLoc+bufferDist-4);
+
 // INITIALIZATION
 spectrumIn.initSpectrum(audioBufIn, fftSize, srate);
 spectrumOut.initSpectrum(audioBufOut, fftSize, srate);
@@ -1275,6 +1301,19 @@ solo2 ? play2 = 1;
 solo3 ? play3 = 1;
 solo4 ? play4 = 1;
 solo5 ? play5 = 1;
+
+(FIR) ? (
+  newPDC = firSize - 1;
+) : (
+  newPDC = 0;
+);
+
+(curPDC != newPDC) ? (
+  pdc_top_ch = 10;
+  pdc_bot_ch = 0;
+  pdc_delay = newPDC;
+  curPDC = newPDC;
+);
 
 @sample
   function init_LR(freq)
@@ -1323,7 +1362,7 @@ solo5 ? play5 = 1;
       ic4eq = 2*v2 - ic4eq;
       
       v2
-    ); 
+    );  
  
   function eval_LRAP(v0)
     global()
@@ -1354,12 +1393,170 @@ solo5 ? play5 = 1;
  
       lp = this.eval_LRLP(v2); 
       hp = all - lp;
-    );
-
-  function updateCoeffs()
+    );  
+  
+  function resetBands()
   local()
-  global(Cuts, Freq1, Freq2, Freq3, Freq4)
-  instance( F1, F2, F3, F4
+  global()
+  instance( b1, b2, b3, b4, b5 )
+  (
+    b1.r = b1.l = b2.r = b2.l = b3.r = b3.l = b4.r = b4.l = b5.l = 0;
+  );
+  
+  function resetFilters()
+  global()
+  local()
+  instance(
+            LF1, LF2, LF3, LF4            /* Lowpass left */
+            LA_F2,                        /* Allpass frequency 2 left */
+            LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
+            LA_F4, LA_F4_2, LA_F4_3,      /* Allpass frequency 4 left */
+            RF1, RF2, RF3, RF4            /* Lowpass right */
+            RA_F2,                        /* Allpass frequency 2 right */
+            RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
+            RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */  
+  )
+  (
+    // LR2  => ic1eq, ic2eq, ic3eq, ic4eq
+    // LPLP => ic3eq, ic4eq
+    // LRAP => ic5eq, ic6eq
+    
+    LF1.ic1eq = LF1.ic2eq = LF1.ic3eq = LF1.ic4eq = 0;
+    LF2.ic1eq = LF2.ic2eq = LF2.ic3eq = LF2.ic4eq = 0;
+    LF3.ic1eq = LF3.ic2eq = LF3.ic3eq = LF3.ic4eq = 0;
+    LF4.ic1eq = LF4.ic2eq = LF4.ic3eq = LF4.ic4eq = 0;
+
+    RF1.ic1eq = RF1.ic2eq = RF1.ic3eq = RF1.ic4eq = 0;
+    RF2.ic1eq = RF2.ic2eq = RF2.ic3eq = RF2.ic4eq = 0;
+    RF3.ic1eq = RF3.ic2eq = RF3.ic3eq = RF3.ic4eq = 0;
+    RF4.ic1eq = RF4.ic2eq = RF4.ic3eq = RF4.ic4eq = 0;
+    
+    LA_F4.ic5eq = LA_F4.ic6eq = LA_F3.ic5eq = LA_F3.ic6eq = LA_F2.ic5eq = LA_F2.ic6eq = 0;
+    RA_F4.ic5eq = RA_F4.ic6eq = RA_F3.ic5eq = RA_F3.ic6eq = RA_F2.ic5eq = RA_F2.ic6eq = 0;
+
+    LA_F4_2.ic5eq = LA_F4_2.ic6eq = LA_F3_2.ic5eq = LA_F3_2.ic6eq = LA_F4_3.ic5eq = LA_F4_3.ic6eq = 0;
+    RA_F4_2.ic5eq = RA_F4_2.ic6eq = RA_F3_2.ic5eq = RA_F3_2.ic6eq = RA_F4_3.ic5eq = RA_F4_3.ic6eq = 0;
+  );
+  
+  // Make sure the delay is the same on all bands (identical number of filters)
+  function splitBands(sl, sr)
+  local()
+  global(Cuts, FIR)
+  instance( LF1, LF2, LF3, LF4            /* Lowpass left */
+            LA_F2,                        /* Allpass frequency 2 left */
+            LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
+            LA_F4, LA_F4_2, LA_F4_3,      /* Allpass frequency 4 left */
+            RF1, RF2, RF3, RF4            /* Lowpass right */
+            RA_F2,                        /* Allpass frequency 2 right */
+            RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
+            RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
+            b1, b2, b3, b4, b5, lcuts )
+  (
+    ( lcuts != cuts ) ? (
+      lcuts = cuts;
+      this.resetBands();
+    );
+    
+    (cuts==0) ? (
+      b1.inL = sl;
+      b1.inR = sr;
+    ) : (cuts==1) ? (
+      LF1.eval_LR2(sl);
+      b1.inL = LF1.lp;
+      b2.inL = LF1.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR = RF1.lp;
+      b2.inR = RF1.hp;
+    ) : (cuts==2) ? (
+      LF1.eval_LR2(sl);
+      b1.inL   = LA_F2.eval_LRAP(LF1.lp);
+        
+      LF2.eval_LR2(LF1.hp);
+      b2.inL   = LF2.lp;
+      b3.inL   = LF2.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR   = RA_F2.eval_LRAP(RF1.lp);
+        
+      RF2.eval_LR2(RF1.hp);
+      b2.inR   = RF2.lp;
+      b3.inR   = RF2.hp;
+    ) : (cuts == 3) ? (
+      LF1.eval_LR2(sl);
+      b1.inL   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
+        
+      LF2.eval_LR2(LF1.hp);
+      b2.inL   = LA_F3_2.eval_LRAP(LF2.lp);
+        
+      LF3.eval_LR2(LF2.hp);
+      b3.inL   = LF3.lp;
+      b4.inL   = LF3.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
+      
+      RF2.eval_LR2(RF1.hp);
+      b2.inR   = RA_F3_2.eval_LRAP(RF2.lp);
+      
+      RF3.eval_LR2(RF2.hp);
+      b3.inR   = RF3.lp;
+      b4.inR   = RF3.hp;
+    ) : (cuts == 4) ? (
+      LF1.eval_LR2(sl);
+      b1.inL   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
+      
+      LF2.eval_LR2(LF1.hp);
+      b2.inL   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
+        
+      LF3.eval_LR2(LF2.hp);
+      b3.inL   = LA_F4_3.eval_LRAP(LF3.lp);
+        
+      LF4.eval_LR2(LF3.hp);
+      b4.inL   = LF4.lp;
+      b5.inL   = LF4.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
+        
+      RF2.eval_LR2(RF1.hp);
+      b2.inR   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
+        
+      RF3.eval_LR2(RF2.hp);
+      b3.inR   = RA_F4_3.eval_LRAP(RF3.lp);
+        
+      RF4.eval_LR2(RF3.hp);
+      b4.inR   = RF4.lp;
+      b5.inR   = RF4.hp;
+    );
+  );  
+  
+  // Destroy phase information
+  function zeroPhase(fft_mem, fftSize)
+  local(fwd, r1, i1, mag1)
+  global()
+  instance()
+  (
+    fwd = fft_mem;
+    loop(fftSize*2,
+      r1  = fwd[];
+      i1  = fwd[1];
+            
+      mag1 = sqrt(r1*r1 + i1*i1);
+           
+      fwd[]     = mag1;
+      fwd[1]    = 0;
+            
+      fwd += 2;
+    );    
+  );
+  
+  function updateCoeffs()
+  local(fptr1, fptr2, fptr3, fptr4, fptr5)
+  global(Cuts, Freq1, Freq2, Freq3, Freq4, FIR,
+         FIR1, FIR2, FIR3, FIR4, FIR5, bufferDist,
+         firSize, fftCalcSize )
+  instance( F1,  F2,  F3,  F4
             LF1, LF2, LF3, LF4            /* Lowpass left */
             LA_F2,                        /* Allpass frequency 2 left */
             LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
@@ -1368,7 +1565,7 @@ solo5 ? play5 = 1;
             RA_F2,                        /* Allpass frequency 2 right */
             RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
             RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
-            lcuts,
+            lcuts, lFIR, 
             lF1, lF2, lF3, lF4,
             updateRequired
             )
@@ -1378,13 +1575,17 @@ solo5 ? play5 = 1;
         ( lF1 != Freq1 ) ||
         ( lF2 != Freq2 ) ||
         ( lF3 != Freq3 ) ||
-        ( lF4 != Freq4 ) );
+        ( lF4 != Freq4 ) ||
+        ( cuts != lcuts ) ||
+        ( FIR != lFIR ) );
       
       updateRequired ? (        
         lF1 = Freq1;
         lF2 = Freq2;
         lF3 = Freq3;
         lF4 = Freq4;
+        lFIR = FIR;
+        lcuts = cuts;
       
         F1 = Freq1;
         F2 = Freq1  + Freq2 * (1 - Freq1);
@@ -1486,119 +1687,148 @@ solo5 ? play5 = 1;
           RA_F2.a2 = LA_F2.a2;
           RA_F2.a3 = LA_F2.a3;
         );
-    );
+        
+        /* Are we dealing with a FIR filter? */
+        FIR ? (
+          memset(FIR1, 0, bufferDist);
+          memset(FIR2, 0, bufferDist);
+          memset(FIR3, 0, bufferDist);
+          memset(FIR4, 0, bufferDist);
+          memset(FIR5, 0, bufferDist);
+          
+          this.resetFilters();
+        
+          /* Fetch impulse response */
+          fptr1 = FIR1;
+          fptr2 = FIR2;
+          fptr3 = FIR3;
+          fptr4 = FIR4;
+          fptr5 = FIR5;
+
+          this.splitBands(1.0/fftCalcSize, 1.0/fftCalcSize);
+
+          // TO DO: Add windowing
+          loop(firSize,
+            fptr1[] = this.b1.inL; fptr1 += 1;
+            fptr1[] = 0; fptr1 += 1;
+            fptr2[] = this.b2.inL; fptr2 += 1;
+            fptr2[] = 0; fptr2 += 1;
+            fptr3[] = this.b3.inL; fptr3 += 1;
+            fptr3[] = 0; fptr3 += 1;
+            fptr4[] = this.b4.inL; fptr4 += 1;
+            fptr4[] = 0; fptr4 += 1;
+            fptr5[] = this.b5.inL; fptr5 += 1;
+            fptr5[] = 0; fptr5 += 1;          
+          
+            this.splitBands(0, 0);
+          );
+          
+          loop(fftCalcSize - firSize + 1,
+            fptr1[] = 0; fptr1 += 1;
+            fptr1[] = 0; fptr1 += 1;
+            fptr2[] = 0; fptr2 += 1;
+            fptr2[] = 0; fptr2 += 1;
+            fptr3[] = 0; fptr3 += 1;
+            fptr3[] = 0; fptr3 += 1;
+            fptr4[] = 0; fptr4 += 1;
+            fptr4[] = 0; fptr4 += 1;
+            fptr5[] = 0; fptr5 += 1;
+            fptr5[] = 0; fptr5 += 1;
+          );
+          
+          /* Transform impulse responses */
+          fft(FIR1, fftCalcSize);
+          fft(FIR2, fftCalcSize);
+          fft(FIR3, fftCalcSize);
+          fft(FIR4, fftCalcSize);
+          fft(FIR5, fftCalcSize);
+          
+          /* Remove phase information (converts to linear phase) */
+          zeroPhase(FIR1, fftCalcSize);
+          zeroPhase(FIR2, fftCalcSize);
+          zeroPhase(FIR3, fftCalcSize);
+          zeroPhase(FIR4, fftCalcSize);
+          zeroPhase(FIR5, fftCalcSize);
+        );
+      );
     
     updateRequired
-  );  
-  
-  function resetBands()
-  local()
-  global()
-  instance( b1, b2, b3, b4, b5 )
-  (
-    b1.r = b1.l = b2.r = b2.l = b3.r = b3.l = b4.r = b4.l = b5.l = 0;
-  );  
-  
-  // Make sure the delay is the same on all bands (identical number of filters)
-  function splitBands(sl, sr)
-  local()
-  global(Cuts)
-  instance( LF1, LF2, LF3, LF4            /* Lowpass left */
-            LA_F2,                        /* Allpass frequency 2 left */
-            LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
-            LA_F4, LA_F4_2, LA_F4_3,      /* Allpass frequency 4 left */
-            RF1, RF2, RF3, RF4            /* Lowpass right */
-            RA_F2,                        /* Allpass frequency 2 right */
-            RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
-            RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
-            b1, b2, b3, b4, b5, lcuts )
-  (
-    ( lcuts != cuts ) ? (
-      lcuts = cuts;
-      this.resetBands();
-    );
-  
-    (cuts==0) ? (
-      b1.inL = sl;
-      b1.inR = sr;
-    ) : (cuts==1) ? (
-      LF1.eval_LR2(sl);
-      b1.inL = LF1.lp;
-      b2.inL = LF1.hp;
-      
-      RF1.eval_LR2(sr);
-      b1.inR = RF1.lp;
-      b2.inR = RF1.hp;
-    ) : (cuts==2) ? (
-      LF1.eval_LR2(sl);
-      b1.inL   = LA_F2.eval_LRAP(LF1.lp);
-      
-      LF2.eval_LR2(LF1.hp);
-      b2.inL   = LF2.lp;
-      b3.inL   = LF2.hp;
-      
-      RF1.eval_LR2(sr);
-      b1.inR   = RA_F2.eval_LRAP(RF1.lp);
-      
-      RF2.eval_LR2(RF1.hp);
-      b2.inR   = RF2.lp;
-      b3.inR   = RF2.hp;
-    ) : (cuts == 3) ? (
-      LF1.eval_LR2(sl);
-      b1.inL   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
-      
-      LF2.eval_LR2(LF1.hp);
-      b2.inL   = LA_F3_2.eval_LRAP(LF2.lp);
-      
-      LF3.eval_LR2(LF2.hp);
-      b3.inL   = LF3.lp;
-      b4.inL   = LF3.hp;
-      
-      RF1.eval_LR2(sr);
-      b1.inR   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
-      
-      RF2.eval_LR2(RF1.hp);
-      b2.inR   = RA_F3_2.eval_LRAP(RF2.lp);
-      
-      RF3.eval_LR2(RF2.hp);
-      b3.inR   = RF3.lp;
-      b4.inR   = RF3.hp;
-    ) : (cuts == 4) ? (
-      LF1.eval_LR2(sl);
-      b1.inL   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
-      
-      LF2.eval_LR2(LF1.hp);
-      b2.inL   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
-      
-      LF3.eval_LR2(LF2.hp);
-      b3.inL   = LA_F4_3.eval_LRAP(LF3.lp);
-      
-      LF4.eval_LR2(LF3.hp);
-      b4.inL   = LF4.lp;
-      b5.inL   = LF4.hp;
-      
-      RF1.eval_LR2(sr);
-      b1.inR   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
-      
-      RF2.eval_LR2(RF1.hp);
-      b2.inR   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
-      
-      RF3.eval_LR2(RF2.hp);
-      b3.inR   = RA_F4_3.eval_LRAP(RF3.lp);
-      
-      RF4.eval_LR2(RF3.hp);
-      b4.inR   = RF4.lp;
-      b5.inR   = RF4.hp;
-    );
-  );  
-  
-  function processSample()
-  (
-    filterBank.splitBands(inL, inR);
-    filterBank.processBands();    
   );
   
-  spectrumIn.feedSample(.5*(spl0+spl1));
+  function doFIR(l, r, block1, block2, fftSize, filterSize, filterLoc, cPos)
+  instance(curBlock, lastBlock, initialized, chunkSize, chunksizeT2)
+  local(tmp, cPosT2)
+  global(bufferdist)
+  (
+    !initialized ? (
+      curBlock  = block1;
+      lastBlock = block2;
+      
+      memset(curBlock, 0, bufferdist);
+      memset(lastBlock, 0, bufferdist);
+      initialized = 1;
+      
+      chunkSize   = fftSize - filterSize - 1;
+      chunkSizeT2 = chunkSize*2;
+    );
+  
+    cPos >= chunkSize ? 
+    (
+      tmp       = lastBlock;
+      lastBlock = curBlock;
+      curBlock  = tmp;
+     
+      memset( curBlock + chunkSize * 2, 0, (fftSize-chunkSize)*2 );
+    
+      fft(curBlock, fftSize);
+      convolve_c(curBlock, filterLoc, fftSize); /* This is element-wise complex multiplication, not convolution! */
+      ifft(curBlock, fftSize);
+      
+      cPos = 0;
+    );
+      
+    /* Save sample */
+    cPosT2 = cPos * 2;
+    lastBlock[cPosT2]   = l;
+    lastBlock[cPosT2+1] = r;
+    
+    this.inL = curBlock[cPosT2];
+    this.inR = curBlock[cPosT2+1];    
+    
+    /* Overlap add */
+    ( cPos < fftSize-chunksize ) ? 
+    (
+      this.inL += lastBlock[chunkSizeT2+cPosT2];
+      this.inR += lastBlock[chunkSizeT2+cPosT2+1];
+    );
+    
+    cPos += 1
+  );
+  
+  function processSample()
+  (  
+    FIR ? (
+      filterBank.resetBands();    
+      cPosNew = filterBank.b1.doFIR(inL, inR, F1Block1, F1Block2, fftCalcSize, firSize, FIR1, cPos);
+      ( cuts > 0 ) ? ( filterBank.b2.doFIR(inL, inR, F2Block1, F2Block2, fftCalcSize, firSize, FIR2, cPos); );
+      ( cuts > 1 ) ? ( filterBank.b3.doFIR(inL, inR, F3Block1, F3Block2, fftCalcSize, firSize, FIR3, cPos); );
+      ( cuts > 2 ) ? ( filterBank.b4.doFIR(inL, inR, F4Block1, F4Block2, fftCalcSize, firSize, FIR4, cPos); );
+      ( cuts > 3 ) ? ( filterBank.b5.doFIR(inL, inR, F5Block1, F5Block2, fftCalcSize, firSize, FIR5, cPos); );
+      cPos = cPosNew;
+    ) : (
+      filterBank.splitBands(inL, inR);
+    );
+    
+    filterBank.processBands();
+  );
+    
+  FIR ? (
+    specBuffer.updateBuffer(.5*(spl0+spl1));
+    specBuffer.setOffset(firSize-1);
+    spectrumIn.feedSample(specBuffer.readBuffer());
+  ) : (
+    spectrumIn.feedSample(.5*(spl0+spl1));
+  );
 
   // Split signal into bands
   filterBank.updateCoeffs();
