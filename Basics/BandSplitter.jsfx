@@ -1,8 +1,8 @@
 desc:Saike 4-pole BandSplitter
 tags: bandsplitter
-version: 0.02
+version: 0.04
 author: Joep Vanlier
-changelog: Added FIR option
+changelog: Fixed FIR option
 license: MIT
 
 in_pin:left input
@@ -19,7 +19,7 @@ out_pin:left output 5
 out_pin:right output 5
 
 slider1:Cuts=1<0,4,1>-Cuts
-slider2:Freq1=0.5<0,1,.0001>-Frequency 1
+slider2:Freq1=0.2<0,1,.0001>-Frequency 1
 slider3:Freq2=0.5<0,1,.0001>-Frequency 2
 slider4:Freq3=0.5<0,1,.0001>-Frequency 3
 slider5:Freq4=0.5<0,1,.0001>-Frequency 4
@@ -30,7 +30,7 @@ slider8:Drive3=0<-40,60,.1>-Drive 3 (dB)
 slider9:Drive4=0<-40,60,.1>-Drive 4 (dB)
 slider10:Drive5=0<-40,60,.1>-Drive 5 (dB)
 
-slider61:FIR=0<0,1,1>FIR mode
+slider61:FIR=1<0,1,1>FIR mode
 
 slider62:masterGainSlider=0<-26,26,.1>-Master Gain
 
@@ -207,8 +207,9 @@ driveMin = -40;
 driveRange = driveMax - driveMin;
 
 filterBank.initBands();
-firSize = 512*16;
-fftCalcSize = 1024*16;
+M = 4;
+firSize = 512*M;
+fftCalcSize = 1024*M;
 
 // Precompute some things
 gainRange = ( gainMax - gainMin );
@@ -1303,7 +1304,8 @@ solo4 ? play4 = 1;
 solo5 ? play5 = 1;
 
 (FIR) ? (
-  newPDC = firSize - 1;
+  chunkSize = (fftCalcSize - firSize - 1);
+  newPDC = chunkSize + 0.5*firSize;
 ) : (
   newPDC = 0;
 );
@@ -1531,28 +1533,50 @@ solo5 ? play5 = 1;
     );
   );  
   
-  // Destroy phase information
-  function zeroPhase(fft_mem, fftSize)
-  local(fwd, r1, i1, mag1)
+  // Convert to linear phase
+  function linearPhase(fft_mem, fftCalcSize)
+  local(fwd, r1, i1, mag1, flip, i, w)
   global()
   instance()
   (
     fwd = fft_mem;
-    loop(fftSize*2,
+    
+    /* Making the filter linear phase involves both removing
+       the phase; but then also shifting the impulse response
+       to overlap with our chunk. If we just remove the phase, 
+       we'd get an impulse response like this:
+       \____/
+       The goal is to shift it to the middle of the FIR section.
+       Considering that the FIR section is at .25 of the spectrum,
+       we have to shift it further than we normally would (a step of
+       1.5 * pi rather than pi. */
+    
+    flip = 1;
+    i = 0;
+    loop(fftCalcSize,
       r1  = fwd[];
       i1  = fwd[1];
+      
+      mag1      = sqrt(sqr(r1) + sqr(i1));
             
-      mag1 = sqrt(r1*r1 + i1*i1);
-           
-      fwd[]     = mag1;
-      fwd[1]    = 0;
-            
+      fwd[]     = mag1 * cos($pi*i);
+      fwd[1]    = mag1 * sin($pi*i);
+
+      i += 1.5;
       fwd += 2;
-    );    
+    );
+    
+    /*i = 0;
+    loop(1,
+      fft_mem[2*i] = 0;
+      fft_mem[2*fftCalcSize-2*i] = 0;
+      i = i + 1;
+    );*/
+    
   );
   
   function updateCoeffs()
-  local(fptr1, fptr2, fptr3, fptr4, fptr5)
+  local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i)
   global(Cuts, Freq1, Freq2, Freq3, Freq4, FIR,
          FIR1, FIR2, FIR3, FIR4, FIR5, bufferDist,
          firSize, fftCalcSize )
@@ -1690,6 +1714,7 @@ solo5 ? play5 = 1;
         
         /* Are we dealing with a FIR filter? */
         FIR ? (
+          // CalcFIR
           memset(FIR1, 0, bufferDist);
           memset(FIR2, 0, bufferDist);
           memset(FIR3, 0, bufferDist);
@@ -1706,36 +1731,19 @@ solo5 ? play5 = 1;
           fptr5 = FIR5;
 
           this.splitBands(1.0/fftCalcSize, 1.0/fftCalcSize);
-
-          // TO DO: Add windowing
+               
           loop(firSize,
-            fptr1[] = this.b1.inL; fptr1 += 1;
-            fptr1[] = 0; fptr1 += 1;
-            fptr2[] = this.b2.inL; fptr2 += 1;
-            fptr2[] = 0; fptr2 += 1;
-            fptr3[] = this.b3.inL; fptr3 += 1;
-            fptr3[] = 0; fptr3 += 1;
-            fptr4[] = this.b4.inL; fptr4 += 1;
-            fptr4[] = 0; fptr4 += 1;
-            fptr5[] = this.b5.inL; fptr5 += 1;
-            fptr5[] = 0; fptr5 += 1;          
+            fptr1[] = this.b1.inL; fptr1 += 2;
+            fptr2[] = this.b2.inL; fptr2 += 2;
+            fptr3[] = this.b3.inL; fptr3 += 2;
+            fptr4[] = this.b4.inL; fptr4 += 2;
+            fptr5[] = this.b5.inL; fptr5 += 2;
           
             this.splitBands(0, 0);
           );
           
-          loop(fftCalcSize - firSize + 1,
-            fptr1[] = 0; fptr1 += 1;
-            fptr1[] = 0; fptr1 += 1;
-            fptr2[] = 0; fptr2 += 1;
-            fptr2[] = 0; fptr2 += 1;
-            fptr3[] = 0; fptr3 += 1;
-            fptr3[] = 0; fptr3 += 1;
-            fptr4[] = 0; fptr4 += 1;
-            fptr4[] = 0; fptr4 += 1;
-            fptr5[] = 0; fptr5 += 1;
-            fptr5[] = 0; fptr5 += 1;
-          );
-          
+          //FIR1[0]=1/fftCalcSize;
+                    
           /* Transform impulse responses */
           fft(FIR1, fftCalcSize);
           fft(FIR2, fftCalcSize);
@@ -1743,19 +1751,31 @@ solo5 ? play5 = 1;
           fft(FIR4, fftCalcSize);
           fft(FIR5, fftCalcSize);
           
+          fft_permute(FIR1, fftCalcSize);
+          fft_permute(FIR2, fftCalcSize);
+          fft_permute(FIR3, fftCalcSize);
+          fft_permute(FIR4, fftCalcSize);
+          fft_permute(FIR5, fftCalcSize);
+          
           /* Remove phase information (converts to linear phase) */
-          zeroPhase(FIR1, fftCalcSize);
-          zeroPhase(FIR2, fftCalcSize);
-          zeroPhase(FIR3, fftCalcSize);
-          zeroPhase(FIR4, fftCalcSize);
-          zeroPhase(FIR5, fftCalcSize);
+          linearPhase(FIR1, fftCalcSize);
+          linearPhase(FIR2, fftCalcSize);
+          linearPhase(FIR3, fftCalcSize);
+          linearPhase(FIR4, fftCalcSize);
+          linearPhase(FIR5, fftCalcSize);
+          
+          fft_ipermute(FIR1, fftCalcSize);
+          fft_ipermute(FIR2, fftCalcSize);
+          fft_ipermute(FIR3, fftCalcSize);
+          fft_ipermute(FIR4, fftCalcSize);
+          fft_ipermute(FIR5, fftCalcSize);
         );
       );
     
     updateRequired
   );
   
-  function doFIR(l, r, block1, block2, fftSize, filterSize, filterLoc, cPos)
+  function doFIR(l, r, block1, block2, fftCalcSize, filterSize, filterLoc, cPos)
   instance(curBlock, lastBlock, initialized, chunkSize, chunksizeT2)
   local(tmp, cPosT2)
   global(bufferdist)
@@ -1768,8 +1788,8 @@ solo5 ? play5 = 1;
       memset(lastBlock, 0, bufferdist);
       initialized = 1;
       
-      chunkSize   = fftSize - filterSize - 1;
-      chunkSizeT2 = chunkSize*2;
+      chunkSize   = (fftCalcSize - filterSize - 1);
+      chunkSizeT2 = chunkSize * 2;
     );
   
     cPos >= chunkSize ? 
@@ -1778,11 +1798,19 @@ solo5 ? play5 = 1;
       lastBlock = curBlock;
       curBlock  = tmp;
      
-      memset( curBlock + chunkSize * 2, 0, (fftSize-chunkSize)*2 );
+      /* Empty out the data beyond chunkSize of the block that has 
+         just been filled. This used to be the carried over overlap-add
+         tail of the previous one */
+      memset( curBlock + chunkSizeT2, 0, (fftCalcSize-chunkSize)*2 );
     
-      fft(curBlock, fftSize);
-      convolve_c(curBlock, filterLoc, fftSize); /* This is element-wise complex multiplication, not convolution! */
-      ifft(curBlock, fftSize);
+      /* Calculate FFT of current chunk */
+      fft(curBlock, fftCalcSize);
+      //fft_permute(curBlock, fftCalcSize);
+      
+      /* Convolve with the FIR filter (already FFT'd) */
+      convolve_c(curBlock, filterLoc, fftCalcSize);
+      //fft_ipermute(curBlock, fftCalcSize);
+      ifft(curBlock, fftCalcSize);
       
       cPos = 0;
     );
@@ -1793,22 +1821,23 @@ solo5 ? play5 = 1;
     lastBlock[cPosT2+1] = r;
     
     this.inL = curBlock[cPosT2];
-    this.inR = curBlock[cPosT2+1];    
+    this.inR = curBlock[cPosT2+1];
     
-    /* Overlap add */
-    ( cPos < fftSize-chunksize ) ? 
+    /* Overlap add the previous tail */
+    ( cPos < (fftCalcSize-chunkSize) ) ? 
     (
       this.inL += lastBlock[chunkSizeT2+cPosT2];
       this.inR += lastBlock[chunkSizeT2+cPosT2+1];
+      1
     );
-    
-    cPos += 1
+ 
+    cPos + 1
   );
   
   function processSample()
   (  
     FIR ? (
-      filterBank.resetBands();    
+      filterBank.resetBands();   
       cPosNew = filterBank.b1.doFIR(inL, inR, F1Block1, F1Block2, fftCalcSize, firSize, FIR1, cPos);
       ( cuts > 0 ) ? ( filterBank.b2.doFIR(inL, inR, F2Block1, F2Block2, fftCalcSize, firSize, FIR2, cPos); );
       ( cuts > 1 ) ? ( filterBank.b3.doFIR(inL, inR, F3Block1, F3Block2, fftCalcSize, firSize, FIR3, cPos); );
@@ -1824,8 +1853,9 @@ solo5 ? play5 = 1;
     
   FIR ? (
     specBuffer.updateBuffer(.5*(spl0+spl1));
-    specBuffer.setOffset(firSize-1);
-    spectrumIn.feedSample(specBuffer.readBuffer());
+    specBuffer.setOffset(newPDC+2);
+    cSpec = specBuffer.readBuffer();
+    spectrumIn.feedSample(cSpec);
   ) : (
     spectrumIn.feedSample(.5*(spl0+spl1));
   );
