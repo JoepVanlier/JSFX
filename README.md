@@ -98,7 +98,9 @@ Tone Stacks emulates the tone stacks of some classic guitar amps. It is based on
 Tone stacks contains some bi-linearly transformed versions of these filters.
 
 # Bandsplitter/joiner
-4-pole band splitter that preserves phase between the bands. It has a UI and uses much steeper crossover filters than the default that ships with reaper providing sharper band transitions.
+4-pole band splitter that preserves phase between the bands. It has a UI and uses much steeper crossover filters (24 dB/oct) than the default that ships with reaper thereby providing sharper band transitions.
+
+It also has an option for linear phase FIR crossovers instead of the default IIR filters. IIRs cost less CPU and introduce no preringing or latency. The linear phase FIRs however prevent phase distortion (which can be important in some mixing settings), but introduce latency compensation. Note that when using the linear phase filters, it is not recommended to modulate the crossover frequencies as this introduces crackles.
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
