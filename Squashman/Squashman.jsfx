@@ -1,8 +1,8 @@
 desc:Squashman (work in progress! alpha)
 tags: multiband saturation plugin
-version: 0.62
+version: 0.63
 author: Joep Vanlier
-changelog: Added pamp
+changelog: Added drive panning
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -986,6 +986,7 @@ function addBand(idx)
     shiftRightMem(delayMod1Type,    idx, maxCuts );
     shiftRightMem(fbMod1Value,      idx, maxCuts );
     shiftRightMem(fbMod1Type,       idx, maxCuts );
+    shiftRightMem(drivePanning,     idx, maxCuts );
     
     /* drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5 */
     /* fbToggle1 fbToggle2 fbToggle3 fbToggle4 fbToggle5 */
@@ -1026,7 +1027,8 @@ function remBand(idx)
     shiftLeftMem(delayMod1Type,    idx, maxCuts );
     shiftLeftMem(fbMod1Value,      idx, maxCuts );
     shiftLeftMem(fbMod1Type,       idx, maxCuts );
-    
+    shiftLeftMem(drivePanning,     idx, maxCuts );
+        
     /* drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5 */
     /* fbToggle1 fbToggle2 fbToggle3 fbToggle4 fbToggle5 */
     
@@ -2458,8 +2460,6 @@ function initSpectrum(memoryOffset, fftSize, srate)
     );
   );
   
-  side = 0;
-  
   function sinh(x)
   local(ex)
   (
@@ -2475,9 +2475,9 @@ function initSpectrum(memoryOffset, fftSize, srate)
   );
   
   /* TO DO: Merge crossovers with control */
-  function processBand(drive, play, mode, modifier, fbl, fbr)
+  function processBand(drive, pan, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
-  instance(l, r, inL, inR, in, pre, post, t, preamp, ldrive, lastl, lastr, ttime, lastrin, lastlin)
+  instance(l, r, inL, inR, in, pre, post, t, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin)
   local(inv_ceiling, factor, depth, idepth, 
         tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
   (
@@ -2493,13 +2493,15 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = (tc - r)*.5;
       );
       
-      ( ldrive != drive ) ? (
+      ( ldrive != drive || lpan != pan ) ? (
         //preamp = 10^(0.05*drive);
-        preamp = exp(logten005*drive);
+        preampl = exp(logten005*drive*2*(1-pan));
+        preampr = exp(logten005*drive*2*(pan+1));
         ldrive = drive;
+        lpan = pan;
       );
-      l = l * preamp;
-      r = r * preamp;
+      l = l * preampl;
+      r = r * preampr;
       
       l += fbl;
       r += fbr;
@@ -2897,21 +2899,22 @@ function initSpectrum(memoryOffset, fftSize, srate)
         this.lF2.init_AP(modifier, .75);
         this.rF2.init_AP(modifier, .75);
         
-        t2l = (1/preamp);
+        t2l = (1/preampl);
+        t2r = (1/preampl);
         l = t2l*atan(l);
-        r = t2l*atan(r);
+        r = t2r*atan(r);
         
         l = this.lF.eval_AP(l);
         r = this.rF.eval_AP(r);
         
-        l = t2l*atan(preamp*l);
-        r = t2l*atan(preamp*r);
+        l = t2l*atan(preampl*l);
+        r = t2r*atan(preampr*r);
 
         l = this.lF2.eval_AP(l);
         r = this.rF2.eval_AP(r);
 
-        l = atan(preamp*l);
-        r = atan(preamp*r);
+        l = atan(preampl*l);
+        r = atan(preampr*r);
       ) : ( mode == 31 ) ? (
         dt = 44100/overSampling/srate;
         
@@ -2955,6 +2958,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
   function processBands()
   local(BW2)
   global( Drive1,    Drive2,    Drive3,     Drive4,     Drive5, 
+          DrivePan1, DrivePan2, DrivePan3,  DrivePan4,  DrivePan5,
           Gain1,     Gain2,     Gain3,      Gain4,      Gain5,
           DryWet1,   DryWet2,   DryWet3,    DryWet4,    DryWet5,
           play1,     play2,     play3,      play4,      play5,
@@ -2982,11 +2986,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
     fbToggle5 ? ( fbL5 = Feedback5 * bufferL5.readBuffer();
                   fbR5 = Feedback5 * bufferR5.readBuffer(); ) : ( fbL5 = fbR5 = 0; );
     
-    b1.processBand(Drive1, play1, Mode1, Modifier1, fbL1, fbR1);
-    b2.processBand(Drive2, play2, Mode2, Modifier2, fbL2, fbR2);
-    b3.processBand(Drive3, play3, Mode3, Modifier3, fbL3, fbR3);
-    b4.processBand(Drive4, play4, Mode4, Modifier4, fbL4, fbR4);
-    b5.processBand(Drive5, play5, Mode5, Modifier5, fbL5, fbR5);
+    b1.processBand(Drive1, DrivePan1, play1, Mode1, Modifier1, fbL1, fbR1);
+    b2.processBand(Drive2, DrivePan2, play2, Mode2, Modifier2, fbL2, fbR2);
+    b3.processBand(Drive3, DrivePan3, play3, Mode3, Modifier3, fbL3, fbR3);
+    b4.processBand(Drive4, DrivePan4, play4, Mode4, Modifier4, fbL4, fbR4);
+    b5.processBand(Drive5, DrivePan5, play5, Mode5, Modifier5, fbL5, fbR5);
     
     fbToggle1 ? ( bufferL1.updateBuffer(b1.l);
                   bufferR1.updateBuffer(b1.r); );
@@ -3123,7 +3127,7 @@ function drawShaper(drive)
     
     calc.inL = s;
     calc.inR = s;
-    calc.processBand(displayDrive, 1, mode, modifier, 0, 0);
+    calc.processBand(displayDrive, 0, 1, mode, modifier, 0, 0);
     ll = calc.l*.5 + .5;
     lr = calc.r*.5 + .5;
     loop( steps,
@@ -3131,7 +3135,7 @@ function drawShaper(drive)
       calc.inL = s;
       calc.inR = s;
       
-      calc.processBand(displayDrive, 1, mode, modifier, 0, 0);      
+      calc.processBand(displayDrive, 0, 1, mode, modifier, 0, 0);      
       ol = calc.l*.5 + .5;
       or = calc.r*.5 + .5;
       gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
@@ -3266,6 +3270,8 @@ delayMod1Type     = delayMod1Value + 20;
 fbMod1Value       = delayMod1Type + 20;
 fbMod1Type        = fbMod1Value + 20;
 
+drivePanning      = fbMod1Type + 20;
+
 block_list        = 16*65536;
 
 envWindow1.setEnvMemory(17*65536, 18*65536);
@@ -3384,6 +3390,9 @@ file_mem(0,fbMod1Type,16);
 
 file_var(0,envInputGain);
 
+file_mem(0,drivePanning,16);
+file_var(0,side);
+
 f1Attack = max(attackMin,min(attackMax,f1Attack));
 f1Decay = max(releaseMin,min(releaseMax,f1Decay));
 f2Attack = max(attackMin,min(attackMax,f2Attack));
@@ -3495,6 +3504,12 @@ notes_remain    = 1;        // End of the note buffer?
 note_next       = notePtr[];  
 
 cTempo          = tempo; 
+
+drivePan1          = drivePanning[0];
+drivePan2          = drivePanning[1];
+drivePan3          = drivePanning[2];
+drivePan4          = drivePanning[3];
+drivePan5          = drivePanning[4];
 
 /* Horrible, but saves performance */
 shapeMod1Type0     = shapeMod1Type[0];
@@ -4410,27 +4425,27 @@ fbMod1Value4       = fbMod1Value[4];
   );
 
   function getPan(band)
-  global(drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5)
+  global(drivePanning)
   local()
   instance()
   (
-    ( band == 0 ) ? ( drivePanning1 )
-    : ( band == 1 ) ? ( drivePanning2 )
-    : ( band == 2 ) ? ( drivePanning3 )
-    : ( band == 3 ) ? ( drivePanning4 )
-    : ( band == 4 ) ? ( drivePanning5 )
+    ( band == 0 ) ? ( drivePanning[] )
+    : ( band == 1 ) ? ( drivePanning[1] )
+    : ( band == 2 ) ? ( drivePanning[2] )
+    : ( band == 3 ) ? ( drivePanning[3] )
+    : ( band == 4 ) ? ( drivePanning[4] )
   );
   
   function setPan(band, pan)
-  global(drivePanning1, drivePanning2, drivePanning3, drivePanning4, drivePanning5)
+  global(drivePanning)
   local()
   instance()
   (
-    ( band == 0 ) ? ( drivePanning1 = pan; )
-    : ( band == 1 ) ? ( drivePanning2 = pan; )
-    : ( band == 2 ) ? ( drivePanning3 = pan; )
-    : ( band == 3 ) ? ( drivePanning4 = pan; )
-    : ( band == 4 ) ? ( drivePanning5 = pan; )
+    ( band == 0 ) ? ( drivePanning[] = pan; )
+    : ( band == 1 ) ? ( drivePanning[1] = pan; )
+    : ( band == 2 ) ? ( drivePanning[2] = pan; )
+    : ( band == 3 ) ? ( drivePanning[3] = pan; )
+    : ( band == 4 ) ? ( drivePanning[4] = pan; )
   );  
   
   bg_color_r = 47/255;
@@ -4620,9 +4635,26 @@ fbMod1Value4       = fbMod1Value[4];
   driveKnob.drawKnob(currentPos, bottomRow + 75*(1+scaling), 30*(1+scaling), "Drive", "Modify band drive.");
   driveKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.4) ? slider_automate( slider(driveLocation+selectedBand) = driveKnob.value * driveRange + driveMin );  
   
-  /*panSlider.value = getPan(selectedBand)*.5+.5;
+  panSlider.value = getPan(selectedBand)*.5+.5;
   panSlider.drawSimpleSlider(currentPos-45*(1+scaling), spectrumH + 150*(1+scaling)-20*(1+scaling), 90*(1+scaling), 20*(1+scaling), .4, .4, .8, 1, "Drive pan");
-  panSlider.simpleSlider_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? setPan(selectedBand, 2*panSlider.value - 1);*/
+  panSlider.simpleSlider_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? setPan(selectedBand, 2*panSlider.value - 1);
+  
+  msToggle.drawToggle(currentPos + 2.45*miniknobWidth + miniknobPadX, spectrumH + 118*(1+scaling), buttonSize, buttonSize, side, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Mid/Side mode?");
+  side = msToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  
+  gfx_x = currentPos-40*(1+scaling);
+  gfx_y = spectrumH + 149*(1+scaling)-15*(1+scaling);
+  gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+  side ? (
+    gfx_printf("M");
+    gfx_x = currentPos+33*(1+scaling);
+    gfx_printf("S");
+  ) : (
+    gfx_printf("L");
+    gfx_x = currentPos+33*(1+scaling);
+    gfx_printf("R");
+  );
   
   //////////////////////////
   /* Gain dry/wet section */
