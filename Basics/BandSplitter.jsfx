@@ -1,8 +1,8 @@
 desc:Saike 4-pole BandSplitter
 tags: bandsplitter
-version: 0.04
+version: 0.05
 author: Joep Vanlier
-changelog: Fixed FIR option
+changelog: Added frequency indicators. Added shift + ctrl precision drag options.
 license: MIT
 
 in_pin:left input
@@ -274,6 +274,14 @@ function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
   TOGGLE_FONT   = 15;
   gfx_ext_retina = 1;
 
+  function f_trafo(freq)
+  local()
+  global()
+  instance()
+  (
+    exp( (1-freq) * log(20/22050) )
+  );  
+
   function initBands()
   local()
   global()
@@ -494,8 +502,8 @@ function drawBackface()
   );
 
 // Draws the FFT Grid, frequency axis and dB axis
-function drawGrid()  
-  global(   fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT,
+function drawGrid()
+  global( fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT,
              )
   instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset,
            grid_color_r, grid_color_g, grid_color_b, grid_color_a )
@@ -510,7 +518,7 @@ function drawGrid()
     
     gfx_setfont(GRID_FONT);
     loop(16,
-      xx = x + log(1+i*fftSize/srate-hzoffset)*wsc;
+      xx = x + log(i*fftSize/srate-hzoffset)*wsc;
       gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(xx, y, xx, y+h);
       
@@ -638,7 +646,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
            x1, x2, x3, x4, x5,
            v1, v2, v3, v4, v5,
            h1, h2, h3, h4, h5, 
-           c1, c2, c3, c4, c5 )
+           c1, c2, c3, c4, c5,
+           F1hz, F2hz, F3hz, F4hz )
   global(dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI, fftSize,
          bandClickRange, cuts,
          Freq1, Freq2, Freq3, Freq4,
@@ -648,11 +657,11 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          solo1, solo2, solo3, solo4, solo5,
          driveMin, driveMax, maxCuts,
          hinter.updateHintTime,
-         selectedBand, gfx_x, gfx_y )
+         selectedBand, gfx_x, gfx_y, srate )
   local(dx, dy, over, dys,
         F1, F2, F3, F4,
         leftClick, rightClick, doubleClick,
-        cTime, mpos, shift, ctrl)
+        cTime, mpos, shift, ctrl, lb)
   (
     over = mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h);
     leftClick   = ( mouse_cap & 1 == 1 && lcap & 1 == 0 );
@@ -672,6 +681,16 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     
     x_over = -1;
     
+    F1 = Freq1;
+    F2 = Freq1  + Freq2 * (1 - Freq1);
+    F3 = F2     + Freq3 * (1 - F2);
+    F4 = F3     + Freq4 * (1 - F3);
+
+    F1hz = .5*f_trafo(F1)*srate;
+    F2hz = .5*f_trafo(F2)*srate;
+    F3hz = .5*f_trafo(F3)*srate;
+    F4hz = .5*f_trafo(F4)*srate;
+        
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_y - ly;
       
@@ -686,14 +705,13 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       // Dragging a band frequency
       dx = mouse_x - lx;
       
-      F1 = Freq1;
-      F2 = Freq1  + Freq2 * (1 - Freq1);
-      F3 = F2     + Freq3 * (1 - F2);
-      F4 = F3     + Freq4 * (1 - F3);
+      shift ? dx *= .5;
+      ctrl ? dx *= .01;
       
+      lb = .02;
       dragging == 1 ? ( 
         F1 = this.pixelToWindowRatio(x1 - x + dx);
-        slider_automate( Freq1 = clamp( F1, 0, 1 ) );
+        slider_automate( Freq1 = clamp( F1, lb, 1 ) );
         slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-F1), 0, 1 ) );
       );
       dragging == 2 ? ( 
@@ -801,12 +819,12 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         leftClick ? ( cap = 3; dragging = 1; selectedBand = 0; );
         doubleClick ? ( Drive1 = 0; selectedBand = 0; );
       ) : ( h2.isOver(mouse_x, mouse_y) ) && ( cuts > 0 ) ? (
-        hinter.updateHintTime("LMB + Drag - Modify drive\nDouble LMB - Reset drive to zero\nShift + LMB + Drag - Modify drive while reducing gain");      
+        hinter.updateHintTime("LMB + Drag - Modify drive\nDouble LMB - Reset drive to zero\nShift + LMB + Drag - Modify drive while reducing gain");
         h2.over = 1;
         leftClick ? ( cap = 3; dragging = 2; selectedBand = 1; );
         doubleClick ? ( Drive2 = 0; selectedBand = 1; );
       ) : ( h3.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
-        hinter.updateHintTime("LMB + Drag - Modify drive\nDouble LMB - Reset drive to zero\nShift + LMB + Drag - Modify drive while reducing gain");      
+        hinter.updateHintTime("LMB + Drag - Modify drive\nDouble LMB - Reset drive to zero\nShift + LMB + Drag - Modify drive while reducing gain");
         h3.over = 1;
         leftClick ? ( cap = 3; dragging = 3; selectedBand = 2; );
         doubleClick ? ( Drive3 = 0; selectedBand = 2; );
@@ -967,14 +985,6 @@ function drawLineFFT(peakLocation)
     base = fftSize*peakLocation;
     tx = floor(x + log(1.0+base-hzoffset)*wsc);
     drawLine(tx, y, tx, y+h);
-  );
-  
-function f_trafo(freq)
-  local()
-  global()
-  instance()
-  (
-    exp( (1-freq) * log(20/22050) )
   );  
   
 function updateBands()
@@ -1174,6 +1184,36 @@ function fancyLineH(x1, y1, x2, y2)
     
     over = 0;    
   ); 
+
+function hzLabel(dy, label)
+  local(lww, lhh, cy, dy2)
+  global(gfx_x, gfx_y, hzLabelW, hzLabelH, lineR, lineG, lineB, lineA)
+  instance(x, y, w, h, over)
+  (
+    cy = y + dy*h;
+    
+    gfx_measurestr("888888", hzLabelW, hzLabelH);
+
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, lineA);    
+    dy2 = 3; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+    gfx_set(.7*lineR, .7*lineG, .7*lineB, lineA);
+    dy2 = 2; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+    gfx_set(lineR, lineG, lineB, lineA);
+    dy2 = 1; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+
+    gfx_set( 1, 1, 1, .8 );
+    gfx_rect(x-.5*hzLabelW-1, cy-1, hzLabelW+2, hzLabelH+2);
+    
+    gfx_set( 0, 0, 0, 1 );
+    gfx_rect(x-.5*hzLabelW, cy, hzLabelW, hzLabelH);
+
+    sprintf(19, "%d", label);
+    gfx_measurestr(19, lww, lhh);
+    gfx_set( 1, 1, 1, 1 );    
+    gfx_x = x - .5 *lww;
+    gfx_y = y + dy*h;
+    gfx_printf(19, label);
+  );
   
 function drawBands()
   global(Cuts, stest,
@@ -1187,6 +1227,7 @@ function drawBands()
            v1, v2, v3, v4, v5, // Frequency handles
            h1, h2, h3, h4, h5, // Drive handles
            c1, c2, c3, c4, c5, // Circle handles
+           F1hz, F2hz, F3hz, F4hz, F5hz, // Frequencies
            x_over)
   local()
   (
@@ -1209,18 +1250,23 @@ function drawBands()
  
     (Cuts > 0) ? (
       gfx_set(1,1,1,1); v1.fancyLineV(x1, y, x1, y+h);
+      v1.hzLabel(.8, F1hz);
     );
     (Cuts > 1) ? (
       gfx_set(1,1,1,1); v2.fancyLineV(x2, y, x2, y+h);
+      v2.hzLabel(.8, F2hz);
     );
     (Cuts > 2) ? (
       gfx_set(1,1,1,1); v3.fancyLineV(x3, y, x3, y+h);
+      v3.hzLabel(.8, F3hz);
     );
     (Cuts > 3) ? (
       gfx_set(1,1,1,1); v4.fancyLineV(x4, y, x4, y+h);
+      v4.hzLabel(.8, F4hz);
     );
     (Cuts > 4) ? (
       gfx_set(1,1,1,1); v5.fancyLineV(x5, y, x5, y+h);
+      v5.hzLabel(.8, F5hz);
     );
     
     gfx_rect(x_over-3, y, 5, h);
