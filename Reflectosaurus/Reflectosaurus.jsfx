@@ -1,0 +1,732 @@
+desc:Saike Reflectosaurus (work in progress | do not use)
+tags: multi-tap delay plugin
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+license: MIT
+
+slider1:drywet=1<0,1,.001>Dry/Wet
+
+@init
+function initWindow(_x, _y, _w, _h)
+  local()
+  global()
+  instance(x, y, w, h)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+  );
+
+function initBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+function resetBuffer()
+  local()
+  global()
+  instance(scopebuffermax, scopebuffer)
+  (
+    memset(scopebuffer, 0, scopebuffermax - scopebuffer + 1);
+  );
+  
+function initBufferLen(scopebuffer_in, bufferlen)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffer + bufferlen;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );  
+  
+function draw_buffer(x, y, w, h, mul, fill)
+  instance(scopeptr, scopebuffer, scopebuffermax)
+  globals(gfx_x, gfx_y)
+  local(len, scopeptr2, lx, ly, xx, dx, lptr, yy, lastx, lasty, isc, yref)
+  (
+    xx = x;
+    len = scopebuffermax-scopebuffer;
+    dx = floor(len/w);
+    scopeptr2 = scopeptr;
+    
+    lptr = floor((scopeptr2)/dx)*dx;
+    gfx_x = xx;
+    gfx_y = y+h;
+    isc = h;
+    yref = y+h;
+    ly = y+h;
+    loop((scopebuffermax-scopeptr2)/dx - 1,
+      yy = yref - h*min(1,lptr[]);
+      
+      lptr += dx;
+      
+      fill ? (
+        gfx_triangle( xx-1, y+h,
+                      xx-1, ly,
+                      xx, y+h,
+                      xx, yy);
+      ) : (
+        gfx_lineto(xx, yy);
+      );
+      
+      ly = yy;
+      xx += 1;
+    );
+    
+    lptr = floor((scopebuffer)/dx)*dx;
+    loop((scopeptr2 - scopebuffer)/dx - 1,
+      lptr += dx;
+      yy = yref - h*min(1,lptr[]);
+      
+      fill ? (
+        gfx_triangle( xx-1, y+h,
+                      xx-1, ly,
+                      xx, y+h,
+                      xx, yy);
+      ) : (
+        gfx_lineto(xx, yy);
+      );
+      
+      ly = yy;
+      xx += 1;
+    );
+  );  
+  
+function setOffset(offset)
+  local()
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac)
+  (
+    readptr   = scopeptr;
+    frac      = offset - floor(offset);
+    readptr  -= floor(offset);
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+1);
+  );
+   
+function readBuffer()
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac)
+  (
+    c1 = readptr[];
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c2 = readptr[];
+    readptr -= 1;
+    
+    c2 * (1.0-frac) + c1 * frac
+  );
+  
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );
+  
+function f_trafo(freq)
+  local()
+  global(slider54, legacyCutoff)
+  instance()
+  (
+    exp( (1-freq) * log(20/22050) ) * $pi / (max(1,slider54));
+  );
+
+
+function init_linearSVF(freq, res)
+  global(srate, slider54)
+  local(g)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    g = tan(.5 * f_trafo(freq));
+    k = 2 - 2*res;
+    
+    a1 = 1/(1+g*(g+k));
+    a2 = g*a1;
+    a3 = g*a2;
+  ); 
+
+function reset_linearSVF()
+  global()
+  local()
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    ic1eq = ic2eq = 0;  
+  );
+  
+function eval_linearSVF_LP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v2
+  );  
+  
+function eval_linearSVF_BP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v1
+  );  
+  
+function eval_linearSVF_HP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v0 - k*v1 - v2
+  );  
+
+function feedbackNode()
+  local()
+  global()
+  instance( x, y, active,
+            dtime, temposync, fb, lpf, hpf, 
+            widen, sat, variance )
+  (
+    1
+  );
+
+function xToTime(x)
+  global(mintime, maxtime, xmin, xmax)
+  local()
+  (
+    (maxTime/1024) * 2^(10*x)
+  );
+  
+function yToVol(y)
+  global(minvol, maxvol, ymin, ymax)
+  local()
+  (
+    // Same as 10^(-30*dB/20)
+    exp(-1.5*y*log(10)) 
+  );
+  
+function updateNode()
+  local()
+  global(srate)
+  instance(buffer, tx, x, y, dtime, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, fb, fbcoeff, xlast, ylast, fblast)
+  (
+    y > 1 ? y = 1;
+    x > 1 ? x = 1;
+    y < 0 ? y = 0;
+    x < 0 ? x = 0;  
+  
+   ( x != xlast ) ? ( tx = x; dtime = xToTime(tx); xlast = tx;  buffer.setOffset(2*dtime*srate); );
+   ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
+   ( fb != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fb ) ) );  
+   ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );     
+  
+   (lpf < 1.0) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); );
+   (hpf > 0.0) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); );
+  );
+
+function process(l_in, r_in)
+  local(l, r)
+  global(lOut, rOut)
+  instance(buffer, vol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm)
+  (
+    l = buffer.readBuffer();
+    r = buffer.readBuffer();
+    
+    l = fbcoeff * l;
+    r = fbcoeff * r;
+    lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
+    hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
+
+    buffer.updateBuffer(l + l_in);
+    buffer.updateBuffer(r + r_in);
+    
+    l = vol*l*lPanTerm;
+    r = vol*r*rPanTerm;
+    
+    lOut += l;
+    rOut += r;
+    
+    level = .5*(abs(l)+abs(r));
+  );
+
+function initNode(_memloc, _x, _y)
+  local()
+  instance(buffer, memloc, x,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast)
+  global(bufsize)
+  (
+    memloc = _memloc;
+    buffer.initBuffer(memloc, memloc+bufsize-2);
+    
+    panlast = -9999;
+    fblast = -9999;
+    
+    !x ? ( x = _x; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; );
+  );
+
+function serializeNode()
+  local()
+  global()
+  instance( x, y, active,
+            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance )
+  (
+    file_var( 0, active );
+    file_var( 0, x );
+    file_var( 0, y );
+    file_var( 0, temposync );
+    file_var( 0, fb );
+    file_var( 0, lpf );
+    file_var( 0, hpf );
+    file_var( 0, widen );
+    file_var( 0, sat );
+    file_var( 0, pan );
+    
+    /* Memory to expand into when features are added */
+    file_mem( 0, 0, 99 );
+  );
+
+function draw(xmin, ymin, w, h)
+  local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize)
+  global(gfx_a)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan)
+  ( 
+    r = 4;
+    alpha = 1.0;
+    tf = 100*dtime;
+    adv = min(0.99, fbcoeff);
+    xl = floor(xmin + x*w);
+    yl = floor(ymin + y*h);
+    
+    outer = 8+4.15*log(.2)/log(fbcoeff);
+        
+    panSize = 7;
+    gfx_set(0,0,3,.8);
+    gfx_circle(xl-outer*cos($pi*(pan+.5)/2);, yl-outer*sin($pi*(pan+.5)/2), panSize+2, 1);
+    gfx_set(1,1,1,1);
+    gfx_circle(xl-outer*cos($pi*(pan+.5)/2);, yl-outer*sin($pi*(pan+.5)/2), panSize, 1);
+    
+    gfx_set(0,0,.3,.95);
+    gfx_circle(xl, yl, outer, 1, 1);
+    
+    gfx_set(1, 1, 1, alpha);
+    while(
+      gfx_a = alpha;
+      gfx_circle(xl, yl, r, 0, 0);
+      gfx_a = .5*alpha;
+      gfx_circle(xl, yl, r+1, 0, 1);
+      gfx_circle(xl, yl, r-1, 0, 1);
+      
+      r += 4;
+      alpha *= adv;
+      alpha>.2
+    );
+    
+    gfx_a = 1;
+    hpf < lpf ? (
+      loop(5,
+        gfx_arc(xl, yl, r, 2*lpf*$pi - $pi, 2*hpf*$pi - $pi, 1);
+        r += .5;
+      );
+    );
+    
+    logLevel = log(4000*level-2);
+    
+    gfx_set(1, 1, 1, .2);
+    gfx_circle(xl, yl, logLevel*5, 1, 1);
+    
+    gfx_set(1, 1, 1, .1);
+    gfx_circle(xl, yl, logLevel*6, 1, 1);
+    
+    gfx_set(1, 1, 1, .05);
+    gfx_circle(xl, yl, logLevel*8, 1, 1);
+    
+    r = r*r;
+  );
+
+function clamp(x, lb, ub)
+  local()
+  global()
+  instance()
+  (
+    max(lb,min(ub,x))
+  );
+
+function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap)
+  local(dx, dy, left, right, dist, xl, yl, shift, ctrl, alt)
+  global()
+  instance(x, y, r, cap, lastleft, lastright, lx, ly, fb, lpf, hpf, pan)
+  (
+    shift = mousecap & 8;
+    ctrl  = mousecap & 4;
+    alt   = mousecap & 16;
+    left  = mousecap & 1;
+    right = mousecap & 2;
+    
+    xl = xmin + x*w;
+    yl = ymin + y*h;
+  
+    dx = mousex - xl;
+    dy = mousey - yl;
+    
+    left ? (
+      ( cap == 1 ) ? (
+        ( shift ) ? (
+          ( ctrl ) ? (
+            hpf = clamp( hpf - (mousey-ly)/h, 0, lpf );
+          ) : (
+            lpf = clamp( lpf - (mousey-ly)/h, hpf, 1 );
+          );
+        ) : (
+          ( alt ) ? (
+            pan = clamp( pan - (mousey-ly)/h, 0, 1);
+          ) : (
+            x += (mousex-lx)/w;
+            y += (mousey-ly)/h;
+          );
+        );
+      ) : ( cap == 0 ) ? (
+        ( lastleft == 0 ) ? (
+          dist = dx * dx + dy * dy;
+          ( dist < r ) ? (
+            cap = 1;
+          );
+        );
+      );
+    ) : ( right ) ? (
+      ( cap == 2 ) ? (
+        fb = fb - (mousey-ly)/w;
+        fb = clamp(fb, 0, .999);
+      ) : ( lastright == 0 ) ? (
+        ( lastleft == 0 ) ? (
+          dist = dx * dx + dy * dy;
+          ( dist < r ) ? (
+            cap = 2;
+          );
+        );
+      );
+    ) : (
+      cap = 0;
+    );
+    
+    lastleft = left;
+    lastright = right;
+    lx = mousex;
+    ly = mousey;
+    
+    cap
+  );
+
+// MEMORY LAYOUT
+bufSize = 65536*8;
+
+minTime = 4/100;
+maxTime = 4;
+minvol = 0.05;
+maxvol = 1;
+
+dTap1  = 0;
+dTap2  = bufSize;
+dTap3  = 2*bufSize;
+dTap4  = 3*bufSize;
+dTap5  = 4*bufSize;
+dTap6  = 5*bufSize;
+dTap7  = 6*bufSize;
+dTap8  = 7*bufSize;
+dTap9  = 8*bufSize;
+dTap10 = 9*bufSize;
+
+node1.initNode(dTap1,   0,    0.5);
+node2.initNode(dTap2,   0.1,  0.7);
+node3.initNode(dTap3,   0.2,  0.5);
+node4.initNode(dTap4,   0.3,  0.7);
+node5.initNode(dTap5,   0.4,  0.5);
+node6.initNode(dTap6,   0.5,  0.7);
+node7.initNode(dTap7,   0.6,  0.5);
+node8.initNode(dTap8,   0.7,  0.7);
+node9.initNode(dTap9,   0.8,  0.5);
+node10.initNode(dTap10, 0.9,  0.7);
+
+@serialize
+file_var(0, maxtime);
+file_var(0, mintime);
+
+node1.serializeNode();
+node2.serializeNode();
+node3.serializeNode();
+node4.serializeNode();
+node5.serializeNode();
+node6.serializeNode();
+node7.serializeNode();
+node8.serializeNode();
+node9.serializeNode();
+node10.serializeNode();
+
+@slider
+
+@block
+
+@sample
+lOut = 0;
+rOut = 0;
+
+node1.updateNode();
+node2.updateNode();
+node3.updateNode();
+node4.updateNode();
+node5.updateNode();
+node6.updateNode();
+node7.updateNode();
+node8.updateNode();
+node9.updateNode();
+node10.updateNode();
+
+node1.process(spl0, spl1);
+node2.process(spl0, spl1);
+node3.process(spl0, spl1);
+node4.process(spl0, spl1);
+node5.process(spl0, spl1);
+node6.process(spl0, spl1);
+node7.process(spl0, spl1);
+node8.process(spl0, spl1);
+node9.process(spl0, spl1);
+node10.process(spl0, spl1);
+
+spl0 = spl0 * (1-drywet) + lOut * drywet;
+spl1 = spl1 * (1-drywet) + rOut * drywet;
+
+@gfx
+/* Gradients are buffered to save rendering perf */
+function drawGradients(w, h, spectrumH, gradient_bg)
+instance(lw, lh, lSpectrumH, m, c)
+global(gfx_mode, gfx_dest, bg_color_r, bg_color_g, bg_color_b, bg_color_a,
+       gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a )
+local( oldDest, oldMode, ang1, ang2, alpha, q, centerNoise, bump, cx, cy, angSiz )
+(
+  oldMode = gfx_mode;
+  gfx_mode = 0;
+  gfx_set(1,1,1,1);
+  ( ( lw != w ) || ( lh != h ) || (spectrumH != lSpectrumH) ) ? (
+    /* Only draw gradients when size changes */
+    gfx_x = gfx_y = 0;
+    lw = w;
+    lh = h;
+    lSpectrumH = spectrumH;
+    oldDest = gfx_dest;
+    gfx_setimgdim(gradient_bg, w, h);
+    gfx_dest = gradient_bg;
+    gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);
+
+    m = max(w,h);
+    gfx_mode = 1;
+    alpha = .3;
+    bump = 1.05;
+    q = 0;
+    centerNoise = 0.2*rand();
+    cx = w*rand();
+    cy = h*rand();
+    angSiz = rand();
+    ( angSiz < .3 ) ? ( angSiz = .0015 )
+    : ( angSiz < .7 ) ? ( angSiz = .015 )
+    : .15;
+    
+    loop(200,
+      c = rand();
+      ( c < .5 ) ? ( gfx_set( 1, 0.1, 0.4, alpha ) )
+      : ( c < .9 ) ? ( gfx_set( 0.2, 0.2, 1, alpha) )
+      : ( gfx_set( 0, 0, 0, alpha ) );
+      
+      ang1 = $pi * rand() * 2;
+      q == 0 ? ( 
+        ang2 = 0;
+      ) : (
+        ang2 = ang1 + $pi * rand() * angSiz / q;
+      );
+      gfx_triangle(cx + centerNoise*w*(rand()-0.5), cy + centerNoise*h*(rand()-0.5), .5*w + m * cos(ang1), .5*h + m * sin(ang1), .5*w + m * cos(ang2), .5*h + m * sin(ang2));
+      q += 1;
+      
+      gfx_x = gfx_y = 0;
+      q > 4 ? (
+        q = 0;
+        gfx_blurto(w, h);
+        gfx_muladdrect(0, 0, w, h, bump, bump, bump, 1.0, 0, 0, 0, 0);
+      );
+    );
+    gfx_mode = 0;
+    
+    gfx_dest = oldDest;
+  );
+    
+  gfx_x = gfx_y = 0;
+  gfx_blit(gradient_bg, 1, 0);
+  gfx_mode = oldMode;
+);
+
+font_color_r = 1;
+font_color_g = 1;
+font_color_b = 1;
+font_color_a = 1;
+line_color_r = .3;
+line_color_g = 0;
+line_color_b = 1;
+line_color_a = .7;
+
+FONT_GRID = 4;
+gfx_setfont(FONT_GRID, "Arial", 16);
+
+function drawWindow(x, y, w, h)
+  local(dx, dy, Nx, Ny, pw, ph, xValue, yLevel, dyL, dxL, i, ct)
+  global(gfx_x, gfx_y, FONT_GRID,
+          font_color_r, font_color_g, font_color_b, font_color_a, 
+          line_color_r, line_color_g, line_color_b, line_color_a )
+  instance()
+  (
+    Nx = 10;
+    Ny = 10;
+    dx = w/Nx;
+    dy = h/Ny;
+    dyL = 1/Ny;
+    dxL = 1/Nx;
+    gfx_y = y+dy;
+    
+    gfx_measurestr("8888", pw, ph);
+    gfx_setfont( FONT_GRID );
+    yLevel = 1-dyL;
+    loop(Ny,
+      gfx_set(0, 0, 0, .7);
+      gfx_line(x, gfx_y-1, x+w, gfx_y-1);
+      gfx_set(line_color_r, line_color_g, line_color_b, line_color_a);
+      gfx_line(x, gfx_y, x+w, gfx_y);
+      gfx_set(0, 0, 0, .7);
+      gfx_line(x, gfx_y+1, x+w-pw, gfx_y+1);
+      
+      gfx_x = x+w + 10;
+      gfx_y -= .5*ph;
+      gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+      gfx_printf("%d dB", 20*log10(yToVol(1-yLevel)) );
+      
+      gfx_y += dy + .5*ph;
+      yLevel -= dyL;
+    );
+    
+    gfx_x = x;
+    gfx_y = h;
+    i = 1;
+    xValue = 0;
+    loop(Nx+1,
+      gfx_set(0, 0, 0, .7);
+      gfx_line(gfx_x-1, y, gfx_x-1, y+h);
+      gfx_set(line_color_r, line_color_g, line_color_b, line_color_a);
+      gfx_line(gfx_x, y, gfx_x, y+h);
+      gfx_set(0, 0, 0, .7);
+      gfx_line(gfx_x+1, y, gfx_x+1, y+h);
+      
+      //gfx_x = x + .1*pw;
+      ct = 1000*xToTime(xValue);
+      gfx_x += .2*pw;
+      gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+      ( abs(ct - floor(ct+.5)) < .1 ) ? gfx_printf("%d", floor(ct+.5)) : gfx_printf("%.1f", ct);
+      
+      gfx_x = x + dx * i;
+      xValue += dxL;
+      i += 1;
+    );
+  );
+
+gfx_set(0,0,0,1);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+ymin = 0;
+ymax = gfx_h;
+xmin = 0;
+xmax = gfx_w;
+
+w1x = 0;
+w1y = 0;
+w1w = .9*gfx_w;
+w1h = .9*gfx_h;
+
+bg_color_r = 1.1;
+bg_color_g = 0.3;
+bg_color_b = 0.3;
+bg_color_a = 0.8;
+
+grads.drawGradients(w1w, w1h, w1h, 0);
+
+drawWindow(w1x, w1y, w1w, w1h);
+
+node1.draw(w1x, w1y, w1w, w1h);
+node2.draw(w1x, w1y, w1w, w1h);
+node3.draw(w1x, w1y, w1w, w1h);
+node4.draw(w1x, w1y, w1w, w1h);
+node5.draw(w1x, w1y, w1w, w1h);
+node6.draw(w1x, w1y, w1w, w1h);
+node7.draw(w1x, w1y, w1w, w1h);
+node8.draw(w1x, w1y, w1w, w1h);
+node9.draw(w1x, w1y, w1w, w1h);
+node10.draw(w1x, w1y, w1w, w1h);
+
+node1.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ? ( node1.updateNode() )
+: ( node2.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node2.updateNode() )
+: ( node3.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node3.updateNode() )
+: ( node4.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node4.updateNode() )
+: ( node5.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node5.updateNode() )
+: ( node6.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node6.updateNode() )
+: ( node7.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node7.updateNode() )
+: ( node8.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node8.updateNode() )
+: ( node9.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node9.updateNode() )
+: ( node10.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node10.updateNode() );
+
+gfx_set(0,0,0,1);
+gfx_x = 5; gfx_y = 5;
+gfx_printf("RMB - Feedback\n");
+gfx_x = 5; gfx_y = 20;
+gfx_printf("SHIFT - LPF\n");
+gfx_x = 5; gfx_y = 35;
+gfx_printf("Ctrl + Shift - HPF\n");
+gfx_x = 5; gfx_y = 50;
+gfx_printf("Alt - Panning\n");
+
+gfx_set(1,1,1,1);
+gfx_x = 5; gfx_y = 6;
+gfx_printf("RMB - Feedback\n");
+gfx_x = 5; gfx_y = 21;
+gfx_printf("SHIFT - LPF\n");
+gfx_x = 5; gfx_y = 36;
+gfx_printf("Ctrl + Shift - HPF\n");
+gfx_x = 5; gfx_y = 51;
+gfx_printf("Alt - Panning\n");
