@@ -1,8 +1,8 @@
 desc:Squashman (work in progress! alpha)
 tags: multiband saturation plugin
-version: 0.64
+version: 0.65
 author: Joep Vanlier
-changelog: Bugfix pan thingy
+changelog: Bugfix panlaw
 provides: Squashman_Dependencies/*
 license: MIT
 
@@ -467,6 +467,7 @@ slider64:fixDC=1<0,2,1>-Fix DC options
   (
     lg1 = lg2 = lg3 = lg4 = lg5 = -1000000;
     b1.ldrive = b2.ldrive = b3.ldrive = b4.ldrive = b5.ldrive = -1000000;
+    b1.lpan = b2.lpan = b3.lpan = b4.lpan = b5.lpan = -100000;
   );
 
   function getBandPre(bandIdx)
@@ -2477,7 +2478,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
   /* TO DO: Merge crossovers with control */
   function processBand(drive, pan, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
-  instance(l, r, inL, inR, in, pre, post, t, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin)
+  instance(l, r, inL, inR, in, pre, post, t, panl, panr, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin, lside)
   local(inv_ceiling, factor, depth, idepth, 
         tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
   (
@@ -2493,15 +2494,21 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = (tc - r)*.5;
       );
       
-      ( ldrive != drive || lpan != pan ) ? (
-        //preamp = 10^(0.05*drive);
-        preampl = exp(logten005*drive*2*(1-pan));
-        preampr = exp(logten005*drive*2*(pan+1));
+      ( ldrive != drive ) ? (
+        preampl = exp(logten005*drive);
+        preampr = exp(logten005*drive);
         ldrive = drive;
-        lpan = pan;
       );
-      l = l * preampl;
-      r = r * preampr;
+      
+      ( lpan != pan || side != lside ) ? (
+        panl = cos($pi*(pan*.5+.5)/2)*sqrt(2);
+        panr = sin($pi*(pan*.5+.5)/2)*sqrt(2);
+        lpan = pan;
+        lside = side;
+      );
+      
+      l = l * preampl * panl;
+      r = r * preampr * panr;
       
       l += fbl;
       r += fbr;
@@ -2890,10 +2897,13 @@ function initSpectrum(memoryOffset, fftSize, srate)
         lastl = tl;
         lastr = tr;
       )  : ( mode == 29 ) ? (
+        /* Weird overdrive */
         t2l = .2+(1-.5*modifier);
         l=tanh(10*l)-exp(-10*(l-t2l)*(l-t2l))+exp(-10*(l+t2l)*(l+t2l));
-        r=l;
+
+        r=tanh(10*r)-exp(-10*(r-t2l)*(r-t2l))+exp(-10*(r+t2l)*(r+t2l));
       ) : ( mode == 30 ) ? (
+        /* Phaserdrive */
         this.lF.init_AP(modifier, 1);
         this.rF.init_AP(modifier, 1);
         this.lF2.init_AP(modifier, .75);
@@ -2916,6 +2926,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
         l = atan(preampl*l);
         r = atan(preampr*r);
       ) : ( mode == 31 ) ? (
+        /* Power */
         dt = 44100/overSampling/srate;
         
         // Find zero crossings
@@ -3127,6 +3138,9 @@ function drawShaper(drive)
     
     calc.inL = s;
     calc.inR = s;
+    /* Trigger a forced refresh */
+    calc.ldrive = -9999;
+    calc.lpan = -9999;
     calc.processBand(displayDrive, 0, 1, mode, modifier, 0, 0);
     ll = calc.l*.5 + .5;
     lr = calc.r*.5 + .5;
@@ -5105,7 +5119,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 6 4 [ALPHA]");
+  gfx_printf("S Q U A S H M A N  v  0 . 6 5 [ALPHA]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
