@@ -1,13 +1,27 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.03
+version: 0.05
 author: Joep Vanlier
-changelog: Make pan go full 90 degrees. Minor bugfix in black outline of the nodes.
+changelog: Sync modes, Allow multi-selection
 license: MIT
 
-slider1:drywet=1<0,1,.001>Dry/Wet
+slider1:drywet=1.0<0,1,.001>Dry/Wet
+slider2:SyncMode=0<0,1,4{Off,Fourth,Third,Fifth>Sync Mode
+slider3:Snap=0<0,1,1{Off,On}>Snap
 
 @init
+function updateRange()
+(
+  SyncMode ? (
+    maxTime = 4*tempo/60;
+    minTime = 0;
+  ) : (
+    minTime = 4/100;
+    maxTime = 4;
+  );
+);
+updateRange();
+
 function initWindow(_x, _y, _w, _h)
   local()
   global()
@@ -214,23 +228,35 @@ function eval_linearSVF_HP(v0)
     ic2eq = 2*v2 - ic2eq;    
     
     v0 - k*v1 - v2
-  );  
-
-function feedbackNode()
-  local()
-  global()
-  instance( x, y, active,
-            dtime, temposync, fb, lpf, hpf, 
-            widen, sat, variance )
-  (
-    1
   );
 
 function xToTime(x)
-  global(mintime, maxtime, xmin, xmax)
+  global(mintime, maxtime, xmin, xmax, srate, SyncMode)
   local()
   (
-    (maxTime/1024) * 2^(10*x)
+    SyncMode > 0 ? (
+      maxTime * x + minTime;
+    ) : ( 
+      (maxTime/1024) * 2^(10*x)
+    );
+  );
+
+function log2(x)
+  local()
+  global()
+  (
+    log(x)/log(2)
+  );
+
+function timeToX(dtime)
+  global(mintime, maxtime, xmin, xmax, SyncMode)
+  local()
+  (
+    SyncMode ? (
+      (dTime - minTime) / maxTime
+    ) : (
+      log2( ( dTime * 1024 ) / maxTime )/10;
+    );
   );
   
 function yToVol(y)
@@ -249,33 +275,21 @@ function updateNode()
     y > 1 ? y = 1;
     x > 1 ? x = 1;
     y < 0 ? y = 0;
-    x < 0 ? x = 0;  
+    x < 0 ? x = 0;
   
-   ( x != xlast ) ? ( 
-    tx = x; 
-    dtime = xToTime(tx);
-    xlast = tx; 
-    newdtime = 2*dtime*srate;
-    
-    newdtime = .00005*newdtime + 0.99995*olddtime;
-    diff = newdtime - olddtime;
+    newdtime = .00005 * 2 * srate * dtime + 0.99995*olddtime;
+    diff = olddtime - newdtime;
     ( abs( diff ) > .001 ) ? (
-      xlast = -1;
+      buffer.setOffset(newdtime); 
     );
-    
-    buffer.setOffset(newdtime); 
-    olddtime = newdtime
-  );
+    olddtime = newdtime;
   
-  //  newdtime = 2*dtime*srate;  
-  //  buffer.setOffset(newdtime + 540*sin(time_precise()));
+    ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
+    ( fb != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fb ) ) );  
+    ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );     
   
-   ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
-   ( fb != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fb ) ) );  
-   ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );     
-  
-   (lpf < 1.0) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); );
-   (hpf > 0.0) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); );
+    (lpf < 1.0) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); );
+    (hpf > 0.0) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); );
   );
 
 function process(l_in, r_in)
@@ -303,18 +317,19 @@ function process(l_in, r_in)
     level = .5*(abs(l)+abs(r));
   );
 
-function initNode(_memloc, _x, _y)
+function initNode(_memloc, _dtime, _y)
   local()
-  instance(buffer, memloc, x,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast)
+  instance(buffer, memloc, dtime,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast)
   global(bufsize)
   (
     memloc = _memloc;
     buffer.initBuffer(memloc, memloc+bufsize-2);
+    buffer.resetBuffer();
     
     panlast = -9999;
     fblast = -9999;
     
-    !x ? ( x = _x; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; );
+    !dtime ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; );
   );
 
 function serializeNode()
@@ -324,7 +339,7 @@ function serializeNode()
             dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance )
   (
     file_var( 0, active );
-    file_var( 0, x );
+    file_var( 0, dtime );
     file_var( 0, y );
     file_var( 0, temposync );
     file_var( 0, fb );
@@ -341,7 +356,7 @@ function serializeNode()
 function draw(xmin, ymin, w, h)
   local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize)
   global(gfx_a)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected)
   ( 
     r = 4;
     alpha = 1.0;
@@ -351,6 +366,13 @@ function draw(xmin, ymin, w, h)
     yl = floor(ymin + y*h);
     
     outer = 8+4.15*ceil(log(.2)/log(fbcoeff));
+    
+    selected ? (
+      gfx_set(0,1,.3,.95);
+      gfx_circle(xl, yl, outer+1, 0, 1);
+      gfx_circle(xl, yl, outer+1.5, 0, 0);
+      gfx_circle(xl, yl, outer+2, 0, 1);
+    );
         
     panSize = 7;
     gfx_set(0,0,3,.8);
@@ -359,7 +381,7 @@ function draw(xmin, ymin, w, h)
     gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);
     
     gfx_set(0,0,.3,.95);
-    gfx_circle(xl, yl, outer, 1, 1);
+    gfx_circle(xl, yl, outer, 1, 1);    
     
     gfx_set(1, 1, 1, alpha);
     while(
@@ -404,25 +426,88 @@ function clamp(x, lb, ub)
     max(lb,min(ub,x))
   );
 
-function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap)
-  local(dx, dy, left, right, dist, xl, yl, shift, ctrl, alt)
+function select(xmin, ymin, w, h, xselectmin, xselectmax, yselectmin, yselectmax)
+  local(xl, yl)
   global()
-  instance(x, y, r, cap, lastleft, lastright, lx, ly, fb, lpf, hpf, pan)
+  instance(x, y, dtime, selected)
+  (
+    x = timeToX(dtime);
+    xl = xmin + x*w;
+    yl = ymin + y*h;
+        
+    selected = ( xl > xselectmin ) && ( xl < xselectmax ) && ( yl > yselectmin ) && ( yl < yselectmax ) ? 1 : 0;
+  );
+
+function amIChosen()
+  local()
+  global()
+  instance(selected)
+  (
+    selected = ( selected == 2 ) ? 1 : 0;
+  );
+
+function overNode(xmin, ymin, w, h, mousex, mousey, mousecap)
+  local(dx, dy, dist, xl, yl)
+  global(nodeCap)
+  instance(x, y, r, dtime, lastleft, left, lastright, right, lx, ly, selected)
+  (
+    left  = mousecap & 1;
+    right = mousecap & 2;
+    x = timeToX(dtime);
+    
+    xl = xmin + x*w;
+    yl = ymin + y*h;
+    dx = mousex - xl;
+    dy = mousey - yl;
+    
+    ( left ) ? (
+      ( (nodeCap == 0) && (lastleft == 0) && (lastright == 0) ) ? (
+        dist = dx * dx + dy * dy;
+        ( dist < r ) ? (
+          nodeCap = 1;
+          
+          /* If this one is not selected, signal that all others have to be deselected */
+          !selected ? (
+            selected = 2;
+            nodeCap = -nodeCap;
+          );
+        );
+      );
+    ) : ( right ) ? (
+      ( (nodeCap == 0) && (lastright == 0) && (lastleft == 0) ) ? (
+        dist = dx * dx + dy * dy;
+        ( dist < r ) ? (
+          nodeCap = 2;
+          
+          /* If this one is not selected, signal that all others have to be deselected */
+          !selected ? (
+            selected = 2;
+            nodeCap = -nodeCap;
+          );
+        );
+      );
+    ) : ( 
+      nodeCap = 0;
+    );
+    
+    lastleft = left;
+    lastright = right;    
+  );
+
+function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, cap, lx, ly)
+  local(left, right, dist, shift, ctrl, alt)
+  global(SyncMode, Snap)
+  instance(x, y, r, dtime, fb, lpf, hpf, pan, selected, lcap)
   (
     shift = mousecap & 8;
     ctrl  = mousecap & 4;
     alt   = mousecap & 16;
     left  = mousecap & 1;
-    right = mousecap & 2;
+    right = mousecap & 2;    
     
-    xl = xmin + x*w;
-    yl = ymin + y*h;
-  
-    dx = mousex - xl;
-    dy = mousey - yl;
-    
+    x = timeToX(dtime);
     left ? (
-      ( cap == 1 ) ? (
+      ( cap == 1 && selected ) ? (
         ( shift ) ? (
           ( ctrl ) ? (
             hpf = clamp( hpf - (mousey-ly)/h, 0, lpf );
@@ -437,43 +522,33 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap)
             y += (mousey-ly)/h;
           );
         );
-      ) : ( cap == 0 ) ? (
-        ( lastleft == 0 ) ? (
-          dist = dx * dx + dy * dy;
-          ( dist < r ) ? (
-            cap = 1;
-          );
-        );
       );
     ) : ( right ) ? (
-      ( cap == 2 ) ? (
+      ( cap == 2 && selected ) ? (
         fb = fb - (mousey-ly)/w;
         fb = clamp(fb, 0, .999);
-      ) : ( lastright == 0 ) ? (
-        ( lastleft == 0 ) ? (
-          dist = dx * dx + dy * dy;
-          ( dist < r ) ? (
-            cap = 2;
-          );
-        );
       );
-    ) : (
-      cap = 0;
     );
     
-    lastleft = left;
-    lastright = right;
-    lx = mousex;
-    ly = mousey;
+    ( cap == 0 ) && ( lcap == 1 ) ? (
+      Snap ? (
+        ( SyncMode == 1 ) ? (
+          x= floor(x*16+.5)/16;
+        ) : ( SyncMode == 2 ) ? (
+          x= floor(x*12+.5)/12;
+        ) : ( SyncMode == 3 ) ? (
+          x= floor(x*20+.5)/20;
+        );
+      );
+    );
     
-    cap
+    dtime = xToTime(x);
+    
+    lcap = cap && selected;
   );
 
 // MEMORY LAYOUT
 bufSize = 65536*8;
-
-minTime = 4/100;
-maxTime = 4;
 minvol = 0.05;
 maxvol = 1;
 
@@ -488,16 +563,16 @@ dTap8  = 7*bufSize;
 dTap9  = 8*bufSize;
 dTap10 = 9*bufSize;
 
-node1.initNode(dTap1,   0.5,  0.5);
-node2.initNode(dTap2,   0.1,  1.0);
-node3.initNode(dTap3,   0.2,  1.0);
-node4.initNode(dTap4,   0.3,  1.0);
-node5.initNode(dTap5,   0.4,  1.0);
-node6.initNode(dTap6,   0.5,  1.0);
-node7.initNode(dTap7,   0.6,  1.0);
-node8.initNode(dTap8,   0.7,  1.0);
-node9.initNode(dTap9,   0.8,  1.0);
-node10.initNode(dTap10, 0.9,  1.0);
+node1.initNode(dTap1,   xToTime(0.5),  0.5);
+node2.initNode(dTap2,   xToTime(0.1),  1.0);
+node3.initNode(dTap3,   xToTime(0.2),  1.0);
+node4.initNode(dTap4,   xToTime(0.3),  1.0);
+node5.initNode(dTap5,   xToTime(0.4),  1.0);
+node6.initNode(dTap6,   xToTime(0.5),  1.0);
+node7.initNode(dTap7,   xToTime(0.6),  1.0);
+node8.initNode(dTap8,   xToTime(0.7),  1.0);
+node9.initNode(dTap9,   xToTime(0.8),  1.0);
+node10.initNode(dTap10, xToTime(0.9),  1.0);
 
 @serialize
 file_var(0, maxtime);
@@ -519,6 +594,8 @@ node10.serializeNode();
 @block
 
 @sample
+updateRange();
+
 lOut = 0;
 rOut = 0;
 
@@ -627,13 +704,24 @@ gfx_setfont(FONT_GRID, "Arial", 16);
 
 function drawWindow(x, y, w, h)
   local(dx, dy, Nx, Ny, pw, ph, xValue, yLevel, dyL, dxL, i, ct)
-  global(gfx_x, gfx_y, FONT_GRID,
+  global(gfx_x, gfx_y, FONT_GRID, SyncMode,
           font_color_r, font_color_g, font_color_b, font_color_a, 
           line_color_r, line_color_g, line_color_b, line_color_a )
   instance()
   (
-    Nx = 10;
-    Ny = 10;
+    SyncMode == 0 ? (
+      Nx = 10;
+      Ny = 10;
+    ) : ( SyncMode == 1 ) ? (
+      Nx = 16;
+      Ny = 10;
+    ) : ( SyncMode == 2 ) ? (
+      Nx = 3*4;
+      Ny = 10;
+    ) : ( SyncMode == 3 ) ? (
+      Nx = 5*4;
+      Ny = 10;
+    );
     dx = w/Nx;
     dy = h/Ny;
     dyL = 1/Ny;
@@ -717,16 +805,87 @@ node8.draw(w1x, w1y, w1w, w1h);
 node9.draw(w1x, w1y, w1w, w1h);
 node10.draw(w1x, w1y, w1w, w1h);
 
-node1.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ? ( node1.updateNode() )
-: ( node2.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node2.updateNode() )
-: ( node3.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node3.updateNode() )
-: ( node4.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node4.updateNode() )
-: ( node5.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node5.updateNode() )
-: ( node6.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node6.updateNode() )
-: ( node7.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node7.updateNode() )
-: ( node8.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node8.updateNode() )
-: ( node9.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node9.updateNode() )
-: ( node10.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap) ) ? ( node10.updateNode() );
+lastleft = left;
+left = mouse_cap & 1;
+
+!lastleft ? multiSelect = 0;
+multiSelect == 0 ? (
+   /* These functions will fill global nodeCap with the capture mode that occurred */
+   /* 1 - LMB, 2 - RMB                                                             */
+   node1.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node2.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node3.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node4.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node5.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node6.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node7.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node8.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node9.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+   node10.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
+  
+   /* An unselected one was selected. Deselect all others */
+   nodeCap < 0 ? (
+    node1.amIChosen();
+    node2.amIChosen();
+    node3.amIChosen();
+    node4.amIChosen();
+    node5.amIChosen();
+    node6.amIChosen();
+    node7.amIChosen();
+    node8.amIChosen();
+    node9.amIChosen();
+    node10.amIChosen();
+    nodeCap = abs(nodeCap);
+   );
+   
+  // nodeCap = abs(nodeCap);
+   
+   nodeCap ? (
+     node1.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node2.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node3.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node4.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node5.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node6.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node7.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node8.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node9.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+     node10.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY);
+  );
+  lastMouseX = mouse_x;
+  lastMouseY = mouse_y;
+  
+  !nodeCap ? (
+    // No nodes manipulated => Do multi-select
+    ( mouse_x > w1x ) && ( mouse_y > w1y ) && ( mouse_x < ( w1x + w1w ) ) && ( mouse_y < ( w1y + w1h ) ) ? (
+      ( ( lastleft == 0 ) && ( left == 1 ) ) ? (
+        multiSelect = 1;
+        refx = mouse_x;
+        refy = mouse_y;
+      );
+    );
+  );
+) : ( multiSelect == 1 ) ? (
+  xmi = min(refx, mouse_x);
+  xma = max(refx, mouse_x);
+  ymi = min(refy, mouse_y);
+  yma = max(refy, mouse_y);
+  gfx_set(1, 1, 1, .4);
+  gfx_rect(xmi, ymi, xma-xmi, yma-ymi);
+  // Select nodes upon release
+  !left ? (
+    node1.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node2.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node3.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node4.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node5.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node6.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node7.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node8.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node9.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    node10.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+  );
+);
 
 gfx_set(0,0,0,1);
 gfx_x = 5; gfx_y = 5;
