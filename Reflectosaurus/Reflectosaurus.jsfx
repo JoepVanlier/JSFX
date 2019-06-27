@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Sync modes, Allow multi-selection
+changelog: Added mute/solo
 license: MIT
 
 slider1:drywet=1.0<0,1,.001>Dry/Wet
@@ -270,7 +270,7 @@ function yToVol(y)
 function updateNode()
   local(newdtime)
   global(srate, MAX_MOVE)
-  instance(diff, buffer, tx, x, y, dtime, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, fb, fbcoeff, xlast, ylast, fblast, olddtime)
+  instance(diff, buffer, tx, x, y, dtime, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -284,42 +284,46 @@ function updateNode()
     );
     olddtime = newdtime;
   
-    ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
-    ( fb != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fb ) ) );  
-    ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );     
-  
-    (lpf < 1.0) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); );
-    (hpf > 0.0) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); );
+    ( !mute ) ? (
+      ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
+      ( fb != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fb ) ) );  
+      ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );     
+    
+      (lpf < 1.0 && lpf != llpf ) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); llpf = lpf; );
+      (hpf > 0.0 && hpf != lhpf ) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); lhpf = hpf; );
+    );
   );
 
 function process(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
-  instance(buffer, vol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm)
+  instance(buffer, vol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, play)
   (
-    l = buffer.readBuffer();
-    r = buffer.readBuffer();
+    ( !mute ) ? (
+      l = buffer.readBuffer();
+      r = buffer.readBuffer();
+      
+      l = fbcoeff * l;
+      r = fbcoeff * r;
+      lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
+      hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
+  
+      buffer.updateBuffer(l + l_in);
+      buffer.updateBuffer(r + r_in);
+      
+      l = vol*l*lPanTerm;
+      r = vol*r*rPanTerm;
+      
+      lOut += l;
+      rOut += r;
+    );
     
-    l = fbcoeff * l;
-    r = fbcoeff * r;
-    lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
-    hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
-
-    buffer.updateBuffer(l + l_in);
-    buffer.updateBuffer(r + r_in);
-    
-    l = vol*l*lPanTerm;
-    r = vol*r*rPanTerm;
-    
-    lOut += l;
-    rOut += r;
-    
-    level = .5*(abs(l)+abs(r));
+    level = .5*(abs(l)+abs(r))*play;
   );
 
 function initNode(_memloc, _dtime, _y)
   local()
-  instance(buffer, memloc, dtime,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast)
+  instance(buffer, memloc, dtime,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf)
   global(bufsize)
   (
     memloc = _memloc;
@@ -328,6 +332,8 @@ function initNode(_memloc, _dtime, _y)
     
     panlast = -9999;
     fblast = -9999;
+    llpf = -9999;
+    lhpf = -9999;
     
     !dtime ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; );
   );
@@ -336,7 +342,8 @@ function serializeNode()
   local()
   global()
   instance( x, y, active,
-            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance )
+            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance,
+            mute, solo, play )
   (
     file_var( 0, active );
     file_var( 0, dtime );
@@ -348,16 +355,20 @@ function serializeNode()
     file_var( 0, widen );
     file_var( 0, sat );
     file_var( 0, pan );
+    file_var( 0, mute );
+    file_var( 0, solo );
+    file_var( 0, play );
     
     /* Memory to expand into when features are added */
-    file_mem( 0, 0, 99 );
+    file_mem( 0, 0, 96 );
   );
 
 function draw(xmin, ymin, w, h)
-  local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize)
-  global(gfx_a)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected)
-  ( 
+  local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent)
+  global(gfx_a, gfx_x, gfx_y)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo)
+  (     
+    silent = max(0,1-play);
     r = 4;
     alpha = 1.0;
     tf = 100*dtime;
@@ -365,25 +376,44 @@ function draw(xmin, ymin, w, h)
     xl = floor(xmin + x*w);
     yl = floor(ymin + y*h);
     
-    outer = 8+4.15*ceil(log(.2)/log(fbcoeff));
+    outer = 8+4.15*ceil(log(.2)/log(fbcoeff));    
     
-    selected ? (
-      gfx_set(0,1,.3,.95);
-      gfx_circle(xl, yl, outer+1, 0, 1);
-      gfx_circle(xl, yl, outer+1.5, 0, 0);
-      gfx_circle(xl, yl, outer+2, 0, 1);
-    );
-        
     panSize = 7;
-    gfx_set(0,0,3,.8);
+    gfx_set(0,0,3,.8 - .7*silent);
     gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize+2, 1);
-    gfx_set(1,1,1,1);
+    gfx_set(1,1,1,1 - .7*silent);
     gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);
     
     gfx_set(0,0,.3,.95);
     gfx_circle(xl, yl, outer, 1, 1);    
     
-    gfx_set(1, 1, 1, alpha);
+    gfx_set(0.2,0.35,1.0,.4);
+    gfx_circle(xl, yl, outer, 0, 0);
+    gfx_circle(xl, yl, outer+.5, 1, 0);
+    gfx_circle(xl, yl, outer+1, 0, 1);
+    
+    mute ? (
+      gfx_set(0.7,0,.1,.95);
+      gfx_circle(xl, yl, outer+1, 0, 1);
+      gfx_circle(xl, yl, outer+1.5, 0, 0);
+      gfx_circle(xl, yl, outer+2, 0, 1);
+    );
+    
+    selected ? (
+      gfx_set(0.2,0.35,1.0,1);
+      gfx_circle(xl, yl, outer, 0, 0);
+      gfx_circle(xl, yl, outer+.5, 1, 0);
+      gfx_circle(xl, yl, outer+1, 0, 1);
+    );
+    
+    solo ? (
+      gfx_set(0,1,.3,.95);
+      gfx_circle(xl, yl, outer+1, 0, 1);
+      gfx_circle(xl, yl, outer+1.5, 0, 0);
+      gfx_circle(xl, yl, outer+2, 0, 1);
+    );
+    
+    gfx_set(1 - .7*silent, 1 - .7*silent, 1 - .7*silent, alpha);
     while(
       gfx_a = alpha;
       gfx_circle(xl, yl, r, 0, 0);
@@ -396,7 +426,7 @@ function draw(xmin, ymin, w, h)
       alpha>.2
     );
     
-    gfx_a = 1;
+    gfx_a = 1 - .7*silent;
     hpf < lpf ? (
       loop(5,
         gfx_arc(xl, yl, r, 2*lpf*$pi - $pi, 2*hpf*$pi - $pi, 1);
@@ -405,6 +435,7 @@ function draw(xmin, ymin, w, h)
     );
     
     logLevel = log(4000*level-2);
+    silent ? logLevel = 0;
     
     gfx_set(1, 1, 1, .2);
     gfx_circle(xl, yl, logLevel*5, 1, 1);
@@ -592,6 +623,30 @@ node10.serializeNode();
 @slider
 
 @block
+!node1.mute  ? node1.play  = 1 : node1.play  = 0;
+!node2.mute  ? node2.play  = 1 : node2.play  = 0;
+!node3.mute  ? node3.play  = 1 : node3.play  = 0;
+!node4.mute  ? node4.play  = 1 : node4.play  = 0;
+!node5.mute  ? node5.play  = 1 : node5.play  = 0;
+!node6.mute  ? node6.play  = 1 : node6.play  = 0;
+!node7.mute  ? node7.play  = 1 : node7.play  = 0;
+!node8.mute  ? node8.play  = 1 : node8.play  = 0;
+!node9.mute  ? node9.play  = 1 : node9.play  = 0;
+!node10.mute ? node10.play = 1 : node10.play = 0;
+
+( node1.solo || node2.solo || node3.solo || node4.solo || node5.solo || node6.solo || node7.solo || node8.solo || node9.solo || node10.solo ) ? 
+( node1.play = node2.play = node3.play = node4.play = node5.play = node6.play = node7.play = node8.play = node9.play = node10.play = 0 );
+
+node1.solo  ? node1.play  = 1;
+node2.solo  ? node2.play  = 1;
+node3.solo  ? node3.play  = 1;
+node4.solo  ? node4.play  = 1;
+node5.solo  ? node5.play  = 1;
+node6.solo  ? node6.play  = 1;
+node7.solo  ? node7.play  = 1;
+node8.solo  ? node8.play  = 1;
+node9.solo  ? node9.play  = 1;
+node10.solo ? node10.play = 1;
 
 @sample
 updateRange();
@@ -896,6 +951,10 @@ gfx_x = 5; gfx_y = 35;
 gfx_printf("Ctrl + Shift - HPF\n");
 gfx_x = 5; gfx_y = 50;
 gfx_printf("Alt - Panning\n");
+gfx_x = 5; gfx_y = 65;
+gfx_printf("M - Mute\n");
+gfx_x = 5; gfx_y = 80;
+gfx_printf("S - Solo\n");
 
 gfx_set(1,1,1,1);
 gfx_x = 5; gfx_y = 6;
@@ -906,3 +965,37 @@ gfx_x = 5; gfx_y = 36;
 gfx_printf("Ctrl + Shift - HPF\n");
 gfx_x = 5; gfx_y = 51;
 gfx_printf("Alt - Panning\n");
+gfx_x = 5; gfx_y = 66;
+gfx_printf("M - Mute\n");
+gfx_x = 5; gfx_y = 81;
+gfx_printf("S - Solo\n");
+
+lastchar = gfx_getchar();
+
+/* Mute */
+( lastchar == 109 ) ? (
+  node1.selected  ? node1.mute  = 1 - node1.mute;
+  node2.selected  ? node2.mute  = 1 - node2.mute;
+  node3.selected  ? node3.mute  = 1 - node3.mute;
+  node4.selected  ? node4.mute  = 1 - node4.mute;
+  node5.selected  ? node5.mute  = 1 - node5.mute;
+  node6.selected  ? node6.mute  = 1 - node6.mute;
+  node7.selected  ? node7.mute  = 1 - node7.mute;
+  node8.selected  ? node8.mute  = 1 - node8.mute;
+  node9.selected  ? node9.mute  = 1 - node9.mute;
+  node10.selected ? node10.mute = 1 - node10.mute;
+);
+
+/* Solo */
+( lastchar == 115 ) ? (
+  node1.selected  ? node1.solo  = 1 - node1.solo;
+  node2.selected  ? node2.solo  = 1 - node2.solo;
+  node3.selected  ? node3.solo  = 1 - node3.solo;
+  node4.selected  ? node4.solo  = 1 - node4.solo;
+  node5.selected  ? node5.solo  = 1 - node5.solo;
+  node6.selected  ? node6.solo  = 1 - node6.solo;
+  node7.selected  ? node7.solo  = 1 - node7.solo;
+  node8.selected  ? node8.solo  = 1 - node8.solo;
+  node9.selected  ? node9.solo  = 1 - node9.solo;
+  node10.selected ? node10.solo = 1 - node10.solo;
+);
