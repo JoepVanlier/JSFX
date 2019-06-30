@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.12
+version: 0.13
 author: Joep Vanlier
-changelog: Bugfix panning
+changelog: Allow modification of in gain
 license: MIT
 
 slider1:drywet=1.0<0,1,.001>Dry/Wet
@@ -598,7 +598,7 @@ function yToVol(y)
 function updateNode()
   local(newdtime)
   global(srate, MAX_MOVE, globalFeedback)
-  instance(fbc, diff, buffer, tx, x, y, dtime, activevol, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo)
+  instance(fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -617,9 +617,10 @@ function updateNode()
     
     fbc = fb * globalFeedback;
     ( !mute || solo ) ? (
-      ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
+      ( y != ylast ) ? ( vol = yToVol(y);  ylast = y; );
+      ( Gain != invollast ) ? ( invol = yToVol(Gain); invollast = Gain; );
       ( fbc != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fbc ) ) );  
-      ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );     
+      ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );
     
       ( lpf < 1.0 && lpf != llpf ) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); llpf = lpf; );
       ( hpf > 0.0 && hpf != lhpf ) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); lhpf = hpf; );
@@ -757,11 +758,11 @@ function rectify(in)
 function process(l_in, r_in)
   local(l, r, tmp, lr, ll)
   global(lOut, rOut)
-  instance(dcfl, dcfr, rectl, rectr, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify)
+  instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify)
   (
     ( !mute || solo ) ? (
-      lIn = l_in;
-      rIn = r_in;
+      lIn = l_in * invol;
+      rIn = r_in * invol;
     
       this.getReceives();
     
@@ -815,11 +816,11 @@ function process(l_in, r_in)
 function processVerbNode(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
-  instance(verb, lIn, rIn, buffer, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR)
+  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR)
   (
     ( !mute || solo ) ? (
-      lIn = l_in;
-      rIn = r_in;
+      lIn = l_in * invol;
+      rIn = r_in * invol;
     
       this.getReceives();
       
@@ -847,7 +848,7 @@ function processVerbNode(l_in, r_in)
 
 function initNode(_memloc, _dtime, _y, idx, off)
   local()
-  instance(mute, buffer, memloc, dtime,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR)
+  instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR)
   global(bufsize)
   (
     me = idx;
@@ -861,6 +862,7 @@ function initNode(_memloc, _dtime, _y, idx, off)
     fblast = -9999;
     llpf = -9999;
     lhpf = -9999;
+    invollast = 99999;
     
     !dtime ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; mute = off; );
   );
@@ -899,7 +901,7 @@ function serializeNode()
   local()
   global()
   instance( x, y, active,
-            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify,
+            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain,
             mute, solo, play,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11 )
   (
@@ -931,10 +933,11 @@ function serializeNode()
     
     file_var( 0, pingpong );
     file_var( 0, rectify );
+    file_var( 0, Gain );
     
     /* Memory to expand into when features are added */
     memset(0,0,100);
-    file_mem( 0, 0, 83 );
+    file_mem( 0, 0, 82 );
   );
 
 connectorSize = 16;
@@ -1008,7 +1011,7 @@ function drawConnections(xmin, ymin, w, h)
 function draw(xmin, ymin, w, h, verb)
   local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS)
   global(gfx_a, gfx_x, gfx_y)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain)
   (     
     silent = max(0,1-play);
     r = 4;
@@ -1076,6 +1079,15 @@ function draw(xmin, ymin, w, h, verb)
     );    
     
     gfx_set(1 - .7*silent, 1 - .7*silent, 1 - .7*silent, alpha);
+    
+    gfx_a = alpha;
+    gfx_arc(xl, yl, r, - $pi, 2*(1-gain)*$pi - $pi, 1);
+    gfx_a = .5*alpha;
+    gfx_arc(xl, yl, r+1, - $pi, 2*(1-gain)*$pi - $pi, 1);
+    gfx_arc(xl, yl, r-1, - $pi, 2*(1-gain)*$pi - $pi, 1);
+    
+    r += 4;
+    alpha *= adv;
     while(
       gfx_a = alpha;
       gfx_circle(xl, yl, r, 0, 0);
@@ -1781,6 +1793,7 @@ printRight("M - Mute\n");
 printRight("S - Solo\n");
 printRight("P - Ping pong\n");
 printRight("R - Rectify\n");
+printRight("Wheel - Direct In Gain\n");
 
 lastchar = gfx_getchar();
 
@@ -1842,3 +1855,25 @@ lastchar = gfx_getchar();
   node10.selected ? node10.rectify = node10.rectify ? 0 : 1;
 );
 
+( abs( mouse_wheel ) > 0 ) ? (
+  shift = mouse_cap & 8;
+  ctrl  = mouse_cap & 4;
+  dy = - mouse_wheel * .001;
+  
+  shift ? ( dy /= 4 );
+  ctrl ? ( dy /= 4 );
+  
+  node1.selected   ? node1.gain  = clamp( node1.gain  + dy, 0, 1);
+  node2.selected   ? node2.gain  = clamp( node2.gain  + dy, 0, 1);
+  node3.selected   ? node3.gain  = clamp( node3.gain  + dy, 0, 1);
+  node4.selected   ? node4.gain  = clamp( node4.gain  + dy, 0, 1);
+  node5.selected   ? node5.gain  = clamp( node5.gain  + dy, 0, 1);
+  node6.selected   ? node6.gain  = clamp( node6.gain  + dy, 0, 1);
+  node7.selected   ? node7.gain  = clamp( node7.gain  + dy, 0, 1);
+  node8.selected   ? node8.gain  = clamp( node8.gain  + dy, 0, 1);
+  node9.selected   ? node9.gain  = clamp( node9.gain  + dy, 0, 1);
+  node10.selected  ? node10.gain = clamp( node10.gain + dy, 0, 1);
+  node11.selected  ? node11.gain = clamp( node11.gain + dy, 0, 1);
+
+  mouse_wheel = 0;
+);
