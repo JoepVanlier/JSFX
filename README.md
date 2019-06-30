@@ -106,7 +106,7 @@ It also has an option for linear phase FIR crossovers instead of the default IIR
 
 # ReflectoSaurus
 ![Reflectosaurus](https://imgur.com/aEhOMVo.png)
-Tool for making creative delays and reverbs. Each node indicates a delay. Radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
+Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
 
 Nodes can be routed to each-other to create complex effects. Routing sends are sent out before applying the feedback gain, but after the filters. The arc around the routing arrow indicates the volume at which it is being sent to the other node.
 
