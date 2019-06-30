@@ -117,8 +117,11 @@ Delays/Grid can optionally be synchronized to host tempo on 3/4, 4/4 or 5/4 rhyt
 Examples of possibilities:
 
 https://instaud.io/3SRO
+
 https://instaud.io/3SZq
+
 https://www.youtube.com/watch?v=bGgYUSdWiAA
+
 https://www.youtube.com/watch?v=PJKxva-5x54
 
 
