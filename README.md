@@ -112,11 +112,14 @@ Nodes can be routed to each-other to create complex effects. Routing sends are s
 
 Delays/Grid can optionally be synchronized to host tempo on 3/4, 4/4 or 5/4 rhythm. Reflectosaurus also sports one special FFT reverb node, which is indicated in red. Remember to mute all unused nodes as this lowers CPU significantly.
 
+![InfographicReflectoSaurus](https://i.imgur.com/a4ISztr.png)
+
 Examples of possibilities:
 
 https://instaud.io/3SRO
-
+https://instaud.io/3SZq
 https://www.youtube.com/watch?v=bGgYUSdWiAA
+https://www.youtube.com/watch?v=PJKxva-5x54
 
 
 # Multi-channel spectral analyser with sonogram and time window
