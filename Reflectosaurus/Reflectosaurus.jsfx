@@ -1,13 +1,12 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.08
+version: 0.09
 author: Joep Vanlier
-changelog: Added reverb node. Added presets.
+changelog: Interpolate volume too (less crackles). Fix buffer issue at end of buffer.
 license: MIT
-provides: Reflectosaurus.jsfx.rpl
 
 slider1:drywet=1.0<0,1,.001>Dry/Wet
-slider2:SyncMode=0<0,1,4{Off,Fourth,Third,Fifth>Mode
+slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>Mode
 slider3:Snap=0<0,1,1{Off,On}>Snap
 
 @init
@@ -16,8 +15,13 @@ globalFeedback = 1;
 function updateRange()
 (
   SyncMode ? (
-    maxTime = 4*tempo/60;
-    minTime = 0;
+    SyncMode > 3 ? (
+      maxTime = 2*tempo/60;
+      minTime = 0;
+    ) : (
+      maxTime = 4*tempo/60;
+      minTime = 0;
+    );
   ) : (
     minTime = 4/100;
     maxTime = 4;
@@ -45,19 +49,6 @@ function resetBuffer()
   (
     memset(scopebuffer, 0, scopebuffermax - scopebuffer + 1);
   );
-  
-function initBufferLen(scopebuffer_in, bufferlen)
-  local()
-  global()
-  instance(scopeptr, scopebuffermax, scopebuffer)
-  (
-    scopebuffer     = scopebuffer_in;
-    scopebuffermax  = scopebuffer + bufferlen;
-    
-    scopeptr < scopebuffer ? (
-      scopeptr = scopebuffer 
-    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
-  );  
   
 function draw_buffer(x, y, w, h, mul, fill)
   instance(scopeptr, scopebuffer, scopebuffermax)
@@ -120,7 +111,7 @@ function setOffset(offset)
     readptr   = scopeptr;
     frac      = offset - floor(offset);
     readptr  -= floor(offset);
-    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+1);
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer);
   );
    
 function readBuffer()
@@ -138,16 +129,39 @@ function readBuffer()
     c2 * (1.0-frac) + c1 * frac
   );
   
-function updateBuffer(M)
+function readBuffer2()
+  local(c1l, c2l, c1r, c2r)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR)
+  (
+    readptr > scopebuffermax ? readptr = scopebuffer;
+  
+    c1l = readptr[];
+    readptr += 1;
+    c1r = readptr[];
+    readptr += 1;
+    
+    readptr > scopebuffermax ? readptr = scopebuffer;
+
+    c2l = readptr[];
+    readptr += 1;
+    c2r = readptr[];
+    readptr -= 1;
+
+    outL = c2l * (1.0-frac) + c1l * frac;
+    outR = c2r * (1.0-frac) + c1r * frac;
+  );  
+  
+function updateBuffer2(L, R)
   local()
   global()
   instance(scopeptr, scopebuffermax, scopebuffer)
   (
-    scopeptr[] = M;
+    scopeptr[] = L;
+    scopeptr += 1;
+    scopeptr[] = R;
     scopeptr += 1;
     scopeptr > scopebuffermax ? scopeptr = scopebuffer;
-    
-    M
   );
   
   
@@ -584,20 +598,23 @@ function yToVol(y)
 function updateNode()
   local(newdtime)
   global(srate, MAX_MOVE, globalFeedback)
-  instance(fbc, diff, buffer, tx, x, y, dtime, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute)
+  instance(fbc, diff, buffer, tx, x, y, dtime, activevol, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
     y < 0 ? y = 0;
     x < 0 ? x = 0;
   
-    newdtime = .00005 * 2 * srate * dtime + 0.99995*olddtime; //+ .01*sin(20*time_precise())
+    newdtime = .00005 * srate * dtime + 0.99995*olddtime; //+ .01*sin(20*time_precise())
     diff = olddtime - newdtime;
     ( abs( diff ) > .001 ) ? (
-      buffer.setOffset(newdtime); 
+      buffer.setOffset(newdtime - floor(newdtime) + floor(newdtime*.5)*2 ); 
     );
     olddtime = newdtime;
-  
+    
+    activevol = .00005 * vol + .99995 * oldvol;
+    oldvol = activevol;
+    
     fbc = fb * globalFeedback;
     ( !mute ) ? (
       ( y != ylast ) ? ( vol   = yToVol(y);  ylast = y; );
@@ -704,10 +721,43 @@ function getReceives()
     );
   );
 
+eps = 0.0000000001;
+function rectify(in)
+  instance(last, diff, F0last)
+  local(out, F0n)
+  global(eps)
+  (
+    F0n = .5*in*in*sign(in);
+    diff = in - last;
+  
+    ( diff > eps ) ? (
+      out = ( F0n - F0last ) / diff;
+    ) : (
+      out = abs(.5*(in+last));
+    );
+    
+    last = in;
+    F0last = F0n;
+    
+    out
+  );
+  
+  /* Simple monopole */
+  function fixdc(x)
+  local()
+  global()
+  instance(DC_fixed, prev)
+  (
+    DC_fixed=0.995*DC_fixed + x - prev;
+    prev=x;
+  
+    DC_fixed
+  );  
+
 function process(l_in, r_in)
-  local(l, r)
+  local(l, r, tmp, lr, ll)
   global(lOut, rOut)
-  instance(lIn, rIn, buffer, vol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR)
+  instance(dcfl, dcfr, rectl, rectr, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify)
   (
     ( !mute || solo ) ? (
       lIn = l_in;
@@ -715,8 +765,11 @@ function process(l_in, r_in)
     
       this.getReceives();
     
-      l = buffer.readBuffer();
-      r = buffer.readBuffer();
+      /*l = buffer.readBuffer();
+      r = buffer.readBuffer();*/
+      buffer.readBuffer2();
+      l = buffer.outL;
+      r = buffer.outR;
             
       lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
       hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
@@ -724,15 +777,34 @@ function process(l_in, r_in)
       lastL = l * lPanTerm;
       lastR = r * rPanTerm;
   
-      l = fbcoeff * l;
-      r = fbcoeff * r;
-    
-      buffer.updateBuffer(l + lIn);
-      buffer.updateBuffer(r + rIn);
-      
-      l = vol*l*lPanTerm*play;
-      r = vol*r*rPanTerm*play;   
-      
+      rectify ? (
+        // Higher quality anti aliasing rectification
+        //l = this.rectl.rectify(l);
+        //r = this.rectr.rectify(r);
+        l = abs(l);
+        r = abs(r);
+        
+        l = this.dcfl.fixdc(l);
+        r = this.dcfl.fixdc(r);
+      );
+  
+      pingpong ? (
+        tmp = fbcoeff * l*lPanTerm;
+        l = fbcoeff * r*rPanTerm;
+        r = tmp;
+        buffer.updateBuffer2(l + lIn, r + rIn);
+        
+        l = activevol*l*play;
+        r = activevol*r*play;  
+      ) : (
+        l = fbcoeff * l;
+        r = fbcoeff * r;
+        buffer.updateBuffer2(l + lIn, r + rIn);
+        
+        l = activevol*l*rPanTerm*play;
+        r = activevol*r*rPanTerm*play;  
+      );
+
       lOut += l;
       rOut += r;
     );
@@ -779,7 +851,7 @@ function initNode(_memloc, _dtime, _y, idx, off)
   (
     me = idx;
     memloc = _memloc;
-    buffer.initBuffer(memloc, memloc+bufsize-2);
+    buffer.initBuffer(memloc, memloc+bufsize-4);
     buffer.resetBuffer();
     lastL = 0;
     lastR = 0;
@@ -826,7 +898,7 @@ function serializeNode()
   local()
   global()
   instance( x, y, active,
-            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance,
+            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify,
             mute, solo, play,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11 )
   (
@@ -856,9 +928,12 @@ function serializeNode()
     file_var( 0, fromNode10 );
     file_var( 0, fromNode11 );
     
+    file_var( 0, pingpong );
+    file_var( 0, rectify );
+    
     /* Memory to expand into when features are added */
     memset(0,0,100);
-    file_mem( 0, 0, 85 );
+    file_mem( 0, 0, 83 );
   );
 
 connectorSize = 16;
@@ -930,9 +1005,9 @@ function drawConnections(xmin, ymin, w, h)
   );
 
 function draw(xmin, ymin, w, h, verb)
-  local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius)
+  local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS)
   global(gfx_a, gfx_x, gfx_y)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify)
   (     
     silent = max(0,1-play);
     r = 4;
@@ -945,11 +1020,30 @@ function draw(xmin, ymin, w, h, verb)
     
     outer = 8+4.15*ceil(log(.2)/log(radius));    
     
+    rectify ? (
+      rectS = outer-3;
+      gfx_set(1.6,0.2,1,.1);
+      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+      rectS += 2;
+      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+      rectS += 4;
+      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+      rectS += 7;
+      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+    );
+    
     panSize = 7;
     gfx_set(0,0,3,.8 - .7*silent);
     gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize+2, 1);
     gfx_set(1,1,1,1 - .7*silent);
-    gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);
+    gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);    
+    
+    pingpong ? (
+      gfx_set(0,0,3,.4 - .7*silent);
+      gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize+2, 1);
+      gfx_set(1,1,1,.4 - .7*silent);
+      gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize, 1);    
+    );
     
     gfx_set(0,0,.3,.95);
     gfx_circle(xl, yl, outer, 1, 1);    
@@ -978,7 +1072,7 @@ function draw(xmin, ymin, w, h, verb)
       gfx_circle(xl, yl, outer+1, 0, 1);
       gfx_circle(xl, yl, outer+1.5, 0, 0);
       gfx_circle(xl, yl, outer+2, 0, 1);
-    );
+    );    
     
     gfx_set(1 - .7*silent, 1 - .7*silent, 1 - .7*silent, alpha);
     while(
@@ -1011,7 +1105,7 @@ function draw(xmin, ymin, w, h, verb)
     gfx_circle(xl, yl, logLevel*6, 1, 1);
     
     gfx_set(1, 1, 1, .05);
-    gfx_circle(xl, yl, logLevel*8, 1, 1);
+    gfx_circle(xl, yl, logLevel*8, 1, 1);    
     
     r = r*r;
   );
@@ -1224,6 +1318,10 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
           x= floor(x*12+.5)/12;
         ) : ( SyncMode == 3 ) ? (
           x= floor(x*20+.5)/20;
+        ) : ( SyncMode == 4 ) ? (
+          x= floor(x*16+.5)/16;
+        ) : ( SyncMode == 5 ) ? (
+          x= floor(x*16+.5)/12;
         );
       );
       
@@ -1269,16 +1367,16 @@ dTap8  = 8*bufSize;
 dTap9  = 9*bufSize;
 dTap10 = 10*bufSize;
 
-node1.initNode(dTap1,   xToTime(0.5),  0.5, 1,  0);
+node1.initNode(dTap1,   xToTime(0.5),  0.1, 1,  0);
 node2.initNode(dTap2,   xToTime(0.1),  1.0, 2,  0);
 node3.initNode(dTap3,   xToTime(0.2),  1.0, 3,  0);
 node4.initNode(dTap4,   xToTime(0.3),  1.0, 4,  0);
 node5.initNode(dTap5,   xToTime(0.4),  1.0, 5,  0);
-node6.initNode(dTap6,   xToTime(0.5),  1.0, 6,  0);
-node7.initNode(dTap7,   xToTime(0.6),  1.0, 7,  0);
-node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  0);
-node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  0);
-node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 0);
+node6.initNode(dTap6,   xToTime(0.5),  1.0, 6,  1);
+node7.initNode(dTap7,   xToTime(0.6),  1.0, 7,  1);
+node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  1);
+node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  1);
+node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 1);
 node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1);
 node11.initFFTNode(12*bufSize);
 
@@ -1392,9 +1490,12 @@ local( oldDest, oldMode, ang1, ang2, alpha, q, centerNoise, bump, cx, cy, angSiz
     lSpectrumH = spectrumH;
     oldDest = gfx_dest;
     gfx_setimgdim(gradient_bg, w, h);
+    
     gfx_dest = gradient_bg;
+    gfx_set(0, 0, 0, 1);
+    gfx_rect(0, 0, w, h);
+    
     gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);
-
     m = max(w,h);
     gfx_mode = 1;
     alpha = .1;
@@ -1469,6 +1570,12 @@ function drawWindow(x, y, w, h)
       Ny = 10;
     ) : ( SyncMode == 3 ) ? (
       Nx = 5*4;
+      Ny = 10;
+    ) : ( SyncMode == 4 ) ? (
+      Nx = 16;
+      Ny = 10;
+    ) : ( SyncMode == 5 ) ? ( 
+      Nx = 3*4;
       Ny = 10;
     );
     dx = w/Nx;
@@ -1650,37 +1757,29 @@ multiSelect == 0 ? (
   );
 );
 
-gfx_set(0,0,0,1);
-gfx_x = 5; gfx_y = 5;
-gfx_printf("RMB - Feedback\n");
-gfx_x = 5; gfx_y = 20;
-gfx_printf("Shift - LPF\n");
-gfx_x = 5; gfx_y = 35;
-gfx_printf("Ctrl + Shift - HPF\n");
-gfx_x = 5; gfx_y = 50;
-gfx_printf("Shift + Alt - Add Send\n");
-gfx_x = 5; gfx_y = 65;
-gfx_printf("Alt - Panning\n");
-gfx_x = 5; gfx_y = 80;
-gfx_printf("M - Mute\n");
-gfx_x = 5; gfx_y = 95;
-gfx_printf("S - Solo\n");
+  function printRight(str)
+  (
+    gfx_set(0,0,0,1);
+    gfx_measurestr(str, tx, ty);
+    gfx_x = w1x+w1w-tx-5;
+    gfx_printf(str);
+    gfx_y = gfx_y + 1;
+    gfx_x = w1x+w1w-tx-5;
+    gfx_set(1,1,1,1);
+    gfx_printf(str);
+    gfx_y = gfx_y + ty;
+  );
 
-gfx_set(1,1,1,1);
-gfx_x = 5; gfx_y = 6;
-gfx_printf("RMB - Feedback\n");
-gfx_x = 5; gfx_y = 21;
-gfx_printf("Shift - LPF\n");
-gfx_x = 5; gfx_y = 36;
-gfx_printf("Ctrl + Shift - HPF\n");
-gfx_x = 5; gfx_y = 51;
-gfx_printf("Shift + Alt - Add Send\n");
-gfx_x = 5; gfx_y = 66;
-gfx_printf("Alt - Panning\n");
-gfx_x = 5; gfx_y = 82;
-gfx_printf("M - Mute\n");
-gfx_x = 5; gfx_y = 96;
-gfx_printf("S - Solo\n");
+gfx_y = 5;
+printRight("RMB - Feedback\n");
+printRight("Shift - LPF\n");
+printRight("Ctrl + Shift - HPF\n");
+printRight("Shift + Alt - Add Send\n");
+printRight("Alt - Panning\n");
+printRight("M - Mute\n");
+printRight("S - Solo\n");
+printRight("P - Ping pong\n");
+printRight("R - Rectify\n");
 
 lastchar = gfx_getchar();
 
@@ -1713,3 +1812,32 @@ lastchar = gfx_getchar();
   node10.selected ? node10.solo = node10.solo ? 0 : 1;
   node11.selected ? node11.solo = node11.solo ? 0 : 1;
 );
+
+/* Pingpong (P) */
+( lastchar == 112 ) ? (
+  node1.selected  ? node1.pingpong  = node1.pingpong  ? 0 : 1;
+  node2.selected  ? node2.pingpong  = node2.pingpong  ? 0 : 1;
+  node3.selected  ? node3.pingpong  = node3.pingpong  ? 0 : 1;
+  node4.selected  ? node4.pingpong  = node4.pingpong  ? 0 : 1;
+  node5.selected  ? node5.pingpong  = node5.pingpong  ? 0 : 1;
+  node6.selected  ? node6.pingpong  = node6.pingpong  ? 0 : 1;
+  node7.selected  ? node7.pingpong  = node7.pingpong  ? 0 : 1;
+  node8.selected  ? node8.pingpong  = node8.pingpong  ? 0 : 1;
+  node9.selected  ? node9.pingpong  = node9.pingpong  ? 0 : 1;
+  node10.selected ? node10.pingpong = node10.pingpong ? 0 : 1;
+);
+
+/* Rectify (R) */
+( lastchar == 114 ) ? (
+  node1.selected  ? node1.rectify  = node1.rectify  ? 0 : 1;
+  node2.selected  ? node2.rectify  = node2.rectify  ? 0 : 1;
+  node3.selected  ? node3.rectify  = node3.rectify  ? 0 : 1;
+  node4.selected  ? node4.rectify  = node4.rectify  ? 0 : 1;
+  node5.selected  ? node5.rectify  = node5.rectify  ? 0 : 1;
+  node6.selected  ? node6.rectify  = node6.rectify  ? 0 : 1;
+  node7.selected  ? node7.rectify  = node7.rectify  ? 0 : 1;
+  node8.selected  ? node8.rectify  = node8.rectify  ? 0 : 1;
+  node9.selected  ? node9.rectify  = node9.rectify  ? 0 : 1;
+  node10.selected ? node10.rectify = node10.rectify ? 0 : 1;
+);
+
