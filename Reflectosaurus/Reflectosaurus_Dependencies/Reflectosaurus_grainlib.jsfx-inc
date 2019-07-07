@@ -1,0 +1,204 @@
+/* Graintable library */
+
+@init
+/* Cosine rise. N is number of samples rise time. */
+function grainPrepRise(N)
+  local(w, ip)
+  instance(y0, y1, y2, b1)
+  global()  
+  (
+    w = $pi/(N-1);
+    ip = -.5*$pi;
+    
+    y0 = 0;
+    b1 = 2.0 * cos(w);
+    y1 = sin( ip - w );
+    y2 = sin( ip - 2.0*w );
+  );
+  
+/* Cosine fall. N is number of samples fall time. */
+function grainPrepFall(N)
+  local(w, ip)
+  instance(y0, y1, y2, b1)
+  global()  
+  (
+    w = $pi/(N-1);
+    ip = .5*$pi;
+    
+    y0 = 0;
+    b1 = 2.0 * cos(w);
+    y1 = sin( ip - w );
+    y2 = sin( ip - 2.0*w );
+  );
+
+function initGrain(_ptr, _nTransition, nHold, _ptrMin, _ptrMax, speed, _lmul, _rmul)
+  local()
+  instance(advance, loc, ptrMin, ptrMax, nTransition, N2, N3, idx, ds, lmul, rmul)
+  global()  
+  (
+    ( idx <= N3 ) ? ( 0 ) : (
+      loc = .5*_ptr;
+      ptrMin = _ptrMin;
+      ptrMax = _ptrMax;
+      lmul = _lmul;
+      rmul = _rmul;
+      nTransition = _nTransition;
+      N2 = nTransition + nHold;
+      N3 = N2 + nHold;
+      advance = speed;
+      idx = 0;
+      loc < .5*ptrMin ? (
+        loc += .5*(ptrMax - ptrMin);
+      );
+      this.grainPrepRise(nTransition);
+      1
+    );
+  );
+
+function fadeIn(_N)
+	local()
+	global()
+	instance(N, idx)
+	(
+		N = _N;
+		idx = 0;
+		this.grainPrepRise(N);
+	);
+	
+function evaluateFade()
+	local()
+	instance(y0, y1, y2, b1, N, idx)
+	global()
+	(
+		( idx < N ) ?
+		(
+			idx += 1;
+			y0 = b1 * y1 - y2;
+      y2 = y1;
+      y1 = y0;
+      .5*(y0+1);
+		) : (
+			1
+		)
+	);
+  
+function grainRead()
+  local()
+  instance(ptr, frac,
+           nTransition, N2, N3, idx,
+           y0, y1, y2, b1, lOut, rOut, out,
+           loc, hloc, ptrMin, ptrMax, 
+           advance, hadvance, lmul, rmul)
+  global()
+  (
+    ( idx < N3 ) ? (
+      ptr = 2*loc - floor(2*loc) + floor(loc)*2;
+      frac = loc-floor(loc);
+      ptr = floor(ptr);
+    
+      /* Evaluate the cosine grain windowing function */
+      idx < nTransition ? (
+        // Continue the window
+        y0 = b1 * y1 - y2;
+        y2 = y1;
+        y1 = y0;
+        out = .5*(y0+1);
+      ) : ( idx < N2 ) ? (
+        out = 1;
+      ) : (
+        ( idx == N2 ) ? (
+          this.grainPrepFall(nTransition);
+        );
+        
+        // Continue the window
+        y0 = b1 * y1 - y2;
+        y2 = y1;
+        y1 = y0;
+        out = .5*(y0+1);
+      );
+      
+      // Simple linear interpolation to keep CPU cost in check
+      // Big step up from sample & hold, but not nearly as expensive as AA filters.
+      lOut = out * (ptr[] * (1-frac) + ptr[2]*frac) * lmul;
+      rOut = out * (ptr[1] * (1-frac) + ptr[3]*frac) * rmul;
+      
+      idx += 1;
+      loc += advance;
+      
+      loc > .5*ptrMax ? (
+        loc -= .5*(ptrMax - ptrMin);
+      );
+    ) : ( lOut = 0; rOut = 0; out = 0; idx += 1; );
+  );
+
+function granulator_init()
+  instance(nextGrain, cPos)
+  (
+    cPos = 0;
+    nextGrain = 0;
+    this.grain0.idx = 
+    this.grain1.idx = 
+    this.grain2.idx = 
+    this.grain3.idx = 
+    this.grain4.idx = 
+    this.grain5.idx = 
+    this.grain6.idx = 
+    this.grain7.idx = 
+    this.grain8.idx = 
+    this.grain9.idx = 
+    this.grain10.idx = 0;
+  );
+
+
+function granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, readBufCur, readBufMin, readBufMax, writeBufCur)
+  local(grainVar, N, ptr, pan, dist)
+  global(cPos)
+  instance(nextGrain, L, R, G)
+  (
+    nextGrain -= 1;
+    
+    nextGrain <= 0 ? (
+      N = floor(grainLength*.3333333333333333333333);
+      grainVar = jitter*grainLength;
+      nextGrain = 3*N*(1-overlap);
+      pan = .5 + panSpread*(rand()-.5);
+      
+      ptr = readBufCur - 2*floor(abs(sin(cPos)) * grainVar) - (spd-1) * grainLength - 8;
+			
+			dist = (writeBufCur - ptr);
+			( dist < 0 ) ? (dist = dist + (readBufMax - readBufMin); );
+			( dist < 2*(spd-1)*grainLength ) ? ptr = writeBufCur - 2*(spd-1)*grainLength;
+			
+      spd = spd + spdSpread * (rand()-.5);
+      this.grain0.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain1.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain2.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain3.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain4.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain5.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain6.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain7.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain8.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain9.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
+      : this.grain10.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 )   
+    );
+    
+    this.grain0.grainRead();
+    this.grain1.grainRead();
+    this.grain2.grainRead();
+    this.grain3.grainRead();
+    this.grain4.grainRead();
+    this.grain5.grainRead();
+    this.grain6.grainRead();
+    this.grain7.grainRead();
+    this.grain8.grainRead();
+    this.grain9.grainRead();
+    this.grain10.grainRead();
+    
+    G = this.grain0.out + this.grain1.out + this.grain2.out + this.grain3.out + this.grain4.out + this.grain5.out + this.grain6.out + this.grain7.out + this.grain8.out + this.grain9.out + this.grain10.out;
+    L = this.grain0.lOut + this.grain1.lOut + this.grain2.lOut + this.grain3.lOut + this.grain4.lOut + this.grain5.lOut + this.grain6.lOut + this.grain7.lOut + this.grain8.lOut + this.grain9.lOut + this.grain10.lOut;
+    R = this.grain0.rOut + this.grain1.rOut + this.grain2.rOut + this.grain3.rOut + this.grain4.rOut + this.grain5.rOut + this.grain6.rOut + this.grain7.rOut + this.grain8.rOut + this.grain9.rOut + this.grain10.rOut;
+    
+    L/=max(1,G);
+    R/=max(1,G);
+  );

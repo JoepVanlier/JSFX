@@ -1,16 +1,28 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.13
+version: 0.15
 author: Joep Vanlier
-changelog: Allow modification of in gain
+changelog: Reset filter state cleanly (to avoid clicks on reinit). Add tiny fade in at start of plugin. Add grain library.
 license: MIT
+provides: Reflectosaurus_Dependencies
+
+import Reflectosaurus_grainlib.jsfx-inc
+import Reflectosaurus_widgets.jsfx-inc
 
 slider1:drywet=1.0<0,1,.001>Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>Mode
 slider3:Snap=0<0,1,1{Off,On}>Snap
+slider64:WetGain=0<-32,32,1>Gain
 
 @init
 globalFeedback = 1;
+
+function updateGain()
+  global(gainFactor, WetGain)
+  local()
+  (
+    gainFactor = 10^(WetGain/20);
+  );
 
 function updateRange()
 (
@@ -607,8 +619,8 @@ function updateNode()
   
     newdtime = .00005 * srate * dtime + 0.99995*olddtime; //+ .01*sin(20*time_precise())
     diff = olddtime - newdtime;
-    ( abs( diff ) > .001 ) ? (
-      buffer.setOffset(newdtime - floor(newdtime) + floor(newdtime*.5)*2 ); 
+    ( abs( diff ) > .001 || ( invollast == 99999 ) ) ? (
+      buffer.setOffset(newdtime - floor(newdtime) + floor(newdtime*.5)*2 );       
     );
     olddtime = newdtime;
     
@@ -618,7 +630,7 @@ function updateNode()
     fbc = fb * globalFeedback;
     ( !mute || solo ) ? (
       ( y != ylast ) ? ( vol = yToVol(y);  ylast = y; );
-      ( Gain != invollast ) ? ( invol = yToVol(Gain); invollast = Gain; );
+      ( Gain != invollast ) ? ( invol = Gain<1 ? yToVol(Gain) : 0; invollast = Gain; );
       ( fbc != fblast ) ? ( fbcoeff = .95*exp( -4 * ( 1 - fbc ) ) );  
       ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );
     
@@ -757,21 +769,31 @@ function rectify(in)
 
 function process(l_in, r_in)
   local(l, r, tmp, lr, ll)
-  global(lOut, rOut)
-  instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify)
+  global(lOut, rOut, srate)
+  instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, 
+           pingpong, rectify, 
+           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
       rIn = r_in * invol;
-    
+
       this.getReceives();
     
-      /*l = buffer.readBuffer();
-      r = buffer.readBuffer();*/
-      buffer.readBuffer2();
-      l = buffer.outL;
-      r = buffer.outR;
-            
+      grain ? (
+        granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
+        buffer.readptr += 2;
+        buffer.readptr > buffer.scopebuffermax ? buffer.readptr = buffer.scopebuffer;
+        l = granulator.L;
+        r = granulator.R;
+      ) : (
+        /*l = buffer.readBuffer();
+        r = buffer.readBuffer();*/
+        buffer.readBuffer2();
+        l = buffer.outL;
+        r = buffer.outR;
+      );
+      
       lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
       hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
   
@@ -779,28 +801,29 @@ function process(l_in, r_in)
       lastR = r * rPanTerm;
   
       rectify ? (
-        // Higher quality anti aliasing rectification
+        // Higher quality anti-aliasing rectification
+        // decided against this for performance reasons
         //l = this.rectl.rectify(l);
         //r = this.rectr.rectify(r);
         l = abs(l);
         r = abs(r);
         
         l = this.dcfl.fixdc(l);
-        r = this.dcfl.fixdc(r);
+        r = this.dcfr.fixdc(r);
       );
   
       pingpong ? (
-        tmp = fbcoeff * l*lPanTerm;
-        l = fbcoeff * r*rPanTerm;
+        tmp = l*lPanTerm;
+        l = r*rPanTerm;
         r = tmp;
-        buffer.updateBuffer2(l + lIn, r + rIn);
+        buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
         
         l = activevol*l*play;
         r = activevol*r*play;  
       ) : (
-        l = fbcoeff * l;
-        r = fbcoeff * r;
-        buffer.updateBuffer2(l + lIn, r + rIn);
+        l = l;
+        r = r;
+        buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
         
         l = activevol*l*lPanTerm*play;
         r = activevol*r*rPanTerm*play;  
@@ -848,8 +871,9 @@ function processVerbNode(l_in, r_in)
 
 function initNode(_memloc, _dtime, _y, idx, off)
   local()
-  instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR)
-  global(bufsize)
+  instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR, lpl, lpr, hpl, hpr,
+           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
+  global(bufsize, srate)
   (
     me = idx;
     memloc = _memloc;
@@ -862,12 +886,21 @@ function initNode(_memloc, _dtime, _y, idx, off)
     fblast = -9999;
     llpf = -9999;
     lhpf = -9999;
-    invollast = 99999;
+    invollast = 99999;    
+    
+    /* Cleanly reset the nodes */
+    lpl.reset_linearSVF();
+    hpl.reset_linearSVF();
+    lpr.reset_linearSVF();
+    hpr.reset_linearSVF();
+    
+    granulator.granulator_init();
     
     !dtime ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; mute = off; );
+    !grainLength ? ( grain = 0; grainLength = 60; grainJitter = .15; grainOverlap = .66; grainSpeed = 1; grainPanSpread = .5; grainSpeedSpread = .05; );
   );
 
-function initNode(_memloc, _dtime, _y, idx)
+/*function initNode(_memloc, _dtime, _y, idx)
   local()
   instance(buffer, memloc, dtime,  y, fb, vol, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR)
   global(bufsize)
@@ -885,7 +918,7 @@ function initNode(_memloc, _dtime, _y, idx)
     lhpf = -9999;
     
     !dtime ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; );
-  );
+  );*/
 
 function initFFTNode(loc)
   instance(verb, lpf, hpf, fb)
@@ -903,7 +936,8 @@ function serializeNode()
   instance( x, y, active,
             dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain,
             mute, solo, play,
-            fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11 )
+            fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
+            grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
     file_var( 0, active );
     file_var( 0, dtime );
@@ -935,9 +969,17 @@ function serializeNode()
     file_var( 0, rectify );
     file_var( 0, Gain );
     
+    file_var( 0, grain );
+    file_var( 0, grainLength );
+    file_var( 0, grainJitter );
+    file_var( 0, grainOverlap );
+    file_var( 0, grainSpeed );
+    file_var( 0, grainPanSpread );
+    file_var( 0, grainSpeedSpread );
+    
     /* Memory to expand into when features are added */
     memset(0,0,100);
-    file_mem( 0, 0, 82 );
+    file_mem( 0, 0, 75 );
   );
 
 connectorSize = 16;
@@ -1011,7 +1053,7 @@ function drawConnections(xmin, ymin, w, h)
 function draw(xmin, ymin, w, h, verb)
   local(xmin, ymin, w, h, adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS)
   global(gfx_a, gfx_x, gfx_y)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain)
   (     
     silent = max(0,1-play);
     r = 4;
@@ -1026,7 +1068,7 @@ function draw(xmin, ymin, w, h, verb)
     
     rectify ? (
       rectS = outer-3;
-      gfx_set(1.6,0.2,1,.1);
+      gfx_set(1.6,0.2,1,.3);
       gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
       rectS += 2;
       gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
@@ -1034,6 +1076,16 @@ function draw(xmin, ymin, w, h, verb)
       gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
       rectS += 7;
       gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+    );
+    
+    grain ? (
+      gfx_set(1.6,0.2,1,1);
+      
+      rectS = 0;
+      loop(30,
+        gfx_circle(xl+2*outer*cos(time_precise()*rectS), yl+2*outer*sin(time_precise()*rectS), 2);
+        rectS += $pi/60;
+      );
     );
     
     panSize = 7;
@@ -1380,18 +1432,27 @@ dTap8  = 8*bufSize;
 dTap9  = 9*bufSize;
 dTap10 = 10*bufSize;
 
-node1.initNode(dTap1,   xToTime(0.5),  0.1, 1,  0);
-node2.initNode(dTap2,   xToTime(0.1),  1.0, 2,  0);
-node3.initNode(dTap3,   xToTime(0.2),  1.0, 3,  0);
-node4.initNode(dTap4,   xToTime(0.3),  1.0, 4,  0);
-node5.initNode(dTap5,   xToTime(0.4),  1.0, 5,  0);
-node6.initNode(dTap6,   xToTime(0.5),  1.0, 6,  1);
-node7.initNode(dTap7,   xToTime(0.6),  1.0, 7,  1);
-node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  1);
-node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  1);
-node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 1);
-node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1);
-node11.initFFTNode(12*bufSize);
+function Init()
+  (
+    /* Initialize or reset the nodes */
+    node1.initNode(dTap1,   xToTime(0.5),  0.1, 1,  0);
+    node2.initNode(dTap2,   xToTime(0.1),  1.0, 2,  0);
+    node3.initNode(dTap3,   xToTime(0.2),  1.0, 3,  0);
+    node4.initNode(dTap4,   xToTime(0.3),  1.0, 4,  0);
+    node5.initNode(dTap5,   xToTime(0.4),  1.0, 5,  0);
+    node6.initNode(dTap6,   xToTime(0.5),  1.0, 6,  1);
+    node7.initNode(dTap7,   xToTime(0.6),  1.0, 7,  1);
+    node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  1);
+    node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  1);
+    node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 1);
+    node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1);
+    node11.initFFTNode(12*bufSize);
+    
+    updateGain();
+    startFade.fadeIn(50);
+  );
+
+Init();
 
 @serialize
 file_var(0, maxtime);
@@ -1451,9 +1512,14 @@ node9.updateNodeBlock();
 node10.updateNodeBlock();
 node11.updateNodeBlock();
 
+updateGain();
+
+israte = 1 / srate;
+
 @sample
 updateRange();
 
+cPos += 50*israte;
 lOut = 0;
 rOut = 0;
 
@@ -1469,6 +1535,10 @@ node9.updateNode();
 node10.updateNode();
 node11.updateNode();
 
+fade = startFade.evaluateFade();
+spl0 *= fade;
+spl1 *= fade;
+
 node1.process(spl0, spl1);
 node2.process(spl0, spl1);
 node3.process(spl0, spl1);
@@ -1481,10 +1551,12 @@ node9.process(spl0, spl1);
 node10.process(spl0, spl1);
 node11.processVerbNode(spl0, spl1);
 
-spl0 = spl0 * (1-drywet) + lOut * drywet;
-spl1 = spl1 * (1-drywet) + rOut * drywet;
+spl0 = spl0 * (1-drywet) + lOut * drywet * gainFactor;
+spl1 = spl1 * (1-drywet) + rOut * drywet * gainFactor;
 
 @gfx
+lastchar = gfx_getchar();
+
 /* Gradients are buffered to save rendering perf */
 function drawGradients(w, h, spectrumH, gradient_bg)
 instance(lw, lh, lSpectrumH, m, c)
@@ -1561,9 +1633,22 @@ line_color_r = .3;
 line_color_g = 0;
 line_color_b = 1;
 line_color_a = .7;
+knob_font_color_r = 0;
+knob_font_color_g = 0;
+knob_font_color_b = 0;
+knob_font_color_a = 1;
 
 FONT_GRID = 4;
 gfx_setfont(FONT_GRID, "Arial", 16);
+
+BAND_FONT = 5;
+gfx_setfont(BAND_FONT, "Arial", 16);
+
+KNOB_FONT = 6;
+gfx_setfont(KNOB_FONT, "Arial", 14);
+
+KNOB_FONT2 = 7;
+gfx_setfont(KNOB_FONT2, "Arial", 13);
 
 function drawWindow(x, y, w, h)
   local(dx, dy, Nx, Ny, pw, ph, xValue, yLevel, dyL, dxL, i, ct)
@@ -1600,7 +1685,7 @@ function drawWindow(x, y, w, h)
     gfx_measurestr("8888", pw, ph);
     gfx_setfont( FONT_GRID );
     yLevel = 1-dyL;
-    loop(Ny,
+    loop(Ny-1,
       gfx_set(0, 0, 0, .7);
       gfx_line(x, gfx_y-1, x+w, gfx_y-1);
       gfx_set(line_color_r, line_color_g, line_color_b, line_color_a);
@@ -1641,6 +1726,68 @@ function drawWindow(x, y, w, h)
     );
   );
 
+function drawWindowText(x, y, w, h)
+  local(dx, dy, Nx, Ny, pw, ph, xValue, yLevel, dyL, dxL, i, ct)
+  global(gfx_x, gfx_y, FONT_GRID, SyncMode,
+          font_color_r, font_color_g, font_color_b, font_color_a, 
+          line_color_r, line_color_g, line_color_b, line_color_a )
+  instance()
+  (
+    SyncMode == 0 ? (
+      Nx = 10;
+      Ny = 10;
+    ) : ( SyncMode == 1 ) ? (
+      Nx = 16;
+      Ny = 10;
+    ) : ( SyncMode == 2 ) ? (
+      Nx = 3*4;
+      Ny = 10;
+    ) : ( SyncMode == 3 ) ? (
+      Nx = 5*4;
+      Ny = 10;
+    ) : ( SyncMode == 4 ) ? (
+      Nx = 16;
+      Ny = 10;
+    ) : ( SyncMode == 5 ) ? ( 
+      Nx = 3*4;
+      Ny = 10;
+    );
+    dx = w/Nx;
+    dy = h/Ny;
+    dyL = 1/Ny;
+    dxL = 1/Nx;
+    gfx_y = y+dy;
+    
+    gfx_measurestr("8888", pw, ph);
+    gfx_setfont( FONT_GRID );
+    yLevel = 1-dyL;
+    loop(Ny-1,
+      gfx_x = x+w + 10;
+      gfx_y -= .5*ph;
+      gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+      gfx_printf("%d dB", 20*log10(yToVol(1-yLevel)) );
+      
+      gfx_y += dy + .5*ph;
+      yLevel -= dyL;
+    );
+    
+    gfx_x = x;
+    gfx_y = h;
+    i = 1;
+    xValue = 0;
+    loop(Nx+1,
+      //gfx_x = x + .1*pw;
+      ct = 1000*xToTime(xValue);
+      gfx_x += .2*pw;
+      gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+      ( abs(ct - floor(ct+.5)) < .1 ) ? gfx_printf("%d", floor(ct+.5)) : gfx_printf("%.1f", ct);
+      
+      gfx_x = x + dx * i;
+      xValue += dxL;
+      i += 1;
+    );
+  );
+
 gfx_set(0,0,0,1);
 gfx_rect(0, 0, gfx_w, gfx_h);
 
@@ -1651,8 +1798,8 @@ xmax = gfx_w;
 
 w1x = 0;
 w1y = 0;
-w1w = .9*gfx_w;
-w1h = .9*gfx_h;
+w1w = .92*gfx_w;
+w1h = .8*gfx_h;
 
 bg_color_r = 1.1;
 bg_color_g = 0.3;
@@ -1686,6 +1833,11 @@ node8.draw(w1x, w1y, w1w, w1h, 0);
 node9.draw(w1x, w1y, w1w, w1h, 0);
 node10.draw(w1x, w1y, w1w, w1h, 0);
 node11.draw(w1x, w1y, w1w, w1h, 1);
+
+gfx_set(0,0,0,1);
+gfx_rect(0, w1y+w1h+1, gfx_w, gfx_h-w1h);
+
+drawWindowText(w1x, w1y, w1w, w1h);
 
 lastleft = left;
 left = mouse_cap & 1;
@@ -1794,8 +1946,13 @@ printRight("S - Solo\n");
 printRight("P - Ping pong\n");
 printRight("R - Rectify\n");
 printRight("Wheel - Direct In Gain\n");
+printRight("G - Grain\n");
+printRight("T - Scale by feedback\n");
 
-lastchar = gfx_getchar();
+/* F1 - reset delay lines */
+( lastchar == 26161 ) ? (
+  Init();
+);
 
 /* Mute */
 ( lastchar == 109 ) ? (
@@ -1810,6 +1967,22 @@ lastchar = gfx_getchar();
   node9.selected  ? node9.mute  = node9.mute  ? 0 : 1;
   node10.selected ? node10.mute = node10.mute ? 0 : 1;
   node11.selected ? node11.mute = node11.mute ? 0 : 1;
+);
+
+/* Grain */
+( lastchar == 103 ) ? (
+  node1.selected  ? node1.grain  = node1.grain  ? 0 : 1;
+  node2.selected  ? node2.grain  = node2.grain  ? 0 : 1;
+  node3.selected  ? node3.grain  = node3.grain  ? 0 : 1;
+  node4.selected  ? node4.grain  = node4.grain  ? 0 : 1;
+  node5.selected  ? node5.grain  = node5.grain  ? 0 : 1;
+  node6.selected  ? node6.grain  = node6.grain  ? 0 : 1;
+  node7.selected  ? node7.grain  = node7.grain  ? 0 : 1;
+  node8.selected  ? node8.grain  = node8.grain  ? 0 : 1;
+  node9.selected  ? node9.grain  = node9.grain  ? 0 : 1;
+  node10.selected ? node10.grain = node10.grain ? 0 : 1;
+  node11.selected ? node11.grain = node11.grain ? 0 : 1;
+  init();
 );
 
 /* Solo */
@@ -1855,6 +2028,30 @@ lastchar = gfx_getchar();
   node10.selected ? node10.rectify = node10.rectify ? 0 : 1;
 );
 
+/* T - transform */
+function convertToNewFormat()
+  instance(fbCoeff, y)
+  local(curVol)
+  global()
+  (
+    curVol = yToVol(y);
+    y = (-2/3)*log(curVol * fbCoeff)/log(10);
+  );
+  
+( lastchar == 116 ) ? (
+  node1.convertToNewFormat();
+  node2.convertToNewFormat();
+  node3.convertToNewFormat();
+  node4.convertToNewFormat();
+  node5.convertToNewFormat();
+  node6.convertToNewFormat();
+  node7.convertToNewFormat();
+  node8.convertToNewFormat();
+  node9.convertToNewFormat();
+  node10.convertToNewFormat();
+  lastchar = 0;
+);
+
 ( abs( mouse_wheel ) > 0 ) ? (
   shift = mouse_cap & 8;
   ctrl  = mouse_cap & 4;
@@ -1876,4 +2073,86 @@ lastchar = gfx_getchar();
   node11.selected  ? node11.gain = clamp( node11.gain + dy, 0, 1);
 
   mouse_wheel = 0;
+);
+
+nSelected = node1.selected + node2.selected + node3.selected + node4.selected + node5.selected + node6.selected + node7.selected + node8.selected + node9.selected + node10.selected + node11.selected*2;
+
+/* Draw grain controls */
+function processGrainCtrls(cX, cY)
+  instance(grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, 
+                  lengthKnob,  jitterKnob,  overlapKnob,  speedKnob,  panSpreadKnob,  detuneKnob)
+  local(knobSize)
+  global(mouse_x, mouse_y, mouse_cap, scaling)
+  (
+    gfx_setfont(4);
+    knobSize = 25*(1+scaling);
+    grain ? (
+      lengthKnob.active = 1;
+      lengthKnob.value = (grainLength-40)/260;
+      lengthKnob.drawKnob(cX, cY, knobSize, "Length", "Grain Length.");
+      lengthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? grainLength = lengthKnob.value*260+40;
+      
+      cX += 4*knobSize;
+      
+      overlapKnob.active = 1;
+      overlapKnob.value = grainOverlap;
+      overlapKnob.drawKnob(cX, cY, knobSize, "Overlap", "Grain Overlap.");
+      overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.75) ? grainOverlap = overlapKnob.value;
+      
+      cX += 4*knobSize;
+    
+      jitterKnob.active = 1;
+      jitterKnob.value = grainJitter/10;
+      jitterKnob.drawKnob(cX, cY, knobSize, "Jitter", "Position Jitter.");
+      jitterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.3) ? grainJitter = jitterKnob.value*10;
+      
+      cX += 4*knobSize;
+      
+      panSpreadKnob.active = 1;
+      panSpreadKnob.value = grainPanSpread;
+      panSpreadKnob.drawKnob(cX, cY, knobSize, "Spread", "Pan Jitter.");
+      panSpreadKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? grainPanSpread = panSpreadKnob.value;
+      
+      cX += 4*knobSize;
+      
+      speedKnob.active = 1;
+      speedKnob.value = ((log(grainSpeed)/log(2))+2)*.25;
+      sprintf(5, "%.3g", grainSpeed);
+      speedKnob.label = 5;
+      speedKnob.drawKnob(cX, cY, knobSize, "Pitch", "Control grain pitch.");
+      speedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? grainSpeed = 2^(4*speedKnob.value-2);
+      
+      cX += 4*knobSize;
+      
+      detuneKnob.active = 1;
+      detuneKnob.value = grainSpeedSpread*4;
+      detuneKnob.drawKnob(cX, cY, knobSize, "Detune", "Detune.");
+      detuneKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? grainSpeedSpread = detuneKnob.value*.25;
+    );
+  );
+
+( nSelected == 1 ) ? (
+  cY = w1h + .5*(gfx_h-w1h);
+  cX = 100*(1+scaling);
+  node1.selected ? ( selectedNode = 1; node1.processGrainCtrls(cX, cY); ) :
+  node2.selected ? ( selectedNode = 2; node2.processGrainCtrls(cX, cY); ) :
+  node3.selected ? ( selectedNode = 3; node3.processGrainCtrls(cX, cY); ) :
+  node4.selected ? ( selectedNode = 4; node4.processGrainCtrls(cX, cY); ) :
+  node5.selected ? ( selectedNode = 5; node5.processGrainCtrls(cX, cY); ) :
+  node6.selected ? ( selectedNode = 6; node6.processGrainCtrls(cX, cY); ) :
+  node7.selected ? ( selectedNode = 7; node7.processGrainCtrls(cX, cY); ) :
+  node8.selected ? ( selectedNode = 8; node8.processGrainCtrls(cX, cY); ) :
+  node9.selected ? ( selectedNode = 9; node9.processGrainCtrls(cX, cY); ) :
+  node10.selected ? ( selectedNode = 10; node10.processGrainCtrls(cX, cY); );
+  
+  /* Band indicator */
+  gfx_set(1,1,1,1);
+  sprintf(16, "Node %d", selectedNode);
+  vLabel.drawVertLabel(8, w1h, 16, gfx_h-w1h, BAND_FONT, 3);
+  
+) : (
+  /* Band indicator */
+  gfx_set(1,1,1,1);
+  sprintf(16, "-", selectedNode);
+  vLabel.drawVertLabel(8, w1h, 16, gfx_h-w1h, BAND_FONT, 3);
 );
