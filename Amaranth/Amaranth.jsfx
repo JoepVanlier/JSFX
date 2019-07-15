@@ -1,0 +1,707 @@
+desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
+tags: amaranth granular synth graintable grains
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+provides: Amaranth_Dependencies/*
+license: MIT
+
+slider1:LoopStart=0<0,1,.0000001>-Start point
+slider2:LoopEnd=1<0,1,.0000001>-End point
+slider3:Position=0<0,1,.0000001>-Position
+slider4:grainSize=70<40,300,1>-Grain size [ms]
+slider5:grainVariance=80<0,1000,1>-Position Variance [%]
+slider6:grainOverlap=90<0,93,1>-Overlap (%)
+slider7:panSpread=1<0,1,.00001>-Pan Spread
+slider8:Speed=1<.125,2,.0001>-Speed
+slider9:spdSpread=.001<0,1,.000001>-Speed Spread
+slider10:PitchFollow=1<0,1,1>-Follow MIDI pitch
+slider11:RefNote=0<-48,48,1>-Reference semitone
+slider12:pitchMode=0<0,1,1{Normal,RandomPitch}>
+slider13:octaveMin=0<-4,4,1>-Octave Min
+slider14:octaveMax=0<-4,4,1>-Octave Max
+slider15:reverseProb=0<0,1,1>-Reverse Probability
+slider63:updateBuffer=1<0,1,1>-Update Buffer
+slider64:postGain=1<0,2,.00001>-postGain
+
+import Amaranth_widgets.jsfx-inc
+import Amaranth_envelopes.jsfx-inc
+import Amaranth_grainlib.jsfx-inc
+
+@init
+function updatePitch()
+  local()
+  global(lastNote, refNote, noteFollowFactor)
+  instance()
+  (
+    noteFollowFactor = 2^((lastNote-(floor(RefNote)+60))/12);
+  );
+
+function openRect(x, y, w, h)
+  local()
+  global()
+  instance()
+  (
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y+h, x+w, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y, x, y+h);
+  );
+
+function initRect(_x, _y, _w, _h)
+  instance(x, y, w, h)
+  local()
+  global()
+  (
+    x = _x; y = _y; w = _w; h = _h;
+  );
+  
+function vertBar(width, _xpos, mx, my, mcap)
+  instance(x, y, w, h, xpos, cap, lmx, lmy, lastleft, left)
+  local(xScreen, change, over)
+  global(gfx_w, gfx_a)
+  (
+    xpos = _xpos;
+    left = mcap & 1;
+    xScreen = x + xpos*w - .5*width;    
+    
+    over = ( mx > xScreen ) && ( mx < ( xScreen + width ) ) && ( my > y ) && ( my < (y + h) );
+    
+    gfx_rect(xScreen+2, y, width-4, h);
+    
+    over ? (
+      gfx_a = .5*gfx_a;
+      gfx_rect(xScreen, y, width, h);
+      gfx_a = .5*gfx_a;
+      gfx_rect(xScreen-2, y, width+4, h);
+    );
+    
+    change = 0;
+    ( left == 1 ) ? (
+      ( cap == 1 ) ? (
+        xpos += (mx - lmx) / w;
+        xpos = max(min(xpos, 1), 0);
+        change = 1;
+      ) : ( lastleft == 0 ) ? (
+        over ? (
+          cap = 1;
+        );
+      );
+    ) : ( cap = 0; );
+  
+    lmx = mx;
+    lmy = my;
+    lastleft = left;
+    
+    change
+  );
+
+function initBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+function resetBuffer()
+  local()
+  global()
+  instance(scopebuffermax, scopebuffer)
+  (
+    memset(scopebuffer, 0, scopebuffermax - scopebuffer + 1);
+  );
+
+function updateBuffer(L, R)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = L;
+    scopeptr += 1;
+    scopeptr[] = R;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+  );
+
+function drawBuffer(x, y, w, h, fill)
+  local(nDraw, blockSize, xAdvance, yScale, lymax, lymin, xx, ymax, ymin, yCenter, lptr, blockIdx, yb, lvl)
+  global(gfx_x, gfx_y, gfx_a, graphicsIntensity)
+  instance(scopebuffer, scopebuffermax, scopeptr)
+  (
+    nDraw = w;
+    blockSize = floor((scopebuffermax - scopebuffer) / nDraw);   /* Round to closest */
+    nDraw = (scopebuffermax - scopebuffer) / blockSize;
+    xAdvance = w / nDraw;
+    yScale = h/4;
+    yCenter = y+.5*h;
+    
+    xx          = x;
+    lptr        = floor(scopePtr/blockSize)*blockSize;
+    gfx_x       = xx;
+    gfx_y       = yCenter;
+    blockIdx    = 0;
+    ymax        = 0;
+    ymin        = 0;
+    lymax       = yCenter;
+    lymin       = yCenter;
+    yb          = 5;
+    lvl         = (1-.2*graphicsIntensity);
+    
+    loop(scopebuffermax-scopeptr,
+      (blockIdx > blockSize) ? (
+        ymax = yCenter + yScale*min(max(-2,ymax),2);
+        ymin = yCenter + yScale*min(max(-2,ymin),2);
+      
+        fill ? (
+          gfx_a = fill * lvl;
+          gfx_triangle( xx-xAdvance, lymin,
+                        xx-xAdvance, lymax,
+                        xx, ymin,
+                        xx, ymax);
+                        
+          gfx_a = .3*fill;
+          gfx_triangle( xx-xAdvance, lymin-yb,
+                        xx-xAdvance, lymax+yb,
+                        xx, ymin-yb,
+                        xx, ymax+yb);                        
+          );
+          gfx_a = lvl;
+          gfx_lineto(xx, ymax);
+          gfx_line(xx-xAdvance, lymin, xx, ymin);          
+            
+          lymin = ymin;
+          lymax = ymax;
+          ymax = 0;
+          ymin = 0;
+          xx += xAdvance;
+          blockIdx = 0;
+       );
+        
+       ymax = max(lptr[], ymax);
+       ymin = min(lptr[], ymin);
+        
+       blockIdx += 1;
+       lptr += 1;
+     );
+     
+     blockIdx = 0;
+     lptr = scopebuffer;
+     loop(scopeptr-scopebuffer,
+       (blockIdx > blockSize) ? (
+         ymax = yCenter + yScale*min(max(-2,ymax),2);
+         ymin = yCenter + yScale*min(max(-2,ymin),2);
+       
+         fill ? (
+           gfx_a = fill * lvl;
+           gfx_triangle( xx-xAdvance, lymin,
+                         xx-xAdvance, lymax,
+                         xx, ymin,
+                         xx, ymax);
+           
+           gfx_a = .3*fill;
+           gfx_triangle( xx-xAdvance, lymin-yb,
+                        xx-xAdvance, lymax+yb,
+                        xx, ymin-yb,
+                        xx, ymax+yb);                   
+        );
+           
+                  
+        gfx_a = lvl;
+        gfx_lineto(xx, ymax);
+        gfx_line(xx-xAdvance, lymin, xx, ymin);
+          
+        lymin = ymin;
+        lymax = ymax;
+        ymax = 0;
+        ymin = 0;
+        xx += xAdvance;
+        blockIdx = 0;
+      );
+         
+      ymax = max(lptr[], ymax);
+      ymin = min(lptr[], ymin);
+         
+      blockIdx += 1;
+      lptr += 1;
+    );
+  );
+
+  // Current pitch change
+  noteFollowFactor = 1;
+  lastNote = 60;
+  updatePitch();
+
+  // MEMORY LAYOUT
+  bufSize = 65536*8;
+  
+  outBuffer.initBuffer(bufSize, 2*bufSize-4);
+  grains.granulator_init();
+  grains.normalize = 1;
+  
+  env_buf = 4*bufSize;
+  env_buf_shapes = env_buf + 8192;
+  env_buf2 = env_buf_shapes + 8192;
+  env_buf_shapes2 = env_buf2 + 8192;
+  
+  envWindow1.setEnvMemory(env_buf, env_buf_shapes);
+  envWindow1.resetEnvelope(1, 1);
+  envWindow2.setEnvMemory(env_buf2, env_buf_shapes2);
+  envWindow2.resetEnvelope(1, 1);
+  
+  note_mem = 5*bufSize;
+
+@serialize
+  preset_ver = 1.00;
+  file_var(0, preset_ver);
+  file_var(0, Octaver);
+  
+  envWindow1.serializeEnvelope();
+  envWindow2.serializeEnvelope();
+  
+  /* Store the sample in memory */
+  file_mem(0, bufSize, 2*bufSize-4);
+
+@slider
+
+@block
+  envWindow1.updateEnvRate();
+  envWindow2.updateEnvRate();
+  
+  israte = 1 / srate;
+  
+  /* Did the user drop a file? */
+  /* Sadly, drops from anywhere don't work, so for now this is commented out */
+  /*!fHandle ? (
+    fHandle = file_open("25009__LS__soft_pad_3.wav");
+    fHandle >= 0 ? (
+    triedLoad = 2;
+      file_riff(fHandle,nChannels,waveSampleRate);
+      nChannels > 0 ? (
+        triedLoad=file_avail(fHandle);
+        amt = file_mem(fHandle, outBuffer.scopebuffer, file_avail(fHandle));
+      );
+      file_close(fHandle);
+    );
+  );
+  fHandle = 1;*/
+  
+  notePtr = note_mem;
+  while (midirecv(offset,msg1,msg2,msg3)) (
+    noteOn = msg1>$x8F&&msg1<$xA0 && msg3!=0;
+    noteOff = (msg1>$x7F&&msg1<$x90) || (msg1>$x89&&msg1<$xA0 && msg3==0);
+    mwCC = (msg1>$xAF&&msg1<$xC0);
+        
+    noteOn ? (
+    noteLOGGED = 1;
+      notePtr[] = offset;
+      notePtr += 1;
+      notePtr[] = msg3;
+      notePtr += 1;
+      notePtr[] = msg2;
+      notePtr += 1;
+    ) : ( noteOff ) ? (
+      notePtr[] = offset;
+      notePtr += 1;
+      notePtr[] = -1;
+      notePtr += 1;
+    ) : ( mwCC ) ? (
+      ( slider45 > 9 && slider45 < 11 ) ? (
+        notePtr[] = offset;
+        notePtr += 1;
+        notePtr[] = -2;
+        notePtr += 1;
+        notePtr[] = msg2;
+        notePtr += 1;
+        notePtr[] = msg3;
+        notePtr += 1;
+      );
+    );
+      
+    midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
+  );
+  notePtr[]       = -1337;    // Signal end of note buffer
+  notePtr         = note_mem;
+  curSample       = 0;        // Current sample in block
+  notes_remain    = 1;        // End of the note buffer?
+  note_next       = notePtr[];  
+
+@sample
+  curSample += 1;
+  
+  // Does this plugin respond to MIDI signals?
+  // Take notes from the stack until we hit the end marker -1
+  (notes_remain) ? (
+    while( note_next == curSample ) (
+    noteF = 1;
+      notePtr += 1;
+      (notePtr[] > 0) ? ( // note-on
+        notesOn = notesOn + 1;
+        lastVel_cur = notePtr[]/127;
+        lastVel = ( (slider45 == 4) || (slider45 == 5) ) ? lastVel_cur : 1;
+        (slider45 == 2 || slider45 == 4) ? ( tDynamic = 0; dynval = 0; );
+        
+        envWindow1.resetEnvelope(lastVel_cur, 0);
+        envWindow2.resetEnvelope(lastVel_cur, 0);
+        
+        notePtr += 1;
+        lastNote = notePtr[];
+        
+        updatePitch();
+      ) : (notePtr[] == -1) ? ( // note-off
+        notesOn = notesOn - 1;
+        notesOn = max(0, notesOn);
+      ) : (notePtr[] == -2) ? ( // CC
+        notePtr += 1;
+        // msg3
+        cur_cc = notePtr[];
+        
+        notePtr += 1;
+        // msg2
+        cur_cc == 1 ? (
+          cc_target = notePtr[]/128;
+        )
+      );
+      notePtr += 1;
+      
+      // Avoid constantly dereferencing by picking up the next one
+      note_next = notePtr[];
+      notes_remain = note_next != -1337;
+    );
+  );
+
+  env1    = envWindow1.evaluateEnvelope(notesOn);
+  env2    = envWindow2.evaluateEnvelope(notesOn);
+  curPos  = 1-Position;
+  
+  grainLength = (grainSize/1000)*srate;
+  jitter = (grainVariance/100);
+  overlap = (grainOverlap/100);
+  readBufMin = outBuffer.scopebuffer;
+  readBufMax = outBuffer.scopebuffermax;
+  readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;//0; //outBuffer.scopeptr-0*.25*safeSize*abs(sin(time_precise()))
+  spd = Speed;
+  
+  Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
+  pitchFollow ? (
+    spd = spd * noteFollowFactor;
+  );
+  
+  grains.granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos);
+  
+  updateBuffer ? ( 
+    outBuffer.updateBuffer(postGain*spl0, postGain*spl1);
+  );
+  
+  spl0=grains.L;
+  spl1=grains.R;
+
+@gfx
+  graphicsIntensity = abs(sin(time_precise())); 
+  
+  /* Visual settings */
+  ENVELOPE_FONT = 6;
+  BUTTON_FONT = 7;
+  KNOB_FONT = 5;
+  TOGGLE_FONT = 5;
+  KNOB_FONT2 = 5;
+  HINT_FONT = 14;
+  gfx_setfont(ENVELOPE_FONT, "Arial", 10);
+  gfx_setfont(BUTTON_FONT, "Arial", 10);
+  gfx_setfont(KNOB_FONT, "Arial", 10);
+  gfx_setfont(HINT_FONT, "Arial", 14);
+  gfx_setfont(KNOB_FONT2, "Arial", 12);
+  baseR = .3;
+  baseG = .6;
+  baseB = 1;
+  selectionbutton_color_r = baseR;
+  selectionbutton_color_g = baseG;
+  selectionbutton_color_b = baseB;
+  selectionbutton_color_a = 1;
+  widgetcolor_r = widgetcolor_g = widgetcolor_b = widgetcolor_a = 1;
+  env1_widget_r = baseR;
+  env1_widget_g = baseG;
+  env1_widget_b = baseB;
+  env1_widget_a = 1;
+  grid_color_r = grid_color_g = grid_color_b = grid_color_a = 1;
+  font_color_r = font_color_g = font_color_b = font_color_a = 1;
+  knob_font_color_r = knob_font_color_g = knob_font_color_b = 0; knob_font_color_a = 1;
+  highlight_r = highlight_g = highlight_b = highlight_a = 1;
+  envelope_curve_r = envelope_curve_g = envelope_curve_b = envelope_curve_a = 1;
+  knob_font_color2_r = .3;
+  knob_font_color2_g = .6;
+  knob_font_color2_b = 1;
+  knob_font_color2_a = 1;
+  knob_ring_r = 0;
+  knob_ring_g = .5;
+  knob_ring_b = 1;
+  knob_r = .1;
+  knob_g = .2;
+  knob_b = .8;
+  knob_segments_r = .4;
+  knob_segments_g = .4;
+  knob_segments_b = 1;
+  
+  mod1_color_r = 1.0;
+  mod1_color_g = 0.0;
+  mod1_color_b = 1.0;
+  mod1_color_a = 1.0;
+  
+  mod2_color_r = 1.0;
+  mod2_color_g = 0.0;
+  mod2_color_b = 1.0;
+  mod2_color_a = 1.0;
+  
+  widget_r = .1;
+  widget_g = .2;
+  widget_b = .8;
+  widget_a = 1.0;
+  toggle_r = 1;
+  toggle_g = .1;
+  toggle_b = .1;
+  toggle_a = 1.0;
+  
+  /* Render GUI */
+  gfx_set(0,0.05,0.1,1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+  
+  gfx_set(.1,.1,.2,.15+.1*sin(time_precise()));
+  i = 0; dx = 15+sin(.1*time_precise());
+  xmax = .5*gfx_w;
+  ymax = gfx_h;
+  loop(2*gfx_w / dx,
+    gfx_line(xmax - ( xmax - xmax + dx*i ), 0, 0, ymax - (ymax-dx*i));
+    i += 1;
+  );
+  
+  gfx_set(.1,.1,.2,.15+.1*sin(time_precise()));
+  i = 0; dx = 15+sin(.1*time_precise());
+  xmax = 1.5*gfx_w;
+  ymax = gfx_h;
+  loop(2*gfx_w / dx,
+    gfx_line(xmax - xmax + dx*i, ymax, xmax, ymax-dx*i);
+    i += 1;
+  );
+  
+  /* Render the waveform */
+  audioX = .12*gfx_w;
+  audioY = .05*gfx_h;
+  audioW = .85*gfx_w;
+  audioH = .6*gfx_h;
+  gfx_set(baseR, baseG, baseB,.2);
+  openRect(audioX-1, audioY-1, audioW+2, audioH+2);
+  gfx_set(baseR, baseG, baseB,.5);
+  openRect(audioX-2, audioY-2, audioW+4, audioH+4);
+  gfx_set(baseR, baseG, baseB,1);
+  openRect(audioX, audioY, audioW, audioH);
+  outBuffer.drawbuffer(audioX, audioY, audioW, audioH, .35);
+
+  /* Draw the grain heads */
+  gfx_a = 0.5;
+  grains.grainDrawHeads(audioX, audioY, audioW, audioH, outBuffer.scopeptr);  
+
+  /* Start / Stop loop indicators and controls */
+  startBar.initRect(audioX, audioY, audioW, audioH);
+  endBar.initRect(audioX, audioY, audioW, audioH);
+  gfx_set(baseR+1, baseG+1, baseB,.8);
+  startBar.vertBar(6, LoopStart, mouse_x, mouse_y, mouse_cap) ? ( 
+    LoopStart = startBar.xpos;
+    (LoopStart > LoopEnd) ? ( LoopEnd = LoopStart; );
+  );
+  gfx_set(baseR+1, baseG+1, baseB,.8);
+  endBar.vertBar(6, LoopEnd, mouse_x, mouse_y, mouse_cap) ? (
+    LoopEnd = endBar.xpos;
+    (LoopEnd < LoopStart) ? ( LoopStart = LoopEnd; );
+  );  
+  
+  /* Draw envelopes */
+  envX = audioX;
+  envW = .48*audioW;
+  envH = .4*audioH;
+  envY = .95*gfx_h - envH;
+  envWindow1.initEnvelope(envX, envY, envW, envH, 6, "ENVELOPE 1", env1_widget_r, env1_widget_g, env1_widget_b, env1_widget_a );    
+  envWindow1.drawEnvelopeWindow();
+  envWindow1.processMouseEnvelope();
+  
+  envX = audioX + envW + .04*audioW;
+  envW = .48*audioW;
+  envH = .4*audioH;
+  envY = .95*gfx_h - envH;
+  envWindow2.initEnvelope(envX, envY, envW, envH, 6, "ENVELOPE 2", env1_widget_r, env1_widget_g, env1_widget_b, env1_widget_a );    
+  envWindow2.drawEnvelopeWindow();
+  envWindow2.processMouseEnvelope();
+  
+  col1 = 35*(1+scaling);
+  col2 = 90*(1+scaling);
+  buttonSize = 6*(1+scaling);
+  
+  freeze.drawToggle(audioX+knobSize, audioY+knobSize, buttonSize, buttonSize, 1-updateBuffer, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Freeze sampler.");
+  freeze.label = "Freeze";
+  updateBuffer = 1-freeze.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  /* Knob which controls the position */
+  xPos = col1;
+  yPos = 100*(1+scaling);
+  knobSize = 20*(1+scaling);
+  positionKnob.active = 1;
+  positionKnob.value  = position;
+  positionKnob.value2 = .5;//positionModulator.value;
+  positionKnob.noSegments = 1;
+  positionKnob.drawKnob(xPos, yPos, knobSize, "Position", "Modify position.");
+  positionKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( Position = positionKnob.value );
+  
+  /* Knob which controls the overlap */
+  xPos = col2;
+  grainVarianceKnob.active = 1;
+  grainVarianceKnob.value  = grainVariance/1000;
+  grainVarianceKnob.noSegments = 1;
+  grainVarianceKnob.drawKnob(xPos, yPos, knobSize, "Variance", "Modify grain position variance.");
+  grainVarianceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .08) ? slider_automate( grainVariance = 1000*grainVarianceKnob.value; );
+  
+  yPos += 70*(1+scaling);
+  
+  /* Knob which controls the grain size */
+  xPos = col1;
+  grainSizeKnob.active = 1;
+  grainSizeKnob.value  = (grainSize-40)/(300-40);
+  grainSizeKnob.noSegments = 1;
+  grainSizeKnob.drawKnob(xPos, yPos, knobSize, "Size [ms]", "Modify grain size.");
+  grainSizeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .116) ? slider_automate( grainSize = (300-40)*grainSizeKnob.value+40 );
+  
+  /* Knob which controls the grain variance */
+  xPos = col2;
+  overlapKnob.active = 1;
+  overlapKnob.value  = grainOverlap/93;
+  overlapKnob.noSegments = 1;
+  overlapKnob.drawKnob(xPos, yPos, knobSize, "Overlap", "Modify grain overlap (higher leads to denser, more constant sounds).");
+  overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .9) ? slider_automate( grainOverlap = 93*overlapKnob.value );
+  
+  yPos += 70*(1+scaling);
+  
+  /* Knob which controls the speed */
+  xPos = col1;
+  speedKnob.active = 1;
+  speedKnob.value  = (Speed-.125)/(2-.125);
+  speedKnob.noSegments = 1;
+  speedKnob.drawKnob(xPos, yPos, knobSize, "Pitch", "Modify grain speed / pitch.");
+  speedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .466666666666666666) ? slider_automate( Speed = (2-.125)*speedKnob.value+.125 );
+    
+  /* Knob which controls the grain variance */
+  xPos = col2;
+  minl = -6;
+  maxl = 0;
+  speedVarianceKnob.active = 1;
+  speedVarianceKnob.value  = (log(spdSpread)-minl)/(maxl-minl);
+  speedVarianceKnob.noSegments = 1;
+  speedVarianceKnob.drawKnob(xPos, yPos, knobSize, "Detune", "Modify speed variance (perceived as detune).");
+  speedVarianceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( spdSpread = exp(minl + (maxl-minl)*speedVarianceKnob.value) );
+  
+  yPos += 70*(1+scaling);
+  
+  /* Knob which controls the panning */
+  xPos = col2;
+  panVarianceKnob.active = 1;
+  panVarianceKnob.value  = panSpread;
+  panVarianceKnob.noSegments = 1;
+  panVarianceKnob.drawKnob(xPos, yPos, knobSize, "Pan Spread", "Level of randomization of grain panning.");
+  panVarianceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( panSpread = panVarianceKnob.value );  
+  
+  /* Reference pitch */
+  xPos = col1;
+  followToggle.drawToggle(xPos - 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, PitchFollow, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
+  PitchFollow = followToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  refPitchKnob.active = PitchFollow;
+  refPitchKnob.value  = (RefNote + 48)/96;
+  refPitchKnob.noSegments = 1;
+  refPitchKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( RefNote = refPitchKnob.value*96-48 ); updatePitch(); );
+  sprintf( 5, "%d", floor(refPitchKnob.value*96-48) );
+  refPitchKnob.label = 5;
+  refPitchKnob.drawKnob(xPos, yPos, knobSize, "Ref Note", "Reference pitch for MIDI input.");
+  
+  yPos += 70*(1+scaling);
+  
+  /* Knob which controls the minimum shift for the octaver */
+  xPos = col1;
+  octaverToggle.drawToggle(xPos - 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, Octaver, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
+  Octaver = octaverToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  octaveMinKnob.active = 1;
+  octaveMinKnob.value  = (octaveMin+4)/8;
+  octaveMinKnob.noSegments = 1;
+  octaveMinKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( octaveMin = 8*octaveMinKnob.value-4 );
+  sprintf( 5, "%d", floor(octaveMinKnob.value*8-4) );
+  octaveMinKnob.label = 5;
+  octaveMinKnob.drawKnob(xPos, yPos, knobSize, "Min Octave", "Minimum octave to randomize over.");
+  
+  /* Knob which controls the max for the octaver */
+  xPos = col2;
+  octaveMaxKnob.active = 1;
+  octaveMaxKnob.value  = (octaveMax+4)/8;
+  octaveMaxKnob.noSegments = 1;
+  octaveMaxKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( octaveMax = 8*octaveMaxKnob.value-4 );
+  sprintf( 5, "%d", floor(octaveMaxKnob.value*8-4) );
+  octaveMaxKnob.label = 5;
+  octaveMaxKnob.drawKnob(xPos, yPos, knobSize, "Max Octave", "Maximum octave to randomize over.");
+  
+  yPos += 70*(1+scaling);
+  
+  /* Knob which controls the reverse probability */
+  xPos = col1;
+  reverseProbKnob.active = 1;
+  reverseProbKnob.value  = reverseProb;
+  reverseProbKnob.noSegments = 1;
+  reverseProbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( reverseProb = reverseProbKnob.value );
+  reverseProbKnob.drawKnob(xPos, yPos, knobSize, "Reverse", "Reverse Probability.");
+  
+  
+  
+  /*
+  slider12:pitchMode=0<0,1,1{Normal,RandomPitch}>
+  slider13:octaveMin=0<-4,4,1>-Octave Min
+  slider14:octaveMax=0<-4,4,1>-Octave Max
+  */
+  
+  /* Draw logo */
+  loaded = 0;
+  !loaded || (modVisible != lastModVisible) ? (
+    ( modVisible == 0 ) ? (
+      loaded = gfx_loadimg(5, "./Amaranth_Dependencies/logo4.png");
+    );
+    lastModVisible = modVisible;
+  );
+  gfx_x = -111;
+  gfx_y = -20;
+
+  recSpeed = .3+.5*rand();
+  lsMod = lsMod * (1-recSpeed) + lightState * recSpeed;
+  gfx_a = .2 + .8*lsMod;
+  rand() > lightProb ? (
+    lightState = 1-lightState;
+  );
+  lightState ? (
+    lightProb = lightProb + .1;
+    lightProb > .99 ? lightProb = .99;
+  ) : (
+    lightProb = .5;
+  );
+
+  gfx_blit(5, .56*(1+scaling), 0);
+  
+  /*gfx_getdropfile(0, 14);
+  gfx_x = 0;
+  gfx_y = 50;
+  gfx_printf(14);
+  gfx_getdropfile(-1);*/
+  
+  hinter.drawHint_draw();
+  
+  gfx_x = 0;
+  gfx_set(1,0,0,1);
+  gfx_y = gfx_h-10;
+  gfx_printf( "DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! " );

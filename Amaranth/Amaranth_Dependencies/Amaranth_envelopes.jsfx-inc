@@ -1,0 +1,1267 @@
+/* 
+  @init
+    envWindow.setEnvMemory(env_buf, env_buf_shapes);
+    envWindow.resetEnvelope(1, 1);
+  @gfx
+    envWindow1.initEnvelope(envX, envY, envW, envH, 6, "ENVELOPE 1", env1_widget_r, env1_widget_g, env1_widget_b, env1_widget_a );
+    
+    envWindow.drawEnvelopeWindow();
+    envWindow.processMouseEnvelope();
+  @block:
+    envWindow.updateEnvRate();
+    
+  On note (in @sample):
+    envWindow.resetEnvelope(lastVel_cur, 0);
+    
+  @sample:
+    envWindow.evaluateEnvelope(notesOn)
+  
+  Depends on global colors:
+    selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a,
+    widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a
+*/
+
+@init
+function resetEnvelope(vel, hard)
+  global()
+  instance(curTime, memory, curveMemory, cpos, cpos2, tn, tnm1, yn, ynm1, dy, invdx, cnode, triggering, curvel, curCurve, autoloop)
+  local(go)
+  (
+    // If we do not respond to MIDI triggers, only go on a full reset
+    ( ( triggering == 2 ) && ( hard == 1 ) ) ? (
+      go = 1;
+    
+    // If we _do_ respond to MIDI triggers, respond only when it is *not* a hard reset
+    ) : ( ( triggering == 1 ) && ( hard == 0 ) ) ? ( 
+      go = 1 
+    ) : (go = 0);
+    
+    ( go == 1 ) ? (
+      curTime 	= 0;
+      cpos      = memory;
+      cpos2     = curveMemory;
+      tnm1      = 0;
+      ynm1      = 0;
+      tn        = cpos[];
+      yn        = cpos[1];
+      cnode     = 0;
+      curvel    = vel;
+      dy        = (yn - ynm1);
+      invdx     =  1 / ( tn - tnm1 );
+      curCurve  = cpos2[];
+      curCurve == 0 ? dy *= invdx;
+      cpos2     += 1;
+    );
+  );
+
+function updateNodeCount()
+  instance(nodes, memory)  
+  local(xptr, tmp, tv)
+  global()
+  (
+    tmp = 2;
+    xptr = memory+2;
+    tv = xptr[];
+    while( tv > 0 )
+    (
+      xptr += 2;
+      tmp += 1;
+      tv = xptr[];
+    );
+    
+    nodes = tmp;
+  );
+  
+function updateNodeCount2()
+  instance(nodes, memory)  
+  local(xptr, tmp, tv)
+  global()
+  (
+    tmp = 2;
+    xptr = memory+2;
+    tv = xptr[];
+    while( tv < 1 )
+    (
+      xptr += 2;
+      tmp += 1;
+      tv = xptr[];
+    );
+    
+    nodes = tmp+1;
+  );  
+   
+function bsort()
+  instance(nodes, memory, curveMemory, grabbed)  
+  local(xptr, xptr2, tmpx, tmpy, tmpc, cur, next, i)
+  global()
+  (
+    this.updateNodeCount();
+  
+    loop(nodes-2,
+      xptr = memory;
+      xptr2 = curveMemory;
+      i = 1;
+      loop(nodes-2,
+        cur  = xptr[];
+        next = xptr[2];
+        ( cur > next ) ? (
+          tmpx = cur;
+          tmpc = xptr2[];
+          tmpy = xptr[1];
+          xptr[]  = next;
+          xptr[1] = xptr[3];
+          xptr[2] = tmpx;
+          xptr[3] = tmpy;
+          xptr2[] = xptr2[1];
+          xptr2[1] = tmpc;
+          
+          ( grabbed == i ) ? ( 
+            grabbed += 1;
+          ) : ( grabbed == (i+1) ) ? (
+            grabbed -= 1 ;
+          );
+        );
+        
+        xptr += 2;
+        xptr2 += 1;
+        i += 1;
+      );
+    );
+    
+    this.updateNodeCount2();
+  ); 
+  
+function removeDuplicates()
+  instance(nodes, memory, curveMemory, grabbed)  
+  local(xptr, xptr2, tmpx, tmpy, tmpc, cur, next, i)
+  global()
+  (
+    xptr = memory;
+    xptr2 = curveMemory;
+  
+    loop(nodes-2,
+      cur  = xptr[];
+      next = xptr[2];
+      ( cur == next ) ? (
+        xptr[] = 1;
+      );
+
+      xptr += 2;
+      i += 1;
+    );
+  );    
+  
+function updateEnvRate()
+  instance(invsrate, ispeed)
+  global(srate, tempo)
+  local()
+  (
+    invsrate = tempo/(srate*ispeed*60*4);
+  );  
+  
+function envelopeTempo(cTime)
+  instance( cRate, tempoLabel )
+  local()
+  global()
+  (
+  ( cTime < 0.0416667 ) ?
+  (
+    tempoLabel = "1/16";
+    cRate = 0.0625;
+  ) : ( cTime < 0.0833333 ) ?
+  (
+    tempoLabel = "1/12";
+    cRate = 0.0833333;
+  ) : ( cTime < 0.125 ) ?
+  (
+    tempoLabel = "1/8";
+    cRate = 0.125;
+  ) : ( cTime < 0.166667 ) ?
+  (
+    tempoLabel = "1/6";
+    cRate = 0.166667;
+  ) : ( cTime < 0.208333 ) ?
+  (
+    tempoLabel = "1/5";
+    cRate = 0.2;
+  ) : ( cTime < 0.25 ) ?
+  (
+    tempoLabel = "1/4";
+    cRate = 0.25;
+  ) : ( cTime < 0.291667 ) ?
+  (
+    tempoLabel = "1/3";
+    cRate = 0.333333;
+  ) : ( cTime < 0.333333 ) ?
+  (
+    tempoLabel = "1/2";
+    cRate = 0.5;
+  ) : ( cTime < 0.375 ) ?
+  (
+    tempoLabel = "1";
+    cRate = 1;
+  ) : ( cTime < 0.416667 ) ?
+  (
+    tempoLabel = "2";
+    cRate = 2;
+  ) : ( cTime < 0.458333 ) ?
+  (
+    tempoLabel = "3";
+    cRate = 3;
+  ) : ( cTime < 0.5 ) ?
+  (
+    tempoLabel = "4";
+    cRate = 4;
+  ) : ( cTime < 0.541667 ) ?
+  (
+    tempoLabel = "6";
+    cRate = 6;
+  ) : ( cTime < 0.583333 ) ?
+  (
+    tempoLabel = "7";
+    cRate = 7;
+  ) : ( cTime < 0.625 ) ?
+  (
+    tempoLabel = "8";
+    cRate = 8;
+  ) : ( cTime < 0.666667 ) ?
+  (
+    tempoLabel = "12";
+    cRate = 12;
+  ) : ( cTime < 0.708333 ) ?
+  (
+    tempoLabel = "16";
+    cRate = 16;
+  ) : ( cTime < 0.75 ) ?
+  (
+    tempoLabel = "24";
+    cRate = 24;
+  ) : ( cTime < 0.791667 ) ?
+  (
+    tempoLabel = "32";
+    cRate = 32;
+  ) : ( cTime < 0.833333 ) ?
+  (
+    tempoLabel = "64";
+    cRate = 64;
+  ) : ( cTime < 0.875 ) ?
+  (
+    tempoLabel = "128";
+    cRate = 128;
+  ) : ( cTime < 0.916667 ) ?
+  (
+    tempoLabel = "256";
+    cRate = 256;
+  ) : ( cTime < 0.958333 ) ?
+  (
+    tempoLabel = "512";
+    cRate = 512;
+  ) : ( cTime < 1 ) ?
+  (
+    tempoLabel = "1024";
+    cRate = 1024;
+  )
+);
+
+function updateEnvelopeSpeed() 
+  instance( ispeed, cRate, tempoLabel, speedSlider )
+  global()
+  local()
+  (
+    this.envelopeTempo(speedSlider.value);
+    speedSlider.overrideunit = tempoLabel;
+    speedSlider.overrideValue = -2000;
+    ispeed = cRate;
+    this.updateEnvRate();
+  ); 
+ 
+function updateToggles()
+  instance(soften, midiTrigger, midiVel, aLoop, snap, softening, triggering, useVelocities, snapping, autoloop)
+  global()
+  local()
+  (
+    !softening      ? ( softening = 1;     	soften.active = 1; );
+    !triggering     ? ( triggering = 1;   	midiTrigger.active = 1; );
+    !useVelocities  ? ( useVelocities = 1;  midiVel.active = 1; );
+    !snapping       ? ( snapping = 2;     	snap.active == 0; );
+    !autoloop       ? ( autoloop = 2;     	aLoop.active = 0; );
+    
+    soften.active == 1      ? softening = 1 : softening = 2;
+    midiTrigger.active == 1 ? triggering = 1 : triggering = 2;
+    midiVel.active == 1     ? useVelocities = 1 : useVelocities = 2;
+    snap.active == 1        ? snapping = 1 : snapping = 0;
+    aLoop.active == 1       ? autoloop = 1 : autoloop = 2;
+  ); 
+ 
+function resetEnvelopeCurve()
+  instance(memory, curveMemory, speedSlider, loopStart, loopEnd, loopType, division, zoom, offset)
+  global()
+  local(xptr, xptr2)
+  (
+    xptr = memory;
+    xptr2 = curveMemory;
+      
+    speedSlider.value = .36;
+    loopStart = 0.4;
+    loopEnd = 0.5;
+    loopType = 0;
+    division = 1;
+    zoom = 1;
+    offset = 0;
+      
+    // Nullify
+    memset(memory,0,5000);
+    memset(curveMemory,0,5000);  
+    
+    xptr[] = 0.1; // t = .1,  y = 1
+    xptr2[] = 0;
+    xptr += 1; xptr[] = 1;
+    xptr += 1; xptr[] = 0.2; // t = 0.2, y = 0.5
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0.5;
+    xptr += 1; xptr[] = 0.3; // t = 0.3, y = 0.4
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0.4;      
+    xptr += 1; xptr[] = 0.6; // t = 0.6, y = 0.4
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0.4;            
+    xptr += 1; xptr[] = 1;   // t = 1.0, y = 1.0
+    xptr2 += 1; xptr2[] = 0;
+    xptr += 1; xptr[] = 0;
+      
+    this.updateNodeCount();
+    this.bsort();
+    this.resetEnvelope(1, 1);  
+  ); 
+
+function randomEnvelopeCurve()
+  instance(memory, curveMemory, speedSlider, loopStart, loopEnd, loopType, division, zoom, offset, snap)
+  global()
+  local(xptr, xptr2, tmp, N)
+  (
+    xptr = memory - 1;
+    xptr2 = curveMemory - 1;
+      
+    speedSlider.value = .36;
+    loopStart = 0.4;
+    loopEnd = 0.5;
+    loopType = 0;
+    division = 1;
+    zoom = 1;
+    offset = 0;
+      
+    // Nullify
+    memset(memory,0,5000);
+    memset(curveMemory,0,5000);
+    
+    !snap.active ? (
+      loop(1+floor(100*rand()),
+        xptr += 1; xptr[] = rand();
+        xptr += 1; xptr[] = rand();
+        xptr2 += 1; xptr2[] = floor(rand(3));
+      );
+      
+      loopStart = rand()*.98+.01;
+      loopEnd = rand()*.98+.01;
+    ) : (
+      N = pow(2, floor(rand()*3+2));
+      loop(1+floor(2*N*rand()),
+        xptr += 1; xptr[] = ceil(rand()*(N-2)+1)/N;
+        xptr += 1; xptr[] = rand();
+        xptr2 += 1; xptr2[] = floor(rand(3));
+      );
+      
+      loopStart = floor(rand()*N)/N;
+      loopEnd = floor(rand()*N);
+    );
+    
+    speedSlider.value = rand()*.5+.1;;
+    
+    // Cap
+    xptr += 1; xptr[] = 1;   // t = 1.0, y = 1.0
+    xptr += 1; xptr[] = 0;
+
+    loopStart > loopEnd ?
+    (
+      tmp = loopEnd;
+      loopEnd = loopStart;
+      loopStart = tmp;
+    );
+    
+    division = 1;
+    zoom = 1;
+    offset = 0;
+    
+    this.updateNodeCount();
+    this.bsort();
+    // Remove duplicates
+    snap.active ? (
+      this.removeDuplicates();
+      this.bsort();
+    );
+    this.resetEnvelope(1, 1);
+  );  
+ 
+function setEnvMemory(envelopeMemory, typeMemory)
+  global()
+  local()
+  instance(memory, curveMemory)
+  (
+    memory = envelopeMemory;
+      curveMemory = typeMemory;
+  );
+ 
+function initEnvelope(x_in, y_in, w_in, h_in, nodes_in, title_in, in_wR, in_wG, in_wB, in_wA)
+  global( newUI, srate, scaling,
+          selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a,
+          widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a )
+  instance(memory, curveMemory, nodes, thisUI, x, y, w, h, h_graph, h_total, invsrate, cpos, loopStart, loopEnd, loopType, ispeed, division, title,
+           speedSlider, offset, zoom,
+           soften, midiTrigger, aLoop, midiVel, snap, clear, random,
+           softening, triggering, autoloop, useVelocities, snapping, wR, wG, wB, wA )
+  local(xptr, bw, bh, cx)
+  (
+    wR = in_wR;
+    wG = in_wG;
+    wB = in_wB;
+    wA = in_wA;
+  
+    cx = 0.12;
+    x = x_in;
+    y = y_in;
+    w = w_in;
+    h_total = h_in;
+    h_graph = h_in * (1-cx);
+    h = h_in*(.9-cx);
+  
+    bw = 16.5 * (1+scaling);
+    bh = 12 * (1+scaling);
+
+    soften.selectionButton(x+.5*bw, y-.5*bh, 2*bw, bh, "SOFT", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Soften envelope");
+    midiTrigger.selectionButton(x+2.8*bw, y-.5*bh, 2*bw, bh, "TRIG", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Trigger on MIDI note");
+    aLoop.selectionButton(x+5.1*bw, y-.5*bh, 2*bw, bh, "LOOP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "When reaching loop, loop independent\nof whether MIDI note is still active");
+    midiVel.selectionButton(x+7.4*bw, y-.5*bh, 2*bw, bh, "VEL", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Use MIDI Velocity");
+    snap.selectionButton(x+9.7*bw, y-.5*bh, 2*bw, bh, "SNAP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Snap to grid");
+    clear.selectionButton(x+12*bw, y-.5*bh, 2*bw, bh, "RESET", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Clear envelope back to standard");
+    random.selectionButton(x+14.3*bw, y-.5*bh, 2*bw, bh, "RAND", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Randomize envelope");
+    
+    soften.style = 2;
+    midiTrigger.style = 2;
+    midiVel.style = 2;
+    snap.style = 2;
+    clear.style = 2;
+    random.style = 2;
+    aloop.style = 2;
+    this.updateToggles();
+    
+    speedSlider.sliderWidget(x+2, y + h_graph - .5*cx*h_in, .9*w, 2*cx*h_in, "", widgetcolor_r, widgetcolor_g, widgetcolor_b, widgetcolor_a, 0, 0, 1, .36, " ", 0, "Envelope length (measures)");
+    speedSlider.yslidercenter = speedSlider.y + 0.5 * speedSlider.h;
+    speedSlider.postMeter = x+w;
+  
+    (!thisUI || !nodes)? (       
+      title = title_in;
+      xptr = memory;
+      thisUI = newUI+=1;
+      
+      speedSlider.value = .36;
+      loopStart = 0.4;
+      loopEnd = 0.5;
+      loopType = 0;
+      division = 1;
+      zoom = 1;
+      offset = 0;
+      
+      xptr[] = 0.1; // t = .1,  y = 1
+      xptr += 1; xptr[] = 1;
+      xptr += 1; xptr[] = 0.2; // t = 0.2, y = 0.5
+      xptr += 1; xptr[] = 0.5;
+      xptr += 1; xptr[] = 0.3; // t = 0.3, y = 0.4
+      xptr += 1; xptr[] = 0.4;      
+      xptr += 1; xptr[] = 0.6; // t = 0.6, y = 0.4
+      xptr += 1; xptr[] = 0.4;            
+      xptr += 1; xptr[] = 1;   // t = 1.0, y = 1.0
+      xptr += 1; xptr[] = 0;
+      
+      this.updateNodeCount();
+      this.bsort();
+      this.resetEnvelope(1, 1);
+    );  
+  
+    !nodes  ? nodes = nodes_in;
+    
+    this.updateEnvelopeSpeed();
+  );  
+  
+// Clips line to X range  
+function safeLine(x1, y1, x2, y2, xmin, xmax)
+  local(w)
+  global()
+  instance()
+  (
+    ( (x2 > xmin) && (x1 < xmax) ) ? (
+      w = xmax - xmin;
+      x1 = x1 - xmin;
+      x2 = x2 - xmin;
+    
+      x1 < 0 ? (
+        y1 = y1 - ( ( y2 - y1 ) / ( x2 - x1 ) ) * x1;
+        x1 = 0;
+      );
+      x2 > (xmax-xmin) ? (
+        y2 = y2 - ( ( y2 - y1 ) / ( x2 - x1 ) ) * (x2-w);
+        x2 = w;
+      );
+      
+      gfx_line(xmin + x1, y1,     xmin+x2, y2);
+      gfx_line(xmin + x1, y1 - 1, xmin+x2, y2-1);
+    );
+  );
+  
+function drawEnvelopeWindow()  
+  global( grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
+          backface_color_r, backface_color_g, backface_color_b, backface_color_a,
+          fontface, widgetFontSize, scaling,
+          font_color_r, font_color_g, font_color_b, font_color_a,
+          highlight_r, highlight_g, highlight_b, highlight_a,
+      envelope_curve_r,envelope_curve_g,envelope_curve_b,envelope_curve_a,
+          gfx_x, gfx_y, gfx_mode, boldEdges, ENVELOPE_FONT )
+  instance(x, y, w, h, h_graph, h_total, nodes, memory, curveMemory, curTime, loopStart, loopEnd, grabbed, over, title, division,
+           x4_1, x4_2, x4_3, x4_4, x3_1, x3_2, x5, bw, bh, offset, zoom, speedSlider, wR, wG, wB, wA, 
+           soften, midiTrigger, aLoop, midiVel, snap, highlighted,
+           clear, random, hoveridx, hoverSize,
+           v_out )
+  local(xptr, xptr2, ctype, tn, tnm1, yn, ynm1, dy, xs, ys, ym, siz, jnk, cuts, ymin, ymax, xc, dx, idx, idt, tc, t, t2, t3, y1, y2
+        lps, lpe, xmax)
+  (    
+    gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
+    gfx_rect(x, y, w, h_graph);
+
+    xs = w-4;
+    ys = h-4;
+    ym = y+h_graph-2;
+    xmax = x + w;
+    
+    cuts = 1;
+    division == 1 ? cuts = 16 + 16*floor(zoom/2) :
+    division == 2 ? cuts = 9 + 9*floor(zoom/2);
+
+    xc = x-xs*offset;
+    dx = zoom*xs/cuts;
+    gfx_set(1, 1, 1, .1);
+    loop(cuts-1,
+      xc += dx;
+      (xc > x && xc < x+w) ? (      
+        gfx_line(xc, y+1, xc, y+h_graph);
+      );
+    ); 
+    
+    gfx_set(envelope_curve_r,envelope_curve_g,envelope_curve_b,envelope_curve_a);
+    xptr = memory;
+    xptr2 = curveMemory;
+    tnm1 = - w*offset;
+    ynm1 = 0;
+    
+    (hoveridx > 0 && hoveridx < (nodes-1)) ? (
+      gfx_circle(x+zoom*xptr[2*(hoveridx-1)]*xs - xs*offset, ym-xptr[2*(hoveridx-1)+1]*ys-1, hoverSize);
+    );
+    
+    loop(nodes-1,
+      tn = zoom*xptr[]*xs - xs*offset; xptr += 1;
+      yn = xptr[]*ys; xptr += 1;
+      ctype = xptr2[]; xptr2 += 1;
+      
+      (tn > 0) && (tnm1 < w) ? 
+      (
+        (ctype == 0) ?
+        (
+          tnm1 < 0 ? (
+            ynm1 = ynm1 - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * tnm1;
+            tnm1 = 0;
+          );
+          tn > w ? (
+            yn = yn - ( ( yn - ynm1 ) / ( tn - tnm1 ) ) * (tn-w);
+            tn = w;
+          ) : gfx_circle(x+tn, ym-yn-1, 2);
+          gfx_line(x+tnm1, ym-ynm1,   x+tn, ym-yn);
+          gfx_line(x+tnm1, ym-ynm1-1, x+tn, ym-yn-1);
+        ) : (ctype == 1) ? (
+          // Smooth
+          dy = (yn - ynm1);
+          
+          dx = 10;
+          idt = 1 / dx;
+          idx = (tn - tnm1) * idt;
+          xc = x+tnm1;
+          tc = t2 = t3 = 0;
+          loop(dx, 
+            y1 = ynm1+dy*(3*t2-2*t3);
+            tc += idt;
+            t2 = tc*tc;
+            t3 = t2*tc;
+            y2 = ynm1+dy*(3*t2-2*t3);
+            safeLine(xc, ym-y1, xc+idx, ym-y2, x, xmax);
+            xc += idx;
+          );
+          (x + tn) < xmax ? gfx_circle(x+tn, ym-yn-1, 2);
+        ) : (ctype == 2) ? (
+          // Exponential 1
+          dy = (yn - ynm1);
+          
+          dx = 10;
+          idt = 1 / dx;
+          idx = (tn - tnm1) * idt;
+          xc = x+tnm1;
+          tc = t2 = t3 = 0;
+          loop(dx, 
+            y1 = ynm1+dy*(1-exp(-5*tc));
+            tc += idt;
+            y2 = ynm1+dy*(1-exp(-5*tc));
+            safeLine(xc, ym-y1, xc+idx, ym-y2, x, xmax);
+            xc += idx;
+          );
+          (x + tn) < xmax ? gfx_circle(x+tn, ym-yn-1, 2);
+        ) : (
+          // Exponential 2
+          dy = (yn - ynm1);
+          
+          dx = 10;
+          idt = 1 / dx;
+          idx = (tn - tnm1) * idt;
+          xc = x+tnm1;
+          tc = t2 = t3 = 0;
+          loop(dx, 
+            y1 = ynm1+dy*tc*tc*tc;
+            tc += idt;
+            y2 = ynm1+dy*tc*tc*tc;
+            safeLine(xc, ym-y1, xc+idx, ym-y2, x, xmax);
+            xc += idx;
+          );
+          (x + tn) < xmax ? gfx_circle(x+tn, ym-yn-1, 2);
+        );
+      );
+      
+      tnm1 = tn;
+      ynm1 = yn;
+    );
+    
+    ymin = y+h_graph-h;
+    ymax = y+h_graph;
+    xc   = x+zoom*xs*curTime-xs*offset;
+    ( xc > x && xc < x+w ) ? (
+      gfx_line( xc, ymin, xc, ymax );
+      gfx_circle( xc, ymax - v_out*h, 2 );
+    );
+    
+    
+    // Loop start
+    lps = min(x+w-2, max(x+2, x+w*(zoom*loopStart-offset)));
+    over == -2 ? ( 
+      gfx_set(.5,.5, 1,.3);
+      gfx_line( lps+1, ymin, lps+1, ymax );
+      gfx_line( lps-1, ymin, lps-1, ymax );
+      gfx_set(.7,.7, 1,.6);
+      gfx_line( lps, ymin, lps, ymax );
+    ) : ( 
+      gfx_set(.7,.7, 1,.3);
+      gfx_line( lps, ymin, lps, ymax );
+    );
+    
+    // Loop end
+    lpe = min(x+w-2, max(x+2, x+w*(zoom*loopEnd-offset)));
+    over == -1 ? ( 
+      gfx_set(.5,.5, 1,.3);
+      gfx_line( lpe+1, ymin, lpe+1, ymax ); 
+      gfx_line( lpe-1, ymin, lpe-1, ymax ); 
+      gfx_set(.7,.7, 1,.6);
+      gfx_line( lpe, ymin, lpe, ymax );
+    ) : (
+      gfx_set(.7,.7, 1,.3);
+      gfx_line( lpe, ymin, lpe, ymax );
+    );
+    
+    gfx_set(.7,.7,1,.1);
+    gfx_rect( lps, ymin, lpe-lps, h );
+    
+    gfx_setfont(ENVELOPE_FONT);    
+    gfx_set( font_color_r, font_color_g, font_color_b, font_color_a );
+    gfx_measurestr(title, siz, jnk);
+    gfx_x = x + w - siz - 10;
+    gfx_y = y - .5*jnk + 1;
+    gfx_printf(title);
+    gfx_set( wR, wG, wB, .4 );
+    gfx_line(x, y, x, y+h_total);
+    gfx_line(x+1, y, x + w - siz - 13, y);
+    gfx_line(x+w-8, y, x+w-1, y);
+    gfx_line(x+w, y, x+w, y+h_total);
+    gfx_line(x+1, y+h_graph, x+w-1, y+h_graph);
+    
+    gfx_line(x+1, y+h_total, x+w, y+h_total);
+
+    (highlighted > 0) ? (
+      gfx_set( wR, wG, wB, .4 * highlighted );
+      gfx_line(x, y-1, x + w - siz - 13, y-1);
+      gfx_line(x-1, y, x-1, y+h_total);
+      gfx_line(x+w+1, y, x+w+1, y+h_total);
+      gfx_line(x+w-8, y-1, x+w, y-1);
+      gfx_line(x, y+h_total+1, x+w, y+h_total+1);
+      
+      gfx_set( highlight_r, highlight_g, highlight_b, highlight_a * highlighted );
+      gfx_mode = 1;
+      gfx_rect( x-8, y-8, w+16, h_total+16 );
+      gfx_mode = 0;
+    );
+
+    ( boldEdges == 1 ) ? (
+      gfx_set( wR, wG, wB, wA );
+      gfx_line(x, y-1, x + w - siz - 13, y-1);
+      gfx_line(x-1, y, x-1, y+h_total);
+      gfx_line(x+w+1, y, x+w+1, y+h_total);
+      gfx_line(x+w-8, y-1, x+w, y-1);
+      gfx_line(x, y+h_total+1, x+w, y+h_total+1);
+    );
+
+    speedSlider.sliderwidget_draw();
+    soften.selectionButton_draw();
+    midiTrigger.selectionButton_draw();
+    midiVel.selectionButton_draw();
+    snap.selectionButton_draw();
+    clear.selectionButton_draw();
+    random.selectionButton_draw();
+    aLoop.selectionButton_draw();
+  ); 
+ 
+ 
+function envTrafoX(mx)
+  instance(x, w, zoom, offset)
+  local()
+  global()
+  (
+    mx = (mx - x)/(w-4);
+    mx = (mx + offset)/zoom;
+    mx = max(0.000000001,min(1,mx))
+  );
+  
+function envTrafoY(my)
+  instance(y, h, h_graph)
+  local(ym)
+  global()
+  (
+    ym = y+h_graph-2;
+    my = (ym - my)/(h-4);
+    my = max(0,min(1,my))
+  );  
+  
+function enviTrafoX(mx)
+  instance(x, w, zoom, offset)
+  local()
+  global()
+  (
+    mx = mx*zoom - offset;
+    mx = mx*(w-4)+x;
+  );
+  
+function enviTrafoY(my)
+  instance(y, h, h_graph)
+  local(ym)
+  global()
+  (
+    ym = y+h_graph-2;
+    my = ym - my*(h-4)
+  );   
+ 
+envelopeDist = 0.15; 
+ 
+function selectEnvelopePoint(ex, ey)
+  instance(x, y, w, h, ar, nodes, memory, zoom)
+  local(xptr, dx, dy, ndist, dist, i, cur)
+  global(envelopeDist)
+  (
+    xptr = memory;
+    dist = 10000000000000000;
+    cur = 0;
+    i = 0;
+    ar = w/h;
+    loop(nodes,
+      i += 1;
+      dx = (ex - xptr[])*zoom*ar;
+      xptr += 1;
+      dy = ey - xptr[];
+      xptr += 1;
+      
+      ndist = sqrt(dx * dx + dy * dy);
+      ( ndist < dist ) ?
+      (
+        dist = ndist;
+        cur = i;
+      );
+    );
+    
+    (dist < envelopeDist) ? cur : -1;
+  );
+  
+function selectEnvelopePointByX(ex)
+  instance(x, y, w, h, nodes, memory, zoom)
+  local(cpos, ct, cnode)
+  global()
+  (
+    cpos = memory;
+    ct = cpos[];
+    cnode = 0;
+    while( (ct < ex) && (cnode < nodes) )
+    ( 
+      cpos  += 2;
+      cnode += 1;
+      ct = cpos[];
+    );    
+    
+    cnode
+  );  
+  
+function setEnvPt(idx, ex, ey)
+  instance(x, y, w, h, memory)
+  local(xptr)
+  global()
+  (
+    xptr = memory;
+    xptr += 2*(idx-1);    
+    
+    xptr[] = ex; xptr += 1;
+    xptr[] = ey;
+    
+    this.bsort();
+  );  
+  
+function getEnvX(idx)
+  instance(x, y, w, h, memory)
+  local(xptr)
+  global()
+  (
+    xptr = memory;
+    xptr += 2*(idx-1);
+    xptr[]
+  );  
+  
+function getEnvY(idx)
+  instance(x, y, w, h, memory)
+  local(xptr)
+  global()
+  (
+    xptr = memory;
+    xptr += 2*(idx-1) + 1;
+    xptr[]
+  );  
+ 
+  
+function removeEnvelopePointsBetweenX(ex1, ex2)
+  instance(x, y, w, h, nodes, memory, curveMemory, zoom)
+  local(cpos, ct, cnode, endX, endY)
+  global()
+  (
+    cpos = memory;
+    ct = cpos[];
+    cnode = 0;
+    while( cnode < nodes )
+    ( 
+      ( (ct > ex1) && (ct < ex2) ) ? 
+      (
+        // ct contains current xpos
+        // cpos[1] contains current ypos
+        endX = memory[2*((nodes-1)-1)];
+        endY = memory[2*((nodes-1)-1) + 1];
+        
+        // Replace the detected node with the node at the end.
+        //curveMemory[cnode-2] = curveMemory[nodes-2];
+        curveMemory[cnode] = curveMemory[nodes-2];
+        cpos[] = endX;
+        cpos[1] = endY;
+        
+        // Set node at the end to zero
+        memory[2*((nodes-1)-1)] = 0;
+        memory[2*((nodes-1)-1) + 1] = 0;
+         
+        // Reduce nodecount
+        nodes -= 1;
+      ) : (
+        cpos  += 2;
+        cnode += 1;
+      );
+      ct = cpos[];
+    );    
+    
+    this.bsort();
+  );   
+ 
+N_CURVES = 3; 
+function rotateCurves(cidx, my)
+  instance(curveMemory, cy)
+  local(chg)
+  global(N_CURVES)
+  (
+    chg = .1*(cy - my);
+    // Toggle curves
+    (chg > 1) ?
+    (
+      curveMemory[cidx] += 1;
+      cy = my;
+    ) : (chg < -1) ? (
+      curveMemory[cidx] -= 1;
+      cy = my;
+    );
+    
+    ( curveMemory[cidx] > N_CURVES ) ? curveMemory[cidx] = 0;
+    ( curveMemory[cidx] < 0 ) ? curveMemory[cidx] = N_CURVES;  
+  ); 
+ 
+function processMouseEnvelope()
+  instance(x, y, w, h, h_graph, nodes, memory, curveMemory, grabbed, lastleft, lastright, lx, ly, loopStart, loopEnd, over, zoom, offset, 
+           speedSlider, soften, midiTrigger, aLoop, midiVel, snap, snapping, division, lastLeftTime, cidx, cy, htime, clear, random,
+           hoveridx, hoverSize )
+  local(left, right, xptr, ym, idx, mx, my, mc, ex, ey, endX, endY, newgrab, ymin, ymax, cuts, tx, tx2, now)
+  global(scaling, mouse_x, mouse_y, mouse_cap, mouse_wheel, gfx_x, gfx_y, dbl, N_CURVES)
+  (
+    mx = mouse_x;
+    my = mouse_y;
+    mc = mouse_cap;
+    left = (mc & 1);
+    right = (mc & 2);
+    ymin = y+h_graph-h;
+    ymax = y+h_graph;
+    
+    // Find nearest
+    ( ( ( my > ymin ) && ( my < ymax ) && ( (mouse_cap & 4) == 0 ) ) || grabbed ) ? (
+      ex = abs(mx - this.enviTrafoX(loopStart));
+      ey = abs(mx - this.enviTrafoX(loopEnd));
+      over = ex < ey ? -2 : -1;
+    ) : over = 0;
+    
+    // If nearest is not close enough, reset selection
+    min(ex,ey) > 10/zoom ? over = 0;
+    
+    // Check if we are close to an envelope
+    ( mx > x && my > ymin && mx < (x+w) && my < ymax && ( (mouse_cap & 4) == 0 ) ) ?
+    (
+      idx = this.selectEnvelopePoint(this.envTrafoX(mx), this.envTrafoY(my));
+      ( idx > 0 ) ? 
+      (
+        hoveridx = idx;
+        hoverSize += .5 * (8*(1+scaling)-hoverSize);
+      ) : ( hoverSize = .75*hoverSize; );
+    ) : ( hoverSize = .75*hoverSize; );
+    
+    time_precise(now);
+    cuts = 1;
+    division == 1 ? cuts = 16 + 16*floor(zoom/2) :
+    division == 2 ? cuts = 9 + 9*floor(zoom/2);
+    
+    ( left > 0 ) ?
+    (
+      ( lastleft == 0 ) ? (
+        ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+        (
+          idx = this.selectEnvelopePoint(this.envTrafoX(mx), this.envTrafoY(my));
+          ( (idx > 0) && (idx < nodes-1) && ( (mouse_cap & 4) == 0 ) ) ? (
+            grabbed = idx;
+          ) : (
+            grabbed = over;
+            
+            // Nothing grabbed?
+            ( grabbed == 0 ) ? (
+              (mouse_cap & 16) ? (
+                (mouse_cap & 4) ? (
+                  grabbed = -5;
+                  cidx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
+                  cy = my;
+                ) : (
+                  grabbed = -4;
+                  cidx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
+                  cy = my;
+                );
+              ) : ( (now - lastLeftTime) < .3 ) ? (
+                // Double click? Change envelope shape
+                idx = this.selectEnvelopePointByX( this.envTrafoX(mx) );
+                curveMemory[idx] += 1;
+                ( curveMemory[idx] > N_CURVES ) ? curveMemory[idx] = 0;
+                
+                // Control held, change all of them.
+                (mouse_cap & 4) ? (
+                  xptr = curveMemory;
+                  loop(N_CURVES,
+                    xptr[] = curveMemory[cidx];
+                    xptr += 1;
+                   );
+                );
+                
+                dbl = idx;
+              ) : ( mouse_cap & 4 ) ? (
+                // Step sequencing
+                grabbed = -10;
+              ) : (
+                // Or drag offset?
+                grabbed = -3;
+              );
+            ) 
+          );
+          lastLeftTime = now;
+        )
+      ) : ( grabbed == -10 ) ? (
+        // Step sequencer-style fill
+        ex = this.envTrafoX(mx);
+        ey = this.envTrafoY(my);
+        tx = floor(ex * cuts) / cuts;
+        tx2 = ceil(ex * cuts) / cuts;
+        this.removeEnvelopePointsBetweenX(tx, tx2);
+
+        curveMemory[nodes] = 0;
+        this.setEnvPt(nodes, tx+0.0000001, ey);
+        idx = this.selectEnvelopePoint(ex, ey);
+        curveMemory[nodes] = 0;
+        this.setEnvPt(nodes, tx2-0.0000001, ey);
+        idx = this.selectEnvelopePoint(ex, ey);
+      ) : ( grabbed > 0 ) ?
+      (
+        // Dragging a node
+        ex = this.envTrafoX(mx);
+        ey = this.envTrafoY(my);
+        ( snapping == 1 ) ? (
+          tx = floor(ex * cuts + .5) / cuts;
+
+          (tx < ex) ? ex = tx - 0.0000001 : ex = tx + 0.0000001;
+        );
+        ex = min(max(0.001,ex),1-.001);
+        this.setEnvPt( grabbed, ex, ey );
+      ) : ( grabbed == -5 ) ? (
+        // Changing all curve shapes
+        this.rotateCurves(cidx, my);
+        xptr = curveMemory;
+        loop(N_CURVES,
+          xptr[] = curveMemory[cidx];
+          xptr += 1;
+        );
+      ) : ( grabbed == -4 ) ?
+      (
+        // Change one curve shape
+        this.rotateCurves(cidx, my);
+      ) : ( grabbed == -3 ) ? 
+      (
+        // Pan
+        offset = min( zoom-1, max( 0, offset - this.envTrafoX(mx) + this.envTrafoX(lx) ) );
+      ) : ( grabbed == -2 ) ?
+      (
+        // Move loop end
+        ex = this.envTrafoX(mx);
+        ( snapping == 1 ) ? ex = floor(ex * cuts + .5) / cuts;
+        
+        ex = min(ex, loopEnd - 0.01);
+        loopStart = ex;
+      ) : ( grabbed == -1 ) ?
+      (
+        // Move loop start
+        ex = this.envTrafoX(mx);
+        ( snapping == 1 ) ? ex = floor(ex * cuts + .5) / cuts;
+        
+        ex = max(ex, loopStart + 0.01);
+        loopEnd = ex;
+      );
+    ) : (
+      grabbed = 0;
+    );
+    
+    ( right > 0 ) ?
+    (
+      ( lastright == 0 ) ? (
+        ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+        (
+          endX = this.getEnvX(nodes-1);
+          endY = this.getEnvY(nodes-1);
+          ex = this.envTrafoX(mx);
+          ey = this.envTrafoY(my);
+          idx = this.selectEnvelopePoint(ex, ey);
+          ( idx > 0 ) ? (
+            // Remove node
+            curveMemory[idx-1] = curveMemory[nodes-2];
+            this.setEnvPt(idx, endX, endY);
+            this.setEnvPt(nodes, 0, 0);
+          ) : (
+            // Add node
+            ( snapping == 1 ) ? (
+              tx = floor(ex * cuts + .5) / cuts;
+              ex = tx < ex ? ex = tx - 0.000000001;
+              ex = tx > ex ? ex = tx + 0.000000001;
+            );
+            this.setEnvPt(nodes, ex, ey);
+            idx = this.selectEnvelopePoint(ex, ey);
+            curveMemory[idx-1] = curveMemory[idx];
+            curveMemory[idx] = 0;
+          );
+        );
+      );
+    );
+    
+    ( grabbed == 0 ) ? (
+      speedSlider.sliderWidget_processMouse(mouse_x, mouse_y, lx-mouse_x, ly-mouse_y, mouse_cap);    
+      soften.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+      midiTrigger.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+      midiVel.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+      snap.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+      aLoop.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+    
+      clear.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+        this.resetEnvelopeCurve();
+        clear.active = 0;
+      );
+    
+      random.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+        this.randomEnvelopeCurve();
+        random.active = 0;
+      );
+    );
+    
+    this.updateEnvelopeSpeed();
+    this.updateToggles();
+    
+    ( abs(mouse_wheel) > 0 ) ? (
+      ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ?
+      (
+        zoom = max(1,zoom + .001*mouse_wheel);
+        mouse_wheel = 0;
+        offset = min( zoom-1, max( 0, offset - this.envTrafoX(mx) + this.envTrafoX(lx) ) );
+      );
+    );
+    
+    ( mx > x && my > ymin && mx < (x+w) && my < ymax ) ? updateHintTime("Envelope\n\nRMB - Add/Delete node.\nLMB + Drag - Drag node.\nLMB + Drag - Scroll when zoomed\nScrollwheel - Zoom\nDoubleclick - Change envelope type.\nAlt + LMB + Drag - Change envelope type.\nCtrl + LMB + Drag - Enter values step sequencer style\n\nNote: The envelope loops in shaded area whose extremities can be dragged.");
+    
+    lx = mx;
+    ly = my;
+    lastleft = left;
+    lastright = right;
+  );  
+
+function calcEnvelope(t)
+  global( grid_color_r, grid_color_g, grid_color_b, grid_color_a, 
+          backface_color_r, backface_color_g, backface_color_b, backface_color_a )
+  instance(memory, nodes)
+  local(xptr, tn, tnm1, yn, ynm1, dy)
+  (
+    xptr = memory;
+    loop(nodes,
+      tn = xptr[];
+      tn > t ? (
+        xptr += 1;
+        yn = xptr[];
+        xptr -= 2;
+        ynm1 = xptr[];
+        xptr -= 1;
+        tnm1 = xptr[];
+      );
+      xptr += 2;
+    );
+    
+    // Lerp it baby
+    dy = (yn - ynm1) / ( tn - tnm1 );
+    ynm1 + dy * (t-tnm1);
+  );
+
+function evaluateEnvelope(notesOn)
+  global()
+  instance(v_out, autoloop, triggering, ret, curTime, invsrate, cpos, cpos2, memory, curveMemory, tn, tnm1, yn, ynm1, dy, invdx, cnode, nodes, loopStart, loopEnd, softening, smoothMem, useVelocities, curvel, curCurve)
+  local(xptr,t2, t3, tmp)
+  (
+    //ret = this.calcEnvelope(curTime);
+    ( cnode < nodes ) ? (
+      while( (curTime > tn) && (cnode < nodes) )
+      ( 
+        tnm1      = cpos[];
+        ynm1      = cpos[1];
+        tn        = cpos[2];
+        yn        = cpos[3];
+        curCurve  = cpos2[];
+        
+        dy        = (yn - ynm1);
+        invdx     =  1 / ( tn - tnm1 );
+        curCurve == 0 ? dy *= invdx;
+        
+        cpos  += 2;
+        cpos2 += 1;
+        cnode += 1;
+      );      
+      
+      curCurve == 0 ? (
+        ret = ynm1 + dy * (curTime-tnm1)
+      ) : ( curCurve == 1 ) ? 
+      ( 
+        tmp = (curTime - tnm1)*invdx;
+        t2  = tmp*tmp;
+        t3  = tmp*t2;
+        ret = ynm1+dy*(3*t2-2*t3);
+      ) : ( curCurve == 2 ) ? 
+      (
+        tmp = (curTime - tnm1)*invdx;
+        ret = ynm1+dy*(1-exp(-5*tmp))
+      ) : ( curCurve == 3 ) ? 
+      (
+        tmp = (curTime - tnm1)*invdx;
+        ret = ynm1+dy*tmp*tmp*tmp
+      );
+      
+      ( useVelocities == 1 ) ? ret = curvel * ret;
+      
+      curTime = curTime + invsrate;
+      ( (((triggering == 1) && notesOn) || (autoloop == 1)) && (curTime > loopEnd) ) ? ( 
+        curTime = loopStart + (curTime - loopEnd); 
+        cnode = 0; 
+        cpos = memory; 
+        cpos2 = curveMemory;
+		
+		tnm1      = 0;
+		ynm1      = 0;
+		
+		tn 		  = cpos[];
+		yn        = cpos[1];
+
+		dy        = (yn - ynm1);
+		invdx     =  1 / ( tn - tnm1 );
+		curCurve  = cpos2[];
+		curCurve == 0 ? dy *= invdx;
+		cpos2 += 1;
+      );
+      
+      softening == 1 ? (
+        v_out = smoothMem = smoothMem + .05 * ( ret - smoothMem );
+      ) : (
+        v_out = ret
+      );
+    ) : (
+      softening == 1 ? (
+        v_out = smoothMem = smoothMem - .05 * smoothMem;
+      ) : (
+        v_out = 0
+      );
+    )
+  );
+
+function serializeEnvelope()
+  instance(nodes, 
+     memory, curveMemory,
+     loopStart, loopEnd, loopTypem autoloop, bidiloop,
+     division, zoom, offset, snapping,
+     softening, triggering, useVelocities,
+     speedSlider)
+(
+  file_var(0,nodes);
+  file_var(0,loopStart);
+  file_var(0,loopEnd);
+  file_var(0,loopType);
+  file_var(0,division);
+  file_var(0,speedSlider.value);
+  file_var(0,zoom);
+  file_var(0,offset);
+  file_var(0,softening);
+  file_var(0,triggering);
+  file_var(0,useVelocities);
+  file_var(0,snapping);
+  file_var(0,autoloop);
+  
+  file_mem(0,memory,256);
+  file_mem(0,curveMemory,256);
+);
+
