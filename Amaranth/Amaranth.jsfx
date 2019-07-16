@@ -1,8 +1,8 @@
 desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
 tags: amaranth granular synth graintable grains
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: Added bi-directional envelope looping
+changelog: Added option to maintain grain length. Added envelope automation on position, size and pitch. Fixed bug in bidi envelope.
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -21,6 +21,7 @@ slider12:pitchMode=0<0,1,1{Normal,RandomPitch}>
 slider13:octaveMin=0<-4,4,1>-Octave Min
 slider14:octaveMax=0<-4,4,1>-Octave Max
 slider15:reverseProb=0<0,1,1>-Reverse Probability
+slider16:pitchTimeInvariance=0<0,1,1>-Invariance
 slider63:updateBuffer=1<0,1,1>-Update Buffer
 slider64:postGain=1<0,2,.00001>-postGain
 
@@ -29,6 +30,14 @@ import Amaranth_envelopes.jsfx-inc
 import Amaranth_grainlib.jsfx-inc
 
 @init
+nModulators = 4;
+GRAINMIN = 40;
+GRAINMAX = 300;
+GRAINRANGE = GRAINMAX - GRAINMIN;
+MINSPEED = .125;
+MAXSPEED = 2;
+SPEEDRANGE = MAXSPEED - MINSPEED;
+
 function updatePitch()
   local()
   global(lastNote, refNote, noteFollowFactor)
@@ -327,7 +336,7 @@ function drawBuffer(x, y, w, h, fill)
   );
   notePtr[]       = -1337;    // Signal end of note buffer
   notePtr         = note_mem;
-  curSample       = 0;        // Current sample in block
+  curSample       = -1;        // Current sample in block
   notes_remain    = 1;        // End of the note buffer?
   note_next       = notePtr[];  
 
@@ -377,22 +386,38 @@ function drawBuffer(x, y, w, h, fill)
 
   env1    = envWindow1.evaluateEnvelope(notesOn);
   env2    = envWindow2.evaluateEnvelope(notesOn);
-  curPos  = 1-Position;
   
-  grainLength = (grainSize/1000)*srate;
+  function chooseEnv( choice )
+  (
+    ( choice == 1 ) ? env1
+    : ( choice == 2 ) ? env2
+  );
+  
+  cPosition = position;
+  cGrainSize = grainSize;
+  cSpeed = speed;
+  
+  /* Process modulators */
+  ( positionModulator ) ? ( cPosition   = min( 1, max( 0, cPosition + positionModulatorAmount * chooseEnv(positionModulator) ) ) );
+  ( sizeModulator )     ? ( cGrainSize  = min( GRAINMAX, max( GRAINMIN, cGrainSize + GRAINRANGE * sizeModulatorAmount * chooseEnv(sizeModulator) ) ) );
+  ( speedModulator )    ? ( cSpeed      = min( MAXSPEED, max( MINSPEED, cSpeed + SPEEDRANGE * speedModulatorAmount * chooseEnv(speedModulator) ) ) );
+  
+  /* Actual grain parameters */
+  curPos  = 1-cPosition;
+  grainLength = (cGrainSize/1000)*srate;
   jitter = (grainVariance/100);
   overlap = (grainOverlap/100);
   readBufMin = outBuffer.scopebuffer;
   readBufMax = outBuffer.scopebuffermax;
   readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;//0; //outBuffer.scopeptr-0*.25*safeSize*abs(sin(time_precise()))
-  spd = Speed;
+  spd = cSpeed;
   
   Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
   pitchFollow ? (
     spd = spd * noteFollowFactor;
   );
   
-  grains.granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos);
+  grains.granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos, pitchTimeInvariance);
   
   updateBuffer ? ( 
     outBuffer.updateBuffer(postGain*spl0, postGain*spl1);
@@ -411,11 +436,13 @@ function drawBuffer(x, y, w, h, fill)
   TOGGLE_FONT = 5;
   KNOB_FONT2 = 5;
   HINT_FONT = 14;
+  COMBO_SMALL = 13;
   gfx_setfont(ENVELOPE_FONT, "Arial", 10);
   gfx_setfont(BUTTON_FONT, "Arial", 10);
   gfx_setfont(KNOB_FONT, "Arial", 10);
   gfx_setfont(HINT_FONT, "Arial", 14);
   gfx_setfont(KNOB_FONT2, "Arial", 12);
+  gfx_setfont(COMBO_SMALL, "Arial", 10);
   baseR = .3;
   baseG = .6;
   baseB = 1;
@@ -539,6 +566,9 @@ function drawBuffer(x, y, w, h, fill)
   col1 = 35*(1+scaling);
   col2 = 90*(1+scaling);
   buttonSize = 6*(1+scaling);
+  knobSize = 20*(1+scaling);
+  comboModulatorYSize = 11*(1+scaling);
+  comboModulatorXSize = 9*(1+scaling);
   
   freeze.drawToggle(audioX+knobSize, audioY+knobSize, buttonSize, buttonSize, 1-updateBuffer, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Freeze sampler.");
   freeze.label = "Freeze";
@@ -547,10 +577,21 @@ function drawBuffer(x, y, w, h, fill)
   /* Knob which controls the position */
   xPos = col1;
   yPos = 100*(1+scaling);
-  knobSize = 20*(1+scaling);
+  
+  /* Combobox to select envelope for shaper */
+  positionModulator.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  positionModulator.combobox_setcuritem(positionModulator);
+  positionModulator.value = positionModulatorAmount;
+  positionModulator.combomodulator_draw();
+  positionModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    positionModulator       = positionModulator.curItem;
+    positionModulatorAmount = positionModulator.value;
+  );
+  positionModulator.combobox_draw_top();
+  
   positionKnob.active = 1;
   positionKnob.value  = position;
-  positionKnob.value2 = .5;//positionModulator.value;
+  positionKnob.value2 = positionModulatorAmount;//positionModulator.value;
   positionKnob.noSegments = 1;
   positionKnob.drawKnob(xPos, yPos, knobSize, "Position", "Modify position.");
   positionKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( Position = positionKnob.value );
@@ -566,12 +607,27 @@ function drawBuffer(x, y, w, h, fill)
   yPos += 70*(1+scaling);
   
   /* Knob which controls the grain size */
-  xPos = col1;
+  xPos = col1;  
   grainSizeKnob.active = 1;
-  grainSizeKnob.value  = (grainSize-40)/(300-40);
+  grainSizeKnob.value  = (grainSize-GRAINMIN)/(GRAINMAX-GRAINMIN);
+  grainSizeKnob.value2 = sizeModulatorAmount;
   grainSizeKnob.noSegments = 1;
   grainSizeKnob.drawKnob(xPos, yPos, knobSize, "Size [ms]", "Modify grain size.");
-  grainSizeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .116) ? slider_automate( grainSize = (300-40)*grainSizeKnob.value+40 );
+  grainSizeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .116) ? slider_automate( grainSize = (GRAINMAX-GRAINMIN)*grainSizeKnob.value+GRAINMIN );
+  
+  fixedSizeToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, pitchTimeInvariance, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Maintain grain size when pitching.\n");
+  pitchTimeInvariance = fixedSizeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  /* Combobox to select envelope for speed modulator */
+  sizeModulator.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  sizeModulator.combobox_setcuritem(sizeModulator);
+  sizeModulator.value = sizeModulatorAmount;
+  sizeModulator.combomodulator_draw();
+  sizeModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    sizeModulator       = sizeModulator.curItem;
+    sizeModulatorAmount = sizeModulator.value;
+  );
+  sizeModulator.combobox_draw_top();
   
   /* Knob which controls the grain variance */
   xPos = col2;
@@ -581,16 +637,28 @@ function drawBuffer(x, y, w, h, fill)
   overlapKnob.drawKnob(xPos, yPos, knobSize, "Overlap", "Modify grain overlap (higher leads to denser, more constant sounds).");
   overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .9) ? slider_automate( grainOverlap = 93*overlapKnob.value );
   
-  yPos += 70*(1+scaling);
+  yPos += 70*(1+scaling);  
   
   /* Knob which controls the speed */
   xPos = col1;
   speedKnob.active = 1;
-  speedKnob.value  = (Speed-.125)/(2-.125);
+  speedKnob.value  = (Speed-MINSPEED)/(MAXSPEED-MINSPEED);
+  speedKnob.value2 = speedModulatorAmount;
   speedKnob.noSegments = 1;
   speedKnob.drawKnob(xPos, yPos, knobSize, "Pitch", "Modify grain speed / pitch.");
-  speedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .466666666666666666) ? slider_automate( Speed = (2-.125)*speedKnob.value+.125 );
-    
+  speedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .466666666666666666) ? slider_automate( Speed = (MAXSPEED-MINSPEED)*speedKnob.value+MINSPEED );
+  
+  /* Combobox to select envelope for speed modulator */
+  speedModulator.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  speedModulator.combobox_setcuritem(speedModulator);
+  speedModulator.value = speedModulatorAmount;
+  speedModulator.combomodulator_draw();
+  speedModulator.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    speedModulator       = speedModulator.curItem;
+    speedModulatorAmount = speedModulator.value;
+  );
+  speedModulator.combobox_draw_top();
+  
   /* Knob which controls the grain variance */
   xPos = col2;
   minl = -6;
@@ -613,7 +681,7 @@ function drawBuffer(x, y, w, h, fill)
   
   /* Reference pitch */
   xPos = col1;
-  followToggle.drawToggle(xPos - 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, PitchFollow, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
+  followToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, PitchFollow, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
   PitchFollow = followToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   refPitchKnob.active = PitchFollow;
@@ -623,12 +691,11 @@ function drawBuffer(x, y, w, h, fill)
   sprintf( 5, "%d", floor(refPitchKnob.value*96-48) );
   refPitchKnob.label = 5;
   refPitchKnob.drawKnob(xPos, yPos, knobSize, "Ref Note", "Reference pitch for MIDI input.");
-  
-  yPos += 70*(1+scaling);
+  yPos += 70*(1+scaling);  
   
   /* Knob which controls the minimum shift for the octaver */
   xPos = col1;
-  octaverToggle.drawToggle(xPos - 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, Octaver, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
+  octaverToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, Octaver, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
   Octaver = octaverToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   octaveMinKnob.active = 1;
@@ -658,14 +725,6 @@ function drawBuffer(x, y, w, h, fill)
   reverseProbKnob.noSegments = 1;
   reverseProbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( reverseProb = reverseProbKnob.value );
   reverseProbKnob.drawKnob(xPos, yPos, knobSize, "Reverse", "Reverse Probability.");
-  
-  
-  
-  /*
-  slider12:pitchMode=0<0,1,1{Normal,RandomPitch}>
-  slider13:octaveMin=0<-4,4,1>-Octave Min
-  slider14:octaveMax=0<-4,4,1>-Octave Max
-  */
   
   /* Draw logo */
   loaded = 0;

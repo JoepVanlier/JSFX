@@ -193,71 +193,74 @@ function grainDrawHeads(x, y, w, h, wb)
     this.grain14.grainDrawHead(x, y, w, h, wb);
   );
 
-function granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, reverseProbability, playing, readBufCur, readBufMin, readBufMax, writeBufCur, relPosition)
+function granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, reverseProbability, playing, readBufCur, readBufMin, readBufMax, writeBufCur, relPosition, pitchTimeInvariance)
   local(grainVar, N, ptr, pan, dist, safetyFactor, lostBuffer, total, reverse, lowLatencyCompensation)
   global(updateBuffer)
   instance(nextGrain, L, R, GL, GR, normalize, fixedGrainSize)
   (
-		fixedGrainSize = 1;
+    fixedGrainSize = 1;
     nextGrain -= 1;
     
     (playing && nextGrain <= 0) ? (
-			/* Detune */
-			spd = spd + spdSpread * (rand()-.5);
-		
-      N = floor(grainLength*.3333333333333333333333);
+      /* Detune */
+      spd = spd + spdSpread * (rand()-.5);
+    
+      pitchTimeInvariance ? grainLength = grainLength * spd;
+    
+      N = floor(grainLength*.3333333333333333333333);      
+      
       grainVar = jitter*grainLength;
-			reverse = reverseProbability > rand();
+      reverse = reverseProbability > rand();
       
       pan = .5 + panSpread*(rand()-.5);
       
-			fixedGrainSize ? (
-				N = N/spd;
-				nextGrain = 3*N*(1-overlap);
-				
-				total = readBufMax - readBufMin;
-				
-				safetyFactor = 1/spd;
-				safetyFactor < 1 ? (
-					// Correct for overshooting the buffer at the front
-					lowLatencyCompensation = 2 * grainLength * relPosition * safetyFactor * updateBuffer;
-				) : (
-					// Correct for overshooting the buffer at the back (not actually desirable)
-					//lowLatencyCompensation = 2 * grainLength * (1-relPosition) * (safetyFactor-1) * updateBuffer;
-					1
-				);
-				
-				ptr = writeBufCur - readBufCur * total - 2*floor((rand() - (1-relPosition)) * grainVar) - 2 * grainLength * relPosition + lowLatencyCompensation - 16;
-				
-				reverse ? (
-					spd = -spd;
-					ptr = ptr + 4*grainLength * ( 1 - relPosition ) * updateBuffer + 2*grainLength * (1-updateBuffer);
-				);
-			) : (
-				nextGrain = 3*N*(1-overlap);
-				
-				// When the playback speed is faster, we need to start further back in time to make sure 
-				// that we don't exceed the pointer.
-				safetyFactor = max(0.01, spd-updateBuffer);
-				
-				lostBuffer = max(0, 2 * grainLength * spd * ( 1 / spd - 1 ) * updateBuffer);
-				
-				/* Total range that is safe to use is readBufMax - readBufMin */
-				total = readBufMax - readBufMin - 2 * safetyFactor * grainLength - 2 * grainVar - lostBuffer - 16;
-				ptr = writeBufCur - readBufCur*total;
-				
-				ptr = ptr - 2*floor(abs(rand()) * grainVar) - 2 * safetyFactor * grainLength - 8;
-				
-				reverse ? (
-					spd = -spd;
-					ptr = ptr - 2 * spd * grainLength;
-				);
-				
-				dist = (writeBufCur - ptr);
-				( dist < 0 ) ? (dist = dist + (readBufMax - readBufMin); );
-				( dist < 2*(spd-1)*grainLength ) ? ptr = writeBufCur - 2*safetyFactor*grainLength;
+      fixedGrainSize ? (
+        N = N/spd;
+        nextGrain = 3*N*(1-overlap);
+        
+        total = readBufMax - readBufMin;
+        
+        safetyFactor = 1/spd;
+        safetyFactor < 1 ? (
+          // Correct for overshooting the buffer at the front
+          lowLatencyCompensation = 2 * grainLength * relPosition * safetyFactor * updateBuffer;
+        ) : (
+          // Correct for overshooting the buffer at the back (not actually desirable)
+          //lowLatencyCompensation = 2 * grainLength * (1-relPosition) * (safetyFactor-1) * updateBuffer;
+          1
+        );
+        
+        ptr = writeBufCur - readBufCur * total - 2*floor((rand() - (1-relPosition)) * grainVar) - 2 * grainLength * relPosition + lowLatencyCompensation - 16;
+        
+        reverse ? (
+          spd = -spd;
+          ptr = ptr + 4*grainLength * ( 1 - relPosition ) * updateBuffer + 2*grainLength * (1-updateBuffer);
+        );
+      ) : (
+        nextGrain = 3*N*(1-overlap);
+        
+        // When the playback speed is faster, we need to start further back in time to make sure 
+        // that we don't exceed the pointer.
+        safetyFactor = max(0.01, spd-updateBuffer);
+        
+        lostBuffer = max(0, 2 * grainLength * spd * ( 1 / spd - 1 ) * updateBuffer);
+        
+        /* Total range that is safe to use is readBufMax - readBufMin */
+        total = readBufMax - readBufMin - 2 * safetyFactor * grainLength - 2 * grainVar - lostBuffer - 16;
+        ptr = writeBufCur - readBufCur*total;
+        
+        ptr = ptr - 2*floor(abs(rand()) * grainVar) - 2 * safetyFactor * grainLength - 8;
+        
+        reverse ? (
+          spd = -spd;
+          ptr = ptr - 2 * spd * grainLength;
+        );
+        
+        dist = (writeBufCur - ptr);
+        ( dist < 0 ) ? (dist = dist + (readBufMax - readBufMin); );
+        ( dist < 2*(spd-1)*grainLength ) ? ptr = writeBufCur - 2*safetyFactor*grainLength;
       );
-			
+      
       this.grain0.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
       : this.grain1.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
       : this.grain2.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cos($pi*pan/2), sin($pi*pan/2)) ? ( 0 ) 
