@@ -1,8 +1,8 @@
 desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
 tags: amaranth granular synth graintable grains
-version: 0.04
+version: 0.05
 author: Joep Vanlier
-changelog: Added option to maintain grain length. Added envelope automation on position, size and pitch. Fixed bug in bidi envelope.
+changelog: Added a few absolute buttons. Added feedback dial.
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -21,6 +21,7 @@ slider12:pitchMode=0<0,1,1{Normal,RandomPitch}>
 slider13:octaveMin=0<-4,4,1>-Octave Min
 slider14:octaveMax=0<-4,4,1>-Octave Max
 slider15:reverseProb=0<0,1,1>-Reverse Probability
+slider16:feedbackLevel=0<0,1,1>-Feedback
 slider16:pitchTimeInvariance=0<0,1,1>-Invariance
 slider63:updateBuffer=1<0,1,1>-Update Buffer
 slider64:postGain=1<0,2,.00001>-postGain
@@ -31,12 +32,25 @@ import Amaranth_grainlib.jsfx-inc
 
 @init
 nModulators = 4;
-GRAINMIN = 40;
-GRAINMAX = 300;
-GRAINRANGE = GRAINMAX - GRAINMIN;
-MINSPEED = .125;
-MAXSPEED = 2;
-SPEEDRANGE = MAXSPEED - MINSPEED;
+
+function initSettings()
+(
+  MINSPEED = .125;
+  MAXSPEED = 2;
+  SPEEDRANGE = MAXSPEED - MINSPEED;
+  
+  GRAINMIN = 40;
+  GRAINMAX = 300;
+  GRAINRANGE = GRAINMAX - GRAINMIN;
+  
+  OVERLAPMAX = 93;
+  GRAINDISTMIN = log(1);
+  GRAINDISTMAX = log(500);
+  
+  VARIANCEMIN = log(.1);
+  VARIANCEMAX = log(500);
+);
+initSettings();
 
 function updatePitch()
   local()
@@ -266,7 +280,8 @@ function drawBuffer(x, y, w, h, fill)
   note_mem = 5*bufSize;
 
 @serialize
-  preset_ver = 1.00;
+  preset_ver = 1.01;
+  
   file_var(0, preset_ver);
   file_var(0, Octaver);
   
@@ -275,6 +290,9 @@ function drawBuffer(x, y, w, h, fill)
   
   /* Store the sample in memory */
   file_mem(0, bufSize, 2*bufSize-4);
+
+  file_var(0, useAbsoluteDist);
+  file_var(0, useAbsoluteVar);
 
 @slider
 
@@ -404,9 +422,6 @@ function drawBuffer(x, y, w, h, fill)
   
   /* Actual grain parameters */
   curPos  = 1-cPosition;
-  grainLength = (cGrainSize/1000)*srate;
-  jitter = (grainVariance/100);
-  overlap = (grainOverlap/100);
   readBufMin = outBuffer.scopebuffer;
   readBufMax = outBuffer.scopebuffermax;
   readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;//0; //outBuffer.scopeptr-0*.25*safeSize*abs(sin(time_precise()))
@@ -415,16 +430,17 @@ function drawBuffer(x, y, w, h, fill)
   Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
   pitchFollow ? (
     spd = spd * noteFollowFactor;
-  );
-  
-  grains.granulator_update(grainLength, jitter, overlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos, pitchTimeInvariance);
+  ); 
+  grains.granulator_update(cGrainSize, useAbsoluteVar, grainVariance, useAbsoluteDist, grainOverlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos, pitchTimeInvariance);
   
   updateBuffer ? ( 
-    outBuffer.updateBuffer(postGain*spl0, postGain*spl1);
+    fbL *= feedbackLevel*.99999;
+    fbR *= feedbackLevel*.99999;
+    outBuffer.updateBuffer(postGain*spl0 + fbL, postGain*spl1 + fbR);
   );
   
-  spl0=grains.L;
-  spl1=grains.R;
+  fbL = spl0 = grains.L;
+  fbR = spl1 = grains.R;
 
 @gfx
   graphicsIntensity = abs(sin(time_precise())); 
@@ -596,8 +612,12 @@ function drawBuffer(x, y, w, h, fill)
   positionKnob.drawKnob(xPos, yPos, knobSize, "Position", "Modify position.");
   positionKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( Position = positionKnob.value );
   
-  /* Knob which controls the overlap */
+  /* Knob which controls the variance */
   xPos = col2;
+  
+  absoluteVarianceToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, useAbsoluteVar, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use absolute variance (decoupled from grain size)\n");
+  useAbsoluteVar = absoluteVarianceToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
   grainVarianceKnob.active = 1;
   grainVarianceKnob.value  = grainVariance/1000;
   grainVarianceKnob.noSegments = 1;
@@ -629,13 +649,21 @@ function drawBuffer(x, y, w, h, fill)
   );
   sizeModulator.combobox_draw_top();
   
-  /* Knob which controls the grain variance */
+  /* Knob which controls the grain overlap */
   xPos = col2;
-  overlapKnob.active = 1;
-  overlapKnob.value  = grainOverlap/93;
+  overlapKnob.active = 1;  
+  
+  overlapToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, useAbsoluteDist, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use absolute distances (decoupled from grain size).\n\nNote: This may mean running out of grains.\n");
+  useAbsoluteDist = overlapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  overlapKnob.value  = grainOverlap/OVERLAPMAX;
   overlapKnob.noSegments = 1;
-  overlapKnob.drawKnob(xPos, yPos, knobSize, "Overlap", "Modify grain overlap (higher leads to denser, more constant sounds).");
-  overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .9) ? slider_automate( grainOverlap = 93*overlapKnob.value );
+  useAbsoluteDist ? (
+    overlapKnob.drawKnob(xPos, yPos, knobSize, "Distance", "Modify distance between grains.");
+  ) : (
+    overlapKnob.drawKnob(xPos, yPos, knobSize, "Overlap", "Modify grain overlap (higher leads to denser, more constant sounds).");
+  );
+  overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .9) ? slider_automate( grainOverlap = OVERLAPMAX*overlapKnob.value );
   
   yPos += 70*(1+scaling);  
   
@@ -725,6 +753,14 @@ function drawBuffer(x, y, w, h, fill)
   reverseProbKnob.noSegments = 1;
   reverseProbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( reverseProb = reverseProbKnob.value );
   reverseProbKnob.drawKnob(xPos, yPos, knobSize, "Reverse", "Reverse Probability.");
+  
+  /* Knob which controls the reverse probability */
+  xPos = col2;
+  fbKnob.active = 1;
+  fbKnob.value  = feedbackLevel;
+  fbKnob.noSegments = 1;
+  fbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( feedbackLevel = fbKnob.value );
+  fbKnob.drawKnob(xPos, yPos, knobSize, "Feedback", "Feedback strength.");
   
   /* Draw logo */
   loaded = 0;
