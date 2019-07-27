@@ -1,8 +1,8 @@
 desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
 tags: amaranth granular synth graintable grains
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Added a few absolute buttons. Added feedback dial.
+changelog: Add position modifier in waveform view. Add ability to crop sample data (to make smaller presets that load faster). Add ability to not save sample data in preset when desired. Store envelope modulators.
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -22,13 +22,30 @@ slider13:octaveMin=0<-4,4,1>-Octave Min
 slider14:octaveMax=0<-4,4,1>-Octave Max
 slider15:reverseProb=0<0,1,1>-Reverse Probability
 slider16:feedbackLevel=0<0,1,1>-Feedback
-slider16:pitchTimeInvariance=0<0,1,1>-Invariance
+slider17:pitchTimeInvariance=0<0,1,1>-Invariance
+slider18:F1_type=0<0,1,6>-F1 Type
+slider19:F1_freq=0<0,1,.0000000000000001>-F1 Freq
+slider20:F1_res=0<0,1,.0000000000000001>-F1 Resonance
+slider21:F2_type=0<0,1,6>-F2 Type
+slider22:F2_freq=0<0,1,.0000000000000001>-F2 Freq
+slider23:F2_res=0<0,1,.0000000000000001>-F2 Resonance
+slider62:storeSample=0<0,1,0>-Store sample in preset
 slider63:updateBuffer=1<0,1,1>-Update Buffer
 slider64:postGain=1<0,2,.00001>-postGain
 
 import Amaranth_widgets.jsfx-inc
 import Amaranth_envelopes.jsfx-inc
 import Amaranth_grainlib.jsfx-inc
+//import Amaranth_filters.jsfx-inc
+
+// Filters
+// 0 - OFF
+// 1 - Linear LPF
+// 2 - Linear HPF
+// 3 - Linear BPF
+// 4 - Non-linear LPF
+// 5 - Non-linear HPF
+// 6 - Non-linear BPF
 
 @init
 nModulators = 4;
@@ -125,7 +142,7 @@ function initBuffer(scopebuffer_in, scopebuffermax_in)
   instance(scopeptr, scopebuffermax, scopebuffer)
   (
     scopebuffer     = scopebuffer_in;
-    scopebuffermax  = scopebuffermax_in;
+    !scopebuffermax ? scopebuffermax = scopebuffermax_in;
     
     scopeptr < scopebuffer ? (
       scopeptr = scopebuffer 
@@ -139,6 +156,14 @@ function resetBuffer()
   (
     memset(scopebuffer, 0, scopebuffermax - scopebuffer + 1);
   );
+  
+function setBufferSize( len )
+  local()
+  global()
+  instance(scopebuffermax, scopebuffer)
+  (
+    scopebuffermax = scopebuffer + len;
+  );
 
 function updateBuffer(L, R)
   local()
@@ -151,21 +176,35 @@ function updateBuffer(L, R)
     scopeptr += 1;
     scopeptr > scopebuffermax ? scopeptr = scopebuffer;
   );
+  
+function serializeBuffer(reading)
+  local(bufSize)
+  global()
+  instance(scopebuffermax, scopebuffer, scopeptr)
+  (  
+    bufSize = scopebuffermax - scopebuffer;
+    file_var(0, bufSize);
+    file_var(0, scopeptr);
+    file_mem(0, scopebuffer, bufSize);
+    
+    reading ? scopebuffermax = scopebuffer + bufSize;
+  );
 
 function drawBuffer(x, y, w, h, fill)
-  local(nDraw, blockSize, xAdvance, yScale, lymax, lymin, xx, ymax, ymin, yCenter, lptr, blockIdx, yb, lvl)
-  global(gfx_x, gfx_y, gfx_a, graphicsIntensity)
+  local(yScale, lymax, lymin, xx, ymax, ymin, yCenter, lptr, blockIdx, yb, lvl, blen, xLast)
+  global(gfx_x, gfx_y, gfx_a, graphicsIntensity, xAdvance, blockSize, nDraw)
   instance(scopebuffer, scopebuffermax, scopeptr)
   (
-    nDraw = w;
-    blockSize = floor((scopebuffermax - scopebuffer) / nDraw);   /* Round to closest */
-    nDraw = (scopebuffermax - scopebuffer) / blockSize;
+    blen = scopebuffermax - scopebuffer;
+    blockSize = floor(blen / w);
+    blockSize = max(blockSize, 16);
+    nDraw = blen / blockSize;
     xAdvance = w / nDraw;
     yScale = h/4;
     yCenter = y+.5*h;
     
-    xx          = x;
-    lptr        = floor(scopePtr/blockSize)*blockSize;
+    xLast       = x;
+    xx          = x + xAdvance;
     gfx_x       = xx;
     gfx_y       = yCenter;
     blockIdx    = 0;
@@ -176,39 +215,43 @@ function drawBuffer(x, y, w, h, fill)
     yb          = 5;
     lvl         = (1-.2*graphicsIntensity);
     
+    lptr        = floor(scopePtr/blockSize)*blockSize;
     loop(scopebuffermax-scopeptr,
-      (blockIdx > blockSize) ? (
+      (blockIdx == blockSize) ? (
         ymax = yCenter + yScale*min(max(-2,ymax),2);
         ymin = yCenter + yScale*min(max(-2,ymin),2);
       
         fill ? (
           gfx_a = fill * lvl;
-          gfx_triangle( xx-xAdvance, lymin,
-                        xx-xAdvance, lymax,
-                        xx, ymin,
-                        xx, ymax);
+          gfx_triangle( xLast,  lymin,
+                        xLast,  lymax,
+                        xx,     ymin,
+                        xx,     ymax);
                         
           gfx_a = .3*fill;
-          gfx_triangle( xx-xAdvance, lymin-yb,
-                        xx-xAdvance, lymax+yb,
-                        xx, ymin-yb,
-                        xx, ymax+yb);                        
+          gfx_triangle( xLast,  lymin-yb,
+                        xLast,  lymax+yb,
+                        xx,     ymin-yb,
+                        xx,     ymax+yb);                        
           );
           gfx_a = lvl;
           gfx_lineto(xx, ymax);
-          gfx_line(xx-xAdvance, lymin, xx, ymin);          
+          gfx_line(xLast, lymin, xx, ymin);          
             
           lymin = ymin;
           lymax = ymax;
           ymax = 0;
           ymin = 0;
+          xLast = xx + 1;
           xx += xAdvance;
           blockIdx = 0;
+          
+          xx > (x+w) ? xx = x+w;
        );
-        
+      
        ymax = max(lptr[], ymax);
        ymin = min(lptr[], ymin);
-        
+       
        blockIdx += 1;
        lptr += 1;
      );
@@ -216,34 +259,36 @@ function drawBuffer(x, y, w, h, fill)
      blockIdx = 0;
      lptr = scopebuffer;
      loop(scopeptr-scopebuffer,
-       (blockIdx > blockSize) ? (
+       ( blockIdx == blockSize ) ? (
          ymax = yCenter + yScale*min(max(-2,ymax),2);
          ymin = yCenter + yScale*min(max(-2,ymin),2);
        
          fill ? (
            gfx_a = fill * lvl;
-           gfx_triangle( xx-xAdvance, lymin,
-                         xx-xAdvance, lymax,
-                         xx, ymin,
-                         xx, ymax);
+           gfx_triangle( xLast, lymin,
+                         xLast, lymax,
+                            xx, ymin,
+                            xx, ymax);
            
            gfx_a = .3*fill;
-           gfx_triangle( xx-xAdvance, lymin-yb,
-                        xx-xAdvance, lymax+yb,
-                        xx, ymin-yb,
-                        xx, ymax+yb);                   
+           gfx_triangle( xLast, lymin-yb,
+                         xLast, lymax+yb,
+                            xx, ymin-yb,
+                            xx, ymax+yb);                   
         );
-           
-                  
+               
         gfx_a = lvl;
         gfx_lineto(xx, ymax);
-        gfx_line(xx-xAdvance, lymin, xx, ymin);
+        gfx_line(xLast, lymin, xx, ymin);
           
         lymin = ymin;
         lymax = ymax;
         ymax = 0;
         ymin = 0;
+        xLast = xx + 1;
         xx += xAdvance;
+        xx > (x+w) ? xx = x+w;        
+        
         blockIdx = 0;
       );
          
@@ -263,7 +308,7 @@ function drawBuffer(x, y, w, h, fill)
   // MEMORY LAYOUT
   bufSize = 65536*8;
   
-  outBuffer.initBuffer(bufSize, 2*bufSize-4);
+  outBuffer.initBuffer(bufSize, bufSize + bufSize-4);
   grains.granulator_init();
   grains.normalize = 1;
   
@@ -278,9 +323,13 @@ function drawBuffer(x, y, w, h, fill)
   envWindow2.resetEnvelope(1, 1);
   
   note_mem = 5*bufSize;
+  
+  // Temporary storage for cropping
+  temporaryBuf = 6*bufSize;
 
 @serialize
-  preset_ver = 1.01;
+  preset_ver = 1.03;
+  reading = file_avail(0)>=0;
   
   file_var(0, preset_ver);
   file_var(0, Octaver);
@@ -289,10 +338,21 @@ function drawBuffer(x, y, w, h, fill)
   envWindow2.serializeEnvelope();
   
   /* Store the sample in memory */
-  file_mem(0, bufSize, 2*bufSize-4);
-
+  file_var(0, storeSample);
+  
+  storeSample ? (
+    outBuffer.serializeBuffer(reading);    
+  );
+  
   file_var(0, useAbsoluteDist);
   file_var(0, useAbsoluteVar);
+  
+  file_var(0, positionModulator);
+  file_var(0, sizeModulator);
+  file_var(0, speedModulator);
+  file_var(0, positionModulatorAmount);
+  file_var(0, sizeModulatorAmount);
+  file_var(0, speedModulatorAmount);
 
 @slider
 
@@ -413,7 +473,7 @@ function drawBuffer(x, y, w, h, fill)
   
   cPosition = position;
   cGrainSize = grainSize;
-  cSpeed = speed;
+  cSpeed = speed;  
   
   /* Process modulators */
   ( positionModulator ) ? ( cPosition   = min( 1, max( 0, cPosition + positionModulatorAmount * chooseEnv(positionModulator) ) ) );
@@ -542,7 +602,7 @@ function drawBuffer(x, y, w, h, fill)
   openRect(audioX-2, audioY-2, audioW+4, audioH+4);
   gfx_set(baseR, baseG, baseB,1);
   openRect(audioX, audioY, audioW, audioH);
-  outBuffer.drawbuffer(audioX, audioY, audioW, audioH, .35);
+  outBuffer.drawbuffer(audioX, audioY, audioW, audioH, .5);
 
   /* Draw the grain heads */
   gfx_a = 0.5;
@@ -561,6 +621,17 @@ function drawBuffer(x, y, w, h, fill)
     LoopEnd = endBar.xpos;
     (LoopEnd < LoopStart) ? ( LoopStart = LoopEnd; );
   );  
+  
+  posBar.initRect(audioX, audioY, audioW, audioH);
+  LEnd = 1-LoopEnd;
+  LStart = 1-LoopStart;
+  
+  gfx_set(.8, 0, .8,.8);
+  posBar.vertBar(6, (1-Position)*(LStart-LEnd) + LoopStart, mouse_x, mouse_y, mouse_cap) ? (
+    Position = 1 - (posBar.xpos - LoopStart) /(LStart-LEnd);
+    Position > 1 ? Position = 1;
+    Position < 0 ? Position = 0;
+  );
   
   /* Draw envelopes */
   envX = audioX;
@@ -589,6 +660,98 @@ function drawBuffer(x, y, w, h, fill)
   freeze.drawToggle(audioX+knobSize, audioY+knobSize, buttonSize, buttonSize, 1-updateBuffer, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Freeze sampler.");
   freeze.label = "Freeze";
   updateBuffer = 1-freeze.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  storeToggle.drawToggle(audioX+knobSize, audioY+2*knobSize, buttonSize, buttonSize, storeSample, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Read/Write sample in preset. Note: this increases load/save time\nand size of a preset considerably)..");
+  storeToggle.label = "Store sample in preset";  
+  storeSample = storeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  bw = 16.5 * (1+scaling);
+  bh = 12 * (1+scaling);
+  crop.selectionButton(audioX+audioW-2.5*bw, audioY+.5*bh, 2*bw, bh, "CROP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Crop to loop");
+  crop.selectionButton_draw();
+  crop.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+
+  function memCpySlow( target, src, cnt )
+  local(srcPtr, targetPtr)
+  instance()
+  global()
+  (
+    srcPtr = src;
+    targetPtr = target;
+    loop( cnt,
+      targetPtr[] = srcPtr[];
+      srcPtr += 1;
+      targetPtr += 1;
+    );
+  );
+  
+  function cropBuffer( temporaryStorage, LoopStart, LoopEnd )
+  local()
+  instance(scopePtr, scopebuffermax, scopebuffer)
+  global(len, startPos, endPos, copyLen, chunk1,
+  _sP, _eP, _tmp, _cpLen, _sPtr, _doo, _lastCase)
+  (
+    len       = 2 * floor( ( scopebuffermax - scopebuffer + 1 ) * .5 );
+    startPos  = 2 * floor((scopePtr - LoopStart * len) * .5 );
+    copyLen   = ceil((LoopStart-LoopEnd) * len);
+    endPos    = startPos + copyLen;
+    
+    _sP = startPos;
+    _eP = endPos;
+    _tmp = scopebuffer;
+    _cpLen = copyLen;
+    _sPtr = scopePtr;
+    
+    ( startPos < scopebuffer ) && ( endPos < scopebuffer ) ? (
+      startPos += len;
+      endPos   += len;
+      
+      // Considering that memcpy has restrictions over 65536 item ranges we just loopcopy
+      memCpySlow( temporaryStorage, startPos, copyLen );
+      scopeptr = scopebuffer;
+      scopebuffermax = scopebuffer + copyLen;
+      memCpySlow( scopeptr, temporaryStorage, copyLen );
+      _lastCase = 1;
+    ) : ( ( startPos < scopebuffer ) && ( endPos >= scopebuffer ) ) ? (
+      // Case 2 - Only start pointer is beyond the start of the buffer
+      startPos += len;
+      chunk1 = scopebuffermax-startPos;
+      memCpySlow( temporaryStorage, startPos, chunk1 );
+      memCpySlow( temporaryStorage + chunk1, startPos, copyLen - chunk1 );
+
+      scopebuffermax = scopebuffer + copyLen;
+      memCpySlow( scopeptr, temporaryStorage, copyLen );
+      _lastCase = 2;
+    ) : ( 
+      // Case 3 - Entire thing fits without modification
+      memCpySlow( temporaryStorage, startPos, copyLen );
+      scopeptr = scopebuffer;
+      scopebuffermax = scopebuffer + copyLen;
+      memCpySlow( scopebuffer, temporaryStorage, copyLen );
+      _lastCase = 3;
+    );
+    
+    _doo += 1;
+  );
+  
+  crop.active == 1 ? (
+    // Block buffer updates right now
+    updateOld = updateBuffer;
+    updateBuffer = 0;
+    crop.active = 0;
+        
+    outBuffer.cropBuffer( temporaryBuf, 1-LoopStart, 1-LoopEnd );
+    loopStart = 0;
+    loopEnd = 1;
+    updateBuffer = updateOld;
+  );
+  
+  reset.selectionButton(audioX+audioW-5*bw, audioY+.5*bh, 2*bw, bh, "RESET", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Crop to loop");
+  reset.selectionButton_draw();
+  reset.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+  reset.active == 1 ? (
+    reset.active = 0;
+  );
   
   /* Knob which controls the position */
   xPos = col1;
@@ -760,7 +923,7 @@ function drawBuffer(x, y, w, h, fill)
   fbKnob.value  = feedbackLevel;
   fbKnob.noSegments = 1;
   fbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( feedbackLevel = fbKnob.value );
-  fbKnob.drawKnob(xPos, yPos, knobSize, "Feedback", "Feedback strength.");
+  fbKnob.drawKnob(xPos, yPos, knobSize, "Feedback", "Feedback strength."); 
   
   /* Draw logo */
   loaded = 0;
