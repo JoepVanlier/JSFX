@@ -1,8 +1,8 @@
 desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
 tags: amaranth granular synth graintable grains
-version: 0.06
+version: 0.07
 author: Joep Vanlier
-changelog: Add position modifier in waveform view. Add ability to crop sample data (to make smaller presets that load faster). Add ability to not save sample data in preset when desired. Store envelope modulators.
+changelog: Added filters. Added parallel feedback buffer (for when sample is frozen). Bugfix envelope loading. Enabled reset button.
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -31,12 +31,13 @@ slider22:F2_freq=0<0,1,.0000000000000001>-F2 Freq
 slider23:F2_res=0<0,1,.0000000000000001>-F2 Resonance
 slider62:storeSample=0<0,1,0>-Store sample in preset
 slider63:updateBuffer=1<0,1,1>-Update Buffer
-slider64:postGain=1<0,2,.00001>-postGain
+slider61:preGain=1<0,4,.00001>-preGain
+slider64:postGain=1<0,4,.00001>-postGain
 
 import Amaranth_widgets.jsfx-inc
 import Amaranth_envelopes.jsfx-inc
 import Amaranth_grainlib.jsfx-inc
-//import Amaranth_filters.jsfx-inc
+import Amaranth_filters.jsfx-inc
 
 // Filters
 // 0 - OFF
@@ -46,9 +47,65 @@ import Amaranth_grainlib.jsfx-inc
 // 4 - Non-linear LPF
 // 5 - Non-linear HPF
 // 6 - Non-linear BPF
+// 7 - 303 LP
+// 8 - Vowel
+// 9 - Voodoo
 
 @init
 nModulators = 4;
+nFilters = 8;
+
+function updateFilter( idx, cutoff, reso )
+  local()
+  instance(fidx, lastCutoff, lastReso, lFilter, rFilter)
+  global()
+  (
+    fidx = idx;
+    ( fidx == 0 ) ? (
+      1
+    ) : ( fidx < 4 ) ? (
+      lFilter.init_linearSVF(cutoff, .99*reso);
+      rFilter.init_linearSVF(cutoff, .99*reso);
+    ) : ( fidx < 7 ) ? (
+      lFilter.init_MS20(cutoff, .99*reso);
+      rFilter.init_MS20(cutoff, .99*reso);
+    ) : ( fidx == 7 ) ? (
+      lFilter.init303(cutoff, .99*reso);
+      rFilter.init303(cutoff, .99*reso);
+    );
+  );
+  
+function evalSample( l, r )
+  local()
+  instance(fidx, lFilter, rFilter, outL, outR)
+  global()
+  (
+    ( fidx == 0 ) ? (
+      outL = l;
+      outR = r;
+    ) : ( fidx == 1 ) ? (
+      outL = lFilter.eval_linearSVF_LP( l );
+      outR = rFilter.eval_linearSVF_LP( r );
+    ) : ( fidx == 2 ) ? (
+      outL = lFilter.eval_linearSVF_BP( l );
+      outR = rFilter.eval_linearSVF_BP( r );
+    ) : ( fidx == 3 ) ? (
+      outL = lFilter.eval_linearSVF_HP( l );
+      outR = rFilter.eval_linearSVF_HP( r );
+    ) : ( fidx == 4 ) ? (
+      outL = lFilter.eval_MS20_lp( l );
+      outR = rFilter.eval_MS20_lp( r );
+    ) : ( fidx == 5 ) ? (
+      outL = lFilter.eval_MS20_bp( l );
+      outR = rFilter.eval_MS20_bp( r );
+    ) : ( fidx == 6 ) ? (
+      outL = lFilter.eval_MS20_hp( l );
+      outR = rFilter.eval_MS20_hp( r );
+    ) : ( fidx == 7 ) ? (
+      outL = lFilter.eval303( l );
+      outR = rFilter.eval303( r );
+    );
+  );
 
 function initSettings()
 (
@@ -163,6 +220,14 @@ function setBufferSize( len )
   instance(scopebuffermax, scopebuffer)
   (
     scopebuffermax = scopebuffer + len;
+  );
+
+function getBufferSize( len )
+  local()
+  global()
+  instance(scopebuffermax, scopebuffer)
+  (
+    scopebuffermax - scopebuffer
   );
 
 function updateBuffer(L, R)
@@ -308,9 +373,13 @@ function drawBuffer(x, y, w, h, fill)
   // MEMORY LAYOUT
   bufSize = 65536*8;
   
-  outBuffer.initBuffer(bufSize, bufSize + bufSize-4);
+  outBuffer.initBuffer(bufSize, 2*bufSize-4);
   grains.granulator_init();
   grains.normalize = 1;
+  
+  // Grains used for feedback when the timeline is frozen
+  grainsFeedback.granulator_init();
+  grainsFeedback.normalize = 1;
   
   env_buf = 4*bufSize;
   env_buf_shapes = env_buf + 8192;
@@ -326,7 +395,9 @@ function drawBuffer(x, y, w, h, fill)
   
   // Temporary storage for cropping
   temporaryBuf = 6*bufSize;
-
+  
+  fbBuffer.initBuffer(10*bufSize, 10*bufSize + bufSize-4);
+  
 @serialize
   preset_ver = 1.03;
   reading = file_avail(0)>=0;
@@ -337,11 +408,13 @@ function drawBuffer(x, y, w, h, fill)
   envWindow1.serializeEnvelope();
   envWindow2.serializeEnvelope();
   
+  storedWas = envWindow1.triggering;
+  
   /* Store the sample in memory */
   file_var(0, storeSample);
   
   storeSample ? (
-    outBuffer.serializeBuffer(reading);    
+    outBuffer.serializeBuffer(reading);
   );
   
   file_var(0, useAbsoluteDist);
@@ -353,6 +426,16 @@ function drawBuffer(x, y, w, h, fill)
   file_var(0, positionModulatorAmount);
   file_var(0, sizeModulatorAmount);
   file_var(0, speedModulatorAmount);
+  file_var(0, F1CutoffModulator);
+  file_var(0, F1CutoffModulatorAmount);
+  file_var(0, F1ResModulator);
+  file_var(0, F1ResModulatorAmount);  
+  file_var(0, F2CutoffModulator);
+  file_var(0, F2CutoffModulatorAmount);
+  file_var(0, F2ResModulator);
+  file_var(0, F2ResModulatorAmount);
+
+  fbBuffer.setBufferSize(outBuffer.getBufferSize());
 
 @slider
 
@@ -471,36 +554,74 @@ function drawBuffer(x, y, w, h, fill)
     : ( choice == 2 ) ? env2
   );
   
-  cPosition = position;
-  cGrainSize = grainSize;
-  cSpeed = speed;  
+  cPosition   = position;
+  cGrainSize  = grainSize;
+  cSpeed      = speed;
+  cCutoff1    = F1_freq;
+  cReso1      = F1_res;
+  cCutoff2    = F2_freq;
+  cReso2      = F2_res;  
   
   /* Process modulators */
   ( positionModulator ) ? ( cPosition   = min( 1, max( 0, cPosition + positionModulatorAmount * chooseEnv(positionModulator) ) ) );
   ( sizeModulator )     ? ( cGrainSize  = min( GRAINMAX, max( GRAINMIN, cGrainSize + GRAINRANGE * sizeModulatorAmount * chooseEnv(sizeModulator) ) ) );
   ( speedModulator )    ? ( cSpeed      = min( MAXSPEED, max( MINSPEED, cSpeed + SPEEDRANGE * speedModulatorAmount * chooseEnv(speedModulator) ) ) );
+  ( F1CutoffModulator ) ? ( cCutoff1    = min( 1, max( 0, cCutoff1 + F1CutoffModulatorAmount * chooseEnv(F1CutoffModulator) ) ) );
+  ( F1ResModulator )    ? ( cReso1      = min( 1, max( 0, cReso1 + F1ResModulatorAmount * chooseEnv(F1ResModulator) ) ) );
+  ( F2CutoffModulator ) ? ( cCutoff2    = min( 1, max( 0, cCutoff2 + F2CutoffModulatorAmount * chooseEnv(F2CutoffModulator) ) ) );
+  ( F2ResModulator )    ? ( cReso2      = min( 1, max( 0, cReso2 + F2ResModulatorAmount * chooseEnv(F2ResModulator) ) ) );
   
   /* Actual grain parameters */
   curPos  = 1-cPosition;
   readBufMin = outBuffer.scopebuffer;
   readBufMax = outBuffer.scopebuffermax;
-  readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;//0; //outBuffer.scopeptr-0*.25*safeSize*abs(sin(time_precise()))
+  readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;
   spd = cSpeed;
   
   Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
   pitchFollow ? (
     spd = spd * noteFollowFactor;
   ); 
-  grains.granulator_update(cGrainSize, useAbsoluteVar, grainVariance, useAbsoluteDist, grainOverlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos, pitchTimeInvariance);
+  grains.granulator_update(cGrainSize, useAbsoluteVar, grainVariance, useAbsoluteDist, grainOverlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos, pitchTimeInvariance, updateBuffer);
   
   updateBuffer ? ( 
-    fbL *= feedbackLevel*.99999;
-    fbR *= feedbackLevel*.99999;
+    fbL *= feedbackLevel*.99999999;
+    fbR *= feedbackLevel*.99999999;
     outBuffer.updateBuffer(postGain*spl0 + fbL, postGain*spl1 + fbR);
+  ) : (
+    feedbackLevel > 0 ? (
+      fbL *= feedbackLevel*.99999999+0.0000000001;
+      fbR *= feedbackLevel*.99999999+0.0000000001;
+      
+      fbBuffer.updateBuffer(fbL, fbR);
+      readBufMin = fbBuffer.scopebuffer;
+      readBufMax = fbBuffer.scopebuffermax;
+      readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;
+      grainsFeedback.granulator_update(cGrainSize, useAbsoluteVar, grainVariance, useAbsoluteDist, grainOverlap, spd, spdSpread, panSpread, reverseProb, play_state, readBufCur, readBufMin, readBufMax, fbBuffer.scopeptr, curPos, pitchTimeInvariance, 1);
+      
+      grains.L += grainsFeedback.L;
+      grains.R += grainsFeedback.R;
+    );
   );
   
-  fbL = spl0 = grains.L;
-  fbR = spl1 = grains.R;
+  spLeft  = grains.L;
+  spRight = grains.R;
+  
+  filter1.updateFilter( F1_type, cCutoff1, cReso1 );
+  filter1.evalSample( spLeft, spRight );
+  spLeft  = filter1.outL;
+  spRight = filter1.outR;
+  
+  filter2.updateFilter( F2_type, cCutoff2, cReso2 );
+  filter2.evalSample( spLeft, spRight );
+  spLeft  = filter2.outL;
+  spRight = filter2.outR;
+  
+  fbL = spl0 = spLeft;
+  fbR = spl1 = spRight;
+
+  spl0 = spl0 + grainsFeedback.L;
+  spl0 = spl0 + grainsFeedback.R;
 
 @gfx
   graphicsIntensity = abs(sin(time_precise())); 
@@ -633,6 +754,11 @@ function drawBuffer(x, y, w, h, fill)
     Position < 0 ? Position = 0;
   );
   
+  gfx_set(1,1,0,1);
+  ( feedbackLevel > 0 ) && ( updateBuffer == 0 ) ? (
+    fbBuffer.drawbuffer(audioX, audioY, audioW, audioH, .5);
+  );
+  
   /* Draw envelopes */
   envX = audioX;
   envW = .48*audioW;
@@ -751,10 +877,19 @@ function drawBuffer(x, y, w, h, fill)
   reset.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
   reset.active == 1 ? (
     reset.active = 0;
+    outBuffer.setBufferSize(bufSize-4);
+    outBuffer.resetBuffer();
+    
+    fbBuffer.setBufferSize(outBuffer.getBufferSize());
+    fbBuffer.resetBuffer();
   );
   
   /* Knob which controls the position */
   xPos = col1;
+  yDist = 70*(1+scaling);
+  comboW = 5.4*knobSize;
+  comboH = knobSize;
+  yDistCombo = 1.4*comboH;
   yPos = 100*(1+scaling);
   
   /* Combobox to select envelope for shaper */
@@ -787,7 +922,7 @@ function drawBuffer(x, y, w, h, fill)
   grainVarianceKnob.drawKnob(xPos, yPos, knobSize, "Variance", "Modify grain position variance.");
   grainVarianceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .08) ? slider_automate( grainVariance = 1000*grainVarianceKnob.value; );
   
-  yPos += 70*(1+scaling);
+  yPos += yDist;
   
   /* Knob which controls the grain size */
   xPos = col1;  
@@ -828,7 +963,7 @@ function drawBuffer(x, y, w, h, fill)
   );
   overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .9) ? slider_automate( grainOverlap = OVERLAPMAX*overlapKnob.value );
   
-  yPos += 70*(1+scaling);  
+  yPos += yDist;  
   
   /* Knob which controls the speed */
   xPos = col1;
@@ -860,7 +995,7 @@ function drawBuffer(x, y, w, h, fill)
   speedVarianceKnob.drawKnob(xPos, yPos, knobSize, "Detune", "Modify speed variance (perceived as detune).");
   speedVarianceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( spdSpread = exp(minl + (maxl-minl)*speedVarianceKnob.value) );
   
-  yPos += 70*(1+scaling);
+  yPos += yDist;
   
   /* Knob which controls the panning */
   xPos = col2;
@@ -907,7 +1042,7 @@ function drawBuffer(x, y, w, h, fill)
   octaveMaxKnob.label = 5;
   octaveMaxKnob.drawKnob(xPos, yPos, knobSize, "Max Octave", "Maximum octave to randomize over.");
   
-  yPos += 70*(1+scaling);
+  yPos += yDist;
   
   /* Knob which controls the reverse probability */
   xPos = col1;
@@ -924,6 +1059,104 @@ function drawBuffer(x, y, w, h, fill)
   fbKnob.noSegments = 1;
   fbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( feedbackLevel = fbKnob.value );
   fbKnob.drawKnob(xPos, yPos, knobSize, "Feedback", "Feedback strength."); 
+  
+  yPos += yDist;
+  
+  /* Filter 1 */    
+  xPos = col1;
+  F1cutoffModulatorCtrl.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  F1cutoffModulatorCtrl.combobox_setcuritem(F1CutoffModulator);
+  F1cutoffModulatorCtrl.value = F1CutoffModulatorAmount;
+ F1cutoffModulatorCtrl.combomodulator_draw();
+  F1cutoffModulatorCtrl.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    F1CutoffModulator       = F1cutoffModulatorCtrl.curItem;
+    F1CutoffModulatorAmount = F1cutoffModulatorCtrl.value;
+  );
+  F1cutoffModulatorCtrl.combobox_draw_top();  
+    
+  F1freqKnob.active = 1;
+  F1freqKnob.value  = F1_freq;
+  F1freqKnob.value2 = F1CutoffModulatorAmount;
+  F1freqKnob.noSegments = 1;
+  F1freqKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( F1_freq = F1freqKnob.value );
+  F1freqKnob.drawKnob(xPos, yPos, knobSize, "Cutoff", "Filter 1 Frequency");
+  
+  xPos = col2;
+  F1resModulatorCtrl.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  F1resModulatorCtrl.combobox_setcuritem(F1ResModulator);
+  F1resModulatorCtrl.value = F1ResModulatorAmount;
+  F1resModulatorCtrl.combomodulator_draw();
+  F1resModulatorCtrl.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    F1ResModulator       = F1resModulatorCtrl.curItem;
+    F1ResModulatorAmount = F1resModulatorCtrl.value;
+  );
+  F1resModulatorCtrl.combobox_draw_top();
+  
+  F1resKnob.active = 1;
+  F1resKnob.value  = F1_res;
+  F1resKnob.value2 = F1ResModulatorAmount;
+  F1resKnob.noSegments = 1;
+  F1resKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( F1_res = F1resKnob.value );
+  F1resKnob.drawKnob(xPos, yPos, knobSize, "Reso", "Filter 1 Resonance"); 
+    
+  yPos += yDist;
+  
+  xPos = col1;
+  F1select.combobox(xPos-1.3*knobSize, yPos - 1.5*knobSize, comboW, comboH, widget_r, widget_g, widget_b, widget_a, nFilters, 2, 1, 1, COMBOFONT, "Filter selection" );
+  F1select.combobox_setcuritem( F1_type );
+  F1select.combobox_draw();
+  F1select.combobox_draw_top();
+  F1select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( F1_type = F1select.curitem );
+  
+  yPos += yDistCombo;
+  
+  /* Filter 2 */
+  xPos = col1;
+  F2cutoffModulatorCtrl.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  F2cutoffModulatorCtrl.combobox_setcuritem(F2CutoffModulator);
+  F2cutoffModulatorCtrl.value = F2CutoffModulatorAmount;
+  F2cutoffModulatorCtrl.combomodulator_draw();
+  F2cutoffModulatorCtrl.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    F2CutoffModulator       = F2cutoffModulatorCtrl.curItem;
+    F2CutoffModulatorAmount = F2cutoffModulatorCtrl.value;
+  );
+  F2cutoffModulatorCtrl.combobox_draw_top();  
+  
+  F2freqKnob.active = 1;
+  F2freqKnob.value  = F2_freq;
+  F2freqKnob.value2 = F2CutoffModulatorAmount;
+  F2freqKnob.noSegments = 1;
+  F2freqKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( F2_freq = F2freqKnob.value );
+  F2freqKnob.drawKnob(xPos, yPos, knobSize, "Cutoff", "Filter 2 Frequency");
+  
+  xPos = col2;
+  F2resModulatorCtrl.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  F2resModulatorCtrl.combobox_setcuritem(F2ResModulator);
+  F2resModulatorCtrl.value = F2ResModulatorAmount;
+  F2resModulatorCtrl.combomodulator_draw();
+  F2resModulatorCtrl.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    F2ResModulator       = F2resModulatorCtrl.curItem;
+    F2ResModulatorAmount = F2resModulatorCtrl.value;
+  );
+  F2resModulatorCtrl.combobox_draw_top();
+  
+  F2resKnob.active = 1;
+  F2resKnob.value  = F2_res;
+  F2resKnob.value2 = F2ResModulatorAmount;
+  F2resKnob.noSegments = 1;
+  F2resKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( F2_res = F2resKnob.value );
+  F2resKnob.drawKnob(xPos, yPos, knobSize, "Reso", "Filter 2 Resonance");   
+  
+  yPos += yDist;
+  
+  xPos = col1;
+  F2select.combobox(xPos-1.3*knobSize, yPos - 1.5*knobSize, comboW, comboH, widget_r, widget_g, widget_b, widget_a, nFilters, 2, 1, 1, COMBOFONT, "Filter selection" );
+  F2select.combobox_setcuritem( F2_type );
+  F2select.combobox_draw();
+  F2select.combobox_draw_top();
+  F2select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? slider_automate( F2_type = F2select.curitem );
+  
+  yPos += yDistCombo;
   
   /* Draw logo */
   loaded = 0;
