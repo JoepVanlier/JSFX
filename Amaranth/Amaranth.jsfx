@@ -1,8 +1,8 @@
 desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
 tags: amaranth granular synth graintable grains
-version: 0.07
+version: 0.08
 author: Joep Vanlier
-changelog: Added filters. Added parallel feedback buffer (for when sample is frozen). Bugfix envelope loading. Enabled reset button.
+changelog: Added pre and post filter gain modulators. Added a bunch of new filters.
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -50,10 +50,12 @@ import Amaranth_filters.jsfx-inc
 // 7 - 303 LP
 // 8 - Vowel
 // 9 - Voodoo
+// 10 - Vowel
+// 11 - Monstro
 
 @init
 nModulators = 4;
-nFilters = 8;
+nFilters = 12;
 
 function updateFilter( idx, cutoff, reso )
   local()
@@ -72,6 +74,18 @@ function updateFilter( idx, cutoff, reso )
     ) : ( fidx == 7 ) ? (
       lFilter.init303(cutoff, .99*reso);
       rFilter.init303(cutoff, .99*reso);
+    ) : ( fidx == 8 ) ? (
+      lFilter.init_voodoo(cutoff, .99*reso);
+      rFilter.init_voodoo(cutoff, .99*reso);
+    ) : ( fidx == 9 ) ? (
+      lFilter.init_modulatrix(cutoff, .99*reso);
+      rFilter.init_modulatrix(cutoff, .99*reso);
+    ) : ( fidx == 10 ) ? (
+      lFilter.init_vowelSVF(cutoff, reso);
+      rFilter.init_vowelSVF(cutoff, reso);
+    ) : ( fidx == 11 ) ? (
+      lFilter.init_vowelSVF(cutoff, reso);
+      rFilter.init_vowelSVF(cutoff, reso);
     );
   );
   
@@ -104,6 +118,18 @@ function evalSample( l, r )
     ) : ( fidx == 7 ) ? (
       outL = lFilter.eval303( l );
       outR = rFilter.eval303( r );
+    ) : ( fidx == 8 ) ? (
+      outL = lFilter.eval_voodoo( l );
+      outR = rFilter.eval_voodoo( r );
+    ) : ( fidx == 9 ) ? (
+      outL = lFilter.eval_modulatrix( l );
+      outR = rFilter.eval_modulatrix( r );
+    ) : ( fidx == 10 ) ? (
+      outL = lFilter.eval_vowelsvf( l );
+      outR = rFilter.eval_vowelsvf( r );
+    ) : ( fidx == 11 ) ? (
+      outL = lFilter.eval_monstro( l );
+      outR = rFilter.eval_monstro( r );
     );
   );
 
@@ -373,6 +399,17 @@ function drawBuffer(x, y, w, h, fill)
   // MEMORY LAYOUT
   bufSize = 65536*8;
   
+  // Vowel location
+  vowel_A   = 1024;
+  vowel_E   = 1048;
+  vowel_I   = 1072;
+  vowel_O   = 1096;
+  vowel_U   = 1120;
+  vowel_EE  = 1144;
+  vowel_src = 1168;
+
+  bootvowel();
+  
   outBuffer.initBuffer(bufSize, 2*bufSize-4);
   grains.granulator_init();
   grains.normalize = 1;
@@ -436,6 +473,11 @@ function drawBuffer(x, y, w, h, fill)
   file_var(0, F2ResModulatorAmount);
 
   fbBuffer.setBufferSize(outBuffer.getBufferSize());
+
+  file_var(0, postGainModulator);
+  file_var(0, postGainModulatorAmount);
+  file_var(0, preGainModulator);
+  file_var(0, preGainModulatorAmount);
 
 @slider
 
@@ -560,7 +602,9 @@ function drawBuffer(x, y, w, h, fill)
   cCutoff1    = F1_freq;
   cReso1      = F1_res;
   cCutoff2    = F2_freq;
-  cReso2      = F2_res;  
+  cReso2      = F2_res;
+  cPreGain    = preGain;
+  cPostGain   = postGain;  
   
   /* Process modulators */
   ( positionModulator ) ? ( cPosition   = min( 1, max( 0, cPosition + positionModulatorAmount * chooseEnv(positionModulator) ) ) );
@@ -570,6 +614,8 @@ function drawBuffer(x, y, w, h, fill)
   ( F1ResModulator )    ? ( cReso1      = min( 1, max( 0, cReso1 + F1ResModulatorAmount * chooseEnv(F1ResModulator) ) ) );
   ( F2CutoffModulator ) ? ( cCutoff2    = min( 1, max( 0, cCutoff2 + F2CutoffModulatorAmount * chooseEnv(F2CutoffModulator) ) ) );
   ( F2ResModulator )    ? ( cReso2      = min( 1, max( 0, cReso2 + F2ResModulatorAmount * chooseEnv(F2ResModulator) ) ) );
+  ( preGainModulator )  ? ( cPreGain    = min( 4, max( 0, cPreGain + 4 * preGainModulatorAmount * chooseEnv(preGainModulator) ) ) );  
+  ( postGainModulator ) ? ( cPostGain   = min( 4, max( 0, cPostGain + 4 * postGainModulatorAmount * chooseEnv(postGainModulator) ) ) );  
   
   /* Actual grain parameters */
   curPos  = 1-cPosition;
@@ -577,6 +623,9 @@ function drawBuffer(x, y, w, h, fill)
   readBufMax = outBuffer.scopebuffermax;
   readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;
   spd = cSpeed;
+  
+  inL = spl0;
+  inR = spl1;
   
   Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
   pitchFollow ? (
@@ -587,7 +636,7 @@ function drawBuffer(x, y, w, h, fill)
   updateBuffer ? ( 
     fbL *= feedbackLevel*.99999999;
     fbR *= feedbackLevel*.99999999;
-    outBuffer.updateBuffer(postGain*spl0 + fbL, postGain*spl1 + fbR);
+    outBuffer.updateBuffer(inL + fbL, inR + fbR);
   ) : (
     feedbackLevel > 0 ? (
       fbL *= feedbackLevel*.99999999+0.0000000001;
@@ -604,8 +653,8 @@ function drawBuffer(x, y, w, h, fill)
     );
   );
   
-  spLeft  = grains.L;
-  spRight = grains.R;
+  spLeft  = grains.L * cPreGain;
+  spRight = grains.R * cPreGain;
   
   filter1.updateFilter( F1_type, cCutoff1, cReso1 );
   filter1.evalSample( spLeft, spRight );
@@ -617,11 +666,11 @@ function drawBuffer(x, y, w, h, fill)
   spLeft  = filter2.outL;
   spRight = filter2.outR;
   
-  fbL = spl0 = spLeft;
-  fbR = spl1 = spRight;
+  fbL = outL = spLeft;
+  fbR = outR = spRight;
 
-  spl0 = spl0 + grainsFeedback.L;
-  spl0 = spl0 + grainsFeedback.R;
+  spl0 = ( outL + grainsFeedback.L ) * cPostGain;
+  spl1 = ( outR + grainsFeedback.R ) * cPostGain;
 
 @gfx
   graphicsIntensity = abs(sin(time_precise())); 
@@ -962,6 +1011,50 @@ function drawBuffer(x, y, w, h, fill)
     overlapKnob.drawKnob(xPos, yPos, knobSize, "Overlap", "Modify grain overlap (higher leads to denser, more constant sounds).");
   );
   overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .9) ? slider_automate( grainOverlap = OVERLAPMAX*overlapKnob.value );
+  
+  yPos += yDist;  
+  
+  /* Knob which controls the gain */
+  xPos = col1;
+  pregainKnob.active = 1;
+  pregainKnob.value  = preGain*.25;
+  pregainKnob.value2 = preGainModulatorAmount;
+  pregainKnob.noSegments = 1;
+  pregainKnob.drawKnob(xPos, yPos, knobSize, "Pre-Gain", "Modify pre-gain.");
+  pregainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .25) ? slider_automate( preGain = pregainKnob.value*4 );
+  
+  /* Combobox to select envelope for gain modulator */
+  preGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  preGainModulatorSelect.combobox_setcuritem(preGainModulator);
+  preGainModulatorSelect.value = preGainModulatorAmount;
+  preGainModulatorSelect.combomodulator_draw();
+  preGainModulatorSelect.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    preGainModulator       = preGainModulatorSelect.curItem;
+    preGainModulatorAmount = preGainModulatorSelect.value;
+  );
+  preGainModulatorSelect.combobox_draw_top();
+  
+  /* Knob which controls the grain variance */
+  xPos = col2;
+  minl = -6;
+  maxl = 0;
+  postGainKnob.active = 1;
+  postGainKnob.value  = postGain*.25;
+  postGainKnob.value2 = postGainModulatorAmount;
+  postGainKnob.noSegments = 1;
+  postGainKnob.drawKnob(xPos, yPos, knobSize, "Post-Gain", "Modify output gain.");
+  postGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? slider_automate( postGain = 4*postGainKnob.value );  
+  
+  /* Combobox to select envelope for gain modulator */
+  postGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
+  postGainModulatorSelect.combobox_setcuritem(postGainModulator);
+  postGainModulatorSelect.value = postGainModulatorAmount;
+  postGainModulatorSelect.combomodulator_draw();
+  postGainModulatorSelect.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    postGainModulator       = postGainModulatorSelect.curItem;
+    postGainModulatorAmount = postGainModulatorSelect.value;
+  );
+  postGainModulatorSelect.combobox_draw_top();  
   
   yPos += yDist;  
   
