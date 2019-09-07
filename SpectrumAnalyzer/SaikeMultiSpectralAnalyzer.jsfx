@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
-version: 2.9
+version: 3.1
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos
-changelog: added alpha level, solo mode, off mode for sonogram, added colors to identify channels, improved layout and button organization (tvm79), fixed decibel display, added flat top, minor fix scope, added resizing of scope area, fix annoying buffersync bug in scope that caused ghosting, fix issue with freeze freezing, bugfix linear sonogram, adding free zoom (outer mouse drag), bugfix smoothing, added maximum smoothing, added adaptive smoothing, perf improvements for when not all channels are active, perf improvements sonogram, use maximum operator for sonogram to prevent missing peaks, increase number of displayed Hz labels when zoomed in, fixed bug when zooming out of spectrum range, changed font, made sure sono fft is updated if focal point of sonogram
+changelog: added FFT memory, divide single channels by 2 to make them comparable to the L and R signals from the sum (monoizing)
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -60,12 +60,15 @@ slider43:0<0,1,1{disabled,enabled}>-show theme
 slider44:0<0,1,1{disabled,enabled}>-freeze spectrum
 slider45:3<0,3,1{Average,Maximum,Loess,Adaptive}>-Smoothing method
 slider50:0<0,1,0>-Initialized
+slider51:LatencyCompensation=0<0,1,0>-Latency Compensation
+slider53:showA=0<0,1,1>-Show A
+slider54:showB=0<0,1,1>-Show B
 //in_pin:left input 
 //in_pin:right input
 options:no_meter
 
 @init
-
+copyTo    = 0;
 magma     = 2000;
 viridis   = 4000;
 inferno   = 6000;
@@ -212,6 +215,35 @@ fftwr   = window + (max_fft_size*0.5 + 1) + sumshr;
 ibufr   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshr;
 sumhsr  = window + sumshr;
 
+// Buffer for delay compensation
+latencyBuffer  = 65536*spacing*(totchannels+5);
+latencyBufferMax = latencyBuffer + 65536; // should be x64
+latencyPtr = latencyBuffer;
+memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
+
+memA  = 65536*spacing*(totchannels+8);
+memB  = 65536*spacing*(totchannels+9);
+memA2 = 65536*spacing*(totchannels+10);
+memB2 = 65536*spacing*(totchannels+11);
+
+@serialize
+memA  = 65536*spacing*(totchannels+8);
+memB  = 65536*spacing*(totchannels+9);
+memA2 = 65536*spacing*(totchannels+10);
+memB2 = 65536*spacing*(totchannels+11);
+file_mem(0, memA, 65536);
+file_mem(0, memB, 65536);
+file_mem(0, memA2, 65536);
+file_mem(0, memB2, 65536);
+file_var(0, sModeA);
+file_var(0, kernelSizeA);
+file_var(0, fftSizeA);
+file_var(0, xscaleA);
+file_var(0, sModeB);
+file_var(0, kernelSizeB);
+file_var(0, fftSizeB);
+file_var(0, xscaleB);
+
 @slider
 slider2 != lfloor ? old_w=0;
 
@@ -235,7 +267,7 @@ sr        = 0;
 (
   loop(maxchannels,
     (active[] == 1 || (slider28==iLoad)) ? (
-      recpos[][]=(spl(jch)+spl(jch+1));
+      recpos[][]=.5*(spl(jch)+spl(jch+1));
       recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
     );
 
@@ -254,7 +286,26 @@ sr        = 0;
   sumposr[] = sr;
   sumposl = ((sumposl+1) >= sumhsl ? sumshl : (sumposl+1));
   sumposr = ((sumposr+1) >= sumhsr ? sumshr : (sumposr+1));  
-)
+);
+
+latencyCompensation ? (
+  j = 0;
+  loop(num_ch,
+    latencyPtr[] = spl(j);
+    latencyPtr += 1;
+    j += 1;
+  );
+  ( latencyPtr > latencyBufferMax ) ? latencyPtr -= (latencyBufferMax - latencyBuffer);
+  
+  latencyRead = latencyPtr - num_ch * latencyLength;
+  ( latencyRead <= latencyBuffer ) ? latencyRead += (latencyBufferMax - latencyBuffer);
+  j = 0;
+  loop(num_ch,
+    spl(j) = latencyRead[];
+    latencyRead += 1;
+    j += 1;
+  );
+);
 
 @gfx 900 600
 initCh();
@@ -694,6 +745,10 @@ function checkChannelButtons()
     ch14.hit_button(mouse_x,mouse_y,24) ? ( slider36 = -1; slider24=!slider24; slider_automate(slider24); updateChannelSliders(); old_w = 0; hit=1; ) :
     ch15.hit_button(mouse_x,mouse_y,25) ? ( slider36 = -1; slider25=!slider25; slider_automate(slider25); updateChannelSliders(); old_w = 0; hit=1; ) :
     ch16.hit_button(mouse_x,mouse_y,26) ? ( slider36 = -1; slider26=!slider26; slider_automate(slider26); updateChannelSliders(); old_w = 0; hit=1; );
+    
+    chA.hit_button(mouse_x,mouse_y,200) ? ( showA=!showA; slider_automate(showA); );
+    chB.hit_button(mouse_x,mouse_y,200) ? ( showB=!showB; slider_automate(showB); );
+    
   ) : ( slider36 = -1 );
   hit == 1;
 );
@@ -885,109 +940,9 @@ function drawGrid()
   );
 );
 
-function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw)
+function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
 (
-  buf1=rpos-fftsize;
-  buf1<bufStart ? buf1+=histsize;
-  buf2=window;
-  buf3=fftwspace;
-  loop(fftsize*.5 + 1,
-    buf3[] = buf1[]*buf2[];
-    buf3+=1;
-
-    buf2+=1;
-    (buf1+=1) >= histEnd ? buf1 -= histsize;
-  );
-  buf2-=1;
-  loop(fftsize*.5 - 1,
-    buf3[] = buf1[]*(buf2-=1)[];
-    buf3+=1;
-    (buf1+=1) >= histEnd ? buf1 -= histsize;
-  );
-
-  fft_real(fftwspace,fftsize);
-  fft_permute(fftwspace,fftsize/2);
-  fftwspace[1]=0;
-
-  ascale=gfx_h/$pi*0.25;
-  xscale=800/(fftsize-4);
- 
-  buf3=fftwspace;
-  buf2=intbuf+max_fft_size*0.5;
-  i=0;
-  lx=0;
-  
-  // Draw phase
-  draw ? (
-    rescaleY = (1-(spectrum_yoffset+bottom_pad)/gfx_h);
-    slider3 ? loop(fftsize*0.5,
-      ang=-atan2(buf3[1],buf3[]);
-      buf3+=2;
-      
-      integrate_en ? (
-        ang = buf2[] += integrate_sc * (ang - buf2[]);
-        buf2+=1;
-      );
-      
-      ty2=(ang*ascale + gfx_h*0.5)*rescaleY + spectrum_yoffset;
-      tx = log(1.0+i*xscale)*wsc;
-  
-      i && ( tx < spectrum_xmax ) ? 
-      ( 
-        gfx_x=lx; gfx_y=ly2; gfx_lineto(tx,ty2,1) ;
-      );
-  
-      lx=tx; ly2=ty2;
-      i+=1;
-    );
-  );
-  
-  smoothing = slider7;
-  lx=0;
-  i=0;
-  fill_slmin=gfx_h;
-  fill_slast=0;
-
-  // Process FFT
-  kernelSize  = floor( smoothing/5 + 1 );
-  bufout = filtout + kernelSize;
-  
-  // Integrate the FFT over time to smooth it.
-  // Note that yOut and buf3 both point to the FFTW space. yOut is written after buf3 is read so 
-  // they don't conflict.
-  buf3 = fftwspace;
-  yOut = fftwspace;  
-  buf2 = intbuf;
-  i    = 0;
-  slope = .5*log(2)*slider38;
-  prec = (10^(-500/20*2));
-  loop(fftsize*0.5,   
-    yOut[] = sqr(buf3[0])+sqr(buf3[1]);
-    ty = log(max(yOut[],prec));
-    ty = ty + slope*log(1.0+i*xscale);
-    yOut += 1;
-    buf3 += 2;    
-  
-    integrate_en ? (
-      ty = buf2[] += integrate_sc * (ty - buf2[]);
-      buf2+=1;
-    );
-      
-    bufout[] = ty*-0.5*sc + 20;
-    bufout += 1;
-    i += 1;
-  );
-    
-  // Copy the last few to the front
-  bufout = filtout + kernelSize;
-  last = bufout[];
-  loop(kernelSize,
-    bufout -= 1;
-    bufout[] = last;
-  );
-  
   ( smoothing > 0 ) ? (
-    smoothMode = floor(slider45);
     ( smoothMode == 0 ) ? (
       // Convolve it
       bufout      = filtout+kernelSize;
@@ -1162,6 +1117,110 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
       lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
     )
   )
+);
+
+function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw)
+(
+  buf1=rpos-fftsize;
+  buf1<bufStart ? buf1+=histsize;
+  buf2=window;
+  buf3=fftwspace;
+  loop(fftsize*.5 + 1,
+    buf3[] = buf1[]*buf2[];
+    buf3+=1;
+
+    buf2+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+  buf2-=1;
+  loop(fftsize*.5 - 1,
+    buf3[] = buf1[]*(buf2-=1)[];
+    buf3+=1;
+    (buf1+=1) >= histEnd ? buf1 -= histsize;
+  );
+
+  fft_real(fftwspace,fftsize);
+  fft_permute(fftwspace,fftsize/2);
+  fftwspace[1]=0;
+
+  ascale=gfx_h/$pi*0.25;
+  xscale=800/(fftsize-4);
+ 
+  buf3=fftwspace;
+  buf2=intbuf+max_fft_size*0.5;
+  i=0;
+  lx=0;
+  
+  // Draw phase
+  draw ? (
+    rescaleY = (1-(spectrum_yoffset+bottom_pad)/gfx_h);
+    slider3 ? loop(fftsize*0.5,
+      ang=-atan2(buf3[1],buf3[]);
+      buf3+=2;
+      
+      integrate_en ? (
+        ang = buf2[] += integrate_sc * (ang - buf2[]);
+        buf2+=1;
+      );
+      
+      ty2=(ang*ascale + gfx_h*0.5)*rescaleY + spectrum_yoffset;
+      tx = log(1.0+i*xscale)*wsc;
+  
+      i && ( tx < spectrum_xmax ) ? 
+      ( 
+        gfx_x=lx; gfx_y=ly2; gfx_lineto(tx,ty2,1) ;
+      );
+  
+      lx=tx; ly2=ty2;
+      i+=1;
+    );
+  );
+  
+  smoothing = slider7;
+  lx=0;
+  i=0;
+  fill_slmin=gfx_h;
+  fill_slast=0;
+
+  // Process FFT
+  kernelSize  = floor( smoothing/5 + 1 );
+  bufout = filtout + kernelSize;
+  
+  // Integrate the FFT over time to smooth it.
+  // Note that yOut and buf3 both point to the FFTW space. yOut is written after buf3 is read so 
+  // they don't conflict.
+  buf3 = fftwspace;
+  yOut = fftwspace;
+  buf2 = intbuf;
+  i    = 0;
+  slope = .5*log(2)*slider38;
+  prec = (10^(-500/20*2));
+  loop(fftsize*0.5,   
+    yOut[] = sqr(buf3[0])+sqr(buf3[1]);
+    ty = log(max(yOut[],prec));
+    ty = ty + slope*log(1.0+i*xscale);
+    yOut += 1;
+    buf3 += 2;    
+  
+    integrate_en ? (
+      ty = buf2[] += integrate_sc * (ty - buf2[]);
+      buf2+=1;
+    );
+      
+    bufout[] = ty*-0.5*sc + 20;
+    bufout += 1;
+    i += 1;
+  );
+    
+  // Copy the last few to the front
+  bufout = filtout + kernelSize;
+  last = bufout[];
+  loop(kernelSize,
+    bufout -= 1;
+    bufout[] = last;
+  );
+  
+  drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
 );
   
 // Scrollwheel
@@ -1355,6 +1414,8 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
          old_w=0;
        ) : (
          cap_mode = cap_drag = cap_timer = 0;
+         store_a_button.hit_button(mouse_x,mouse_y,-1) ? ( copyTo = 1 ) :   
+         store_b_button.hit_button(mouse_x,mouse_y,-1) ? ( copyTo = 2 ) :            
          freeze_button.hit_button(mouse_x,mouse_y,-1) ? ( slider44=1 - slider44; slider_automate(slider44); old_w = 0) :   
          options_button.hit_button(mouse_x,mouse_y,-1) ? ( slider42=!slider42; slider_automate(slider42); old_w = 0; ) :
          (
@@ -1415,7 +1476,7 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
     ) :
     cap_mode == 4 && cap_last_y != mouse_y ? (
       // Integration time
-      slider5 = drag_slider_precise(slider5, 0.0, 2500.0, 5);
+      slider5 = drag_slider_precise(slider5, 0.0, 25000.0, 5);
       old_w=0;
       slider_automate(slider5);
     ) :
@@ -1512,8 +1573,18 @@ function DrawButtons()
 (
     buttonPad = 3;
     
-    gfx_measurestr("-100dB Freeze  ", freezeX, freezeY);
-    freeze_button.draw_button(freezeX, 3, slider44 == 1 ? "Unfreeze" : "Freeze");
+    gfx_measurestr(" >A", storeAX, freezeY);
+    gfx_measurestr(" >A >B", storeBX, freezeY);    
+    frstr = slider44 == 1 ? "Unfreeze" : "Freeze";
+    
+    freeze_button.draw_button(freezeX, 3, frstr);
+    gfx_measurestr(frstr, freezeX, freezeY);
+    gfx_measurestr(">", addX, freezeY);
+    freezeX = freezeX + addX;
+    storeAX = storeAX + freezeX;
+    storeBX = storeBX + freezeX;
+    store_a_button.draw_button(storeAX, 3, ">A");
+    store_b_button.draw_button(storeBX, 3, ">B");
     
     // hide buttons
     gfx_measurestr("| <- |", arrowX, arrowY);
@@ -1525,23 +1596,23 @@ function DrawButtons()
     
     gfx_y = 8;
     slider42 == 0 ? (
-      fft_button.draw_button_safe(gfx_y, sprintf(#,"FFT: %d",16<<slider1), freezeX);
+      fft_button.draw_button_safe(gfx_y, sprintf(#,"FFT: %d",16<<slider1), storeBX);
       window_button.draw_button_safe(gfx_y, 
                         (slider4|0)==1 ? "Hamming" :  
                         (slider4|0)==2 ? "Blackman-Harris" :
                         (slider4|0)==3 ? "Blackman" : 
                         (slider4|0)==4 ? "Rectangular":
-                          "Flat-top", freezeX);
+                          "Flat-top", storeBX);
     
-      floor_button.draw_button_safe(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), freezeX);
-      slope_button.draw_button_safe(gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38), freezeX);
-      smoothing.draw_button_safe(gfx_y,sprintf(#,"Smoothing: %.1f",slider7), freezeX);
+      floor_button.draw_button_safe(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), storeBX);
+      slope_button.draw_button_safe(gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38), storeBX);
+      smoothing.draw_button_safe(gfx_y,sprintf(#,"Smoothing: %.1f",slider7), storeBX);
       smoothing_type.draw_button_safe(gfx_y, 
                         (slider45|0)==0 ? "Average" :  
                         (slider45|0)==1 ? "Maximum" :
                         (slider45|0)==2 ? "LOESS" : 
-                          "Adaptive", freezeX);
-      integrate_button.draw_button_safe(gfx_y, sprintf(#,"Integrate: %dms",slider5|0), freezeX);
+                          "Adaptive", storeBX);
+      integrate_button.draw_button_safe(gfx_y, sprintf(#,"Integrate: %dms",slider5|0), storeBX);
     );
     
     
@@ -1587,11 +1658,15 @@ function DrawButtons()
     chButtonWidth = chW+10;
     chButtonSpace = chButtonWidth+chButtonPad;
     chButtonYSpace = chH + 24;
-    totalButtonWidth = 16 * chButtonSpace;
+    totalButtonWidth = 18 * chButtonSpace;
     xButBlocked = max(spectrum_xpad, theme_button.w+8);
     slider41 == 0 ?(
       gfx_w > ( totalButtonWidth + xButBlocked + arrowX + 8 ) ? (
-        ch16.draw_button2_fixedWidth(gfx_w/2 -xButBlocked*0.5 + .5*totalButtonWidth + .5*arrowX, arrowY, chButtonWidth, "Ch16", slider26, slider28==15, slider36==15, slider36>-1, 15);
+      
+        chB.draw_button2_fixedWidth(gfx_w/2 -xButBlocked*0.5 + .5*totalButtonWidth + .5*arrowX, arrowY, chButtonWidth, "MemB", showB, 0, 0, 0, 15);
+        chA.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, "MemA", showA, 0, 0, 0, 15);
+      
+        ch16.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, "Ch16", slider26, slider28==15, slider36==15, slider36>-1, 15);
         ch15.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, "Ch15", slider25, slider28==14, slider36==14, slider36>-1, 14);
         ch14.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, "Ch14", slider24, slider28==13, slider36==13, slider36>-1, 13);
         ch13.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, "Ch13", slider23, slider28==12, slider36==12, slider36>-1, 12);
@@ -1617,7 +1692,8 @@ function DrawButtons()
         bRowCol1 = gfx_w-10;
         bRowCol2 = gfx_w-10-chButtonWidth-chButtonPad;
         
-        ch16.draw_button2_fixedWidth(bRowCol1 , yBStart, chButtonWidth, "Ch16", slider26, slider28==15, slider36==15, slider36>-1, 15);
+        chB.draw_button2_fixedWidth(bRowCol1 , yBStart, chButtonWidth, "MemB",  showB, 0, 0, 0, 7);
+        ch16.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, "Ch16", slider26, slider28==15, slider36==15, slider36>-1, 15);
         ch15.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, "Ch15", slider25, slider28==14, slider36==14, slider36>-1, 14);
         ch14.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, "Ch14", slider24, slider28==13, slider36==13, slider36>-1, 13);
         ch13.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, "Ch13", slider23, slider28==12, slider36==12, slider36>-1, 12);
@@ -1625,8 +1701,9 @@ function DrawButtons()
         ch11.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, "Ch11", slider21, slider28==10, slider36==10, slider36>-1, 10);
         ch10.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, "Ch10", slider20, slider28==9,  slider36==9,  slider36>-1, 9);
         ch9.draw_button2_fixedWidth(bRowCol1 ,  gfx_y-chButtonYSpace, chButtonWidth, "Ch 9",  slider19, slider28==8,  slider36==8,  slider36>-1, 8);
-          
-        ch8.draw_button2_fixedWidth(bRowCol2 , yBStart, chButtonWidth, "Ch 8",  slider18, slider28==7,  slider36==7,  slider36>-1, 7);
+
+        chA.draw_button2_fixedWidth(bRowCol2 , yBStart, chButtonWidth, "MemA",  showA, 0, 0, 0, 7);
+        ch8.draw_button2_fixedWidth(bRowCol2 , gfx_y-chButtonYSpace, chButtonWidth, "Ch 8",  slider18, slider28==7,  slider36==7,  slider36>-1, 7);
         ch7.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, "Ch 7",  slider17, slider28==6,  slider36==6,  slider36>-1, 6);
         ch6.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, "Ch 6",  slider16, slider28==5,  slider36==5,  slider36>-1, 5);
         ch5.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, "Ch 5",  slider15, slider28==4,  slider36==4,  slider36>-1, 4);
@@ -1704,6 +1781,14 @@ UI_SCREEN = 0;
   gfx_rectto(gfx_w,gfx_h);
   sc=(gfx_h-20)*20/(-slider2 * log(10));
   
+  latencyLength = fftSize;
+  ( latencyCompensation == 0 ) ? latencyLength = 0;
+  
+  ( pdc_delay != latencyLength ) ? (
+    pdc_top_ch = num_ch;
+    pdc_delay = latencyLength;
+  );
+  
   integrate_sc = 1;
   slider5 > 0 ? (
     integrate_now = time_precise();
@@ -1777,8 +1862,44 @@ UI_SCREEN = 0;
   showSum ? (
     halfshade = 0.3 * bgcolor + 0.7 * ( 1-bgcolor );
     shade = 1-bgcolor;
-    processFFT(100, sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);  
+    processFFT(100, sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);
+    
+    (copyTo == 1) ? memcpy(memA2, filtout, 65536);
+    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
+    
     processFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 1);
+    
+    copyTo == 1 ? (
+      memcpy(memA, filtout, 65536);
+      copyTo = 0;
+      sModeA = floor(slider45);
+      kernelSizeA = kernelSize;
+      fftSizeA = fftsize;
+      xscaleA = xscale;
+    );
+    
+    copyTo == 2 ? (
+      memcpy(memB, filtout, 65536);
+      copyTo = 0;
+      sModeB = floor(slider45);
+      kernelSizeB = kernelSize;
+      fftSizeB = fftsize;
+      xscaleB = xscale;
+    );
+  );
+  
+  showA ? (
+    memcpy(filtout, memA, 65536);
+    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    memcpy(filtout, memA2, 65536);
+    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+  );
+  
+  showB ? (
+    memcpy(filtout, memB, 65536);
+    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    memcpy(filtout, memB2, 65536);
+    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
   );
   
   ( drawHz == 1 ) ? (
