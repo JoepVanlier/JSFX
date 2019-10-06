@@ -1,14 +1,14 @@
 desc:Saike Tanh Saturation with anti aliasing
 tags: saturation distortion anti-aliased
-version: 1.07
+version: 1.08
 author: Joep Vanlier
 changelog: 
-  + Added high gain fix from Erbird.
+  + Added linear interpolated version.
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
 Proceedings of the 19th International Conference on Digital Audio Effects (DAFx-16), Brno, Czech Republic, September 5–9, 2016
-I have only implemented the rect version, since the linear one depends on Li2 and LUTs aren't so fast in JSFX.
+Special thanks to Erbird for coming up with the odd function mirror trick to improve numerical stability.
 
 in_pin:left input
 in_pin:right input
@@ -17,7 +17,7 @@ out_pin:right output
 
 slider1:0<-6,24,1>Gain (dB)
 slider2:0<-18,0,1>Ceiling (dB)
-slider3:1<0,1,1>Antialias?
+slider3:1<0,2,1{No,Constant,Linear (BETA)}>Antialias mode
 slider4:0<0,1,1>Fix DC?
 
 @slider
@@ -25,15 +25,10 @@ preamp      = 10^(slider1/20);
 ceiling     = 10^(-slider2/20);
 inv_ceiling = 10^(slider2/20);
 
-@sample
-spl0=spl0;
-spl1=spl1;
-
 @sample 
   function F0(x)
   local()
   global()
-  instance()
   (
     x - log(2/(1 + exp(-2*x)))
   );
@@ -45,10 +40,139 @@ spl1=spl1;
   (
     2/(1+exp(-2*x)) - 1
   );
+
+  function Li2(x)
+  local(A, ALFA, B0, B1, B2, H, S, T, Y, Q, HF, PI3, PI6, PI12)
+  global()
+  (
+    HF = 0.5;
+    PI3 = 3.2898681336964528729448303332921; // pi*pi/3
+    PI6 = 1.644934066848226436472415166646; // pi*pi / 6
+    PI12 = 0.82246703342411321823620758332301; // pi*pi / 12
+    
+    (x==1) ? (
+      H = PI6;
+    ) : (x == -1) ? (
+      H = -PI12;
+    ) : (
+      T = -x;
+    );
+
+    A = (T <= -2) ? (
+      Y = -1 / (1 + T);
+      S = 1;
+      A = log(-T);
+      Q = log(1 + 1/T);
+      -PI3 + HF * (A*A - Q*Q)
+    ) : (T < -1) ? (
+      Y = -1 - T;
+      S = -1;
+      A = log(-T);
+      Q = log(1 + 1/T);  
+      -PI6 + A * (A + Q)
+    ) : (T <= -0.5) ? (
+      Y = -(1 + T) / T;
+      S = 1;
+      A = log(-T);
+      Q = log(1 + T);
+      -PI6 + A * (-HF * A + Q)
+    ) : (T < 0) ? (
+      Y = -T / (1 + T);
+      S = -1;
+      Q = log(1 + T);
+      A = HF * Q*Q
+    ) : (T <= 1) ? (
+      Y = T;
+      S = 1;
+      0
+    ) : (
+      Y = 1 / T;
+      S = -1;
+      Q = log(T);
+      PI6 + HF * Q*Q
+    );
+
+    H = Y + Y - 1;
+    ALFA = H + H;
+    B1 = 0;
+    B2 = 0;
+    B0 = 0.00000000000000002 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000000000000014 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00000000000000093 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000000000000610 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00000000000004042 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000000000027007 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00000000000182256 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000000001244332 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00000000008612098 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000000060578480 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00000000434545063 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000003193341274 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00000024195180854 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00000190784959387 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00001588415541880 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.00014304184442340 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.00145751084062268 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = -0.01858843665014592 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.40975987533077105 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    B0 = 0.42996693560813697 + ALFA * B1 - B2; B2 = B1; B1 = B0;
+    
+    H = -(S * (B0 - H * B2) + A)
+  );
+  
+  function F1(x)
+  local(em2x)
+  global()
+  (
+    em2x = exp(-2*x);
+    .5 * (x * (x + 2 * log(em2x + 1)) - Li2(-em2x))
+  );
+  
+  function antialiased_tanh_linear(xn)
+  local(eps, absxn, hpi12)
+  global()
+  instance(antialias, F0_xnm1, xnm1, xnm2, F0_xnm1, F0_xnm2, F1_xnm1, F1_xnm2,
+  F0_xn, F1_xn, diff1, diff2, term1, term2, idiff)
+  (
+    absxn     = abs(xn);
+    F0_xn     = F0(absxn);
+    
+    hpi12     = 0.4112335167120566; // .5 * pi*pi / 12
+    F1_xn     = (F1(absxn) - hpi12)*sign(xn) + hpi12;
+ 
+    diff1     = ( xn - xnm1 );
+    diff2     = ( xnm2 - xnm1 );
+    eps       = .2;
+      
+    term1     = (abs(diff1) > eps) ? (
+      idiff = 1 / (diff1*diff1);
+      ( xn * ( F0_xn - F0_xnm1 ) - (F1_xn - F1_xnm1) ) * idiff
+    ) : (
+      .5 * tanh((xn + 2*xnm1)*.33333333333333333333333333333)
+    );
+    
+    term2     = (abs(diff2) > eps) ? (
+      idiff = 1 / (diff2*diff2);
+      ( xnm2 * ( F0_xnm2 - F0_xnm1 ) - (F1_xnm2 - F1_xnm1) ) * idiff
+    ) : (
+      .5 * tanh((xnm2 + 2*xnm1)*.33333333333333333333333333333)
+    );
+
+    F1_xnm2   = F1_xnm1;
+    F1_xnm1   = F1_xn;
+
+    F0_xnm2   = F0_xnm1;
+    F0_xnm1   = F0_xn;
+    
+    xnm2      = xnm1;
+    xnm1      = xn;
+  
+    term1 + term2
+  );
   
   function antialiased_tanh_rect(x)
   local(eps, F0_xn)
-  global(slider4)
+  global()
   instance(antialias, F0_xnm1, xnm1,diff)
   (
     (
@@ -78,9 +202,12 @@ spl1=spl1;
   spl1 *= preamp;
   
   spl0 *= ceiling;
-  spl1 *= ceiling;
+  spl1 *= ceiling;  
   
-  slider3 ? (
+  ( slider3 == 2 ) ? (
+    spl0 = ch0.antialiased_tanh_linear(spl0);
+    spl1 = ch1.antialiased_tanh_linear(spl1);
+  ) : ( slider3 == 1 ) ? (
     spl0 = ch0.antialiased_tanh_rect(spl0);
     spl1 = ch1.antialiased_tanh_rect(spl1);
   ) : (
@@ -93,5 +220,17 @@ spl1=spl1;
     spl1 = dc1.fix_dc(spl1);
   );
   
-  spl0 *= inv_ceiling;
-  spl1 *= inv_ceiling;
+  (lastmode != slider3) ? (
+    block = 6;
+  );
+  
+  ( block > 0 ) ? (
+    block = block - 1;
+    spl0 = 0;
+    spl1 = 0;
+  ) : (
+    spl0 *= inv_ceiling;
+    spl1 *= inv_ceiling;
+  );
+  
+  lastmode = slider3;
