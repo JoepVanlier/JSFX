@@ -1,0 +1,296 @@
+desc:Ripple
+tags: Ripple (work in progress | not ready for use!)
+version: 0.01
+author: Joep Vanlier
+changelog: Initial commit
+provides: 
+license: MIT
+
+@init
+seq_position = 0;
+
+function rep_scale(from, to, N, shift)
+  local()
+  globals()
+  instance()
+  (
+    loop(N,
+      to[] = from[] + shift;
+      to += 1;
+      from += 1;
+    );
+  );
+  
+
+function gen_scale(addr, scale)
+  globals()
+  instance()
+  local(tones, idx)
+  (
+    (scale == 0) ? (
+      // Major / Ionian
+      addr[0] = 0;
+      addr[1] = 2;
+      addr[2] = 4;
+      addr[3] = 5;
+      addr[4] = 7;
+      addr[5] = 9;
+      addr[6] = 11;
+      addr[7] = 12;      
+      tones = 8;
+    ) : ( scale == 1 ) ? (  
+      // Minor / Aeolian
+      addr[0] = 0;
+      addr[1] = 2;
+      addr[2] = 3;
+      addr[3] = 5;
+      addr[4] = 7;
+      addr[5] = 8;
+      addr[6] = 10;
+      addr[7] = 12;
+      tones = 8;      
+    ) : ( scale == 2 ) ? (
+      // Major pentatonic
+      addr[0] = 0;
+      addr[1] = 2;
+      addr[2] = 4;
+      addr[3] = 7;
+      addr[4] = 9;
+      tones = 5;
+    ) : ( scale == 3 ) ? (
+      // Minor pentatonic
+      addr[0] = 0;
+      addr[1] = 3;
+      addr[2] = 5;
+      addr[3] = 7;
+      addr[4] = 10;
+      tones = 5;
+    ) : ( scale == 4 ) ? (
+      // Blues minor / man gong
+      addr[0] = 0;
+      addr[1] = 3;
+      addr[2] = 5;
+      addr[3] = 8;
+      addr[4] = 10;
+      tones = 5;
+    );
+    
+    idx = 0;
+    loop(8,
+      rep_scale(addr + idx*tones, addr + (idx+1)*tones, tones, 12);
+      idx += 1;
+    ); 
+  );
+  
+function gen_picker(chord_addr, set)
+  globals()
+  local()
+  instance()
+  (
+    (set == 0) ? (
+      // Major ninth
+      chord_addr[0] = 5;
+      chord_addr[1] = 2;
+      chord_addr[2] = 2;
+      chord_addr[3] = 2;
+      chord_addr[4] = 2;
+    ) : (set==1) ? (
+      // Sus
+      chord_addr[0] = 4;
+      chord_addr[1] = 3;
+      chord_addr[2] = 1;
+      chord_addr[3] = 2;
+    ) : (set==2) ? (
+      // Sixth
+      chord_addr[0] = 4;
+      chord_addr[1] = 2;
+      chord_addr[2] = 2;
+      chord_addr[3] = 1;
+    ) : (set==3) ? (
+      // 
+      chord_addr[0] = 3;
+      chord_addr[1] = 2;
+      chord_addr[2] = 2;
+    );;
+  );
+
+function gen_note_sequence(note_addr, scale_addr, chord_addr, origin, N)
+  globals()
+  instance()
+  local(n_chord, scale_idx, chord_idx)
+  (
+    n_chord = chord_addr[0];
+  
+    scale_idx = origin;
+    chord_idx = 1;
+    loop(N,
+      note_addr[] = scale_addr[scale_idx];
+      note_addr += 1;
+      
+      scale_idx += chord_addr[chord_idx];
+      chord_idx += 1;
+      chord_idx == n_chord ? chord_idx = 1;
+    );
+  );
+
+SCALE_ADDRESS = 1000;
+CHORD_ADDRESS = 2000;
+NOTE_ADDRESS = 3000;
+NOTE_DATA = 8000;
+
+offset = 24;
+origin = 4;
+scale = 0;
+chord = 0;
+note = 20; 
+n_notes = 16;
+n_steps = 8;
+
+gen_scale(SCALE_ADDRESS, scale);
+gen_picker(CHORD_ADDRESS, chord);
+gen_note_sequence(NOTE_ADDRESS, SCALE_ADDRESS, CHORD_ADDRESS, origin, 64);
+
+@serialize
+file_var( 0, origin );
+file_var( 0, offset );
+file_var( 0, scale );
+file_var( 0, chord );
+file_var( 0, n_notes );
+file_var( 0, n_steps );
+
+/* Memory to expand into when features are added */
+file_mem( 0, 0, 99 );
+
+file_mem(0, NOTE_DATA, 1024);
+
+gen_scale(SCALE_ADDRESS, 0);
+gen_picker(CHORD_ADDRESS, 0);
+gen_note_sequence(NOTE_ADDRESS, SCALE_ADDRESS, CHORD_ADDRESS, origin, 64);
+
+@slider 
+
+@block
+bps = 2 * (ts_num / ts_denom) * tempo / 60;
+sample_per_beat = srate/bps;
+beat_pos = play_position * bps;
+seq_position = floor(beat_pos % n_steps); 
+
+// Check whether the interval contains a transition from one grid line to the next.
+samples_until_next_beat = (1.0 - (beat_pos - floor(beat_pos)))  * sample_per_beat;
+
+( samples_until_next_beat < samplesblock ) ? (
+  offset = (seq_position+1) * n_notes
+) : ( samples_until_next_beat > (sample_per_beat-1) ) ? (
+  offset = seq_position * n_notes
+) : offset = -1;
+
+(offset > -1) ? (
+  idx = 0;
+  loop(n_notes,
+    midisend(samples_until_next_beat, $x80, 36 + note_address[idx], 127);
+  
+    NOTE_DATA[ny - idx + offset] > 0 ? (
+      midisend(samples_until_next_beat+16, $x90, 36 + note_address[idx], 127);
+      pp = 1;
+    );
+    idx += 1;
+  );
+);
+
+//samplesblock
+//xloc = beat_position
+
+@sample
+
+@gfx 600 600
+w = 600;
+h = 600;
+
+function draw_grid(_x, _y, _w, _h, px, note_address, n_notes, n_steps, seq_position)
+  instance(x, y, w, h, nx, ny, data)
+  globals(gfx_x, gfx_y)
+  local(ptr, xp, yp, dx, dy, cw, ch)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    nx = n_steps;
+    ny = n_notes;
+    data = note_address;
+
+    gfx_set(.02,0.02,.1,.7);
+    gfx_rect(x, y, w, h);
+    
+    dx = w / nx;
+    dy = h / ny;
+  
+    cw = dx - 2*px;
+    ch = dy - 2*px;
+    xp = x + px;
+    ptr = data;
+    loop(n_steps,
+      yp = y+px;
+      loop(n_notes,
+        gfx_set(0.1, 0.1, .2 + .8*ptr[], .7);
+        gfx_rect(xp, yp, cw, ch);
+        gfx_set(0.1, 0.1, .2 + .8*ptr[], .7);
+        gfx_rect(xp+2, yp+2, cw-2, ch-2);
+        gfx_set(0.1, 0.1, .2 + .8*ptr[], .7);
+        gfx_rect(xp+4, yp+4, cw-4, ch-4);
+        
+        ptr += 1;
+        yp += dy;
+      );
+      xp += dx;
+    );
+    
+    xp = x + seq_position*dx;
+    gfx_set(1, 1, 1, .05);
+    gfx_rect(xp, y, dx, h);
+    gfx_rect(xp+2, y, dx-4, h);
+  );
+
+function grid_mouse(mx, my, mc)
+  instance(x, y, w, h, nx, ny, data, lastleft, drawing)
+  globals(gfx_x, gfx_y)
+  local(xloc, yloc, left, dx, dy)
+  (
+    left = mc & 1 > 0;
+  
+    ( mx > x && my > y && mx < (x+w) && my < (y+h) ) ?
+    (
+      dx = w / nx;
+      dy = h / ny;
+    
+      xloc = floor((mx-x) / dx);
+      yloc = floor((my-y) / dy);
+      
+      (!lastleft && left) ? (
+        drawing = data[yloc + xloc * ny] > 0 ? 2 : 1
+      ) : ( drawing == 1 ) ? (
+        data[yloc + xloc * ny] = 1;
+      ) : ( drawing == 2 ) ? (
+        data[yloc + xloc * ny] = 0;
+      );;
+      
+      !left ? drawing = 0;
+      lastleft = left;
+    );
+  );
+  
+grid.draw_grid(10, 10, w, h, 3, NOTE_DATA, n_notes, n_steps, seq_position);
+grid.grid_mouse(mouse_x, mouse_y, mouse_cap);
+
+
+/*
+    gfx_y = 0;
+    i = 0;
+    gfx_set(1,1,1,.7);
+    loop(20,
+      gfx_x = 0;
+      gfx_printf("%d", note_address[i]);
+      i += 1;
+      gfx_y += 10;
+    );
+*/
