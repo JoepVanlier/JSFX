@@ -3,8 +3,10 @@ tags: Ripple (work in progress | not ready for use!)
 version: 0.01
 author: Joep Vanlier
 changelog: Initial commit
-provides: 
+provides: Ripple_dependencies/*
 license: MIT
+
+import widgets.jsfx-inc
 
 @init
 seq_position = 0;
@@ -136,36 +138,50 @@ function gen_note_sequence(note_addr, scale_addr, chord_addr, origin, N)
 SCALE_ADDRESS = 1000;
 CHORD_ADDRESS = 2000;
 NOTE_ADDRESS = 3000;
-NOTE_DATA = 8000;
+NOTE_DATA = 8192;
+NOTE_BLOCKSIZE = 1024;
 
+// 512 is max size of a note block
 offset = 24;
 origin = 4;
 scale = 0;
 chord = 0;
 note = 20; 
 n_notes = 16;
-n_steps = 8;
+n_steps = 16;
+n_patterns = 16;
+version = 0;
 
-gen_scale(SCALE_ADDRESS, scale);
-gen_picker(CHORD_ADDRESS, chord);
-gen_note_sequence(NOTE_ADDRESS, SCALE_ADDRESS, CHORD_ADDRESS, origin, 64);
-
+function rebuild_scale()
+  (
+    gen_scale(SCALE_ADDRESS, scale);
+    gen_picker(CHORD_ADDRESS, chord);
+    gen_note_sequence(NOTE_ADDRESS, SCALE_ADDRESS, CHORD_ADDRESS, origin, 64);
+  );
+  
 @serialize
-file_var( 0, origin );
-file_var( 0, offset );
-file_var( 0, scale );
-file_var( 0, chord );
-file_var( 0, n_notes );
-file_var( 0, n_steps );
+file_var( 0, version );
+( version == 0 ) ? (
+  file_var( 0, origin );
+  file_var( 0, offset );
+  file_var( 0, scale );
+  file_var( 0, chord );
+  file_var( 0, n_notes );
+  file_var( 0, n_steps );
+  file_var( 0, n_patterns );
+  file_var( 0, current_pattern );
+  
+  /* Memory to expand into when features are added */
+  file_mem( 0, 0, 99 );
+  
+  idx = 0;
+  loop(n_patterns,
+    file_mem(0, NOTE_DATA + (idx-1) * NOTE_BLOCKSIZE, 1024);
+    idx += 1;
+  );
+);
 
-/* Memory to expand into when features are added */
-file_mem( 0, 0, 99 );
-
-file_mem(0, NOTE_DATA, 1024);
-
-gen_scale(SCALE_ADDRESS, 0);
-gen_picker(CHORD_ADDRESS, 0);
-gen_note_sequence(NOTE_ADDRESS, SCALE_ADDRESS, CHORD_ADDRESS, origin, 64);
+rebuild_scale();
 
 @slider 
 
@@ -184,12 +200,25 @@ samples_until_next_beat = (1.0 - (beat_pos - floor(beat_pos)))  * sample_per_bea
   offset = seq_position * n_notes
 ) : offset = -1;
 
+(rebuild == 1) ? (
+  rebuild = 0;
+  
+  idx = 0;
+  loop(n_notes,
+      midisend(samples_until_next_beat, $x80, 36 + note_address[idx], 127);
+      idx += 1;
+  );
+  rebuild_scale();
+);
+
+pattern_location = NOTE_DATA + (current_pattern)*NOTE_BLOCKSIZE;
+
 (offset > -1) ? (
   idx = 0;
   loop(n_notes,
     midisend(samples_until_next_beat, $x80, 36 + note_address[idx], 127);
   
-    NOTE_DATA[ny - idx + offset] > 0 ? (
+    pattern_location[ny - idx + offset] > 0 ? (
       midisend(samples_until_next_beat+16, $x90, 36 + note_address[idx], 127);
       pp = 1;
     );
@@ -205,6 +234,44 @@ samples_until_next_beat = (1.0 - (beat_pos - floor(beat_pos)))  * sample_per_bea
 @gfx 600 600
 w = 600;
 h = 600;
+
+font_color_r = .8;
+font_color_g = .8;
+font_color_b = .8;
+font_color_a = .8;
+highlight_color_r = .5;
+highlight_color_g = .7+.2*abs(sin(2*time_precise()));
+highlight_color_b = .9;
+highlight_color_a = .6+.4*abs(sin(2*time_precise()));
+fontface = "Arial";
+scaling = 1;
+combo_height = 25;
+combo_width = 150;
+combo_pad = 10;
+
+event_captured > 0 ? event_captured -= 1;
+gfx_setfont(COMBO_BIG, fontface, 14*(1+scaling));
+
+/* current_pattern, scale, chord */
+
+scale_select.combobox(10, h+.5*combo_height, combo_width, combo_height, .4, .4, .8, 1, SCALE_TYPES, 1, 1, 1, COMBO_BIG, "Scale selection." );
+scale_select.combobox_setcuritem(scale);
+scale_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
+  scale = scale_select.curitem;
+  event_captured = 3;
+  rebuild = 1;
+);
+scale_select.combobox_draw();  
+
+chord_select.combobox(10 + combo_width + combo_pad, h+.5*combo_height, combo_width, combo_height, .4, .4, .8, 1, CHORD_TYPES, 2, 1, 1, COMBO_BIG, "Scale selection." );
+chord_select.combobox_setcuritem(chord);
+chord_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
+  chord = chord_select.curitem;
+  event_captured = 3;
+  rebuild = 1;
+);
+chord_select.combobox_draw();
+
 
 function draw_grid(_x, _y, _w, _h, px, note_address, n_notes, n_steps, seq_position)
   instance(x, y, w, h, nx, ny, data)
@@ -278,10 +345,74 @@ function grid_mouse(mx, my, mc)
       lastleft = left;
     );
   );
-  
-grid.draw_grid(10, 10, w, h, 3, NOTE_DATA, n_notes, n_steps, seq_position);
-grid.grid_mouse(mouse_x, mouse_y, mouse_cap);
 
+pat_back_r = .12;
+pat_back_g = 0.12;
+pat_back_b = .2;
+pat_back_a = .7;
+
+function draw_patterns(_x, _y, _w, _h, px, n_notes, _N, _current)
+  instance(x, y, w, h, N, dy, current)
+  local(y_cur, idx)
+  global(highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a,
+         pat_back_r, pat_back_g, pat_back_b, pat_back_a)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    N = _N;
+    current = _current;
+    
+    gfx_set(pat_back_r, pat_back_g, pat_back_b, pat_back_a);
+    
+    y_cur = y;
+    dy = h / n_notes;
+    
+    idx = 0;
+    loop(N,
+      gfx_rect(x+px, y_cur+px, w-2*px, dy-2*px);
+      ( current == idx ) ? (
+        gfx_set(highlight_color_r, highlight_color_g, highlight_color_b, highlight_color_a);
+        gfx_line(x + px, y_cur + px, x+w-px, y_cur + px);
+        gfx_line(x + px, y_cur + dy - px, x+w-px, y_cur + dy - px);
+        gfx_line(x + px, y_cur + px, x + px, y_cur + dy - px);
+        gfx_line(x + w - px, y_cur + px, x + w - px, y_cur + dy - px);
+        gfx_set(pat_back_r, pat_back_g, pat_back_b, pat_back_a);
+      );    
+      y_cur += dy;
+      idx += 1;
+    );   
+  );
+  
+function patterns_mouse(mx, my, mc)
+  instance(x, y, w, h, N, dy, current, lastleft)
+  local(left)
+  global()
+  (
+    left = mc & 1 > 0;
+    
+    (left && !lastleft) ? (
+      (mx > x) && (mx < (x+w)) && (my > y) && (my < (y+h)) ? (
+        current = (my - y) / dy;
+      );
+    );
+    
+    lastleft = left;
+    
+    floor(current)
+  );
+  
+  
+grid.draw_grid(10, 10, w, h, 3, NOTE_DATA + (current_pattern)*NOTE_BLOCKSIZE, n_notes, n_steps, seq_position);
+patterns.draw_patterns(w + 20, 10, 40, h, 3, n_notes, 16, current_pattern);
+event_captured == 0 ? (
+  grid.grid_mouse(mouse_x, mouse_y, mouse_cap);
+  current_pattern = patterns.patterns_mouse(mouse_x, mouse_y, mouse_cap);
+);
+
+scale_select.combobox_draw_top();
+chord_select.combobox_draw_top();
 
 /*
     gfx_y = 0;
