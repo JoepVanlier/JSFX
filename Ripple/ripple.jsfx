@@ -1,8 +1,8 @@
 desc:Ripple
 tags: Ripple (work in progress | not ready for use!)
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: Initial commit
+changelog: Bugfix note playback
 provides: Ripple_dependencies/*
 license: MIT
 
@@ -10,6 +10,7 @@ import widgets.jsfx-inc
 
 @init
 seq_position = 0;
+current_sample = 0;
 
 function rep_scale(from, to, N, shift)
   local()
@@ -145,16 +146,19 @@ NOTE_DATA = 8192;
 NOTE_BLOCKSIZE = 1024;
 
 // 512 is max size of a note block
-offset = 24;
-origin = 4;
-scale = 0;
-chord = 0;
-note = 20; 
-n_notes = 16;
-n_steps = 16;
-n_patterns = 16;
-version = 0;
-
+loaded == 0 ? (
+  offset = 24;
+  origin = 4;
+  scale = 2;
+  chord = 4;
+  note = 20; 
+  n_notes = 16;
+  n_steps = 16;
+  n_patterns = 16;
+  version = 0;
+  speed = 2;
+);
+  
 function rebuild_scale()
   (
     gen_scale(SCALE_ADDRESS, scale);
@@ -165,6 +169,7 @@ function rebuild_scale()
 @serialize
 file_var( 0, version );
 ( version == 0 ) ? (
+  loaded = 1;
   file_var( 0, origin );
   file_var( 0, offset );
   file_var( 0, scale );
@@ -173,6 +178,7 @@ file_var( 0, version );
   file_var( 0, n_steps );
   file_var( 0, n_patterns );
   file_var( 0, current_pattern );
+  file_var( 0, speed );
   
   /* Memory to expand into when features are added */
   file_mem( 0, 0, 99 );
@@ -181,7 +187,7 @@ file_var( 0, version );
   loop(n_patterns,
     file_mem(0, NOTE_DATA + (idx-1) * NOTE_BLOCKSIZE, 1024);
     idx += 1;
-  );
+  ); 
 );
 
 rebuild_scale();
@@ -189,52 +195,68 @@ rebuild_scale();
 @slider 
 
 @block
-bps = 2 * (ts_num / ts_denom) * tempo / 60;
-sample_per_beat = srate/bps;
-beat_pos = play_position * bps;
-seq_position = floor(beat_pos % n_steps); 
+abs_speed = (2^(speed-2));
+bps = 2 / abs_speed * (ts_num / ts_denom) * tempo / 60;
+sample_per_beat = (srate/num_ch)/bps;
+current_position = current_sample / (srate/num_ch);
+beat_pos = current_position * bps;
+seq_position = floor(beat_pos % n_steps);
 
 // Check whether the interval contains a transition from one grid line to the next.
-samples_until_next_beat = (1.0 - (beat_pos - floor(beat_pos)))  * sample_per_beat;
-
-( samples_until_next_beat < samplesblock ) ? (
-  offset = (seq_position+1) * n_notes
-) : ( samples_until_next_beat > (sample_per_beat-1) ) ? (
-  offset = seq_position * n_notes
-) : offset = -1;
-
-(rebuild == 1) ? (
-  rebuild = 0;
+offset = 1;
+FATAL = 0;
+cumulative_offset = 0;
+while(offset > 0 && FATAL < 15) (
+  samples_until_next_beat = (1.0 - (beat_pos - floor(beat_pos))) * sample_per_beat;
+  current_beat_offset = samples_until_next_beat + cumulative_offset;
   
-  idx = 0;
-  loop(n_notes,
-      midisend(samples_until_next_beat, $x80, 36 + note_address[idx], 127);
-      idx += 1;
-  );
-  rebuild_scale();
-);
-
-pattern_location = NOTE_DATA + (current_pattern)*NOTE_BLOCKSIZE;
-
-(offset > -1) ? (
-  idx = 0;
-  loop(n_notes,
-    midisend(samples_until_next_beat, $x80, 36 + note_address[idx], 127);
+  ( current_beat_offset < samplesblock ) ? (
+    offset = (seq_position+1) * n_notes
+  ) : ( samples_until_next_beat == sample_per_beat ) ? (
+    // We are exactly on the beat
+    offset = seq_position * n_notes
+  ) : offset = -1;
   
-    pattern_location[ny - idx + offset] > 0 ? (
-      midisend(samples_until_next_beat+16, $x90, 36 + note_address[idx], 127);
-      pp = 1;
+  (was_playing && !play_state) ? rebuild = 1;
+  !play_state ? offset = -1;
+  
+  // Stop all notes when rebuilding
+  (rebuild == 1) ? (
+    rebuild = 0;
+    
+    idx = 0;
+    loop(n_notes,
+        midisend(current_beat_offset, $x80, 36 + note_address[idx], 127);
+        idx += 1;
     );
-    idx += 1;
+    rebuild_scale();
   );
+  
+  pattern_location = NOTE_DATA + (current_pattern)*NOTE_BLOCKSIZE;
+  (offset > -1) ? (
+    idx = 0;
+    loop(n_notes,
+      midisend(current_beat_offset, $x80, 36 + note_address[idx], 127);
+    
+      pattern_location[ny - idx + offset] > 0 ? (
+        midisend(current_beat_offset, $x90, 36 + note_address[idx], 127);
+        pp = 1;
+      );
+      idx += 1;
+    );
+  );
+  FATAL += 1;
+  
+  beat_pos += 1;
+  cumulative_offset += sample_per_beat;
+  seq_position = floor(beat_pos % n_steps);
 );
-
-//samplesblock
-//xloc = beat_position
+was_playing = play_state;
 
 @sample
+play_state ? current_sample += 1;
 
-@gfx 600 600
+@gfx 700 700
 w = 600;
 h = 600;
 
@@ -250,12 +272,15 @@ fontface = "Arial";
 scaling = 1;
 combo_height = 25;
 combo_width = 150;
+combo_small_width = 50;
 combo_pad = 10;
 
 event_captured > 0 ? event_captured -= 1;
 gfx_setfont(COMBO_BIG, fontface, 14*(1+scaling));
 
 /* current_pattern, scale, chord */
+
+lastChar = gfx_getchar();
 
 scale_select.combobox(10, h+.5*combo_height, combo_width, combo_height, .4, .4, .8, 1, SCALE_TYPES, 1, 1, 1, COMBO_BIG, "Scale selection." );
 scale_select.combobox_setcuritem(scale);
@@ -275,7 +300,7 @@ chord_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? (
 );
 chord_select.combobox_draw();
 
-base_select.combobox(10 + 2*combo_width + 2*combo_pad, h+.5*combo_height, combo_width, combo_height, .4, .4, .8, 1, NOTE_TYPES, 3, 1, 5, COMBO_BIG, "Scale selection." );
+base_select.combobox(10 + 2*combo_width + 2*combo_pad, h+.5*combo_height, combo_small_width, combo_height, .4, .4, .8, 1, NOTE_TYPES, 3, 1, 5, COMBO_BIG, "Scale selection." );
 base_select.combobox_setcuritem(origin);
 base_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
   origin = base_select.curitem;
@@ -283,6 +308,14 @@ base_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? (
   rebuild = 1;
 );
 base_select.combobox_draw();
+
+speed_select.combobox(10 + 2*combo_width + combo_small_width + 3*combo_pad, h+.5*combo_height, combo_small_width, combo_height, .4, .4, .8, 1, SPEEDS, 4, 1, 1, COMBO_BIG, "Scale selection." );
+speed_select.combobox_setcuritem(speed);
+speed_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? ( 
+  speed = speed_select.curitem;
+  event_captured = 3;
+);
+speed_select.combobox_draw();
 
 
 function draw_grid(_x, _y, _w, _h, px, note_address, n_notes, n_steps, seq_position)
@@ -426,6 +459,7 @@ event_captured == 0 ? (
 scale_select.combobox_draw_top();
 chord_select.combobox_draw_top();
 base_select.combobox_draw_top();
+speed_select.combobox_draw_top();
 
 /*
     gfx_y = 0;
