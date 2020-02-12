@@ -1,0 +1,640 @@
+desc:Saike Swellotron
+tags: ambient, soundscape, long, reverb, convolution, stft
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+Copyright (C) 2019 Joep Vanlier
+License: MIT
+
+-- Based on the STFT-Based Effect Template by Geraintluff
+
+slider1:fft_size_index=7<0,7,1{256,512,1024,2048,4096,8192,16384,32768>-FFT size
+slider2:time_constant=-2<-2,0,.01>-Adapt
+slider3:octaver=0.3<0,1,.001>-Shine
+slider4:saturation=0.2<0,1,0.0000001>-Ruin
+slider5:diffusion=0<0,0.5,.001>-Diffusion
+slider6:scorch=0<0,1,0.0001>-Scorch
+slider7:aether=0<0,1,0.0001>-Aether
+slider8:pitch=0<-1,1,0.0001>-Pitch
+
+@init
+//memset(0, 0, 16*MAX_FFT_SIZE);
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  2/(1+exp(-2*x)) - 1
+);
+
+function process_stft_segment(fft_buffer, fft_buffer2, fft_size)
+global(displacement, time_constant, pitch, aether, fft_size_index, 
+       fft_bin2, left2_real,
+       nrg, octaver, diffusion, diff, displacement, maxi)
+local(fft_bin, a,
+      left_real, left_imag, right_real, right_imag,
+      left2_real, left2_imag, right2_real, right2_imag,
+      mag1_L, mag2_L, mag1_R, mag2_R,
+      out_left_real, out_left_imag, out_right_real, out_right_imag,
+      k, atk, to_10,
+      mL, mR, phaseL, phaseR) (
+  fft_bin = 0; // FFT bin number
+  to_10 = log(10);
+  k = exp(to_10 * time_constant);
+  atk = 10*k;
+  loop(fft_size/2,
+    fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
+
+    // Unfold complex spectrum into two real spectra
+    left_real = fft_buffer[2*fft_bin] + fft_buffer[2*fft_bin2];
+    left_imag = fft_buffer[2*fft_bin + 1] - fft_buffer[2*fft_bin2 + 1];
+    right_real = fft_buffer[2*fft_bin + 1] + fft_buffer[2*fft_bin2 + 1];
+    right_imag = -fft_buffer[2*fft_bin] + fft_buffer[2*fft_bin2];
+
+    // Unfold complex spectrum into two real spectra
+    left2_real = fft_buffer2[2*fft_bin] + fft_buffer2[2*fft_bin2];
+    left2_imag = fft_buffer2[2*fft_bin + 1] - fft_buffer2[2*fft_bin2 + 1];
+    right2_real = fft_buffer2[2*fft_bin + 1] + fft_buffer2[2*fft_bin2 + 1];
+    right2_imag = -fft_buffer2[2*fft_bin] + fft_buffer2[2*fft_bin2];
+
+    //////////////////////// Main STFT block
+    // Complex mul
+    out_left_real = left_real * left2_real - left_imag * left2_imag;
+    out_right_real = right_real * right2_real - right_imag * right2_imag;
+    
+    out_left_imag = (left_real + left_imag) * (left2_real + left2_imag) - left_real * left2_real - left_imag * left2_imag;
+    out_right_imag = (right_real + right_imag) * (right2_real + right2_imag) - right_real * right2_real - right_imag * right2_imag;
+    ////////////////////////
+    
+    mag1_L = sqrt(left_real * left_real + left_imag * left_imag);
+    mag2_L = sqrt(left2_real * left2_real + left2_imag * left2_imag);
+
+    mag1_R = sqrt(right_real * right_real + right_imag * right_imag);
+    mag2_R = sqrt(right2_real * right2_real + right2_imag * right2_imag);
+    
+    // The actual dynamical model
+    mL = nrg[2*fft_bin]    += atk*sqrt(mag1_L * mag2_L) - k*nrg[2*fft_bin];
+    mR = nrg[2*fft_bin+1]  += atk*sqrt(mag1_R * mag2_R) - k*nrg[2*fft_bin+1];
+    
+    pitch ? (
+      displacement = 2*floor(pitch * fft_bin);
+      mL = nrg[2*fft_bin - displacement];
+      mR = nrg[2*fft_bin - displacement + 1];
+    );
+    
+    mL = pow(mL, 1.4)*.1;
+    mR = pow(mR, 1.4)*.1;
+    
+    phaseL = 2*rand()*$pi;
+    phaseR = 2*rand()*$pi;
+    
+    out_left_real = cos(phaseL) * mL;
+    out_left_imag = sin(phaseL) * mL;
+    out_right_real = cos(phaseR) * mR;
+    out_right_imag = sin(phaseR) * mR;
+    
+    // Re-fold back into complex spectrum
+    fft_buffer[2*fft_bin] = (out_left_real - out_right_imag)*0.5;
+    fft_buffer[2*fft_bin + 1] = (out_left_imag + out_right_real)*0.5;
+    fft_buffer[2*fft_bin2] = (out_left_real + out_right_imag)*0.5;
+    fft_buffer[2*fft_bin2 + 1] = (-out_left_imag + out_right_real)*0.5;
+
+    fft_bin += 1;
+  );
+  
+  octaver ? (
+    fft_bin = 0; 
+    loop(fft_size/2,
+      a = 4*fft_bin;
+      nrg[a]      = nrg[a] + octaver*k*nrg[2*fft_bin];
+      nrg[a + 1]  = nrg[a + 1] + octaver*k*nrg[2*fft_bin + 1];
+      fft_bin += 1;
+    );
+  ); 
+  
+  aether ? (
+    fft_bin = 0;
+    loop(fft_size/2,
+      a = floor(3*fft_bin/2)*2;
+      nrg[a]      = nrg[a] + aether*k*nrg[2*fft_bin];
+      nrg[a + 1]  = nrg[a + 1] + aether*k*nrg[2*fft_bin + 1];
+      fft_bin += 1;
+    );
+  ); 
+  
+  // Crappy diffusion scheme (only stable up to k2 = .5)
+  diffusion ? (
+    loop(5,
+    fft_bin = 0; 
+    loop(fft_size/2,
+      diff[2*fft_bin]      = nrg[2*fft_bin] + 
+                             diffusion * ( nrg[2*fft_bin-2] - 2 * nrg[2*fft_bin] + nrg[2*fft_bin+2] );
+      diff[2*fft_bin+1]     = nrg[2*fft_bin+1] + 
+                             diffusion * ( nrg[2*fft_bin-1] - 2 * nrg[2*fft_bin+1] + nrg[2*fft_bin+3] );
+      
+      fft_bin += 1;
+    );
+    
+    fft_bin = 0;
+    loop(fft_size,
+      nrg[fft_bin] = diff[fft_bin];
+      fft_bin += 1;
+    );
+    );
+  );
+);
+
+function setup_stft_state(fft_size, first_time) (
+  //////////////////////// Setup block
+  // This is called when playback starts, or when the FFT size is changed
+  0;
+  ////////////////////////
+);
+
+MAX_FFT_SIZE = 32768;
+
+freemem = 0;
+freemem = (fft_buffer = freemem) + MAX_FFT_SIZE*2;
+freemem = (fft_buffer2 = freemem) + MAX_FFT_SIZE*2;
+freemem = (window_buffer = freemem) + MAX_FFT_SIZE;
+
+buffer_length = srate;
+buffer_index = 0;
+freemem = (input_buffer = freemem) + buffer_length*2;
+freemem = (input_buffer2 = freemem) + buffer_length*2;
+freemem = (output_buffer = freemem) + buffer_length*2;
+
+freemem = (nrg = freemem) + buffer_length*2;
+freemem = (diff = freemem) + buffer_length*2;
+
+BUF_SIZE = 32768;
+freemem += 30*MAX_FFT_SIZE;
+
+freemem = (height = freemem) + BUF_SIZE;
+freemem = (velocity_x = freemem) + BUF_SIZE;
+freemem = (velocity_y = freemem) + BUF_SIZE;
+freemem = (height_gradient_x = freemem) + BUF_SIZE;
+freemem = (height_gradient_y = freemem) + BUF_SIZE;
+freemem = (velocity_prediction_x = freemem) + BUF_SIZE;
+freemem = (velocity_prediction_y = freemem) + BUF_SIZE;
+
+
+function window(r) local(s, s2, gaussian_width, x) (
+  // When squared, the Hann window adds up perfectly for overlap >= 4, so it's suitable for perfect reconstruction
+  (0.5 - 0.5*cos(r*2*$pi))/sqrt(0.375);
+);
+
+fft_size = 0;
+
+@block
+overlap_factor = 6;
+fft_size = 256<<fft_size_index;
+fft_interval = fft_size/overlap_factor;
+fft_scaling_factor = 1/overlap_factor/fft_size;
+
+fft_size != prev_fft_size ? (
+  setup_stft_state(fft_size, prev_fft_size == 0);
+  prev_fft_size = fft_size;
+  // Fill window buffer
+  i = 0;
+  loop(fft_size,
+    r = (i + 0.5)/fft_size;
+    window_buffer[i] = window(r);
+    i += 1;
+  );
+);
+
+pdc_delay = fft_size;
+pdc_bot_ch = 0;
+pdc_top_ch = 4;
+
+@sample
+deadtime = (!spl2 && !spl3 && play_state) ? deadtime += 1 : 0;
+
+function fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor)
+local(bi, i, i2)
+global()
+(
+  // Copy input to buffer
+  bi = buffer_index - fft_size + 1;
+  i = 0;
+  loop(fft_size,
+    i2 = bi + i;
+    i2 < 0 ? i2 += buffer_length;
+  
+    fft_buffer[2*i] = input_buffer[2*i2]*window_buffer[i];
+    fft_buffer[2*i + 1] = input_buffer[2*i2 + 1]*window_buffer[i];
+  
+    i += 1;
+  );
+  
+  // Process buffer
+  fft(fft_buffer, fft_size);
+  fft_permute(fft_buffer, fft_size);
+);
+
+in0 = spl0;
+in1 = spl1;
+in2 = spl2;
+in3 = spl3;
+
+scorch ? (
+  pref = exp(scorch*9-6);
+  ipref = 1.0 / pref;
+  in0 = tanh(pref*in0) * ipref;
+  in1 = tanh(pref*in1) * ipref;
+  in2 = tanh(pref*in2) * ipref;
+  in3 = tanh(pref*in3) * ipref;
+);
+
+input_buffer[buffer_index*2] = in0;
+input_buffer[buffer_index*2 + 1] = in1;
+input_buffer2[buffer_index*2] = in2;
+input_buffer2[buffer_index*2 + 1] = in3;
+
+fft_counter += 1;
+fft_counter >= fft_interval ? (
+  fft_counter = 0;
+  fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor);
+  fft_input(input_buffer2, fft_buffer2, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor);
+
+  process_stft_segment(fft_buffer, fft_buffer2, fft_size);
+
+  fft_ipermute(fft_buffer, fft_size);
+  ifft(fft_buffer, fft_size);
+
+  // Add to output
+  bi = buffer_index - fft_size + 1;
+  i = 0;
+  loop(fft_size,
+    i2 = bi + i;
+    (i2 < 0) ? i2 += buffer_length;
+
+    output_buffer[2*i2] += fft_buffer[2*i]*window_buffer[i] * fft_scaling_factor;
+    output_buffer[2*i2 + 1] += fft_buffer[2*i + 1]*window_buffer[i] * fft_scaling_factor;
+
+    i += 1;
+  );
+);
+
+output_index = buffer_index - fft_size;
+output_index < 0 ? output_index += buffer_length;
+
+Saturation ? (
+  pref = exp(Saturation*9-6);
+  ipref = 1.0 / pref;
+  output_buffer[output_index*2] = tanh(pref*output_buffer[output_index*2]) * ipref;
+  output_buffer[output_index*2+1] = tanh(pref*output_buffer[output_index*2+1]) * ipref;
+);
+
+outl = output_buffer[output_index*2];
+outr = output_buffer[output_index*2 + 1];
+
+m = outl + outr;
+
+tc = tc + .0001;
+tX = .5 + .5 * sin(tc);
+tY = cos(4*tc);
+
+spl0 = outl;
+spl1 = outr;
+
+abs(spl0) > 0.001 ? deadtime = 0;
+
+output_buffer[output_index*2] = 0;
+output_buffer[output_index*2 + 1] = 0;
+
+buffer_index = (buffer_index + 1)%buffer_length;
+
+@gfx 780 120
+render_time = render_time + 1/60;
+
+function clamp(value, mini, maxi)
+  local()
+  global()
+  (
+    max(min(value,maxi),mini)
+  );
+
+/* Hint handling */
+function drawHint_draw()
+  global(scaling, gfx_x, gfx_y, gfx_w, gfx_h, mouse_x, mouse_y, fontface)
+  local(w, h, globalTime)
+  instance(hintTime, currentHint, lastGlobalTime, delta_time)
+  (
+    globalTime = time_precise();
+    delta_time = globalTime - lastGlobalTime;
+    lastGlobalTime = globalTime;
+  
+    ( hintTime > .99 ) ? (
+      gfx_setfont(7, fontface, 14*(1+scaling));
+      gfx_measurestr(currentHint,w,h);
+      
+      gfx_x = mouse_x+15;
+      gfx_y = mouse_y+15;
+      ( gfx_x > 0.5*gfx_w ) ? gfx_x = mouse_x - w - 8;
+      ( gfx_y > 0.5*gfx_h ) ? gfx_y = mouse_y - h - 8;
+
+      gfx_set( 0.05, 0.05, 0.1, .8 );
+      gfx_rect(gfx_x-2, gfx_y-2, w+4, h+4);
+      gfx_set( .7, .7, .7, 1 );      
+      gfx_printf(currentHint);
+    );
+  );
+
+function updateHintTime(hint)
+  global(gfx_x, gfx_y, mouse_x, mouse_y)
+  local()
+  instance(lx, ly, hintTime, currentHint, delta_time)
+  (
+    ( ( abs(lx - mouse_x) + abs( ly - mouse_y ) ) > 0 ) ? (
+      hintTime = 0;
+    ) : (      
+      (hint != 0) ? (
+        currentHint = hint;
+        hintTime = hintTime + delta_time;
+        hintTime = min(1, hintTime)
+      ) : (
+        0
+      )
+    );
+    
+    lx = mouse_x;
+    ly = mouse_y;
+  );
+
+/* Knob handling */
+function drawKnob(_x, _y, _r, text, _hint, offset)
+  local(ang, dang, r0, r1, r2, r3, rk, tw, th)
+  instance(x, y, cy, r, value, active, label, hint)
+  global(gfx_x, gfx_y, fontface, render_time)
+  (
+    x = _x;
+    y = _y;
+    r = _r;
+    
+    r0 = .5*r;
+    r1 = 1.2*r;
+    r2 = 1.4*r;
+    r3 = 1.7*r;
+    rk = .1*r;
+    
+    cy = .5*sin(offset + 4*render_time);
+    
+    gfx_set(.3+cy, .3, .7, 1);
+    gfx_circle(x, y, r, 1, 1);
+    gfx_set(0, 0, 0, .9);
+    gfx_circle(x, y, .9*r, 1, 1);
+    gfx_set(.2, .3, .6, .7-.7*cy);
+    gfx_circle(x, y, .8*r, 1, 1);
+    gfx_set(.1, .1, .1, .3*cy);
+    gfx_circle(x, y, .7*r, 1, 1);
+    hint = _hint;
+
+    !active ? (
+      gfx_set(0, 0, 0, .5);
+      gfx_circle(x, y, r, 1, 1);
+    );
+  
+    gfx_set(0, 0, 0, .2);
+    gfx_circle(x, y, .78*r, 0, 1);
+    gfx_circle(x, y, .76*r, 0, 1);
+    gfx_set(.3, .4, .8, 1);
+     
+    ang = .75*$pi + 1.5*$pi*value;
+    active ? (
+      gfx_set(cy*3, cy/2, cy, .9);
+      gfx_circle( x + r0 * cos(ang), y + r0 * sin(ang), rk, 1, 1 );
+      gfx_set(cy*3, cy/2, cy, .3);
+      gfx_circle( x + r0 * cos(ang), y + r0 * sin(ang), 1.3*rk, 1, 1 );      
+    );
+    
+    gfx_set(.4, .6, .9, 1);
+    gfx_setfont(2, fontface, 13);
+    gfx_measurestr(text, tw, th);
+    gfx_x = x - .5*tw;
+    gfx_y = y + r + .25*th;
+    gfx_printf(text);
+    
+    label ? (
+      gfx_setfont(2, fontface, 13);
+      gfx_set(0,0,0,1);
+      gfx_measurestr(label, tw, th);
+      gfx_x = x - .5*tw;
+      gfx_y = y - .5*th + 1;
+      gfx_printf(label);
+    );
+  );
+
+function processMouse(mx, my, mousecap, default)
+  local(left, dx, dy, change, mul, over)
+  instance(hint, value, x, y, r, cap, lleft, lx, ly, active, lastLeftClick, doubleClick, cTime)
+  global(hinter.updateHintTime, mouse_wheel)
+  (
+    change = 0;
+    mul = 1;
+    
+    dx = (mx-x);
+    dy = (my-y);
+    over = (dx*dx + dy*dy) < (r*r);
+
+    (mousecap&4) ? mul = mul * 0.1666666666667; /* CTRL */
+    (mousecap&8) ? mul = mul * 0.125; /* SHIFT */
+    
+    active ? (
+      left = mousecap & 1;
+      
+      ( over == 1 ) ? (
+        (mouse_wheel ~= 0) ? (
+          value = value + 0.0001 * mul * mouse_wheel;
+          mouse_wheel = 0;
+          value = clamp(value, 0, 1);
+          change = 1;
+        );
+      );
+      
+      ( left == 0 ) ? (
+        ( over == 1 ) ? (
+          hinter.updateHintTime(hint);
+        ) : ( 
+          hinter.updateHintTime(0);
+        );
+      );
+      
+      doubleClick = 0;
+      (left && !lleft) ? (
+         time_precise(cTime);
+         ( ( cTime - lastLeftClick ) < .25 ) ? (
+            doubleClick = 1;
+         ) : lastLeftClick = cTime;
+      );
+      
+      ( left && cap == 1 ) ? (
+        value = value - .01*mul*(my - ly);
+        value = clamp(value, 0, 1);
+        change = 1;
+      ) : ( cap = 0; );
+      
+      ( left && !lleft ) ? 
+      (
+        ( over ) ?
+        (
+          doubleClick ? (
+            lastLeftClick = -100;
+            change = 1;
+            value = default;
+          ) : ( 
+            cap = 1;
+          );
+        );
+      );
+      
+      lleft = left;
+      lx = mx;
+      ly = my;
+    );
+    
+    change
+  );
+  
+  
+x = 60*(1+scaling);
+y = 60*(1+scaling);
+ksize = 33*(1+scaling);
+dx = 110*(1+scaling);
+dy = 110*(1+scaling);
+c_offset = .1;
+
+AdaptKnob.active = 1;
+ShineKnob.active = 1;
+RuinKnob.active = 1;
+DiffuseKnob.active = 1;
+ScorchKnob.active = 1;
+AetherKnob.active = 1;
+PitchKnob.active = 1;
+
+adapt_min = -2;
+adapt_max = 0;
+octaver_min = 0;
+octaver_max = 1;
+saturation_min = 0;
+saturation_max = 1;
+diffusion_min = 0;
+diffusion_max = 0.5;
+scorch_min = 0;
+scorch_max = 1;
+aether_min = 0;
+aether_max = 1;
+pitch_min = -1;
+pitch_max = 1;
+
+w = 780;
+h = 120;
+xs = 3;
+Nx = w/xs;
+Ny = h/xs;
+
+dtg = 9.81*0.1;
+dth = .4*0.1;
+
+cx = (Nx-4) * rand() + 2;
+cy = (Ny-4) * rand() + 2;
+height[cx * Ny + cy] = 8*(rand()>.65)*(.5+rand());
+cx = 0;
+loop(Nx-1,
+  cy = 0;
+  loop(Ny-1,
+    h = height[cx * Ny + cy];
+    dHx = h - height[(cx-1) * Ny + cy];
+    dHy = h - height[cx * Ny + cy-1];
+  
+    velocity_prediction_x[cx * Ny + cy] = velocity_x[cx * Ny + cy] - dtg * dHx;
+    velocity_prediction_y[cx * Ny + cy] = velocity_y[cx * Ny + cy] - dtg * dHy;
+    cy += 1;
+  );
+  cx += 1;
+);
+
+cx = 0;
+loop(Ny,
+  velocity_prediction_x[0 + cy] = 0;
+  velocity_prediction_x[(Nx-1) * Ny + cy] = 0;
+  cy += 1;
+);
+
+cy = 0;
+loop(Nx,
+  velocity_prediction_y[cx * Ny + 0] = 0;
+  velocity_prediction_y[cx * Ny + (Ny-1)] = 0;
+  cx += 1;
+);
+
+cx = 0;
+loop(Nx-1,
+  cy = 0;
+  loop(Ny-1,
+    dUx = velocity_prediction_x[(cx+1) * Ny + cy] - velocity_prediction_x[cx * Ny + cy];
+    dUy = velocity_prediction_y[cx * Ny + cy + 1] - velocity_prediction_y[cx * Ny + cy];
+  
+    h = height[cx * Ny + cy];
+    height[cx * Ny + cy] = h - dth * (dUx + dUy) - .005*h;
+    cy += 1;
+    gfx_set(.4, .6, .9, h>1?1:h);
+    gfx_rect(cx * xs, cy*xs, xs-1, xs-1);
+  );
+  cx += 1;
+);
+
+cx = 0;
+loop(Nx-1,
+  cy = 0;
+  loop(Ny-1,
+    h = height[cx * Ny + cy];
+    dHx = h - height[(cx-1) * Ny + cy];
+    dHy = h - height[cx * Ny + cy-1];
+  
+    velocity_x[cx * Ny + cy] = velocity_x[cx * Ny + cy] - dtg * dHx;
+    velocity_y[cx * Ny + cy] = velocity_y[cx * Ny + cy] - dtg * dHy;
+    cy += 1;
+  );
+  cx += 1;
+);
+
+
+
+AdaptKnob.value = (time_constant - adapt_min) / (adapt_max - adapt_min);
+ShineKnob.value = (octaver - octaver_min) / (octaver_max - octaver_min);
+RuinKnob.value = (saturation - saturation_min) / (saturation_max - saturation_min);
+DiffuseKnob.value = (diffusion - diffusion_min) / (diffusion_max - diffusion_min);
+ScorchKnob.value = (scorch - scorch_min) / (scorch_max - scorch_min);
+AetherKnob.value = (aether - aether_min) / (aether_max - aether_min);
+PitchKnob.value = (pitch - pitch_min) / (pitch_max - pitch_min);
+
+AdaptKnob.drawKnob(x, y, ksize*(1+scaling), "Adapt", "Adaptivity to incoming sound.", 0);  
+ShineKnob.drawKnob(x+dx, y, ksize*(1+scaling), "Shine", "Add brightness with\nfrequency doubling.", c_offset);
+RuinKnob.drawKnob(x+2*dx, y, ksize*(1+scaling), "Ruin", "Output saturation.", c_offset*2);
+DiffuseKnob.drawKnob(x+3*dx, y, ksize*(1+scaling), "Diffusion", "Diffuse.\n\nOnly use on overly sharp sounds.", c_offset*3);
+ScorchKnob.drawKnob(x+4*dx, y, ksize*(1+scaling), "Scorch", "Input saturation.", c_offset*4);
+AetherKnob.drawKnob(x+5*dx, y, ksize*(1+scaling), "Aether", "Add brightness with fifths..", c_offset*5);
+PitchKnob.drawKnob(x+6*dx, y, ksize*(1+scaling), "Pitch", "Pitch shift.", c_offset*6);
+
+AdaptKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( time_constant = AdaptKnob.value * (adapt_max - adapt_min) + adapt_min; ); forceUpdate = 1; );
+ShineKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.3) ? ( slider_automate( octaver = ShineKnob.value * (octaver_max - octaver_min) + octaver_min; ); forceUpdate = 1; );
+RuinKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( saturation = RuinKnob.value * (saturation_max - saturation_min) + saturation_min; ); forceUpdate = 1; );
+DiffuseKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( diffusion = DiffuseKnob.value * (diffusion_max - diffusion_min) + diffusion_min; ); forceUpdate = 1; );
+ScorchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( scorch = ScorchKnob.value * (scorch_max - scorch_min) + scorch_min; ); forceUpdate = 1; );
+AetherKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( aether = AetherKnob.value * (aether_max - aether_min) + aether_min; ); forceUpdate = 1; );
+PitchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( pitch = PitchKnob.value * (pitch_max - pitch_min) + pitch_min; ); forceUpdate = 1; );
+
+gfx_x = 5;
+gfx_y = 5;
+
+norm_time = (deadtime / srate);
+norm_time = norm_time > 1 ? norm_time : 0;
+norm_time = norm_time > 2 ? 2 : norm_time;
+gfx_set(1, 1, 1, norm_time - 1);
+gfx_printf("Please note that this plugin needs two inputs to function.");
+
+hinter.drawHint_draw()
+
