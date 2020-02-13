@@ -1,8 +1,8 @@
 desc:Saike Swellotron
 tags: ambient, soundscape, long, reverb, convolution, stft
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Forgot to remove some old code
+changelog: Bugfix buffersize
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 
@@ -16,6 +16,7 @@ slider5:diffusion=0<0,0.5,.001>-Diffusion
 slider6:scorch=0<0,1,0.0001>-Scorch
 slider7:aether=0<0,1,0.0001>-Aether
 slider8:pitch=0<-1,1,0.0001>-Pitch
+slider9:non_linear=1<0,1,1>-NonLinear
 
 @init
 //memset(0, 0, 16*MAX_FFT_SIZE);
@@ -30,9 +31,9 @@ instance()
 
 function process_stft_segment(fft_buffer, fft_buffer2, fft_size)
 global(displacement, time_constant, pitch, aether, fft_size_index, 
-       fft_bin2, left2_real,
-       nrg, octaver, diffusion, diff, displacement, maxi)
-local(fft_bin, a,
+       fft_bin2, left2_real
+       nrg, octaver, diffusion, diff, displacement, mode, non_linear)
+local(fft_bin, a, mag_L, mag_R,
       left_real, left_imag, right_real, right_imag,
       left2_real, left2_imag, right2_real, right2_imag,
       mag1_L, mag2_L, mag1_R, mag2_R,
@@ -63,10 +64,13 @@ local(fft_bin, a,
 
     mag1_R = sqrt(right_real * right_real + right_imag * right_imag);
     mag2_R = sqrt(right2_real * right2_real + right2_imag * right2_imag);
-    
+      
+    mag_L = sqrt(mag1_L * mag2_L);
+    mag_R = sqrt(mag1_R * mag2_R);
+ 
     // The actual dynamical model
-    mL = nrg[2*fft_bin]    += atk*sqrt(mag1_L * mag2_L) - k*nrg[2*fft_bin];
-    mR = nrg[2*fft_bin+1]  += atk*sqrt(mag1_R * mag2_R) - k*nrg[2*fft_bin+1];
+    mL = nrg[2*fft_bin]    += atk*mag_L - k*nrg[2*fft_bin];
+    mR = nrg[2*fft_bin+1]  += atk*mag_R - k*nrg[2*fft_bin+1];
     
     pitch ? (
       displacement = 2*floor(pitch * fft_bin);
@@ -74,8 +78,10 @@ local(fft_bin, a,
       mR = nrg[2*fft_bin - displacement + 1];
     );
     
-    mL = pow(mL, 1.4)*.1;
-    mR = pow(mR, 1.4)*.1;
+    non_linear ? (
+      mL = pow(mL, 1.4)*.1;
+      mR = pow(mR, 1.4)*.1;
+    );
     
     phaseL = 2*rand()*$pi;
     phaseR = 2*rand()*$pi;
@@ -149,15 +155,14 @@ freemem = 0;
 freemem = (fft_buffer = freemem) + MAX_FFT_SIZE*2;
 freemem = (fft_buffer2 = freemem) + MAX_FFT_SIZE*2;
 freemem = (window_buffer = freemem) + MAX_FFT_SIZE;
+freemem = (nrg = freemem) + MAX_FFT_SIZE*4;
+freemem = (diff = freemem) + MAX_FFT_SIZE*4;
 
 buffer_length = srate;
 buffer_index = 0;
 freemem = (input_buffer = freemem) + buffer_length*2;
 freemem = (input_buffer2 = freemem) + buffer_length*2;
 freemem = (output_buffer = freemem) + buffer_length*2;
-
-freemem = (nrg = freemem) + buffer_length*2;
-freemem = (diff = freemem) + buffer_length*2;
 
 BUF_SIZE = 32768;
 freemem += 30*MAX_FFT_SIZE;
