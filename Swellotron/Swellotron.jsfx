@@ -1,8 +1,8 @@
 desc:Saike Swellotron
 tags: ambient, soundscape, long, reverb, convolution, stft
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: Bugfix buffersize
+changelog: Add placing points. Add ice.
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 
@@ -17,6 +17,8 @@ slider6:scorch=0<0,1,0.0001>-Scorch
 slider7:aether=0<0,1,0.0001>-Aether
 slider8:pitch=0<-1,1,0.0001>-Pitch
 slider9:non_linear=1<0,1,1>-NonLinear
+slider10:ice=0<0,1,.00001>-Ice
+slider11:ice_panned=0<0,1,1>-IcePanned
 
 @init
 //memset(0, 0, 16*MAX_FFT_SIZE);
@@ -31,19 +33,20 @@ instance()
 
 function process_stft_segment(fft_buffer, fft_buffer2, fft_size)
 global(displacement, time_constant, pitch, aether, fft_size_index, 
-       fft_bin2, left2_real
+       fft_bin2, left2_real, ice, ice_panned, 
        nrg, octaver, diffusion, diff, displacement, mode, non_linear)
 local(fft_bin, a, mag_L, mag_R,
+      g_rand1, g_rand2, g_rand3, g_rand4,
       left_real, left_imag, right_real, right_imag,
       left2_real, left2_imag, right2_real, right2_imag,
       mag1_L, mag2_L, mag1_R, mag2_R,
       out_left_real, out_left_imag, out_right_real, out_right_imag,
-      k, atk, to_10,
-      mL, mR, phaseL, phaseR) (
+      k, atk, to_10, tmp, mL, mR, phaseL, phaseR) (
   fft_bin = 0; // FFT bin number
   to_10 = log(10);
   k = exp(to_10 * time_constant);
   atk = 10*k;
+  
   loop(fft_size/2,
     fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
 
@@ -82,10 +85,9 @@ local(fft_bin, a, mag_L, mag_R,
       mL = pow(mL, 1.4)*.1;
       mR = pow(mR, 1.4)*.1;
     );
-    
+     
     phaseL = 2*rand()*$pi;
     phaseR = 2*rand()*$pi;
-    
     out_left_real = cos(phaseL) * mL;
     out_left_imag = sin(phaseL) * mL;
     out_right_real = cos(phaseR) * mR;
@@ -98,6 +100,29 @@ local(fft_bin, a, mag_L, mag_R,
     fft_buffer[2*fft_bin2 + 1] = (-out_left_imag + out_right_real)*0.5;
 
     fft_bin += 1;
+  );
+  
+  ice ? (
+    fft_bin = 0;
+    g_rand1 = 2*(1 + floor(rand() * 2));
+    g_rand2 = 0.01 * fft_size + rand() * fft_size/2;
+    g_rand4 = g_rand3 = 100 * rand() * k * ice;
+    
+    ice_panned ? (
+      tmp = rand();
+      g_rand3 = g_rand3 * sqrt(1.0-tmp);
+      g_rand4 = g_rand4 * sqrt(tmp);      
+    );
+    tmp = 0;    
+    loop(fft_size/2,
+      a = g_rand1*fft_bin;
+      nrg[a]      = nrg[a] + g_rand3*nrg[2*fft_bin] * tmp;
+      nrg[a + 1]  = nrg[a + 1] + g_rand4*nrg[2*fft_bin + 1] * tmp;
+      tmp         = g_rand2 - fft_bin;
+      tmp         = -50 * tmp * tmp;
+      tmp         = exp(tmp / fft_size);
+      fft_bin += 1;
+    );
   );
   
   octaver ? (
@@ -151,10 +176,11 @@ function setup_stft_state(fft_size, first_time) (
 
 MAX_FFT_SIZE = 32768;
 
+/* There's some additional padding so that we don't have to range check when octaving */
 freemem = 0;
-freemem = (fft_buffer = freemem) + MAX_FFT_SIZE*2;
-freemem = (fft_buffer2 = freemem) + MAX_FFT_SIZE*2;
-freemem = (window_buffer = freemem) + MAX_FFT_SIZE;
+freemem = (fft_buffer = freemem) + MAX_FFT_SIZE*4;
+freemem = (fft_buffer2 = freemem) + MAX_FFT_SIZE*4;
+freemem = (window_buffer = freemem) + MAX_FFT_SIZE*2;
 freemem = (nrg = freemem) + MAX_FFT_SIZE*4;
 freemem = (diff = freemem) + MAX_FFT_SIZE*4;
 
@@ -163,6 +189,7 @@ buffer_index = 0;
 freemem = (input_buffer = freemem) + buffer_length*2;
 freemem = (input_buffer2 = freemem) + buffer_length*2;
 freemem = (output_buffer = freemem) + buffer_length*2;
+freemem = (delay_line = freemem) + buffer_length*2;
 
 BUF_SIZE = 32768;
 freemem += 30*MAX_FFT_SIZE;
@@ -287,8 +314,6 @@ Saturation ? (
 outl = output_buffer[output_index*2];
 outr = output_buffer[output_index*2 + 1];
 
-m = outl + outr;
-
 tc = tc + .0001;
 tX = .5 + .5 * sin(tc);
 tY = cos(4*tc);
@@ -297,13 +322,12 @@ spl0 = outl;
 spl1 = outr;
 
 abs(spl0) > 0.001 ? deadtime = 0;
-
 output_buffer[output_index*2] = 0;
 output_buffer[output_index*2 + 1] = 0;
 
 buffer_index = (buffer_index + 1)%buffer_length;
 
-@gfx 780 120
+@gfx 890 120
 render_time = render_time + 1/60;
 
 function clamp(value, mini, maxi)
@@ -422,7 +446,7 @@ function drawKnob(_x, _y, _r, text, _hint, offset)
       gfx_printf(label);
     );
   );
-
+  
 function processMouse(mx, my, mousecap, default)
   local(left, dx, dy, change, mul, over)
   instance(hint, value, x, y, r, cap, lleft, lx, ly, active, lastLeftClick, doubleClick, cTime)
@@ -495,12 +519,91 @@ function processMouse(mx, my, mousecap, default)
   );
   
   
+function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
+  local(ww, hh)
+  instance(x, y, w, h, str, on, invert, label)
+  global(gfx_x, gfx_y, gfx_a, gfx_mode, 
+         TOGGLE_FONT, knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    on = _on;
+    str = _str;
+
+    gfx_set(0, 0, 0, 0);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(r, g, b, a*.2);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(wr, wg, wb, wa);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+
+    ( label ) ? (
+      gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
+      gfx_setfont(TOGGLE_FONT);
+      gfx_measurestr(label, ww, hh);
+      gfx_x = floor(x+1.5*w);
+      gfx_y = floor(y-.5*hh+.5*h);
+      gfx_printf(label);
+    );
+    
+    ( (on && !invert) || (!on && invert) ) ? (
+      gfx_set(r, g, b, a);
+      gfx_rect(x, y, w, h);
+      gfx_a *= .6;
+      gfx_rect(x-1, y-1, w+2, h+2);
+      gfx_a *= .6;
+      gfx_rect(x-2, y-2, w+4, h+4);
+      gfx_a *= .6;
+      gfx_rect(x-3, y-3, w+6, h+6);
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 2*max(w,h), 2*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 3*max(w,h), 3*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 4*max(w,h), 4*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 5*max(w,h), 5*max(w,h));
+    );
+  );
+  
+function processMouseToggle(mx, my, mousecap)
+  instance(x, y, w, h, on, lastleft, str)
+  local(left, slack, over)
+  global(hinter.updateHintTime, comboboxOpen)
+  (
+    !comboboxOpen ? (
+      slack = 5;
+      left = mousecap & 1;
+      
+      over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
+      
+      over ? (
+        ( (left == 1) && (lastleft == 0) ) ?  (
+          on = 1 - on;
+        );
+        hinter.updateHintTime(str);
+      );
+      
+      lastleft = left;
+    );
+    
+    on
+  );
+    
+  
 x = 60*(1+scaling);
 y = 60*(1+scaling);
 ksize = 33*(1+scaling);
 dx = 110*(1+scaling);
 dy = 110*(1+scaling);
-c_offset = .1;
+c_offset = .2;
 
 AdaptKnob.active = 1;
 ShineKnob.active = 1;
@@ -509,6 +612,7 @@ DiffuseKnob.active = 1;
 ScorchKnob.active = 1;
 AetherKnob.active = 1;
 PitchKnob.active = 1;
+IceKnob.active = 1;
 
 adapt_min = -2;
 adapt_max = 0;
@@ -525,14 +629,25 @@ aether_max = 1;
 pitch_min = -1;
 pitch_max = 1;
 
-w = 780;
-h = 120;
+sim_w = 890;
+sim_h = 120;
 xs = 3;
-Nx = w/xs;
-Ny = h/xs;
+Nx = sim_w/xs;
+Ny = sim_h/xs;
 
 dtg = 9.81*0.1;
 dth = .4*0.1;
+
+(mouse_cap & 1 && !capped) > 0 ? (  
+  (mouse_x < sim_w) && (mouse_y < sim_h) && (mouse_x > 0) && (mouse_y > 0) ? (
+    dt = time_precise() - last_time;
+    vx = (mouse_x - last_mouse_x) / dt;
+    vy = (mouse_y - last_mouse_y) / dt;
+    cx = floor(mouse_x / xs);
+    cy = floor(mouse_y / xs);
+    height[cx * Ny + cy] += 3;
+  );
+);
 
 cx = (Nx-4) * rand() + 2;
 cy = (Ny-4) * rand() + 2;
@@ -576,8 +691,9 @@ loop(Nx-1,
     h = height[cx * Ny + cy];
     height[cx * Ny + cy] = h - dth * (dUx + dUy) - .005*h;
     cy += 1;
-    gfx_set(.4, .6, .9, h>1?1:h);
-    gfx_rect(cx * xs, cy*xs, xs-1, xs-1);
+    h += .2*ice;
+    gfx_set(.4+.2*ice, .6+.2*ice, .9, h>1?1:h);
+    gfx_rect(cx * xs, cy * xs, xs-1, xs-1);
   );
   cx += 1;
 );
@@ -590,14 +706,14 @@ loop(Nx-1,
     dHx = h - height[(cx-1) * Ny + cy];
     dHy = h - height[cx * Ny + cy-1];
   
-    velocity_x[cx * Ny + cy] = velocity_x[cx * Ny + cy] - dtg * dHx;
-    velocity_y[cx * Ny + cy] = velocity_y[cx * Ny + cy] - dtg * dHy;
+    velocity_x[cx * Ny + cy] = velocity_x[cx * Ny + cy] * (1-.4*ice) - dtg * dHx;
+    velocity_y[cx * Ny + cy] = velocity_y[cx * Ny + cy] * (1-.4*ice) - dtg * dHy;
     cy += 1;
   );
   cx += 1;
 );
 
-
+toggleSize = 5*(1+scaling);
 
 AdaptKnob.value = (time_constant - adapt_min) / (adapt_max - adapt_min);
 ShineKnob.value = (octaver - octaver_min) / (octaver_max - octaver_min);
@@ -606,22 +722,28 @@ DiffuseKnob.value = (diffusion - diffusion_min) / (diffusion_max - diffusion_min
 ScorchKnob.value = (scorch - scorch_min) / (scorch_max - scorch_min);
 AetherKnob.value = (aether - aether_min) / (aether_max - aether_min);
 PitchKnob.value = (pitch - pitch_min) / (pitch_max - pitch_min);
+IceKnob.value = ice;
 
 AdaptKnob.drawKnob(x, y, ksize*(1+scaling), "Adapt", "Adaptivity to incoming sound.", 0);  
 ShineKnob.drawKnob(x+dx, y, ksize*(1+scaling), "Shine", "Add brightness with\nfrequency doubling.", c_offset);
 RuinKnob.drawKnob(x+2*dx, y, ksize*(1+scaling), "Ruin", "Output saturation.", c_offset*2);
-DiffuseKnob.drawKnob(x+3*dx, y, ksize*(1+scaling), "Diffusion", "Diffuse.\n\nOnly use on overly sharp sounds.", c_offset*3);
+DiffuseKnob.drawKnob(x+3*dx, y, ksize*(1+scaling), "Diffusion", "Diffuse.\nOnly use on overly sharp sounds.", c_offset*3);
 ScorchKnob.drawKnob(x+4*dx, y, ksize*(1+scaling), "Scorch", "Input saturation.", c_offset*4);
-AetherKnob.drawKnob(x+5*dx, y, ksize*(1+scaling), "Aether", "Add brightness with fifths..", c_offset*5);
-PitchKnob.drawKnob(x+6*dx, y, ksize*(1+scaling), "Pitch", "Pitch shift.", c_offset*6);
+AetherKnob.drawKnob(x+5*dx, y, ksize*(1+scaling), "Aether", "Add brightness with fifths.", c_offset*5);
+IceKnob.drawKnob(x+6*dx, y, ksize*(1+scaling), "Ice", "Ice.\nAdds bandpassed peaks of the\noriginal audio at different octaves.\n", c_offset*6);
+PitchKnob.drawKnob(x+7*dx, y, ksize*(1+scaling), "Pitch", "Pitch shift.", c_offset*7);
+IcePan.drawToggle(x+6*dx-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), toggleSize, toggleSize, ice_panning, .3, .2, .2, 1, .3, .4, .7, 1, "Pan icey spectral peaks.");
 
-AdaptKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( time_constant = AdaptKnob.value * (adapt_max - adapt_min) + adapt_min; ); forceUpdate = 1; );
-ShineKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.3) ? ( slider_automate( octaver = ShineKnob.value * (octaver_max - octaver_min) + octaver_min; ); forceUpdate = 1; );
-RuinKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( saturation = RuinKnob.value * (saturation_max - saturation_min) + saturation_min; ); forceUpdate = 1; );
-DiffuseKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( diffusion = DiffuseKnob.value * (diffusion_max - diffusion_min) + diffusion_min; ); forceUpdate = 1; );
-ScorchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( scorch = ScorchKnob.value * (scorch_max - scorch_min) + scorch_min; ); forceUpdate = 1; );
-AetherKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( aether = AetherKnob.value * (aether_max - aether_min) + aether_min; ); forceUpdate = 1; );
-PitchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( pitch = PitchKnob.value * (pitch_max - pitch_min) + pitch_min; ); forceUpdate = 1; );
+capped = 0;
+AdaptKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( time_constant = AdaptKnob.value * (adapt_max - adapt_min) + adapt_min; ); forceUpdate = 1; capped = 1; );
+ShineKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.3) ? ( slider_automate( octaver = ShineKnob.value * (octaver_max - octaver_min) + octaver_min; ); forceUpdate = 1; capped = 1; );
+RuinKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( saturation = RuinKnob.value * (saturation_max - saturation_min) + saturation_min; ); forceUpdate = 1; capped = 1; );
+DiffuseKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( diffusion = DiffuseKnob.value * (diffusion_max - diffusion_min) + diffusion_min; ); forceUpdate = 1; capped = 1; );
+ScorchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( scorch = ScorchKnob.value * (scorch_max - scorch_min) + scorch_min; ); forceUpdate = 1; capped = 1; );
+AetherKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( aether = AetherKnob.value * (aether_max - aether_min) + aether_min; ); forceUpdate = 1; capped = 1; );
+PitchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( pitch = PitchKnob.value * (pitch_max - pitch_min) + pitch_min; ); forceUpdate = 1; capped = 1; );
+IceKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( ice = IceKnob.value; ); forceUpdate = 1; capped = 1; );
+ice_panning = IcePan.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 gfx_x = 5;
 gfx_y = 5;
@@ -632,5 +754,8 @@ norm_time = norm_time > 2 ? 2 : norm_time;
 gfx_set(1, 1, 1, norm_time - 1);
 gfx_printf("Please note that this plugin needs two inputs to function.");
 
-hinter.drawHint_draw()
+hinter.drawHint_draw();
 
+last_mouse_x = mouse_x;
+last_mouse_y = mouse_y;
+last_time = time_precise();
