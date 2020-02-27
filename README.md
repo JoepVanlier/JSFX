@@ -9,6 +9,21 @@ https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 to your reapack (https://reapack.com/) list of repositories. If you run 
 into issues with these, feel free to open an issue here on github.
 
+# Swellotron
+![SwellotronUI](https://i.imgur.com/ikizwwk.gif)
+
+It computes the spectrum of both signals (using the STFT), multiplies the magnitudes in the spectral domain and puts the result of that in an energy buffer. This energy buffer is drained proportionally to its contents. The energy buffer is then used to resynthesize the sound, but this time with a random phase.
+
+In plain terms, it behaves almost like a reverb, where frequencies that both sounds have in common are emphasized and frequencies where the sounds differ are attenuated. This will almost always lead to something that sounds pretty harmonic.
+
+Features:
+- Shimmer: Copies energy to twice the frequency (leading to iterative octave doubling).
+- Aether: Same as shimmer but for fifths.
+- Scorch: Input saturation.
+- Ruin: Output saturation.
+- Diffusion: Spectral blur.
+- Ice: Chops small bandwidth bits from the energy at random, and copies them to a higher frequency (at 1x or 2x the frequency), thereby giving narrowband high frequency sounds (sounding very cold).
+
 # SatanVerb
 ![SatanUI](https://i.imgur.com/JLXFrOH.png)
 
@@ -86,6 +101,11 @@ There are two basic modes of operation:
 1. You can either add stereo sound from nothing, using the Strength slider. This adds a comb filtered version of the average signal with opposite polarity to the different channels. Be careful not to overdo it, or you get a flangey sound (unless that is what you want).
 2. You can manipulate the existing side channel that's in the input. The gain of the original side channel is scaled by the old "Old side" knob. Depending on the button "HP original side" this signal route will be highpassed (mono-izing the low frequencies).
 
+# Stereo Bub III
+![StereoBub3](https://i.imgur.com/1JQFa5w.png)
+It's pretty much the same as II, except it adds vibrato on left and right and a squash option to box in the side channel. This squash option can be useful at times to mask the phasing effects you can sometimes hear on drums. Mind you, too much of it will cause harmonics that will completely vanish when mixing down to mono, so be careful with that one.
+
+
 # Transience
 ![TransienceUI](https://imgur.com/TgC7n2B.png)
 
@@ -124,6 +144,10 @@ https://www.youtube.com/watch?v=bGgYUSdWiAA
 
 https://www.youtube.com/watch?v=PJKxva-5x54
 
+# Amaranth
+![AmaranthUI](https://i.imgur.com/CfZ9oLm.png)
+
+Graintable tool. Wouldn't recommend using this one for any serious project yet, and if you do, make sure you render out your results, as I may still make changes that break backward compatibility 
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
