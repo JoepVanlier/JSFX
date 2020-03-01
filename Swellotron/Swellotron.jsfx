@@ -1,8 +1,8 @@
 desc:Saike Swellotron
 tags: ambient, soundscape, long, reverb, convolution, stft
-version: 0.04
+version: 0.05
 author: Joep Vanlier
-changelog: Add placing points. Add ice.
+changelog: Added chirp knob. Fixed bug that caused HF buildup from swell when pitch shifting. Added secondary diffusion mode.
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 
@@ -19,6 +19,8 @@ slider8:pitch=0<-1,1,0.0001>-Pitch
 slider9:non_linear=1<0,1,1>-NonLinear
 slider10:ice=0<0,1,.00001>-Ice
 slider11:ice_panned=0<0,1,1>-IcePanned
+slider12:diff_mode=0<0,1,1>-Diffusion Mode
+slider13:noise_mode=0<0,5,.001>-Noise mode
 
 @init
 //memset(0, 0, 16*MAX_FFT_SIZE);
@@ -34,19 +36,25 @@ instance()
 function process_stft_segment(fft_buffer, fft_buffer2, fft_size)
 global(displacement, time_constant, pitch, aether, fft_size_index, 
        fft_bin2, left2_real, ice, ice_panned, 
-       nrg, octaver, diffusion, diff, displacement, mode, non_linear)
+       nrg, octaver, diffusion, diff, displacement, mode, non_linear,
+       fft_velocity, fft_height_gradient, fft_velocity_prediction, diff_mode,
+       noise_mode)
 local(fft_bin, a, mag_L, mag_R,
       g_rand1, g_rand2, g_rand3, g_rand4,
       left_real, left_imag, right_real, right_imag,
       left2_real, left2_imag, right2_real, right2_imag,
       mag1_L, mag2_L, mag1_R, mag2_R,
       out_left_real, out_left_imag, out_right_real, out_right_imag,
-      k, atk, to_10, tmp, mL, mR, phaseL, phaseR) (
+      k, atk, to_10, tmp, mL, mR, phaseL, phaseR,
+      dHy, dUy, h, dtg, dth, fft_height) (
   fft_bin = 0; // FFT bin number
   to_10 = log(10);
   k = exp(to_10 * time_constant);
   atk = 10*k;
   
+  g_rand1 = rand();
+  g_rand2 = rand();
+  g_rand3 = exp(-to_10 * (1.0+noise_mode));
   loop(fft_size/2,
     fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
 
@@ -75,6 +83,9 @@ local(fft_bin, a, mag_L, mag_R,
     mL = nrg[2*fft_bin]    += atk*mag_L - k*nrg[2*fft_bin];
     mR = nrg[2*fft_bin+1]  += atk*mag_R - k*nrg[2*fft_bin+1];
     
+    //mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], mag_L);
+    //mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], mag_R);
+    
     pitch ? (
       displacement = 2*floor(pitch * fft_bin);
       mL = nrg[2*fft_bin - displacement];
@@ -85,9 +96,15 @@ local(fft_bin, a, mag_L, mag_R,
       mL = pow(mL, 1.4)*.1;
       mR = pow(mR, 1.4)*.1;
     );
-     
-    phaseL = 2*rand()*$pi;
-    phaseR = 2*rand()*$pi;
+    
+    noise_mode ? (
+      phaseL += sin(g_rand3*fft_bin+g_rand1)*2*$pi;
+      phaseR += sin(g_rand3*fft_bin+g_rand2)*2*$pi;
+    ) : (
+      phaseL = 2*$pi*rand();
+      phaseR = 2*$pi*rand();
+    );
+    
     out_left_real = cos(phaseL) * mL;
     out_left_imag = sin(phaseL) * mL;
     out_right_real = cos(phaseR) * mR;
@@ -132,8 +149,17 @@ local(fft_bin, a, mag_L, mag_R,
       nrg[a]      = nrg[a] + octaver*k*nrg[2*fft_bin];
       nrg[a + 1]  = nrg[a + 1] + octaver*k*nrg[2*fft_bin + 1];
       fft_bin += 1;
-    );
-  ); 
+    );    
+  );
+  
+  /* Avoid HF buildup over the edge */
+  fft_bin = fft_size/4;
+  loop(fft_size/4,
+    a = 4*fft_bin;
+    nrg[a]      = nrg[a] - k * nrg[a];
+    nrg[a + 1]  = nrg[a + 1] - k * nrg[a + 1];
+    fft_bin += 1;
+  );  
   
   aether ? (
     fft_bin = 0;
@@ -142,27 +168,64 @@ local(fft_bin, a, mag_L, mag_R,
       nrg[a]      = nrg[a] + aether*k*nrg[2*fft_bin];
       nrg[a + 1]  = nrg[a + 1] + aether*k*nrg[2*fft_bin + 1];
       fft_bin += 1;
-    );
+    );    
   ); 
-  
+    
   // Crappy diffusion scheme (only stable up to k2 = .5)
   diffusion ? (
-    loop(5,
-    fft_bin = 0; 
-    loop(fft_size/2,
-      diff[2*fft_bin]      = nrg[2*fft_bin] + 
-                             diffusion * ( nrg[2*fft_bin-2] - 2 * nrg[2*fft_bin] + nrg[2*fft_bin+2] );
-      diff[2*fft_bin+1]     = nrg[2*fft_bin+1] + 
-                             diffusion * ( nrg[2*fft_bin-1] - 2 * nrg[2*fft_bin+1] + nrg[2*fft_bin+3] );
+    (diff_mode == 0) ? (
+      loop(5,
+        fft_bin = 0; 
+        loop(fft_size/2,
+          diff[2*fft_bin]      = nrg[2*fft_bin] + 
+                                 diffusion * ( nrg[2*fft_bin-2] - 2 * nrg[2*fft_bin] + nrg[2*fft_bin+2] );
+          diff[2*fft_bin+1]     = nrg[2*fft_bin+1] + 
+                                 diffusion * ( nrg[2*fft_bin-1] - 2 * nrg[2*fft_bin+1] + nrg[2*fft_bin+3] );
+          
+          fft_bin += 1;
+        );
+        
+        fft_bin = 0;
+        loop(fft_size,
+          nrg[fft_bin] = diff[fft_bin];
+          fft_bin += 1;
+        );
+      );
+    ) : (
+      dtg = 9.81*0.2*diffusion;
+      dth = .4*0.2*diffusion;
       
-      fft_bin += 1;
-    );
-    
-    fft_bin = 0;
-    loop(fft_size,
-      nrg[fft_bin] = diff[fft_bin];
-      fft_bin += 1;
-    );
+      fft_height = nrg;
+      
+      fft_bin = 0;
+      tmp = 2;
+      loop(fft_size - 2,
+        h = fft_height[fft_bin];
+        dHy = h - fft_height[fft_bin - tmp];
+        
+        fft_velocity_prediction[fft_bin] = fft_velocity[fft_bin] - dtg * dHy;
+        fft_bin += 1;
+      );
+      
+      fft_velocity_prediction[0] = 0;
+      fft_velocity_prediction[fft_size] = 0;
+      
+      fft_bin = 0;
+      loop(fft_size - 2,
+        dUy = fft_velocity_prediction[fft_bin + tmp] - fft_velocity_prediction[fft_bin];
+        h = fft_height[fft_bin];
+        fft_height[fft_bin] = h - dth * dUy;
+        fft_bin += 1;
+      );
+      
+      fft_bin = 0;
+      loop(fft_size,
+        h = fft_height[fft_bin];
+        dHy = h - fft_height[fft_bin - tmp];
+        
+        fft_velocity[fft_bin] = fft_velocity[fft_bin] - dtg * dHy;
+        fft_bin += 1;
+      );
     );
   );
 );
@@ -183,6 +246,9 @@ freemem = (fft_buffer2 = freemem) + MAX_FFT_SIZE*4;
 freemem = (window_buffer = freemem) + MAX_FFT_SIZE*2;
 freemem = (nrg = freemem) + MAX_FFT_SIZE*4;
 freemem = (diff = freemem) + MAX_FFT_SIZE*4;
+freemem = (fft_velocity = freemem) + MAX_FFT_SIZE*4;
+freemem = (fft_height_gradient = freemem) + MAX_FFT_SIZE*4;
+freemem = (fft_velocity_prediction = freemem) + MAX_FFT_SIZE*4;
 
 buffer_length = srate;
 buffer_index = 0;
@@ -327,7 +393,7 @@ output_buffer[output_index*2 + 1] = 0;
 
 buffer_index = (buffer_index + 1)%buffer_length;
 
-@gfx 890 120
+@gfx 1000 120
 render_time = render_time + 1/60;
 
 function clamp(value, mini, maxi)
@@ -613,6 +679,7 @@ ScorchKnob.active = 1;
 AetherKnob.active = 1;
 PitchKnob.active = 1;
 IceKnob.active = 1;
+ChirpKnob.active = 1;
 
 adapt_min = -2;
 adapt_max = 0;
@@ -628,8 +695,10 @@ aether_min = 0;
 aether_max = 1;
 pitch_min = -1;
 pitch_max = 1;
+noise_max = 5;
+noise_min = 0;
 
-sim_w = 890;
+sim_w = 1000;
 sim_h = 120;
 xs = 3;
 Nx = sim_w/xs;
@@ -722,6 +791,7 @@ DiffuseKnob.value = (diffusion - diffusion_min) / (diffusion_max - diffusion_min
 ScorchKnob.value = (scorch - scorch_min) / (scorch_max - scorch_min);
 AetherKnob.value = (aether - aether_min) / (aether_max - aether_min);
 PitchKnob.value = (pitch - pitch_min) / (pitch_max - pitch_min);
+ChirpKnob.value = (noise_mode - noise_min) / (noise_max - noise_min);
 IceKnob.value = ice;
 
 AdaptKnob.drawKnob(x, y, ksize*(1+scaling), "Adapt", "Adaptivity to incoming sound.", 0);  
@@ -733,6 +803,8 @@ AetherKnob.drawKnob(x+5*dx, y, ksize*(1+scaling), "Aether", "Add brightness with
 IceKnob.drawKnob(x+6*dx, y, ksize*(1+scaling), "Ice", "Ice.\nAdds bandpassed peaks of the\noriginal audio at different octaves.\n", c_offset*6);
 PitchKnob.drawKnob(x+7*dx, y, ksize*(1+scaling), "Pitch", "Pitch shift.", c_offset*7);
 IcePan.drawToggle(x+6*dx-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), toggleSize, toggleSize, ice_panning, .3, .2, .2, 1, .3, .4, .7, 1, "Pan icey spectral peaks.");
+DiffMode.drawToggle(x+3*dx-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), toggleSize, toggleSize, diff_mode, .3, .2, .2, 1, .3, .4, .7, 1, "Diffusion mode.\n\nSwitches between a spectral diffusion\nand spectral wave propagation model.");
+ChirpKnob.drawKnob(x+8*dx, y, ksize*(1+scaling), "Chirp", "Chirpiness.\n\nNonzero produces frequency\ndependent phases.", c_offset*8);
 
 capped = 0;
 AdaptKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( time_constant = AdaptKnob.value * (adapt_max - adapt_min) + adapt_min; ); forceUpdate = 1; capped = 1; );
@@ -743,7 +815,9 @@ ScorchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( sco
 AetherKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( aether = AetherKnob.value * (aether_max - aether_min) + aether_min; ); forceUpdate = 1; capped = 1; );
 PitchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( pitch = PitchKnob.value * (pitch_max - pitch_min) + pitch_min; ); forceUpdate = 1; capped = 1; );
 IceKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( ice = IceKnob.value; ); forceUpdate = 1; capped = 1; );
+ChirpKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( noise_mode = ChirpKnob.value * (noise_max - noise_min) + noise_min; ); forceUpdate = 1; capped = 1; );
 ice_panning = IcePan.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+diff_mode = DiffMode.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 gfx_x = 5;
 gfx_y = 5;
