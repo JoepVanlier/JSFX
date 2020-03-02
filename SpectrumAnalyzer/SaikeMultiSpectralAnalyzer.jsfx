@@ -1,14 +1,16 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
-version: 3.4
+version: 4.0
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: fix bug that channel was not solo-able if above sonogram/spectro divide
+changelog: Made sure that max mode starts at -inf. Added side option. Walled of some data, prevented a race condition. Fixed smoothing induced offset. Added fast smoothing option (new default!)
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
 License: LGPL - http://www.gnu.org/licensses/lgpl.html
 
 This file was modified by Joep Vanlier and Trond-Viggo Melssen to enable multispectrum analysis analysis, sonogram and time domain plots. Thanks to cjewellstudios for the smooth colormap.
+
+options:maxmem=9000000
 
 import colormaps.jsfx-inc
 
@@ -18,7 +20,7 @@ slider3:0<0,1,1{disabled,enabled}>-show phase
 slider4:2<0,4,1{rectangular,hamming,blackman-harris,blackman,flat-top}>-window
 slider5:200<0,2500,1>-integration time (ms)
 slider6:1<1,6,.2>-scaling
-slider7:20<0,100,1>-smoothing
+slider7:smoothing=20<0,100,1>-smoothing
 slider8:1<0,14,1{dark,intense,fluo,colorblind,pimp,shades,fancy,pastel,purple,dark2,dark3,dark4,dark5,colorblind2,smooth}>-colormap
 slider9:16<1,16,1>-mxchannels
 slider10:.15<0,1,.4>-colorBackground
@@ -58,12 +60,13 @@ slider41:0<0,1,1{disabled,enabled}>-show channels
 slider42:0<0,1,1{disabled,enabled}>-show options
 slider43:0<0,1,1{disabled,enabled}>-show theme
 slider44:0<0,1,1{disabled,enabled}>-freeze spectrum
-slider45:3<0,3,1{Average,Maximum,Loess,Adaptive}>-Smoothing method
+slider45:4<0,4,1{Average,Maximum,Loess,Adaptive,Fast}>-Smoothing method
 slider50:0<0,1,0>-Initialized
 slider51:LatencyCompensation=0<0,1,0>-Latency Compensation
 slider53:showA=0<0,1,1>-Show A
 slider54:showB=0<0,1,1>-Show B
 slider55:maxIntegrate=0<0,1,0>-Integration mode
+slider56:showSide=0<0,1,0>-Show side channel
 //in_pin:left input 
 //in_pin:right input
 options:no_meter
@@ -94,30 +97,43 @@ function setChannelNames()
 !trCnt ? setChannelNames();
 
 function updateChannelSliders()
+global(slider11, slider12, slider13, slider14, slider15, 
+       slider16, slider17, slider18, slider19, slider20, 
+       slider21, slider22, slider23, slider24, slider25, 
+       slider26, slider27, actc, activechannels, maxchannels,
+       showSum)
+local(mx)
 (
   // For some reason this isn't being called in @slider
   actc = activechannels;
-  actc[] = slider11 ? (maxchannels=1; 1); actc += 1;
-  actc[] = slider12 ? (maxchannels=2; 1); actc += 1;
-  actc[] = slider13 ? (maxchannels=3; 1); actc += 1;
-  actc[] = slider14 ? (maxchannels=4; 1); actc += 1;
-  actc[] = slider15 ? (maxchannels=5; 1); actc += 1;
-  actc[] = slider16 ? (maxchannels=6; 1); actc += 1;
-  actc[] = slider17 ? (maxchannels=7; 1); actc += 1;
-  actc[] = slider18 ? (maxchannels=8; 1); actc += 1;
-  actc[] = slider19 ? (maxchannels=9; 1); actc += 1;
-  actc[] = slider20 ? (maxchannels=10; 1); actc += 1;
-  actc[] = slider21 ? (maxchannels=11; 1); actc += 1;
-  actc[] = slider22 ? (maxchannels=12; 1); actc += 1;
-  actc[] = slider23 ? (maxchannels=13; 1); actc += 1;
-  actc[] = slider24 ? (maxchannels=14; 1); actc += 1;
-  actc[] = slider25 ? (maxchannels=15; 1); actc += 1;
-  actc[] = slider26 ? (maxchannels=16; 1); actc += 1;
+  mx = 0;
+  actc[] = slider11 ? (mx=1; 1);
+  actc[1] = slider12 ? (mx=2; 1);
+  actc[2] = slider13 ? (mx=3; 1);
+  actc[3] = slider14 ? (mx=4; 1);
+  actc[4] = slider15 ? (mx=5; 1);
+  actc[5] = slider16 ? (mx=6; 1);
+  actc[6] = slider17 ? (mx=7; 1);
+  actc[7] = slider18 ? (mx=8; 1);
+  actc[8] = slider19 ? (mx=9; 1);
+  actc[9] = slider20 ? (mx=10; 1);
+  actc[10] = slider21 ? (mx=11; 1);
+  actc[11] = slider22 ? (mx=12; 1);
+  actc[12] = slider23 ? (mx=13; 1);
+  actc[13] = slider24 ? (mx=14; 1);
+  actc[14] = slider25 ? (mx=15; 1);
+  actc[15] = slider26 ? (mx=16; 1);
 
+  maxchannels = mx;
   showSum = slider27;
 );
 
 function initCh()
+global(slider11, slider12, slider13, slider14, slider15,
+       slider16, slider17, slider18, slider19, slider20,
+       slider21, slider22, slider23, slider24, slider25, 
+       slider26, slider50, num_ch)
+local(i1)
 (
   slider50 == 0 ? (
     slider11 = slider12 = slider13 = slider14 = slider15 = slider16 = slider17 = slider18 = slider19 = slider20 = slider21 = slider22 = slider23 = slider24 = slider25 = slider26 = 0;
@@ -156,8 +172,6 @@ max_fft_size    = 32768;
 fftsize         = max_fft_size;
 window          = max_fft_size + (max_fft_size*0.5 - 1);
 histsize        = max_fft_size + (max_fft_size*0.5 - 1);
-//fftworkspace    = window+(max_fft_size*0.5 + 1);
-//integrate_buf   = fftworkspace + max_fft_size*2;
 
 SONOSURFACE   = 4;
 gfx_dest      = SONOSURFACE;
@@ -169,84 +183,92 @@ gfx_a         = 1;
 gfx_rectto(0.5*fftsize, 0.5*fftsize);
 gfx_dest      = -1;
 
-recpositions    = 100;
-histsizes       = 200;
-fftworkspaces   = 300;
-integrate_bufs  = 400;
-shifts          = 500;
-activechannels  = 600;
-maxchannels     = 16;
-totchannels     = 16;
-offscreenbuf    = 1;
-
 bgcolor         = 0;
 drawHz          = 0;
 
-updateChannelSliders();
-
-rpos      = recpositions;
-hsize     = histsizes;
-fftw      = fftworkspaces; 
-ibuf      = integrate_bufs;
-csh       = shifts;
-curshift  = 65536;
-
-spacing   = 3;
-loop(totchannels,
-  rpos[]  = curshift;
-  hsize[] = window + curshift;
-  fftw[]  = window + (max_fft_size*0.5 + 1) + curshift;
-  ibuf[]  = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + curshift;
-  csh[]   = curshift;
+function init_memory_mapping()
+local(rpos, curshift, rpos, hsize, fftw, ibuf, csh)
+global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activechannels, maxchannels, totchannels, offscreenbuf, spacing, M_BLOCK_SIZE, 
+       window, max_fft_size, maxIntegrate, filtout, filtout2, sumshl, sumshr, sumposl, sumposr, fftwl, fftwr, ibufl, ibufr, sumhsl, sumhsr
+       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2)
+(
+  recpositions    = 100;
+  histsizes       = 200;
+  fftworkspaces   = 300;
+  integrate_bufs  = 400;
+  shifts          = 500;
+  activechannels  = 600;
+  maxchannels     = 16;
+  totchannels     = 16;
+  offscreenbuf    = 1;
+  spacing         = 3; // Used to be 3
+  M_BLOCK_SIZE    = 65536;
   
-  memset(fftw[],0,max_fft_size);
-  memset(ibuf[],0,max_fft_size);
-  memset(rpos[],0,max_fft_size);
+  curshift  = M_BLOCK_SIZE;
+  rpos      = recpositions;
+  hsize     = histsizes;
+  fftw      = fftworkspaces; 
+  ibuf      = integrate_bufs;
+  csh       = shifts;
   
-  rpos  += 1;
-  hsize += 1;
-  fftw  += 1;
-  ibuf  += 1;
-  csh   += 1;
+  loop(totchannels*2,
+    rpos[]  = curshift;
+    hsize[] = curshift + window;
+    fftw[]  = curshift + window + (max_fft_size*0.5 + 1);
+    ibuf[]  = curshift + window + (max_fft_size*0.5 + 1) + max_fft_size*2;
+    csh[]   = curshift;
+    
+    memset(fftw[],0,max_fft_size);
+    memset(ibuf[],0-100*maxIntegrate,max_fft_size);
+    memset(rpos[],0,max_fft_size);
+    
+    rpos  += 1;
+    hsize += 1;
+    fftw  += 1;
+    ibuf  += 1;
+    csh   += 1;
+    
+    curshift += spacing*M_BLOCK_SIZE;
+  );
   
-  curshift += spacing*65536;
+  // Memory for the filter on the spectrum
+  filtout   = (curshift += spacing*M_BLOCK_SIZE);
+  memset(filtout,0,max_fft_size);
+  filtout2  = (curshift += spacing*M_BLOCK_SIZE);
+  memset(filtout2,0,max_fft_size);
+  
+  // Memory for the sum signals
+  sumshl  = (curshift += spacing*M_BLOCK_SIZE);
+  sumposl = sumshl;
+  fftwl   = sumshl + window + (max_fft_size*0.5 + 1);
+  ibufl   = sumshl + window + (max_fft_size*0.5 + 1) + max_fft_size*2;
+  sumhsl  = sumshl + window;
+  
+  sumshr  = (curshift += spacing*M_BLOCK_SIZE);
+  sumposr = sumshr;
+  fftwr   = sumshr + window + (max_fft_size*0.5 + 1);
+  ibufr   = sumshr + window + (max_fft_size*0.5 + 1) + max_fft_size*2;
+  sumhsr  = sumshr + window;
+  
+  memset(ibufl,0-100*maxIntegrate,max_fft_size);
+  memset(ibufr,0-100*maxIntegrate,max_fft_size);
+  
+  // Buffer for delay compensation
+  latencyBuffer  = (curshift += spacing*M_BLOCK_SIZE);
+  latencyBufferMax = latencyBuffer + M_BLOCK_SIZE; // should be x64
+  latencyPtr = latencyBuffer;
+  memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
+  
+  memA  = (curshift += spacing*M_BLOCK_SIZE);
+  memB  = (curshift += spacing*M_BLOCK_SIZE);
+  memA2 = (curshift += spacing*M_BLOCK_SIZE);
+  memB2 = (curshift += spacing*M_BLOCK_SIZE);
 );
 
-// Memory for the filter on the spectrum
-filtout   = 65536*spacing*(totchannels+1);
-memset(filtout,0,max_fft_size);
-filtout2  = 65536*spacing*(totchannels+2);
-memset(filtout2,0,max_fft_size);
-
-// Memory for the sum signals
-sumshl  = 65536*spacing*(totchannels+3);
-sumposl = sumshl;
-fftwl   = window + (max_fft_size*0.5 + 1) + sumshl;
-ibufl   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshl;
-sumhsl  = window + sumshl;
-
-sumshr  = 65536*spacing*(totchannels+4);
-sumposr = sumshr;
-fftwr   = window + (max_fft_size*0.5 + 1) + sumshr;
-ibufr   = window + (max_fft_size*0.5 + 1) + max_fft_size*2 + sumshr;
-sumhsr  = window + sumshr;
-
-// Buffer for delay compensation
-latencyBuffer  = 65536*spacing*(totchannels+5);
-latencyBufferMax = latencyBuffer + 65536; // should be x64
-latencyPtr = latencyBuffer;
-memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
-
-memA  = 65536*spacing*(totchannels+8);
-memB  = 65536*spacing*(totchannels+9);
-memA2 = 65536*spacing*(totchannels+10);
-memB2 = 65536*spacing*(totchannels+11);
+init_memory_mapping();
+updateChannelSliders();
 
 @serialize
-memA  = 65536*spacing*(totchannels+8);
-memB  = 65536*spacing*(totchannels+9);
-memA2 = 65536*spacing*(totchannels+10);
-memB2 = 65536*spacing*(totchannels+11);
 file_mem(0, memA, 65536);
 file_mem(0, memB, 65536);
 file_mem(0, memA2, 65536);
@@ -262,6 +284,7 @@ file_var(0, xscaleB);
 
 @slider
 slider2 != lfloor ? old_w=0;
+updateChannelSliders();
 
 @block
 slider2 != lfloor ? (
@@ -270,39 +293,74 @@ slider2 != lfloor ? (
 );
 
 @sample
-iLoad     = 0;
-jch       = 0;
-active    = activechannels;
-recpos    = recpositions;
-hs        = histsizes;
-sh        = shifts;
-sl        = 0;
-sr        = 0;
-
-( slider44 == 0 ) ?
-(
-  loop(maxchannels,
-    (active[] == 1 || (slider28==iLoad)) ? (
-      recpos[][]=.5*(spl(jch)+spl(jch+1));
-      recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
-    );
-
-    sl = sl+spl(jch);
-    sr = sr+spl(jch+1);
-    
-    active += 1;
-    recpos += 1; 
-    hs     += 1;
-    sh     += 1;
-    jch    += 2;
-    iLoad  += 1;
-  );
-
-  sumposl[] = sl;
-  sumposr[] = sr;
-  sumposl = ((sumposl+1) >= sumhsl ? sumshl : (sumposl+1));
-  sumposr = ((sumposr+1) >= sumhsr ? sumshr : (sumposr+1));  
+updateSliders ? (
+  updateSliders = 0;
+  updateChannelSliders();
 );
+
+function update()
+local(jch, active, recpos, hs, sh, sl, sr, iLoad)
+global(activechannels, recpositions, histsizes, shifts, slider44, maxchannels, slider28, 
+       showSide, sumposl, sumposr, sumhsl, sumshl, sumhsr, sumshr)
+(
+  iLoad     = 0;
+  jch       = 0;
+  active    = activechannels;
+  recpos    = recpositions;
+  hs        = histsizes;
+  sh        = shifts;
+  sl        = 0;
+  sr        = 0;
+  
+  ( slider44 == 0 ) ?
+  (
+    loop(maxchannels,
+      (active[] == 1 || (slider28==iLoad)) ? (
+        recpos[][]=.5*(spl(jch)+spl(jch+1));
+        recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
+      );
+  
+      sl = sl+spl(jch);
+      sr = sr+spl(jch+1);
+      
+      active += 1;
+      recpos += 1; 
+      hs     += 1;
+      sh     += 1;
+      jch    += 2;
+      iLoad  += 1;
+    );
+    
+    showSide ? (
+      jch = 0;
+      active = activechannels;
+      iLoad = 0;
+      loop(maxchannels,
+        (active[] == 1 || (slider28==iLoad)) ? (
+          recpos[][] = .5*(spl(jch)-spl(jch+1));
+          recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
+        );
+        
+        active += 1;
+        recpos += 1;
+        hs     += 1;
+        sh     += 1;
+        jch    += 2;
+        iLoad  += 1;
+      );
+      
+      sumposl[] = 0.5 * (sl + sr);
+      sumposr[] = 0.5 * (sl - sr);
+    ) : (
+      sumposl[] = sl;
+      sumposr[] = sr;
+    );
+    
+    sumposl = ((sumposl+1) >= sumhsl ? sumshl : (sumposl+1));
+    sumposr = ((sumposr+1) >= sumhsr ? sumshr : (sumposr+1));
+  );
+);
+update();
 
 latencyCompensation ? (
   j = 0;
@@ -325,9 +383,7 @@ latencyCompensation ? (
 
 @gfx 900 600
 initCh();
-updateChannelSliders();
 gfx_ext_retina>1 ? gfx_setfont(1,"Arial",max(12,12*gfx_ext_retina),'b') : gfx_setfont(0);
-gfx_measurestr("ly", jnk, fheight);
 
 function proceed(val, h)
 (
@@ -574,6 +630,10 @@ function draw_button2_fixedWidth(xp, yp, _w, str, active, selected, solo, someth
     gfx_line(x,y+fh-1,x+w,y+fh-1);
     gfx_line(x,y+1,x+w,y+1);
     gfx_line(x+w-1,y,x+w-1,y+fh);
+    gfx_line(x+2,y,x+2,y+fh);
+    gfx_line(x,y+fh-2,x+w,y+fh-2);
+    gfx_line(x,y+2,x+w,y+2);
+    gfx_line(x+w-2,y,x+w-2,y+fh);
  );
  gfx_a = 1.0;
   
@@ -751,30 +811,39 @@ function hit(xp,yp,cm)
 function checkChannelButtons()
 (
   hit = 0;
-  ( slider36 == -1 ) ?
-  (
-    ch1.hit_button(mouse_x,mouse_y,11)  ? ( slider36 = -1; slider11=!slider11; slider_automate(slider11); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch2.hit_button(mouse_x,mouse_y,12)  ? ( slider36 = -1; slider12=!slider12; slider_automate(slider12); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch3.hit_button(mouse_x,mouse_y,13)  ? ( slider36 = -1; slider13=!slider13; slider_automate(slider13); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch4.hit_button(mouse_x,mouse_y,14)  ? ( slider36 = -1; slider14=!slider14; slider_automate(slider14); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch5.hit_button(mouse_x,mouse_y,15)  ? ( slider36 = -1; slider15=!slider15; slider_automate(slider15); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch6.hit_button(mouse_x,mouse_y,16)  ? ( slider36 = -1; slider16=!slider16; slider_automate(slider16); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch7.hit_button(mouse_x,mouse_y,17)  ? ( slider36 = -1; slider17=!slider17; slider_automate(slider17); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch8.hit_button(mouse_x,mouse_y,18)  ? ( slider36 = -1; slider18=!slider18; slider_automate(slider18); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch9.hit_button(mouse_x,mouse_y,19)  ? ( slider36 = -1; slider19=!slider19; slider_automate(slider19); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch10.hit_button(mouse_x,mouse_y,20) ? ( slider36 = -1; slider20=!slider20; slider_automate(slider20); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch11.hit_button(mouse_x,mouse_y,21) ? ( slider36 = -1; slider21=!slider21; slider_automate(slider21); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch12.hit_button(mouse_x,mouse_y,22) ? ( slider36 = -1; slider22=!slider22; slider_automate(slider22); updateChannelSliders(); old_w = 0; hit=1; ) :                                                                       
-    ch13.hit_button(mouse_x,mouse_y,23) ? ( slider36 = -1; slider23=!slider23; slider_automate(slider23); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch14.hit_button(mouse_x,mouse_y,24) ? ( slider36 = -1; slider24=!slider24; slider_automate(slider24); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch15.hit_button(mouse_x,mouse_y,25) ? ( slider36 = -1; slider25=!slider25; slider_automate(slider25); updateChannelSliders(); old_w = 0; hit=1; ) :
-    ch16.hit_button(mouse_x,mouse_y,26) ? ( slider36 = -1; slider26=!slider26; slider_automate(slider26); updateChannelSliders(); old_w = 0; hit=1; );
+
+  ch1.hit_button(mouse_x,mouse_y,11)  ? ( hit=11; ) :
+  ch2.hit_button(mouse_x,mouse_y,12)  ? ( hit=12; ) :
+  ch3.hit_button(mouse_x,mouse_y,13)  ? ( hit=13; ) :
+  ch4.hit_button(mouse_x,mouse_y,14)  ? ( hit=14; ) :
+  ch5.hit_button(mouse_x,mouse_y,15)  ? ( hit=15; ) :
+  ch6.hit_button(mouse_x,mouse_y,16)  ? ( hit=16; ) :
+  ch7.hit_button(mouse_x,mouse_y,17)  ? ( hit=17; ) :
+  ch8.hit_button(mouse_x,mouse_y,18)  ? ( hit=18; ) :
+  ch9.hit_button(mouse_x,mouse_y,19)  ? ( hit=19; ) :
+  ch10.hit_button(mouse_x,mouse_y,20) ? ( hit=20; ) :
+  ch11.hit_button(mouse_x,mouse_y,21) ? ( hit=21; ) :
+  ch12.hit_button(mouse_x,mouse_y,22) ? ( hit=22; ) :                                                                       
+  ch13.hit_button(mouse_x,mouse_y,23) ? ( hit=23; ) :
+  ch14.hit_button(mouse_x,mouse_y,24) ? ( hit=24; ) :
+  ch15.hit_button(mouse_x,mouse_y,25) ? ( hit=25; ) :
+  ch16.hit_button(mouse_x,mouse_y,26) ? ( hit=26; );
     
-    chA.hit_button(mouse_x,mouse_y,200) ? ( showA=!showA; slider_automate(showA); );
-    chB.hit_button(mouse_x,mouse_y,200) ? ( showB=!showB; slider_automate(showB); );
+  hit > 0 ? (
+    (slider36 == -1) ? (
+      slider(hit) = !slider(hit);
+      slider_automate(slider(hit)); 
+      updateSliders = 1;
+      old_w = 0;
+    ) : (
+      slider36 = -1;
+    );
+  );
     
-  ) : ( slider36 = -1 );
-  hit == 1;
+  chA.hit_button(mouse_x,mouse_y,200) ? ( showA=!showA; slider_automate(showA); );
+  chB.hit_button(mouse_x,mouse_y,200) ? ( showB=!showB; slider_automate(showB); );
+  
+  hit > 0;
 );
 
 SONOSURFACE2 = 3;
@@ -906,6 +975,13 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
 );
 
 function drawGrid()
+local(intensity, textintensity,
+      gv, cnt, rescaleY, y, gfx_texth, bottom_line, f, lx, ltxt, tx, dotext)
+global(bgColor, wsc, sc,
+       gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, gfx_w, gfx_h,
+       slider39, slider40, srate,
+       spectrum_yoffset, spectrum_yoffsetbottom, spectrum_xpad,
+       scaling, spectrum_xmax, spectrum_xoffset)
 (
   intensity = 0 * bgColor + 1 * ( 1 - bgColor );
   textintensity = 0.1 * bgColor + 1.0 * ( 1 - bgColor ); 
@@ -964,7 +1040,21 @@ function drawGrid()
   );
 );
 
-function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
+function drawFFT(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
+local(bufout, fout, scfac, jk, tmp, curSize, kern, tsc, i, curh
+      sumWtY, iSize, xij, SumWtS,
+      d, w, yAdaptive, res, 
+      M_est, S_est,
+      alpha, Sq_est, 
+      rescaleY, ixsc, 
+      prec, tx, ty, tx0, lx0, lx, ly, 
+      fill_slast, fill_slmin, ly2, ty2)
+global(smoothing, filtout2,
+       gfx_w, gfx_h, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a,
+       spectrum_yoffsetbottom, spectrum_yoffset
+       spectrum_xoffsetbottom, spectrum_xoffset,
+       wsc, spectrum_xmax, slider37)
+instance()
 (
   ( smoothing > 0 ) ? (
     ( smoothMode == 0 ) ? (
@@ -976,7 +1066,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
       
       loop(fftsize*0.5,
         tmp = 0;
-        curSize   = ceil( scfac * log(1.0+jk*xscale) );
+        curSize   = ceil(scfac * log(1.0+jk*xscale));
         kern      = bufout-curSize;
         tsc       = 1 / (2*curSize+1);
         loop(2*curSize+1,
@@ -1094,7 +1184,39 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
       );
           
       bufout = filtout2;
-    )
+    ) : ( smoothMode == 4 ) ? (
+      bufout      = filtout + kernelSize;
+      fout        = filtout2;
+      scfac       = .00025 * kernelSize * kernelSize;
+      jk          = 1;
+      
+      tmp = bufout[];
+      loop(fftsize*0.5,
+        kern = 1/(1+scfac*jk);
+        tmp = kern * bufout[] + (1-kern) * tmp;
+
+        fout[] = tmp;
+        bufout += 1;
+        fout += 1;
+        jk += 1;
+      );
+      
+      bufout = filtout2 + fftsize * 0.5 - 1;
+      fout = filtout2 + fftsize * 0.5 - 1;
+      tmp = bufout[];
+      jk = fftsize*0.5;
+      loop(fftsize*0.5,
+        kern = 1/(1+scfac*jk);
+        tmp = kern * bufout[] + (1-kern) * tmp;
+
+        fout[] = tmp;
+        bufout -= 1;
+        fout -= 1;
+        jk -= 1;
+      );      
+    
+      bufout = filtout2;
+    );
   ) : bufout = filtout;
   
   draw ? (
@@ -1131,8 +1253,7 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
           fill_slast=tx0;        
         );  
         gfx_a=1;
-        //gfx_line(lx-.5, ly-.5, tx-.5, ty-.5);
-        gfx_x=lx; gfx_y=ly; gfx_lineto(tx,ty,1) ;
+        gfx_x=lx; gfx_y=ly; draw==1?gfx_lineto(tx,ty,1) ;
       );
   
       lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
@@ -1140,7 +1261,17 @@ function drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fi
   )
 );
 
-function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw)
+function processFFT(rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw)
+local(buf1, buf2, buf3, bufout, ascale, i, lx, rescaleY, ang, ty, ty2, tx, ly2,
+      fill_slmin, fill_slast, yOut, slope, prec, last)
+global(histsize, fftsize, window, filtout, 
+       max_fft_size,
+       spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, sc,
+       gfx_x, gfx_y, gfx_h, 
+       slider3, slider38, maxIntegrate, slider45, smoothing,
+       integrate_en, integrate_sc,
+       kernelSize, xscale)
+instance()
 (
   buf1=rpos-fftsize;
   buf1<bufStart ? buf1+=histsize;
@@ -1165,7 +1296,7 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
   fftwspace[1]=0;
 
   ascale=gfx_h/$pi*0.25;
-  xscale=800/(fftsize-4);
+  xscale=800.0/(fftsize-4.0);
  
   buf3=fftwspace;
   buf2=intbuf+max_fft_size*0.5;
@@ -1197,14 +1328,13 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
     );
   );
   
-  smoothing = slider7;
   lx=0;
   i=0;
   fill_slmin=gfx_h;
   fill_slast=0;
 
   // Process FFT
-  kernelSize  = floor( smoothing/5 + 1 );
+  kernelSize  = smoothing > 0 ? floor( smoothing/5 + 1 ) : 0;
   bufout = filtout + kernelSize;
   
   // Integrate the FFT over time to smooth it.
@@ -1245,7 +1375,7 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
     bufout[] = last;
   );
   
-  drawFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
+  drawFFT(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
 );
   
 // Scrollwheel
@@ -1351,8 +1481,8 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
               ) : (
                 cap_mode == 6 ? (
                   // Smoothing
-                  slider7 = 20;
-                  slider_automate(slider7);
+                  smoothing = 20;
+                  slider_automate(smoothing);
                 ) : (
                   cap_mode == 8 ? (                
                     // Sonogram
@@ -1404,22 +1534,22 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
                                   (cap_mode > 10 && cap_mode < 27) ? (
                                     // Was something solo'd?
                                     ( slider36 > -1 ) ? ( slider36 = -1; ) : ( 
-                                      ( ch1.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 11 ) ? ( slider36 = 0; slider11 = 1; slider_automate(slider11); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch2.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 12 ) ? ( slider36 = 1; slider12 = 1; slider_automate(slider12); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch3.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 13 ) ? ( slider36 = 2; slider13 = 1; slider_automate(slider13); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch4.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 14 ) ? ( slider36 = 3; slider14 = 1; slider_automate(slider14); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch5.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 15 ) ? ( slider36 = 4; slider15 = 1; slider_automate(slider15); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch6.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 16 ) ? ( slider36 = 5; slider16 = 1; slider_automate(slider16); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch7.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 17 ) ? ( slider36 = 6; slider17 = 1; slider_automate(slider17); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch8.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 18 ) ? ( slider36 = 7; slider18 = 1; slider_automate(slider18); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch9.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 19 ) ? ( slider36 = 8; slider19 = 1; slider_automate(slider19); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch10.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 20 ) ? ( slider36 = 9; slider20 = 1; slider_automate(slider20); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch11.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 21 ) ? ( slider36 = 10; slider21 = 1; slider_automate(slider21); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch12.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 22 ) ? ( slider36 = 11; slider22 = 1; slider_automate(slider22); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch13.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 23 ) ? ( slider36 = 12; slider23 = 1; slider_automate(slider23); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch14.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 24 ) ? ( slider36 = 13; slider24 = 1; slider_automate(slider24); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch15.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 25 ) ? ( slider36 = 14; slider25 = 1; slider_automate(slider25); updateChannelSliders(); ) : checkChannelButtons(); );
-                                      ( ch16.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 26 ) ? ( slider36 = 15; slider26 = 1; slider_automate(slider26); updateChannelSliders(); ) : checkChannelButtons(); );
+                                      ( ch1.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 11 ) ? ( slider36 = 0; slider11 = 1; slider_automate(slider11); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch2.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 12 ) ? ( slider36 = 1; slider12 = 1; slider_automate(slider12); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch3.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 13 ) ? ( slider36 = 2; slider13 = 1; slider_automate(slider13); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch4.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 14 ) ? ( slider36 = 3; slider14 = 1; slider_automate(slider14); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch5.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 15 ) ? ( slider36 = 4; slider15 = 1; slider_automate(slider15); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch6.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 16 ) ? ( slider36 = 5; slider16 = 1; slider_automate(slider16); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch7.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 17 ) ? ( slider36 = 6; slider17 = 1; slider_automate(slider17); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch8.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 18 ) ? ( slider36 = 7; slider18 = 1; slider_automate(slider18); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch9.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 19 ) ? ( slider36 = 8; slider19 = 1; slider_automate(slider19); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch10.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 20 ) ? ( slider36 = 9; slider20 = 1; slider_automate(slider20); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch11.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 21 ) ? ( slider36 = 10; slider21 = 1; slider_automate(slider21); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch12.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 22 ) ? ( slider36 = 11; slider22 = 1; slider_automate(slider22); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch13.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 23 ) ? ( slider36 = 12; slider23 = 1; slider_automate(slider23); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch14.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 24 ) ? ( slider36 = 13; slider24 = 1; slider_automate(slider24); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch15.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 25 ) ? ( slider36 = 14; slider25 = 1; slider_automate(slider25); updateSliders = 1; ) : checkChannelButtons(); );
+                                      ( ch16.hit_button(mouse_x,mouse_y,cap_mode) ? ( cap_mode == 26 ) ? ( slider36 = 15; slider26 = 1; slider_automate(slider26); updateSliders = 1; ) : checkChannelButtons(); );
                                     );
                                   );
                                 );
@@ -1458,22 +1588,23 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
          sonogram.hit_button(mouse_x,mouse_y,8+slider29);
          
          checkChannelButtons() ? : 
-                 slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateChannelSliders(); old_w = 0) :
+                 slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateSliders = 1; old_w = 0) :
                  slider42 == 0 ? floor_button.hit_button(mouse_x,mouse_y,1);
                  slider42 == 0 ? slope_button.hit_button(mouse_x,mouse_y,29);
                  slider42 == 0 ? window_button.hit_button(mouse_x,mouse_y,2);
                  slider42 == 0 ? fft_button.hit_button(mouse_x,mouse_y,3);
                  slider42 == 0 ? integrate_button.hit_button(mouse_x,mouse_y,4); 
                  slider42 == 0 ? integration_type_button.hit_button(mouse_x, mouse_y, 46);
+                 slider42 == 0 ? show_side_button.hit_button(mouse_x, mouse_y, 47);
                  slider42 == 0 ? scaling.hit_button(mouse_x,mouse_y,5);
                  slider42 == 0 ? colormap.hit_button(mouse_x,mouse_y,7);              
-                 slider42 == 0 ? smoothing.hit_button(mouse_x,mouse_y,6);
+                 slider42 == 0 ? smoothing_button.hit_button(mouse_x,mouse_y,6);
                  slider42 == 0 ? alphalevel.hit_button(mouse_x,mouse_y,28);
                  slider42 == 0 ? sonoScale.hit_button(mouse_x,mouse_y,10) ? :
                  slider42 == 0 ? smoothing_type.hit_button(mouse_x,mouse_y,45);
                 
                  (      // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position 
-                    slider42 == 0 ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateChannelSliders(); old_w = 0) :
+                    slider42 == 0 ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0) :
                     slider42 == 0 ? sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>2?slider29=0; slider_automate(slider29); old_w = 0 ):
                     drawHz = 1;
                 )                
@@ -1502,6 +1633,11 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
       old_w=0;
       slider_automate(maxIntegrate);
     ) :
+    cap_mode == 47 && cap_last_y != mouse_y ? (
+      showSide = drag_slider(showSide, 0.0, 1.0, .03);
+      old_w=0;
+      slider_automate(showSide);
+    ) :
       cap_mode == 3 && cap_last_y != mouse_y ? (
       slider1 = drag_slider(slider1, 0.0, 11.0, .03);
       old_w=0;
@@ -1521,9 +1657,9 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
     ) :
     cap_mode == 6 && cap_last_y != mouse_y ? (
       // Smoothing
-      slider7 = drag_slider_precise(slider7, 0.0, 100, 1);
+      smoothing = drag_slider_precise(smoothing, 0.0, 100, 1);
       old_w=0;
-      slider_automate(slider7);
+      slider_automate(smoothing);
     ) :
     cap_mode == 7 && cap_last_y != mouse_y ? (
       // Colormap
@@ -1575,7 +1711,7 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
     cap_mode == 60 && cap_lasty_y != mouse_y ? (
       sono_frac = (1-(mouse_y+sono_yoffset_bottom)/gfx_h);
     ) : cap_mode == 45 && cap_last_y != mouse_y ? (
-      slider45 = drag_slider(slider45, 0.0, 3.0, .03);
+      slider45 = drag_slider(slider45, 0.0, 4.0, .03);
       old_w=0;
       slider_automate(slider45);
     );
@@ -1595,7 +1731,7 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
       slider_automate(slider1);
     );
     cap_mode == 45 ? (
-      slider45 = cycle_slider(slider45, 0.0, 3.0, 1.0);
+      slider45 = cycle_slider(slider45, 0.0, 4.0, 1.0);
       old_w=0;
       slider_automate(slider45);
     );
@@ -1603,6 +1739,11 @@ function processFFT(idx, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb,
       maxIntegrate = cycle_slider(maxIntegrate, 0.0, 1.0, 1.0);
       old_w=0;
       slider_automate(maxIntegrate);
+    );
+    cap_mode == 47 ? (
+      showSide = cycle_slider(showSide, 0.0, 1.0, 1.0);
+      old_w=0;
+      slider_automate(showSide);
     );
   );
 );
@@ -1644,12 +1785,13 @@ function DrawButtons()
     
       floor_button.draw_button_safe(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), storeBX);
       slope_button.draw_button_safe(gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38), storeBX);
-      smoothing.draw_button_safe(gfx_y,sprintf(#,"Smoothing: %.1f",slider7), storeBX);
+      smoothing_button.draw_button_safe(gfx_y,sprintf(#,"Smoothing: %.1f",smoothing), storeBX);
       smoothing_type.draw_button_safe(gfx_y, 
                         (slider45|0)==0 ? "Average" :  
                         (slider45|0)==1 ? "Maximum" :
                         (slider45|0)==2 ? "LOESS" : 
-                          "Adaptive", storeBX);
+                        (slider45|0)==3 ? "Adaptive" :
+                          "Fast", storeBX);
       maxIntegrate ? ( 
         integrate_button.draw_button_safe(gfx_y, sprintf(#,"Maxtime: %dms",slider5|0), storeBX);
       ) : (
@@ -1657,23 +1799,9 @@ function DrawButtons()
       );
       
       integration_type_button.draw_button_safe(gfx_y, maxIntegrate ? "Max" : "Int", storeBX);
+      show_side_button.draw_button_safe(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
     );
-    
-    
-    /*slider42 == 0 ? gfx_w < 925 ? integrate_button.draw_button(gfx_w+9-spectrum_xpad, 23, sprintf(#,"Integrate: %dms",slider5|0));
-    slider42 == 0 ? gfx_w < 794 ? smoothing.draw_button(gfx_x-8,23,sprintf(#,"Smoothing: %.1f",slider7));
-    slider42 == 0 ? gfx_w < 655 ? slope_button.draw_button(gfx_w-8-spectrum_xpad,43, sprintf(#,"Slope: %.1fdB/oct", slider38));
-    slider42 == 0 ? gfx_w < 522 ? floor_button.draw_button(gfx_x-8,43, sprintf(#,"Floor: %.1fdB", slider2));
-    slider42 == 0 ? gfx_w < 447 ? window_button.draw_button(gfx_w-8-spectrum_xpad, 63, 
-      (slider4|0)==1 ? "Hamming" :  
-      (slider4|0)==2 ? "Blackman-Harris" :
-      (slider4|0)==3 ? "Blackman" : 
-      (slider4|0)==4 ? "Rectangular":
-      "Flat-top");
-    slider42 == 0 ? gfx_w < 314 ? fft_button.draw_button(gfx_w -8-spectrum_xpad, 80, sprintf(#,"FFT: %d",16<<slider1));
-    */    
           
-  //  scaling.draw_button(gfx_x-8,0,sprintf(#,"Scale: %.1f",slider6));
   gfx_measurestr("^^:: THEMES ::^^", themeW, themeH);
   yShift = themeH + 18;
     slider42 == 0 ? theme_button.draw_button(gfx_w -10, arrowY, slider43 ?"<<:: THEMES   ::" : "^^:: THEMES ::^^");
@@ -1698,7 +1826,7 @@ function DrawButtons()
       "Theme:    Tracks"); 
     
   slider42 == 0 ? slider43 == 1 ? yShift = yShift*4;
-    
+ 
     gmem[0] > 0 ? (
       // Reset channel names
       setChannelNames();
@@ -1850,8 +1978,6 @@ function DrawButtons()
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;
   );
 
-//sonoScale.draw_button(gfx_x-8, 16, sprintf(#,"SonoScale: %d",slider35));
-  
   scaling = slider6;
   bgcolor = slider10;
 
@@ -1859,7 +1985,7 @@ function DrawButtons()
 cap_mode && cap_timer < 12 ? cap_timer += 1;
 last_mouse_cap = mouse_cap;
 
-UI_SCREEN = 0;
+UI_SCREEN = 1;
 
 // only update if new fft data is there or if the size changed
 ( update == 1 || old_w != gfx_w || old_h!=gfx_h ) ? (
@@ -1907,7 +2033,7 @@ UI_SCREEN = 0;
     integrate_sc=1;
   );
 
-  smoothing != slider7 || windowsize != fftsize || windowtype != (slider4|0) ? (
+  windowsize != fftsize || windowtype != (slider4|0) ? (
     windowtype=slider4|0; 
     windowsize=fftsize;
     dwindowpos = $pi*2/fftsize;
@@ -1943,7 +2069,8 @@ UI_SCREEN = 0;
   loop(maxchannels,
     (blah[] == 1) ? (
       ( slider36 < 0 || ( slider36 == (jl-1) ) ) ? (
-        processFFT(1, rpos[], fftw[], ibuf[], shft[], hsiz[], ccolor[0], ccolor[1], ccolor[2], 1, 1);
+        showSide ? processFFT((rpos+maxchannels)[], (fftw+maxchannels)[], (ibuf+maxchannels)[], (shft+maxchannels)[], (hsiz+maxchannels)[], ccolor[0], ccolor[1], ccolor[2], 1, 2);
+        processFFT(rpos[], fftw[], ibuf[], shft[], hsiz[], ccolor[0], ccolor[1], ccolor[2], 1, 1);
       );
     );
     jl      += 1;
@@ -1956,18 +2083,18 @@ UI_SCREEN = 0;
     blah    += 1; 
   );
 
-  showSum ? (
+  showSum || copyTo ? (
     halfshade = 0.3 * bgcolor + 0.7 * ( 1-bgcolor );
     shade = 1-bgcolor;
-    processFFT(100, sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);
+    processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);
     
     (copyTo == 1) ? memcpy(memA2, filtout, 65536);
     (copyTo == 2) ? memcpy(memB2, filtout, 65536);
     
-    processFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 1);
+    processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 1);
     
     copyTo == 1 ? (
-      memcpy(memA, filtout, 65536);
+      memcpy(memA, filtout, M_BLOCK_SIZE);
       copyTo = 0;
       sModeA = floor(slider45);
       kernelSizeA = kernelSize;
@@ -1976,7 +2103,7 @@ UI_SCREEN = 0;
     );
     
     copyTo == 2 ? (
-      memcpy(memB, filtout, 65536);
+      memcpy(memB, filtout, M_BLOCK_SIZE);
       copyTo = 0;
       sModeB = floor(slider45);
       kernelSizeB = kernelSize;
@@ -1985,18 +2112,20 @@ UI_SCREEN = 0;
     );
   );
   
+  //drawFFT(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
+  
   showA ? (
-    memcpy(filtout, memA, 65536);
-    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
-    memcpy(filtout, memA2, 65536);
-    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    memcpy(filtout, memA, M_BLOCK_SIZE);
+    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    memcpy(filtout, memA2, M_BLOCK_SIZE);
+    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
   );
   
   showB ? (
-    memcpy(filtout, memB, 65536);
-    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
-    memcpy(filtout, memB2, 65536);
-    drawFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    memcpy(filtout, memB, M_BLOCK_SIZE);
+    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    memcpy(filtout, memB2, M_BLOCK_SIZE);
+    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
   );
   
   ( drawHz == 1 ) ? (
@@ -2065,7 +2194,7 @@ UI_SCREEN = 0;
     ( selected > -1 ) ? (
       // Make sure that the sonogram is still updated if it's not currently being rendered.       
       ( activeChannels[selected] == 0 ) ? (
-        processFFT(1, recpositions[selected], fftworkspaces[selected], integrate_bufs[selected], shifts[selected], histsizes[selected], ccolor[0], ccolor[1], ccolor[2], 1, 0);
+        processFFT(recpositions[selected], fftworkspaces[selected], integrate_bufs[selected], shifts[selected], histsizes[selected], ccolor[0], ccolor[1], ccolor[2], 1, 0);
       );
       sonogram.drawSono( fftworkspaces[selected], cmapidx * 2000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35 );
       gfx_mode = 1;
@@ -2076,8 +2205,8 @@ UI_SCREEN = 0;
     ) : (
       ( showSum == 0 ) ? (
         // Make sure that the sonogram is still updated if it's not currently being rendered.
-        processFFT(100, sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 0);  
-        processFFT(100, sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 0);
+        processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 0);  
+        processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 0);
       );
     
       sonogram.drawSono( fftwr, cmapidx * 2000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35 );    
@@ -2105,4 +2234,8 @@ UI_SCREEN = 0;
   
   // Finished
   update = 1;
+  
+  //gfx_x = 0;
+  //gfx_y = 0;
+  //gfx_printf("%d", __memtop());
 );
