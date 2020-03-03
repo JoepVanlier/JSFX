@@ -1,8 +1,8 @@
 desc:Saike Swellotron
 tags: ambient, soundscape, long, reverb, convolution, stft
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Added chirp knob. Fixed bug that caused HF buildup from swell when pitch shifting. Added secondary diffusion mode.
+changelog: Added width and angle controls. Minor fix chirp.
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 
@@ -21,6 +21,8 @@ slider10:ice=0<0,1,.00001>-Ice
 slider11:ice_panned=0<0,1,1>-IcePanned
 slider12:diff_mode=0<0,1,1>-Diffusion Mode
 slider13:noise_mode=0<0,5,.001>-Noise mode
+slider14:width=1<0,1,.001>-Width
+slider15:theta=0<-3.14,3.14,.001>-Theta
 
 @init
 //memset(0, 0, 16*MAX_FFT_SIZE);
@@ -38,7 +40,7 @@ global(displacement, time_constant, pitch, aether, fft_size_index,
        fft_bin2, left2_real, ice, ice_panned, 
        nrg, octaver, diffusion, diff, displacement, mode, non_linear,
        fft_velocity, fft_height_gradient, fft_velocity_prediction, diff_mode,
-       noise_mode)
+       noise_mode, width)
 local(fft_bin, a, mag_L, mag_R,
       g_rand1, g_rand2, g_rand3, g_rand4,
       left_real, left_imag, right_real, right_imag,
@@ -53,8 +55,10 @@ local(fft_bin, a, mag_L, mag_R,
   atk = 10*k;
   
   g_rand1 = rand();
-  g_rand2 = rand();
+  g_rand2 = g_rand1 * (1.0 - width) + width * rand();
   g_rand3 = exp(-to_10 * (1.0+noise_mode));
+  phaseL = rand()*2*$pi;
+  phaseR = phaseL * (1.0 - width) + width * rand();
   loop(fft_size/2,
     fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
 
@@ -102,7 +106,7 @@ local(fft_bin, a, mag_L, mag_R,
       phaseR += sin(g_rand3*fft_bin+g_rand2)*2*$pi;
     ) : (
       phaseL = 2*$pi*rand();
-      phaseR = 2*$pi*rand();
+      phaseR = phaseL + width * 2 * $pi * rand();
     );
     
     out_left_real = cos(phaseL) * mL;
@@ -380,12 +384,11 @@ Saturation ? (
 outl = output_buffer[output_index*2];
 outr = output_buffer[output_index*2 + 1];
 
-tc = tc + .0001;
-tX = .5 + .5 * sin(tc);
-tY = cos(4*tc);
-
-spl0 = outl;
-spl1 = outr;
+ctheta = 0.999 * ctheta + 0.001 * theta;
+ct = cos(ctheta);
+st = sin(ctheta);
+spl0 = outl * ct - outr * st;
+spl1 = outl * st + outr * ct;
 
 abs(spl0) > 0.001 ? deadtime = 0;
 output_buffer[output_index*2] = 0;
@@ -393,7 +396,7 @@ output_buffer[output_index*2 + 1] = 0;
 
 buffer_index = (buffer_index + 1)%buffer_length;
 
-@gfx 1000 120
+@gfx 1222 120
 render_time = render_time + 1/60;
 
 function clamp(value, mini, maxi)
@@ -680,6 +683,8 @@ AetherKnob.active = 1;
 PitchKnob.active = 1;
 IceKnob.active = 1;
 ChirpKnob.active = 1;
+WidthKnob.active = 1;
+AngleKnob.active = 1;
 
 adapt_min = -2;
 adapt_max = 0;
@@ -697,8 +702,12 @@ pitch_min = -1;
 pitch_max = 1;
 noise_max = 5;
 noise_min = 0;
+width_min = 0;
+width_max = 1;
+theta_min = -3.14;
+theta_max = 3.14;
 
-sim_w = 1000;
+sim_w = 1225;
 sim_h = 120;
 xs = 3;
 Nx = sim_w/xs;
@@ -792,6 +801,8 @@ ScorchKnob.value = (scorch - scorch_min) / (scorch_max - scorch_min);
 AetherKnob.value = (aether - aether_min) / (aether_max - aether_min);
 PitchKnob.value = (pitch - pitch_min) / (pitch_max - pitch_min);
 ChirpKnob.value = (noise_mode - noise_min) / (noise_max - noise_min);
+WidthKnob.value = (width - width_min) / (width_max - width_min);
+AngleKnob.value = (theta - theta_min) / (theta_max - theta_min);
 IceKnob.value = ice;
 
 AdaptKnob.drawKnob(x, y, ksize*(1+scaling), "Adapt", "Adaptivity to incoming sound.", 0);  
@@ -805,6 +816,9 @@ PitchKnob.drawKnob(x+7*dx, y, ksize*(1+scaling), "Pitch", "Pitch shift.", c_offs
 IcePan.drawToggle(x+6*dx-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), toggleSize, toggleSize, ice_panning, .3, .2, .2, 1, .3, .4, .7, 1, "Pan icey spectral peaks.");
 DiffMode.drawToggle(x+3*dx-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), toggleSize, toggleSize, diff_mode, .3, .2, .2, 1, .3, .4, .7, 1, "Diffusion mode.\n\nSwitches between a spectral diffusion\nand spectral wave propagation model.");
 ChirpKnob.drawKnob(x+8*dx, y, ksize*(1+scaling), "Chirp", "Chirpiness.\n\nNonzero produces frequency\ndependent phases.", c_offset*8);
+WidthKnob.drawKnob(x+9*dx, y, ksize*(1+scaling), "Width", "Width.\n\nStereo field width.", c_offset*9);
+AngleKnob.drawKnob(x+10*dx, y, ksize*(1+scaling), "Angle", "Angle.\nStereo field angle..", c_offset*10);
+
 
 capped = 0;
 AdaptKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( time_constant = AdaptKnob.value * (adapt_max - adapt_min) + adapt_min; ); forceUpdate = 1; capped = 1; );
@@ -815,9 +829,12 @@ ScorchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( sco
 AetherKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( aether = AetherKnob.value * (aether_max - aether_min) + aether_min; ); forceUpdate = 1; capped = 1; );
 PitchKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( pitch = PitchKnob.value * (pitch_max - pitch_min) + pitch_min; ); forceUpdate = 1; capped = 1; );
 IceKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( ice = IceKnob.value; ); forceUpdate = 1; capped = 1; );
-ChirpKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( noise_mode = ChirpKnob.value * (noise_max - noise_min) + noise_min; ); forceUpdate = 1; capped = 1; );
+ChirpKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( noise_mode = ChirpKnob.value * (noise_max - noise_min) + noise_min; ); forceUpdate = 1; capped = 1; );
 ice_panning = IcePan.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 diff_mode = DiffMode.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+WidthKnob.processMouse(mouse_x, mouse_y, mouse_cap, 1) ? ( slider_automate( width = WidthKnob.value * (width_max - width_min) + width_min; ); forceUpdate = 1; capped = 1; );
+AngleKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( theta = AngleKnob.value * (theta_max - theta_min) + theta_min; ); forceUpdate = 1; capped = 1; );
 
 gfx_x = 5;
 gfx_y = 5;
