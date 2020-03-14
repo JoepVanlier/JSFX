@@ -1,14 +1,15 @@
 desc:Saike Tanh Saturation with anti aliasing
 tags: saturation distortion anti-aliased
-version: 1.10
-author: Joep Vanlier
+version: 1.11
+author: Joep Vanlier, Erich M. Burg
 changelog: 
-  + Re-added block, needed after all.
+  + Added sample-accurate automation. Added parameter smoothing (thanks Erbird!).
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
 Proceedings of the 19th International Conference on Digital Audio Effects (DAFx-16), Brno, Czech Republic, September 5–9, 2016
-Special thanks to Erich M. Burg for coming up with the odd function mirror trick to improve numerical stability.
+Special thanks to Erich M. Burg for coming up with the odd function mirror trick to improve numerical stability and
+parameter smoothing.
 
 in_pin:left input
 in_pin:right input
@@ -19,13 +20,111 @@ slider1:0<-6,24,1>Gain (dB)
 slider2:0<-18,0,1>Ceiling (dB)
 slider3:1<0,2,1{No,Constant,Linear (BETA)}>Antialias mode
 slider4:0<0,1,1>Fix DC?
+slider5:smooth_time=50<0,100,.001>Inertia (ms)
+
+@init
+ function smooth_parameter(target)
+  instance(s, coeff)
+  global(maxo, mino)
+  local(y, v)
+  (
+    v = coeff*(target - s);
+    y = v + s;
+    s = y + v;
+    y
+  );
+  
+  function initialize_smoother(cutoff)
+  instance(coeff)
+  global(srate)
+  local(g)
+  ( 
+    g = tan($pi*cutoff/srate);
+    coeff = g/(1+g);  
+  );
+
+  function interpolator_init(slider_idx)
+  instance(next_val)
+  local()
+  global()
+  (
+    next_val = slider(slider_idx);
+  );
+
+  function interpolator_block(slider_idx)
+  instance(delta, next_changepoint_t, next_val)
+  local(next_changepoint_y)
+  global(samplesblock)
+  (
+    next_changepoint_t = slider_next_chg(slider_idx, next_changepoint_y);
+    next_changepoint_t > 0 ? 
+    (
+      next_val = slider(slider_idx);
+    ) : (
+      next_changepoint_y = slider(slider_idx);
+      next_changepoint_t = samplesblock;
+    );
+    
+    delta = (next_changepoint_y - next_val) / next_changepoint_t;
+  );
+  
+  function interpolate(slider_idx)
+  instance(delta, next_changepoint_t, next_val)
+  local(current_value, next_changepoint_y)
+  global(current_sample)
+  (
+    current_value = next_val;
+    current_sample == next_changepoint_t ? 
+    (
+      delta = 0;
+      next_changepoint_t = slider_next_chg(slider_idx, next_changepoint_y);
+      delta = next_changepoint_t > current_sample ? (next_changepoint_y - current_value) / (next_changepoint_t-current_sample) : 0;
+    );
+    
+    next_val = current_value + delta;
+    current_value
+  );
+  
+  function initialize_interpolators()
+  (
+    gain_interpolator.interpolator_init(1);
+    ceiling_interpolator.interpolator_init(2);
+    new_cutoff = 1000.0/(smooth_time);
+    (new_cutoff != cutoff) ? (
+      cutoff = new_cutoff;
+      gain_smoother.initialize_smoother(cutoff);
+      ceiling_smoother.initialize_smoother(cutoff);
+      gain_smoother.s = slider1;
+      ceiling_smoother.s = slider2;
+    );
+  );
+  
+  initialize_interpolators();
 
 @slider
-preamp      = 10^(slider1/20);
-ceiling     = 10^(-slider2/20);
-inv_ceiling = 10^(slider2/20);
+  initialize_interpolators();
 
-@sample 
+@block
+  current_sample = 0;
+  gain_interpolator.interpolator_block(1);
+  ceiling_interpolator.interpolator_block(2);
+
+@sample
+  /* Sample accurate interpolation */
+  current_gain = gain_interpolator.interpolate(1);
+  current_ceiling = ceiling_interpolator.interpolate(2);
+  
+  smooth_time ? (
+    current_gain = gain_smoother.smooth_parameter(current_gain);
+    current_ceiling = ceiling_smoother.smooth_parameter(current_ceiling);
+  );
+  
+  // exp((log(10)/20) * X) is equivalent but faster than 10^(X/20), which is why we use this form
+  log10d20_conversion  = .11512925464970228420089957273422; //log(10)/20;
+  preamp      = exp(log10d20_conversion * current_gain);
+  ceiling     = exp(-log10d20_conversion * current_ceiling);
+  inv_ceiling = 1.0 / ceiling;
+
   function F0(x)
   local()
   global()
@@ -142,17 +241,17 @@ inv_ceiling = 10^(slider2/20);
  
     diff1     = ( xn - xnm1 );
     diff2     = ( xnm2 - xnm1 );
-    eps       = .2;
+    eps       = .002;
       
     term1     = (abs(diff1) > eps) ? (
-      idiff = 1 / (diff1*diff1);
+      idiff = 1.0 / (diff1*diff1);
       ( xn * ( F0_xn - F0_xnm1 ) - (F1_xn - F1_xnm1) ) * idiff
     ) : (
       .5 * tanh((xn + 2*xnm1)*.33333333333333333333333333333)
     );
     
     term2     = (abs(diff2) > eps) ? (
-      idiff = 1 / (diff2*diff2);
+      idiff = 1.0 / (diff2*diff2);
       ( xnm2 * ( F0_xnm2 - F0_xnm1 ) - (F1_xnm2 - F1_xnm1) ) * idiff
     ) : (
       .5 * tanh((xnm2 + 2*xnm1)*.33333333333333333333333333333)
@@ -235,3 +334,4 @@ inv_ceiling = 10^(slider2/20);
 
   lastmode = slider3;
   
+  current_sample += 1;
