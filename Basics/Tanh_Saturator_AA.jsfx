@@ -1,9 +1,9 @@
 desc:Saike Tanh Saturation with anti aliasing
 tags: saturation distortion anti-aliased
-version: 1.13
+version: 1.14
 author: Joep Vanlier, Erich M. Burg
 changelog: 
-  + Added allpass to fix group delay for the constant anti-aliasing mode.
+  + Added matched shelf to correct for HF loss due to linear interpolation.
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -21,8 +21,29 @@ slider2:0<-18,0,1>Ceiling (dB)
 slider3:1<0,2,1{No,Constant,Linear (BETA)}>Continuous antialias mode
 slider4:0<0,1,1>Fix DC?
 slider5:smooth_time=50<0,100,.001>Inertia (ms)
+slider6:shelf=0<0,1,1>Correct for HF loss
 
 @init
+  function generate_shelf()
+  local(alpha, beta, twodivpisq, f, ifcsq, theta, b, G)
+  global()
+  instance(a1, a2, b0, b1)
+  (
+    G = 2.20;  
+    f = 2.5;
+    theta = 1.0 - cos($pi * f);
+    twodivpisq = 2.0 / $pi * $pi;
+    
+    ifcsq = 1.0/(f*f);
+    alpha = twodivpisq * ( ifcsq + ifcsq / G ) - theta;
+    beta = twodivpisq * (ifcsq + G * ifcsq ) - theta;
+    
+    a1 = - alpha / ( 1.0 + alpha + sqrt(1.0 + 2.0*alpha) );
+    b = - beta / ( 1.0 + beta + sqrt(1.0 + 2.0*beta) );
+    b0 = (1.0 + a1) / (1.0 + b);
+    b1 = b * b0;
+  );
+
  function smooth_parameter(target)
   instance(s, coeff)
   global(maxo, mino)
@@ -97,6 +118,9 @@ slider5:smooth_time=50<0,100,.001>Inertia (ms)
       gain_smoother.s = slider1;
       ceiling_smoother.s = slider2;
     );
+    
+    l_shelf.generate_shelf();
+    r_shelf.generate_shelf();
   );
   
   initialize_interpolators();
@@ -310,6 +334,41 @@ slider5:smooth_time=50<0,100,.001>Inertia (ms)
     prev=x;
     DC_fixed
   );
+  
+  function half_delay(x)
+  local(nu)
+  global()
+  instance(y0, d0)
+  (
+   // Allpass filter to fix phase issues due to the half sample group delay induced by the continuous convolution
+   // nu = (1.0-0.5)/(1.0+0.5);
+   nu = 0.333333333333333333333333;
+   y0 = nu * x + d0 - nu * y0;
+   d0 = x;
+   y0
+  );
+  
+  function s_delay(x)
+  local(nu)
+  global()
+  instance(y0, d0)
+  (
+   // Allpass filter to fix phase issues due to the group delay
+   nu = 0.036;
+   y0 = nu * x + d0 - nu * y0;
+   d0 = x;
+   y0
+  ); 
+  
+  function shelf_correct(x)
+  local()
+  global()
+  instance(y0, d0, theta, a1, a2, b0, b1)
+  (
+    y0 = b0 * x + b1 * d0 - a1 * y0;
+    d0 = x;
+    y0;
+  );
 
   spl0 *= preamp;
   spl1 *= preamp;
@@ -346,17 +405,16 @@ slider5:smooth_time=50<0,100,.001>Inertia (ms)
     spl1 *= inv_ceiling;
   );
 
-  // Allpass filter to fix phase issues due to the half sample group delay induced by the continuous convolution
   slider3 == 1 ? (
-    // nu = (1.0-0.5)/(1.0+0.5);
-    nu = 0.333333333333333333333333;
-    y0_L = nu * spl0 + d0_L - nu * y0_L;
-    d0_L = spl0;
-    spl0 = y0_L;
-    
-    y0_R = nu * spl1 + d0_R - nu * y0_R;
-    d0_R = spl1;
-    spl1 = y0_R;  
+    shelf ? (
+      spl0 = l_delay.s_delay(spl0);
+      spl1 = r_delay.s_delay(spl1);
+      spl0 = l_shelf.shelf_correct(spl0);
+      spl1 = r_shelf.shelf_correct(spl1);
+    ) : (
+      spl0 = l_delay.half_delay(spl0);
+      spl1 = r_delay.half_delay(spl1);
+    );
   );
   
   lastmode = slider3;
