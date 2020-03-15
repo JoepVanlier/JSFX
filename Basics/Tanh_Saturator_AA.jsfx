@@ -1,9 +1,9 @@
 desc:Saike Tanh Saturation with anti aliasing
 tags: saturation distortion anti-aliased
-version: 1.14
+version: 1.15
 author: Joep Vanlier, Erich M. Burg
 changelog: 
-  + Added matched shelf to correct for HF loss due to linear interpolation.
+  + Added some other waveshaping options. Moved location of the phase correction.
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -22,6 +22,7 @@ slider3:1<0,2,1{No,Constant,Linear (BETA)}>Continuous antialias mode
 slider4:0<0,1,1>Fix DC?
 slider5:smooth_time=50<0,100,.001>Inertia (ms)
 slider6:shelf=0<0,1,1>Correct for HF loss
+slider7:func=0<0,3,1{tanh,clip,sin}>Shaping function
 
 @init
   function generate_shelf()
@@ -29,7 +30,7 @@ slider6:shelf=0<0,1,1>Correct for HF loss
   global()
   instance(a1, a2, b0, b1)
   (
-    G = 2.20;  
+    G = 2.20;
     f = 2.5;
     theta = 1.0 - cos($pi * f);
     twodivpisq = 2.0 / $pi * $pi;
@@ -43,6 +44,29 @@ slider6:shelf=0<0,1,1>Correct for HF loss
     b0 = (1.0 + a1) / (1.0 + b);
     b1 = b * b0;
   );
+  
+  function generate_shelf_alternate()
+  local(alpha, beta, twodivpisq, f, ifcsq, theta, b, G)
+  global()
+  instance(a1, a2, b0, b1)
+  (
+    G = 2.20;
+    f = 2.5;
+    theta = 1.0 - cos($pi * f);
+    twodivpisq = 2.0 / $pi * $pi;
+    
+    ifcsq = 1.0/(f*f);
+    alpha = twodivpisq * ( ifcsq + ifcsq / G ) - theta;
+    beta = twodivpisq * (ifcsq + G * ifcsq ) - theta;
+    
+    alpha = twodivpisq * ( 1 + ifcsq / G ) - .5;
+    beta = twodivpisq * ( 1 + G * ifcsq ) - .5;
+        
+    a1 = - alpha / ( 1.0 + alpha + sqrt(1.0 + 2.0*alpha) );
+    b = - beta / ( 1.0 + beta + sqrt(1.0 + 2.0*beta) );
+    b0 = (1.0 + a1) / (1.0 + b);
+    b1 = b * b0;
+  );  
 
  function smooth_parameter(target)
   instance(s, coeff)
@@ -118,7 +142,6 @@ slider6:shelf=0<0,1,1>Correct for HF loss
       gain_smoother.s = slider1;
       ceiling_smoother.s = slider2;
     );
-    
     l_shelf.generate_shelf();
     r_shelf.generate_shelf();
   );
@@ -151,7 +174,7 @@ slider6:shelf=0<0,1,1>Correct for HF loss
   /* Sample accurate interpolation */
   current_gain = gain_interpolator.interpolate(1);
   current_ceiling = ceiling_interpolator.interpolate(2);
-  
+    
   smooth_time ? (
     current_gain = gain_smoother.smooth_parameter(current_gain);
     current_ceiling = ceiling_smoother.smooth_parameter(current_ceiling);
@@ -163,7 +186,39 @@ slider6:shelf=0<0,1,1>Correct for HF loss
   ceiling     = exp(-log10d20_conversion * current_ceiling);
   inv_ceiling = 1.0 / ceiling;
 
-  function F0(x)
+  function F0_sin(x)
+  (
+    x > 1.0 ? x + 2.0/$pi - 1.0 : 
+    x < -1.0 ? -x + 2.0/$pi - 1.0 :
+    -2.0*(cos(0.5*$pi*x)-1.0)/$pi
+  );
+
+  function shape_sin(x)
+  local()
+  global()
+  (
+    x > 1.0 ? 1.0 : 
+    x < -1.0 ? -1.0 :
+    sin(.5*$pi*x)
+  );
+
+  function F0_clip(x)
+  (
+    x > 1.0 ? x - 0.5 : 
+    x < -1.0 ? -x - 0.5 :
+    .5*x*x
+  );
+
+  function clip(x)
+  local()
+  global()
+  (
+    x > 1.0 ? 1.0 : 
+    x < -1.0 ? -1.0 :
+    x
+  );
+
+  function F0_tanh(x)
   local()
   global()
   (
@@ -272,7 +327,7 @@ slider6:shelf=0<0,1,1>Correct for HF loss
   F0_xn, F1_xn, diff1, diff2, term1, term2, idiff)
   (
     absxn     = abs(xn);
-    F0_xn     = F0(absxn);
+    F0_xn     = F0_tanh(absxn);
     
     hpi12     = 0.4112335167120566;  // .5 * pi*pi / 12
     F1_xn     = (F1(absxn) - hpi12)*sign(xn) + hpi12;
@@ -308,12 +363,12 @@ slider6:shelf=0<0,1,1>Correct for HF loss
   );
   
   function antialiased_tanh_rect(x)
-  local(eps, F0_xn)
+  local(eps, F0_xn, diff)
   global()
-  instance(antialias, F0_xnm1, xnm1,diff)
+  instance(antialias, F0_xnm1, xnm1)
   (
     (
-      F0_xn     = F0(abs(x));
+      F0_xn     = F0_tanh(abs(x));
       diff      = ( x - xnm1 );
       eps       = 0.0000000001;
       antialias = (abs(diff) > eps) ? ( F0_xn - F0_xnm1 ) / diff : tanh(.5*(x+xnm1));
@@ -322,6 +377,42 @@ slider6:shelf=0<0,1,1>Correct for HF loss
     F0_xnm1   = F0_xn;
     xnm1      = x;
 
+    antialias
+  );
+  
+  function antialiased_clip_rect(x)
+  local(eps, F0_xn)
+  global()
+  instance(antialias, F0_xnm1, xnm1,diff)
+  (
+    (
+      F0_xn     = F0_clip(abs(x));
+      diff      = ( x - xnm1 );
+      eps       = 0.0000000001;
+      antialias = (abs(diff) > eps) ? ( F0_xn - F0_xnm1 ) / diff : clip(.5*(x+xnm1));
+    );
+    
+    F0_xnm1   = F0_xn;
+    xnm1      = x;
+  
+    antialias
+  );
+  
+  function antialiased_sin_rect(x)
+  local(eps, F0_xn)
+  global()
+  instance(antialias, F0_xnm1, xnm1,diff)
+  (
+    (
+      F0_xn     = F0_sin(x);
+      diff      = ( x - xnm1 );
+      eps       = 0.0000000001;
+      antialias = (abs(diff) > eps) ? ( F0_xn - F0_xnm1 ) / diff : shape_sin(.5*(x+xnm1));
+    );
+    
+    F0_xnm1   = F0_xn;
+    xnm1      = x;
+  
     antialias
   );
 
@@ -370,21 +461,47 @@ slider6:shelf=0<0,1,1>Correct for HF loss
     y0;
   );
 
-  spl0 *= preamp;
-  spl1 *= preamp;
+  total_gain = preamp * ceiling;
+  spl0 *= total_gain;
+  spl1 *= total_gain;  
   
-  spl0 *= ceiling;
-  spl1 *= ceiling;  
+  slider3 == 1 ? (
+    shelf ? (
+      spl0 = l_delay.s_delay(spl0);
+      spl1 = r_delay.s_delay(spl1);
+    ) : (
+      spl0 = l_delay.half_delay(spl0);
+      spl1 = r_delay.half_delay(spl1);
+    );
+  );  
   
-  ( slider3 == 2 ) ? (
-    spl0 = ch0.antialiased_tanh_linear(spl0);
-    spl1 = ch1.antialiased_tanh_linear(spl1);
-  ) : ( slider3 == 1 ) ? (
-    spl0 = ch0.antialiased_tanh_rect(spl0);
-    spl1 = ch1.antialiased_tanh_rect(spl1);
-  ) : (
-    spl0 = tanh(spl0);
-    spl1 = tanh(spl1);
+  ( func == 0 ) ? (
+    ( slider3 == 2 ) ? (
+      spl0 = ch0.antialiased_tanh_linear(spl0);
+      spl1 = ch1.antialiased_tanh_linear(spl1);
+    ) : ( slider3 == 1 ) ? (
+      spl0 = ch0.antialiased_tanh_rect(spl0);
+      spl1 = ch1.antialiased_tanh_rect(spl1);
+    ) : (
+      spl0 = tanh(spl0);
+      spl1 = tanh(spl1);
+    );
+  ) : ( func == 1 ) ? (
+    ( slider3 == 0 ) ? (
+      spl0 = clip(spl0);
+      spl1 = clip(spl1);
+    ) : (
+      spl0 = ch0_c.antialiased_clip_rect(spl0);
+      spl1 = ch1_c.antialiased_clip_rect(spl1);
+    );
+  ) : ( func == 2 ) ? (
+    ( slider3 == 0 ) ? (
+      spl0 = shape_sin(spl0);
+      spl1 = shape_sin(spl1);
+    ) : (
+      spl0 = ch0_s.antialiased_sin_rect(spl0);
+      spl1 = ch1_s.antialiased_sin_rect(spl1);
+    );
   );
   
   slider4 ? (
@@ -396,6 +513,11 @@ slider6:shelf=0<0,1,1>Correct for HF loss
     block = 6;
   );
 
+  (slider3==1) && shelf ? (
+    spl0 = l_shelf.shelf_correct(spl0);
+    spl1 = r_shelf.shelf_correct(spl1);
+  );
+
   ( block > 0 ) ? (
     block = block - 1;
     spl0 = 0;
@@ -403,19 +525,7 @@ slider6:shelf=0<0,1,1>Correct for HF loss
   ) : (
     spl0 *= inv_ceiling;
     spl1 *= inv_ceiling;
-  );
-
-  slider3 == 1 ? (
-    shelf ? (
-      spl0 = l_delay.s_delay(spl0);
-      spl1 = r_delay.s_delay(spl1);
-      spl0 = l_shelf.shelf_correct(spl0);
-      spl1 = r_shelf.shelf_correct(spl1);
-    ) : (
-      spl0 = l_delay.half_delay(spl0);
-      spl1 = r_delay.half_delay(spl1);
-    );
-  );
+  );  
   
   lastmode = slider3;
   current_sample += 1;
