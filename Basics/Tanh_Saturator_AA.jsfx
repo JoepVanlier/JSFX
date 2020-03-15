@@ -1,9 +1,9 @@
 desc:Saike Tanh Saturation with anti aliasing
 tags: saturation distortion anti-aliased
-version: 1.12
+version: 1.13
 author: Joep Vanlier, Erich M. Burg
 changelog: 
-  + Fixed epsilon saturator
+  + Added allpass to fix group delay for the constant anti-aliasing mode.
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
@@ -18,7 +18,7 @@ out_pin:right output
 
 slider1:0<-6,24,1>Gain (dB)
 slider2:0<-18,0,1>Ceiling (dB)
-slider3:1<0,2,1{No,Constant,Linear (BETA)}>Antialias mode
+slider3:1<0,2,1{No,Constant,Linear (BETA)}>Continuous antialias mode
 slider4:0<0,1,1>Fix DC?
 slider5:smooth_time=50<0,100,.001>Inertia (ms)
 
@@ -103,6 +103,20 @@ slider5:smooth_time=50<0,100,.001>Inertia (ms)
 
 @slider
   initialize_interpolators();
+  
+  (slider3 == 2) ? (
+    pdc_bot_ch = 0;
+    pdc_top_ch = 2;
+    pdc_delay = 1;
+  ) : (slider3 == 1) ? (
+    pdc_bot_ch = 0;
+    pdc_top_ch = 2;
+    pdc_delay = 1;
+  ) : (slider3 == 0) ? (
+    pdc_bot_ch = 0;
+    pdc_top_ch = 2;
+    pdc_delay = 0;
+  );
 
 @block
   current_sample = 0;
@@ -236,7 +250,7 @@ slider5:smooth_time=50<0,100,.001>Inertia (ms)
     absxn     = abs(xn);
     F0_xn     = F0(absxn);
     
-    hpi12     = 0.4112335167120566; // .5 * pi*pi / 12
+    hpi12     = 0.4112335167120566;  // .5 * pi*pi / 12
     F1_xn     = (F1(absxn) - hpi12)*sign(xn) + hpi12;
  
     diff1     = ( xn - xnm1 );
@@ -332,6 +346,18 @@ slider5:smooth_time=50<0,100,.001>Inertia (ms)
     spl1 *= inv_ceiling;
   );
 
-  lastmode = slider3;
+  // Allpass filter to fix phase issues due to the half sample group delay induced by the continuous convolution
+  slider3 == 1 ? (
+    // nu = (1.0-0.5)/(1.0+0.5);
+    nu = 0.333333333333333333333333;
+    y0_L = nu * spl0 + d0_L - nu * y0_L;
+    d0_L = spl0;
+    spl0 = y0_L;
+    
+    y0_R = nu * spl1 + d0_R - nu * y0_R;
+    d0_R = spl1;
+    spl1 = y0_R;  
+  );
   
+  lastmode = slider3;
   current_sample += 1;
