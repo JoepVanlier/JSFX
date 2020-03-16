@@ -1,15 +1,18 @@
 desc:Saike Tanh Saturation with anti aliasing
 tags: saturation distortion anti-aliased
-version: 1.15
+version: 1.16
 author: Joep Vanlier, Erich M. Burg
 changelog: 
-  + Added some other waveshaping options. Moved location of the phase correction.
+  + Added oversampling
+provides: upsampler/*
 license: MIT
 
 Uses technique from: Parker et al, "REDUCING THE ALIASING OF NONLINEAR WAVESHAPING USING CONTINUOUS-TIME CONVOLUTION",
 Proceedings of the 19th International Conference on Digital Audio Effects (DAFx-16), Brno, Czech Republic, September 5–9, 2016
 Special thanks to Erich M. Burg for coming up with the odd function mirror trick to improve numerical stability and
 parameter smoothing.
+
+import tanh_upsampler.jsfx-inc
 
 in_pin:left input
 in_pin:right input
@@ -21,8 +24,9 @@ slider2:0<-18,0,1>Ceiling (dB)
 slider3:1<0,2,1{No,Constant,Linear (BETA)}>Continuous antialias mode
 slider4:0<0,1,1>Fix DC?
 slider5:smooth_time=50<0,100,.001>Inertia (ms)
-slider6:shelf=0<0,1,1>Correct for HF loss
+slider6:shelf=1<0,1,1>Correct for HF loss
 slider7:func=0<0,3,1{tanh,clip,sin}>Shaping function
+slider8:Oversampling=1<1,4,1>Oversampling
 
 @init
   function generate_shelf()
@@ -152,20 +156,21 @@ slider7:func=0<0,3,1{tanh,clip,sin}>Shaping function
   initialize_interpolators();
   
   (slider3 == 2) ? (
-    pdc_bot_ch = 0;
-    pdc_top_ch = 2;
-    pdc_delay = 1;
+    target_pdc = 1 + getFIRdelay(overSampling);
   ) : (slider3 == 1) ? (
-    pdc_bot_ch = 0;
-    pdc_top_ch = 2;
-    pdc_delay = 1;
+    target_pdc = 1 + getFIRdelay(overSampling);
   ) : (slider3 == 0) ? (
-    pdc_bot_ch = 0;
-    pdc_top_ch = 2;
-    pdc_delay = 0;
+    target_pdc = getFIRdelay(overSampling);
   );
 
 @block
+  target_pdc != current_pdc ? (
+    pdc_bot_ch = 0;
+    pdc_top_ch = 2;
+    pdc_delay = target_pdc;
+    current_pdc = target_pdc;
+  );
+
   current_sample = 0;
   gain_interpolator.interpolator_block(1);
   ceiling_interpolator.interpolator_block(2);
@@ -460,47 +465,79 @@ slider7:func=0<0,3,1{tanh,clip,sin}>Shaping function
     d0 = x;
     y0;
   );
+  
+  function processNonLinearity(inL, inR)
+  (
+    ( func == 0 ) ? (
+      ( slider3 == 2 ) ? (
+        outL = ch0.antialiased_tanh_linear(inL);
+        outR = ch1.antialiased_tanh_linear(inR);
+      ) : ( slider3 == 1 ) ? (
+        outL = ch0.antialiased_tanh_rect(inL);
+        outR = ch1.antialiased_tanh_rect(inR);
+      ) : (
+        outL = tanh(inL);
+        outR = tanh(inR);
+      );
+    ) : ( func == 1 ) ? (
+      ( slider3 == 0 ) ? (
+        outL = clip(inL);
+        outR = clip(inR);
+      ) : (
+        outL = ch0_c.antialiased_clip_rect(inL);
+        outR = ch1_c.antialiased_clip_rect(inR);
+      );
+    ) : ( func == 2 ) ? (
+      ( slider3 == 0 ) ? (
+        outL = shape_sin(inL);
+        outR = shape_sin(inR);
+      ) : (
+        outL = ch0_s.antialiased_sin_rect(inL);
+        outR = ch1_s.antialiased_sin_rect(inR);
+      );
+    );
+  );
 
   total_gain = preamp * ceiling;
   spl0 *= total_gain;
   spl1 *= total_gain;  
   
+  shelf_active = shelf && (oversampling == 1);
+  
   slider3 == 1 ? (
-    shelf ? (
+    shelf_active ? (
       spl0 = l_delay.s_delay(spl0);
       spl1 = r_delay.s_delay(spl1);
     ) : (
       spl0 = l_delay.half_delay(spl0);
       spl1 = r_delay.half_delay(spl1);
     );
-  );  
+  );    
   
-  ( func == 0 ) ? (
-    ( slider3 == 2 ) ? (
-      spl0 = ch0.antialiased_tanh_linear(spl0);
-      spl1 = ch1.antialiased_tanh_linear(spl1);
-    ) : ( slider3 == 1 ) ? (
-      spl0 = ch0.antialiased_tanh_rect(spl0);
-      spl1 = ch1.antialiased_tanh_rect(spl1);
-    ) : (
-      spl0 = tanh(spl0);
-      spl1 = tanh(spl1);
-    );
-  ) : ( func == 1 ) ? (
-    ( slider3 == 0 ) ? (
-      spl0 = clip(spl0);
-      spl1 = clip(spl1);
-    ) : (
-      spl0 = ch0_c.antialiased_clip_rect(spl0);
-      spl1 = ch1_c.antialiased_clip_rect(spl1);
-    );
-  ) : ( func == 2 ) ? (
-    ( slider3 == 0 ) ? (
-      spl0 = shape_sin(spl0);
-      spl1 = shape_sin(spl1);
-    ) : (
-      spl0 = ch0_s.antialiased_sin_rect(spl0);
-      spl1 = ch1_s.antialiased_sin_rect(spl1);
+  ( Oversampling == 1 ) ? (
+    processNonLinearity(spl0, spl1);
+    spl0 = outL;
+    spl1 = outR;
+  ) : (
+    inL = spl0;
+    inR = spl1;
+    upsampleL.updateUpHist(overSampling, inL);
+    upsampleR.updateUpHist(overSampling, inR);
+    
+    f = 0;
+    loop(overSampling,
+      f += 1;
+      inL = overSampling*upsampleL.upSample(overSampling);
+      inR = overSampling*upsampleR.upSample(overSampling);
+  
+      processNonLinearity(inL, inR);
+      downL.updateDownHist(overSampling, outL);
+      downR.updateDownHist(overSampling, outR);
+      
+      ( f == 1 ) ? (
+        spl0 = downL.downSample(overSampling);
+        spl1 = downR.downSample(overSampling);
+      );
     );
   );
   
@@ -513,7 +550,7 @@ slider7:func=0<0,3,1{tanh,clip,sin}>Shaping function
     block = 6;
   );
 
-  (slider3==1) && shelf ? (
+  (slider3==1) && shelf_active ? (
     spl0 = l_shelf.shelf_correct(spl0);
     spl1 = r_shelf.shelf_correct(spl1);
   );
@@ -529,3 +566,4 @@ slider7:func=0<0,3,1{tanh,clip,sin}>Shaping function
   
   lastmode = slider3;
   current_sample += 1;
+
