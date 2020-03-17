@@ -1,8 +1,8 @@
 desc:Saike Swellotron
 tags: ambient, soundscape, long, reverb, convolution, stft
-version: 0.06
+version: 0.07
 author: Joep Vanlier
-changelog: Added width and angle controls. Minor fix chirp.
+changelog: Added input/output gain. Added secondary swell mode.
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 
@@ -23,9 +23,86 @@ slider12:diff_mode=0<0,1,1>-Diffusion Mode
 slider13:noise_mode=0<0,5,.001>-Noise mode
 slider14:width=1<0,1,.001>-Width
 slider15:theta=0<-3.14,3.14,.001>-Theta
+slider16:input_gain=0<-12,0,12>-Input Gain
+slider17:output_gain=0<-12,0,12>-Output Gain
+slider18:buffer_mode=0<0,1,1>-Buffer mode
 
 @init
-//memset(0, 0, 16*MAX_FFT_SIZE);
+ function smooth_parameter(target)
+  instance(s, coeff)
+  global(maxo, mino)
+  local(y, v)
+  (
+    v = coeff*(target - s);
+    y = v + s;
+    s = y + v;
+    y
+  );
+  
+  function initialize_smoother(cutoff)
+  instance(coeff)
+  global(srate)
+  local(g)
+  ( 
+    g = tan($pi*cutoff/srate);
+    coeff = g/(1+g);  
+  );
+
+  function interpolator_init(slider_idx)
+  instance(next_val)
+  local()
+  global()
+  (
+    next_val = slider(slider_idx);
+  );
+
+  function interpolator_block(slider_idx)
+  instance(delta, next_changepoint_t, next_val)
+  local(next_changepoint_y)
+  global(samplesblock)
+  (
+    next_changepoint_t = slider_next_chg(slider_idx, next_changepoint_y);
+    next_changepoint_t > 0 ? 
+    (
+      next_val = slider(slider_idx);
+    ) : (
+      next_changepoint_y = slider(slider_idx);
+      next_changepoint_t = samplesblock;
+    );
+    
+    delta = (next_changepoint_y - next_val) / next_changepoint_t;
+  );
+  
+  function interpolate(slider_idx)
+  instance(delta, next_changepoint_t, next_val)
+  local(current_value, next_changepoint_y)
+  global(current_sample)
+  (
+    current_value = next_val;
+    current_sample == next_changepoint_t ? 
+    (
+      delta = 0;
+      next_changepoint_t = slider_next_chg(slider_idx, next_changepoint_y);
+      delta = next_changepoint_t > current_sample ? (next_changepoint_y - current_value) / (next_changepoint_t-current_sample) : 0;
+    );
+    
+    next_val = current_value + delta;
+    current_value
+  );
+  
+  function initialize_interpolators()
+  (
+    input_gain_interpolator.interpolator_init(16);
+    output_gain_interpolator.interpolator_init(17);
+    new_cutoff = 20.0;
+    (new_cutoff != cutoff) ? (
+      cutoff = new_cutoff;
+      input_gain_smoother.initialize_smoother(cutoff);
+      output_gain_smoother.initialize_smoother(cutoff);
+      input_gain_smoother.s = input_gain;
+      output_gain_smoother.s = output_gain;
+    );
+  );
 
 function tanh(x)
 local()
@@ -40,7 +117,7 @@ global(displacement, time_constant, pitch, aether, fft_size_index,
        fft_bin2, left2_real, ice, ice_panned, 
        nrg, octaver, diffusion, diff, displacement, mode, non_linear,
        fft_velocity, fft_height_gradient, fft_velocity_prediction, diff_mode,
-       noise_mode, width)
+       noise_mode, width, buffer_mode)
 local(fft_bin, a, mag_L, mag_R,
       g_rand1, g_rand2, g_rand3, g_rand4,
       left_real, left_imag, right_real, right_imag,
@@ -84,11 +161,13 @@ local(fft_bin, a, mag_L, mag_R,
     mag_R = sqrt(mag1_R * mag2_R);
  
     // The actual dynamical model
-    mL = nrg[2*fft_bin]    += atk*mag_L - k*nrg[2*fft_bin];
-    mR = nrg[2*fft_bin+1]  += atk*mag_R - k*nrg[2*fft_bin+1];
-    
-    //mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], mag_L);
-    //mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], mag_R);
+    buffer_mode ? (
+      mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], 5*mag_L);
+      mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], 5*mag_R);
+    ) : (
+      mL = nrg[2*fft_bin]    += atk*mag_L - k*nrg[2*fft_bin];
+      mR = nrg[2*fft_bin+1]  += atk*mag_R - k*nrg[2*fft_bin+1];
+    );
     
     pitch ? (
       displacement = 2*floor(pitch * fft_bin);
@@ -279,6 +358,10 @@ function window(r) local(s, s2, gaussian_width, x) (
 );
 
 fft_size = 0;
+initialize_interpolators();
+
+@slider
+initialize_interpolators();
 
 @block
 overlap_factor = 6;
@@ -302,7 +385,21 @@ pdc_delay = fft_size;
 pdc_bot_ch = 0;
 pdc_top_ch = 4;
 
+input_gain_interpolator.interpolator_block(16);
+output_gain_interpolator.interpolator_block(17);
+
 @sample
+/* Sample accurate interpolation */
+current_input_gain = input_gain_interpolator.interpolate(1);
+current_output_gain = output_gain_interpolator.interpolate(2);
+current_input_gain = input_gain_smoother.smooth_parameter(current_input_gain);
+current_output_gain = output_gain_smoother.smooth_parameter(current_output_gain);
+ 
+// exp((log(10)/20) * X) is equivalent but faster than 10^(X/20), which is why we use this form
+log10d20_conversion  = .11512925464970228420089957273422; //log(10)/20;
+in_gain      = exp(log10d20_conversion * current_input_gain);
+out_gain     = exp(log10d20_conversion * current_output_gain);
+
 deadtime = (!spl2 && !spl3 && play_state) ? deadtime += 1 : 0;
 
 function fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor)
@@ -341,10 +438,10 @@ scorch ? (
   in3 = tanh(pref*in3) * ipref;
 );
 
-input_buffer[buffer_index*2] = in0;
-input_buffer[buffer_index*2 + 1] = in1;
-input_buffer2[buffer_index*2] = in2;
-input_buffer2[buffer_index*2 + 1] = in3;
+input_buffer[buffer_index*2] = in_gain*in0;
+input_buffer[buffer_index*2 + 1] = in_gain*in1;
+input_buffer2[buffer_index*2] = in_gain*in2;
+input_buffer2[buffer_index*2 + 1] = in_gain*in3;
 
 fft_counter += 1;
 fft_counter >= fft_interval ? (
@@ -377,8 +474,8 @@ output_index < 0 ? output_index += buffer_length;
 Saturation ? (
   pref = exp(Saturation*9-6);
   ipref = 1.0 / pref;
-  output_buffer[output_index*2] = tanh(pref*output_buffer[output_index*2]) * ipref;
-  output_buffer[output_index*2+1] = tanh(pref*output_buffer[output_index*2+1]) * ipref;
+  output_buffer[output_index*2] = out_gain * tanh(pref*output_buffer[output_index*2]) * ipref;
+  output_buffer[output_index*2+1] = out_gain * tanh(pref*output_buffer[output_index*2+1]) * ipref;
 );
 
 outl = output_buffer[output_index*2];
@@ -396,7 +493,7 @@ output_buffer[output_index*2 + 1] = 0;
 
 buffer_index = (buffer_index + 1)%buffer_length;
 
-@gfx 1222 120
+@gfx 1444 120
 render_time = render_time + 1/60;
 
 function clamp(value, mini, maxi)
@@ -666,7 +763,6 @@ function processMouseToggle(mx, my, mousecap)
     on
   );
     
-  
 x = 60*(1+scaling);
 y = 60*(1+scaling);
 ksize = 33*(1+scaling);
@@ -685,6 +781,8 @@ IceKnob.active = 1;
 ChirpKnob.active = 1;
 WidthKnob.active = 1;
 AngleKnob.active = 1;
+InputGainKnob.active = 1;
+OutputGainKnob.active = 1;
 
 adapt_min = -2;
 adapt_max = 0;
@@ -706,8 +804,10 @@ width_min = 0;
 width_max = 1;
 theta_min = -3.14;
 theta_max = 3.14;
+gain_min = -12;
+gain_max = 12;
 
-sim_w = 1225;
+sim_w = 1444;
 sim_h = 120;
 xs = 3;
 Nx = sim_w/xs;
@@ -803,9 +903,12 @@ PitchKnob.value = (pitch - pitch_min) / (pitch_max - pitch_min);
 ChirpKnob.value = (noise_mode - noise_min) / (noise_max - noise_min);
 WidthKnob.value = (width - width_min) / (width_max - width_min);
 AngleKnob.value = (theta - theta_min) / (theta_max - theta_min);
+InputGainKnob.value = (input_gain - gain_min) / (gain_max - gain_min);
+OutputGainKnob.value = (output_gain - gain_min) / (gain_max - gain_min);
 IceKnob.value = ice;
 
 AdaptKnob.drawKnob(x, y, ksize*(1+scaling), "Adapt", "Adaptivity to incoming sound.", 0);  
+BufferToggle.drawToggle(x-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), toggleSize, toggleSize, buffer_mode, .3, .2, .2, 1, .3, .4, .7, 1, "Swell mode.\n\nSwitches from first order system\nto maximum system.\n\nWhen activated, the plugin responds\nto new input more sharply but\nsounds less smooth.\n");
 ShineKnob.drawKnob(x+dx, y, ksize*(1+scaling), "Shine", "Add brightness with\nfrequency doubling.", c_offset);
 RuinKnob.drawKnob(x+2*dx, y, ksize*(1+scaling), "Ruin", "Output saturation.", c_offset*2);
 DiffuseKnob.drawKnob(x+3*dx, y, ksize*(1+scaling), "Diffusion", "Diffuse.\nOnly use on overly sharp sounds.", c_offset*3);
@@ -818,10 +921,12 @@ DiffMode.drawToggle(x+3*dx-1.05*ksize*(1+scaling), y-1.05*ksize*(1+scaling), tog
 ChirpKnob.drawKnob(x+8*dx, y, ksize*(1+scaling), "Chirp", "Chirpiness.\n\nNonzero produces frequency\ndependent phases.", c_offset*8);
 WidthKnob.drawKnob(x+9*dx, y, ksize*(1+scaling), "Width", "Width.\n\nStereo field width.", c_offset*9);
 AngleKnob.drawKnob(x+10*dx, y, ksize*(1+scaling), "Angle", "Angle.\nStereo field angle..", c_offset*10);
-
+InputGainKnob.drawKnob(x+11*dx, y, ksize*(1+scaling), "In gain", "Input gain.", c_offset*11);
+OutputGainKnob.drawKnob(x+12*dx, y, ksize*(1+scaling), "Out gain", "Output gain.", c_offset*12);
 
 capped = 0;
 AdaptKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( time_constant = AdaptKnob.value * (adapt_max - adapt_min) + adapt_min; ); forceUpdate = 1; capped = 1; );
+buffer_mode = BufferToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 ShineKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.3) ? ( slider_automate( octaver = ShineKnob.value * (octaver_max - octaver_min) + octaver_min; ); forceUpdate = 1; capped = 1; );
 RuinKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( saturation = RuinKnob.value * (saturation_max - saturation_min) + saturation_min; ); forceUpdate = 1; capped = 1; );
 DiffuseKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( slider_automate( diffusion = DiffuseKnob.value * (diffusion_max - diffusion_min) + diffusion_min; ); forceUpdate = 1; capped = 1; );
@@ -835,6 +940,10 @@ diff_mode = DiffMode.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 WidthKnob.processMouse(mouse_x, mouse_y, mouse_cap, 1) ? ( slider_automate( width = WidthKnob.value * (width_max - width_min) + width_min; ); forceUpdate = 1; capped = 1; );
 AngleKnob.processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( theta = AngleKnob.value * (theta_max - theta_min) + theta_min; ); forceUpdate = 1; capped = 1; );
+
+InputGainKnob.processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( slider_automate( input_gain = InputGainKnob.value * (gain_max - gain_min) + gain_min; ); forceUpdate = 1; capped = 1; );
+OutputGainKnob.processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( slider_automate( output_gain = OutputGainKnob.value * (gain_max - gain_min) + gain_min; ); forceUpdate = 1; capped = 1; );
+
 
 gfx_x = 5;
 gfx_y = 5;
