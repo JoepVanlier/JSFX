@@ -1,0 +1,439 @@
+desc:Pop rocks
+tags: noise generator
+version: 0.01
+author: Joep Vanlier
+changelog: 
+  + First commit
+license: MIT
+
+slider1:rate=1.27<0,5,.0001>Rate
+slider2:slowdown=0.57<0,3>Slow down
+slider3:ar_uni=4.55<0,5>Uniform time constant
+slider4:ar_pow=0.55<0,5>Power law time constant
+slider5:mul=1<0,1,{No,Yes}>Multiply?
+slider6:vowelize=1<0,1,1{No,Yes}>Vowelize?
+slider7:vowel_position=0.45<0,1,.0001>Vowel position
+slider8:vowel_reso=0.77<0,1,.0001>Vowel resonance
+slider9:pregain=-4.11<-12,6,.00001>Pregain [dB]
+slider10:postgain=0<-12,6,.00001>Postgain [dB]
+slider11:smooth_time=0<0,500,.001>Inertia (ms)
+
+@init
+to_10 = log(10);
+timeleft = 1.0;
+log10d20_conversion  = .11512925464970228420089957273422; //log(10)/20;
+
+function bootvowel()
+  instance()
+  local(c, ptr)
+  global(vowel_src, vowel_A, vowel_E, vowel_I, vowel_O, vowel_U, vowel_EE)
+  (
+    c = vowel_src;
+    c[0] = vowel_A;
+    c[1] = vowel_E;
+    c[2] = vowel_I;
+    c[3] = vowel_O;
+    c[4] = vowel_U;
+    c[5] = vowel_EE;
+    
+    // 34 39 57
+    ptr = vowel_A;
+    ptr[] = 660;        ptr += 1;
+    ptr[] = 1700;       ptr += 1;
+    ptr[] = 2400;       ptr += 1;
+    ptr[] = 2^(0/6);    ptr += 1; // gain
+    ptr[] = 2^(-15/6);  ptr += 1; // gain
+    ptr[] = 2^(-15/6);   ptr += 1; // gain
+    ptr[] = 5;          ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+
+    ptr = vowel_E;
+    ptr[] = 530;        ptr += 1;
+    ptr[] = 1850;       ptr += 1;
+    ptr[] = 2500;       ptr += 1;
+    ptr[] = 2^(0/6);    ptr += 1; // gain
+    ptr[] = 2^(-15/6);  ptr += 1; // gain
+    ptr[] = 2^(-9/6);   ptr += 1; // gain
+    ptr[] = 5;          ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+    ptr[] = 50;         ptr += 1; // Q
+
+    ptr = vowel_I;
+    ptr[] = 400;        ptr += 1;
+    ptr[] = 2000;       ptr += 1;
+    ptr[] = 2550;       ptr += 1;
+    ptr[] = 2^(0/6);    ptr += 1; // gain
+    ptr[] = 2^(-15/6);  ptr += 1; // gain
+    ptr[] = 2^(-9/6);   ptr += 1; // gain
+    ptr[] = 5;          ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+    ptr[] = 50;         ptr += 1; // Q
+
+    ptr = vowel_O;
+    ptr[] = 300;        ptr += 1;
+    ptr[] = 870;        ptr += 1;
+    ptr[] = 2250;       ptr += 1;
+    ptr[] = 2^(0/6);    ptr += 1; // gain
+    ptr[] = 2^(-15/6);  ptr += 1; // gain
+    ptr[] = 2^(-9/6);   ptr += 1; // gain
+    ptr[] = 5;          ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+    ptr[] = 50;         ptr += 1; // Q
+
+    ptr = vowel_U;
+    ptr[] = 640;        ptr += 1;
+    ptr[] = 1200;       ptr += 1;
+    ptr[] = 2400;       ptr += 1;
+    ptr[] = 2^(0/6);    ptr += 1; // gain
+    ptr[] = 2^(-11/6);  ptr += 1; // gain
+    ptr[] = 2^(-13/6);   ptr += 1; // gain
+    ptr[] = 9;          ptr += 1; // Q
+    ptr[] = 10;         ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+
+    ptr   = vowel_EE; // These are correct
+    ptr[] = 207;        ptr += 1; // freq
+    ptr[] = 2300;       ptr += 1; // freq
+    ptr[] = 3000;       ptr += 1; // freq
+    ptr[] = 2^(0/6);    ptr += 1; // gain
+    ptr[] = 2^(-15/6);  ptr += 1; // gain
+    ptr[] = 2^(-9/6);   ptr += 1; // gain
+    ptr[] = 5;          ptr += 1; // Q
+    ptr[] = 20;         ptr += 1; // Q
+    ptr[] = 50;         ptr += 1; // Q
+);
+
+freemem = 0;
+vowel_A = (freemem += 20);
+vowel_E = (freemem += 20);
+vowel_I = (freemem += 20);
+vowel_O = (freemem += 20);
+vowel_U = (freemem += 20);
+vowel_EE = (freemem += 20);
+vowel_src = (freemem += 20);
+bootvowel();
+
+function init_linearSVF_direct(freq, res)
+  global(srate, slider54)
+  local(g, fn)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    fn = freq;
+    g = tan(.5 * $pi * fn / max(slider54,1));
+    k = 2 - 2*res;
+    
+    a1 = 1/(1+g*(g+k));
+    a2 = g*a1;
+    a3 = g*a2;
+  );  
+  
+function reset_linearSVF()
+  global()
+  local()
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    ic1eq = ic2eq = 0;  
+  );
+  
+function initvowelSVF(freq, qin)
+  instance(c, svf1, svf2, svf3, svf4, svf5, svf6, amp1, amp2, amp3, fr1, fr2, fr3, q1, q2, q3)
+  local(loc, idx, rloc, fact, ampfac, sr, sq, ptr)
+  global(vowel_src)
+  (
+    c     = vowel_src;
+    loc   = 5 * freq;
+    idx   = floor( loc - 0.0001 );
+    rloc  = loc-idx;
+    rloc  = 1.0 - rloc;
+    
+    sr    = 1/22050;
+    sq    = .02;
+    
+    ampfac = .1;
+    ptr   = c[idx];
+    fr1   = ptr[]*rloc; ptr+=1;
+    fr2   = ptr[]*rloc; ptr+=1;
+    fr3   = ptr[]*rloc; ptr+=1;
+    amp1  = ampfac*ptr[]*rloc; ptr+=1;
+    amp2  = ampfac*ptr[]*rloc; ptr+=1;
+    amp3  = ampfac*ptr[]*rloc; ptr+=1;
+    q1    = ptr[]*rloc; ptr+=1;
+    q2    = ptr[]*rloc; ptr+=1;
+    q3    = ptr[]*rloc; ptr+=1;
+    
+    ptr   = c[idx+1];    
+    rloc  = 1 - rloc;
+    fr1   += ptr[]*rloc; ptr+=1;
+    fr2   += ptr[]*rloc; ptr+=1;
+    fr3   += ptr[]*rloc; ptr+=1;
+    amp1  += ampfac*ptr[]*rloc; ptr+=1;
+    amp2  += ampfac*ptr[]*rloc; ptr+=1;
+    amp3  += ampfac*ptr[]*rloc; ptr+=1;
+    q1    += ptr[]*rloc; ptr+=1;
+    q2    += ptr[]*rloc; ptr+=1;
+    q3    += ptr[]*rloc; ptr+=1;
+  
+    fr1 = fr1 * sr;
+    fr2 = fr2 * sr;
+    fr3 = fr3 * sr;
+    
+    q1 = 1-sqrt(q1)*sq;
+    q2 = 1-sqrt(q2)*sq;
+    q3 = 1-sqrt(q3)*sq;
+    
+    q1 = q1 * (.7+.28*qin);
+    q2 = q2 * (.7+.28*qin);
+    q3 = q3 * (.7+.28*qin);
+    
+    this.svf1.init_linearSVF_direct(fr1, q1);
+    this.svf2.init_linearSVF_direct(fr2, q2);
+    this.svf3.init_linearSVF_direct(fr3, q3);
+    
+    this.svf4.init_linearSVF_direct(fr1, q1);
+    this.svf5.init_linearSVF_direct(fr2, q2);
+    this.svf6.init_linearSVF_direct(fr3, q3);
+  );
+  
+function resetvowelSVF()
+  instance( c, svf1, svf2, svf3, svf4, svf5, svf6, amp1, amp2, amp3 )
+  local(loc, idx, rloc, fact, ampfac, ptr, fr1, fr2, fr3, q1, q2, q3)
+  global()
+  (
+    this.svf1.reset_linearSVF();
+    this.svf2.reset_linearSVF();
+    this.svf3.reset_linearSVF();
+    this.svf4.reset_linearSVF();
+    this.svf5.reset_linearSVF();
+    this.svf6.reset_linearSVF();
+  );
+  
+function eval_linearSVF_peak(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;
+    
+    v0 - k*v1 -2*v2
+  );
+  
+function eval_linearSVF_BP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v1
+  );  
+
+function evalvowelSVF(sample)
+  instance( c, svf1, svf2, svf3, svf4, svf5, svf6, amp1, amp2, amp3 )
+  local(outA, outB, outC)
+  global()
+  (
+    outA = this.svf1.eval_linearSVF_peak(sample);
+    outB = this.svf2.eval_linearSVF_BP(sample);
+    outC = this.svf3.eval_linearSVF_BP(sample);
+    
+    outA = this.svf4.eval_linearSVF_BP(outA);
+    outB = this.svf5.eval_linearSVF_BP(outB);
+    outC = this.svf6.eval_linearSVF_BP(outC);
+    
+    amp1 * outA + amp2 * outB + amp3 * outC;
+  );  
+
+ function smooth_parameter(target)
+  instance(s, coeff)
+  global(maxo, mino)
+  local(y, v)
+  (
+    v = coeff*(target - s);
+    y = v + s;
+    s = y + v;
+    y
+  );
+  
+  function initialize_smoother(cutoff)
+  instance(coeff)
+  global(srate)
+  local(g)
+  ( 
+    g = tan($pi*cutoff/srate);
+    coeff = g/(1+g);  
+  );
+
+  function interpolator_init(slider_idx)
+  instance(next_val)
+  local()
+  global()
+  (
+    next_val = slider(slider_idx);
+  );
+
+  function interpolator_block(slider_idx)
+  instance(delta, next_changepoint_t, next_val)
+  local(next_changepoint_y)
+  global(samplesblock)
+  (
+    next_changepoint_t = slider_next_chg(slider_idx, next_changepoint_y);
+    next_changepoint_t > 0 ? 
+    (
+      next_val = slider(slider_idx);
+    ) : (
+      next_changepoint_y = slider(slider_idx);
+      next_changepoint_t = samplesblock;
+    );
+    
+    delta = (next_changepoint_y - next_val) / next_changepoint_t;
+  );
+  
+  function interpolate(slider_idx)
+  instance(delta, next_changepoint_t, next_val)
+  local(current_value, next_changepoint_y)
+  global(current_sample)
+  (
+    current_value = next_val;
+    current_sample == next_changepoint_t ? 
+    (
+      delta = 0;
+      next_changepoint_t = slider_next_chg(slider_idx, next_changepoint_y);
+      delta = next_changepoint_t > current_sample ? (next_changepoint_y - current_value) / (next_changepoint_t-current_sample) : 0;
+    );
+    
+    next_val = current_value + delta;
+    current_value
+  );
+  
+  function initialize_interpolators()
+  (
+    position_interpolator.interpolator_init(7);
+    postgain_interpolator.interpolator_init(10);
+    new_cutoff = 1000.0/(smooth_time);
+    (new_cutoff != cutoff) ? (
+      cutoff = new_cutoff;
+      position_interpolator.initialize_smoother(cutoff);
+      postgain_interpolator.initialize_smoother(cutoff);
+      position_interpolator.s = slider7;
+      postgain_interpolator.s = slider10;
+    );
+  );
+
+@slider
+dt = exp(-slowdown);
+uniform_const = 1.0-exp(-ar_uni);
+power_const = 1.0-exp(-ar_pow);
+normalization = sqrt( 1.0 - uniform_const * uniform_const );
+alpha = exp(to_10 * rate);
+
+preamp = exp(log10d20_conversion * pregain);
+
+initialize_interpolators();
+
+@block
+position_interpolator.interpolator_block(7);
+postgain_interpolator.interpolator_block(10);
+  
+  
+@sample
+function tanh(x)
+local()
+global()
+instance()
+(
+  2/(1+exp(-2*x)) - 1
+);
+
+function noise_gen(alpha, dt, ar_uni, ar_pow, normalization)
+instance(timeleft, d0, d1, d2, d3, w_noise, p_noise)
+global()
+local(t, t2, a0, a1, a2, a3)
+(
+  timeleft <= 0 ? (
+    p_noise = ar_pow * p_noise + pow(rand(), alpha) * (1.0 - p_noise);
+    w_noise = w_noise * ar_uni + (rand()-0.5);
+    d3 = d2;
+    d2 = d1;
+    d1 = d0;
+    d0 = p_noise * w_noise;
+    
+    timeleft = timeleft + 1.0;
+  );
+  
+  // Cubic interpolation
+  t = 1.0 - timeleft;
+  t2 = t * t;
+  a0 = d0 - d1 - d3 + d2;
+  a1 = d3 - d2 - a0;
+  a2 = d1 - d3;
+  a3 = d2;
+  
+  timeleft -= dt;
+  
+  (a0*t*t2+a1*t2+a2*t+a3) * normalization;
+);
+
+out_l = noise1.noise_gen(alpha, dt, uniform_const, power_const, normalization);
+out_l += noise5.noise_gen(alpha, dt*.75, uniform_const, power_const, normalization);
+out_l += noise6.noise_gen(alpha, dt*.5, uniform_const, power_const, normalization);
+
+out_r = noise2.noise_gen(alpha, dt, uniform_const, power_const, normalization);
+out_r += noise7.noise_gen(alpha, dt*.75, uniform_const, power_const, normalization);
+out_r += noise8.noise_gen(alpha, dt*.5, uniform_const, power_const, normalization);
+mul ? (
+  out_l *= noise3.noise_gen(alpha, dt*.15, uniform_const, power_const, normalization)*10;
+  out_r *= noise4.noise_gen(alpha, dt*.15, uniform_const, power_const, normalization)*10;
+);
+
+
+/* Sample accurate interpolation */
+current_position = position_interpolator.interpolate(7);
+current_postgain = postgain_interpolator.interpolate(10);
+   
+smooth_time ? (
+  current_position = position_interpolator.smooth_parameter(current_position);
+  current_postgain = postgain_interpolator.smooth_parameter(current_postgain);
+);
+postamp = exp(log10d20_conversion * current_postgain);
+
+vowelize == 1 ? (
+  abs(current_position - last_vowel_position) > 0.0001 || abs(vowel_reso - last_vowel_reso) > 0.0001 ? (
+    l_vowel.initvowelSVF(current_position, vowel_reso);
+    r_vowel.initvowelSVF(current_position, vowel_reso);
+    
+    last_vowel_position = current_position;
+    last_vowel_reso = vowel_reso;
+  );
+  out_l = l_vowel.evalvowelSVF(out_l);
+  out_r = r_vowel.evalvowelSVF(out_r);
+);
+
+randpan = rand() * 2.0 * $pi;
+
+spl0=out_l + .25 * out_r + .5*d5r;
+spl1=out_r + .25 * out_l + .5*d5;
+
+spl0 = postamp * tanh(preamp * spl0);
+spl1 = postamp * tanh(preamp * spl1);
+
+d5 = d4;
+d4 = d3;
+d3 = d2;
+d2 = d1;
+d1 = out_l;
+
+d5r = d4r;
+d4r = d3r;
+d3r = d2r;
+d2r = d1r;
+d1r = out_r;
+
