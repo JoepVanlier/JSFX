@@ -154,7 +154,7 @@ I needed a plugin that I could keep open on one screen to monitor things.
 Hence I modified the stock Reaper spectral analyzer to allow for 
 multi-channel analysis and combine it with a sonogram and time window.
 
-![Spectral Analyzer](https://i.imgur.com/CRpRL00.png)
+![Spectral Analyzer](https://imgur.com/DTEQ0am.jpg)
 
 The JSFX comes with a lua script which sets up the routing appropriately
 on a new FX track.
