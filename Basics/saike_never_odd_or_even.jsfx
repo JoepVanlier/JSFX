@@ -1,19 +1,17 @@
-desc:Saike Smooth
-tags: Saturation with even and odd harmonics.
-version: 0.02
+desc:Saike Never Odd or Even (Distortion)
+tags: static waveshaper
+version: 0.01
 author: Joep Vanlier
-changelog: Added slew limiter for that extra messy grunge.
-license: MIT
-
-/* This is just a simple static waveshaper. The model is just a static
-   shaper that was fitted to some data.                                */
+changelog: Initial version
+Copyright (C) 2019 Joep Vanlier
+License: MIT
 
 slider1:current_gain=0<-6,24,1>Gain (dB)
-slider2:current_ceiling=0<-18,0,1>Ceiling (dB)
-slider3:slew=0<0,1,.001>Slew
+slider2:current_ceiling=0<-36,0,1>Ceiling (dB)
+slider3:even=0<0,1,.0001>Even
+slider4:odd=0<0,1,.0001>Odd
 
 @init
-
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
   function init_HP6(freq)
     global(srate)
@@ -74,6 +72,7 @@ inv_ceiling = 1.0 / ceiling;
 
 @block
 
+
 @sample
 function tanh(x)
 local()
@@ -84,49 +83,28 @@ instance()
 );
 
 function processChannel(x)
-local(cterm, indep,
-      p0, p1, p2, p3, p4, p5, p6, p7)
-global()
+local(t1, x_corrected)
+global(even, odd)
+instance(current_gain)
 (
-    p0 = -0.43497619473852767;
-    p1 = -0.5460978062661744;
-    p2 = -0.9288977638330088;
-    p3 = -1.8931725230583496;
-    p4 = -1.901829522587536;
-    p5 = -0.7951494375999134;
-    p6 = -0.35701520925330404;
-    
-    indep = p2 + p3*x + p6*x*x;
-    cterm = indep < 0 ? 1 : cterm > $pi ? -1 : cos(indep);
-    p4 * tanh(p0 + p1*x) + p5 * cterm
-);
+    current_gain = max(.9999*current_gain, abs(x));
 
-function slew_buffer(x)
-local()
-global(slew_target, srate)
-instance(diff, tank, lx, slew_factor)
-(
-  slew_factor = .999 * slew_factor + .001 * (0.00075*srate*slew_target);
-  diff = tanh(slew_factor*(x - lx))/slew_factor;
-  lx = lx + diff;
-  lx
+    t1 = tanh(x);
+    x_corrected = x*(tanh(current_gain))/current_gain;
+    t1 = x_corrected + odd*(t1-x_corrected) + even*(t1 * t1);
+      
+    t1
 );
 
 l = spl0;
 r = spl1;
 
-slew > 0 ? (
-  l = slew_left.slew_buffer(l);
-  r = slew_right.slew_buffer(r);
-);
-
 l = ceiling*preamp*l;
 r = ceiling*preamp*r;
 
-l = processChannel(l)*inv_ceiling;
-r = processChannel(r)*inv_ceiling;
+l = left.processChannel(l)*inv_ceiling;
+r = right.processChannel(r)*inv_ceiling;
 
-/* Steep highpass to get rid of any DC from the shaper */
 spl0=dc0.eval_HP6(l);
 spl1=dc0.eval_HP6(r);
 
