@@ -1,8 +1,8 @@
 desc:Saike Never Odd or Even (Distortion)
 tags: static waveshaper
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: Initial version
+changelog: Added warmth control.
 Copyright (C) 2019 Joep Vanlier
 License: MIT
 
@@ -10,6 +10,7 @@ slider1:current_gain=0<-6,24,1>Gain (dB)
 slider2:current_ceiling=0<-36,0,1>Ceiling (dB)
 slider3:even=0<0,1,.0001>Even
 slider4:odd=0<0,1,.0001>Odd
+slider5:warmth=0<-12,12,.001>Warmth
 
 @init
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
@@ -60,6 +61,37 @@ slider4:odd=0<0,1,.0001>Odd
       hp    = hp - k3*v1 - v2;
     );   
 
+  function init_tilt(freq, res, A)
+    global(srate, slider54)
+    local(g, k)
+    instance(ic1eq, ic2eq, A, a1, a2, a3, m0, m1, m2)
+    (
+      g = tan(.5 * $pi * freq) / sqrt(A);
+      k = 2 - 2*res;
+      
+      a1 = 1/(1+g*(g+k));
+      a2 = g*a1;
+      a3 = g*a2;
+      
+      m0 = 1;
+      m1 = k*(A-1);
+      m2 = (A*A - 1);
+    );
+
+  function eval_tilt(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3*v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;    
+      
+      (v0 + m1 * v1 + m2 * v2)
+    );
+
 dc0.init_HP6(7/srate);
 dc1.init_HP6(7/srate);
 
@@ -69,6 +101,14 @@ preamp      = exp(log10d20_conversion * current_gain);
 ceiling     = exp(-log10d20_conversion * current_ceiling);
 slew_target = exp(log10d20_conversion * 15 * slew);
 inv_ceiling = 1.0 / ceiling;
+
+tilt_gain = 10^(warmth / 20);
+inverse_tilt_gain = 1.0 / tilt_gain;
+omega_tilt = 3200 / srate;
+l_tilt.init_tilt(omega_tilt, 0, tilt_gain);
+r_tilt.init_tilt(omega_tilt, 0, tilt_gain);
+l_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
+r_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
 
 @block
 
@@ -102,8 +142,21 @@ r = spl1;
 l = ceiling*preamp*l;
 r = ceiling*preamp*r;
 
+// De-emphasize before for warmth
+warmth != 0 ? (
+  l=l_itilt.eval_tilt(l)*tilt_gain;
+  r=r_itilt.eval_tilt(r)*tilt_gain;
+);
+
 l = left.processChannel(l)*inv_ceiling;
 r = right.processChannel(r)*inv_ceiling;
+
+// Re-emphasize before for warmth
+warmth != 0 ? (
+  l=l_tilt.eval_tilt(l)*inverse_tilt_gain;
+  r=r_tilt.eval_tilt(r)*inverse_tilt_gain;
+);
+
 
 spl0=dc0.eval_HP6(l);
 spl1=dc0.eval_HP6(r);
