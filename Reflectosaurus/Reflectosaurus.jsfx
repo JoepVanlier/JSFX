@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.22
+version: 0.23
 author: Joep Vanlier
-changelog: Performance improvements. Make pitch-shift effect samplerate independent. Add dials as alternative method of entry. Add fluid sim to get an idea of where the audio is coming from.
+changelog: Fix reverb issue with peak near Nyquist.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -323,24 +323,26 @@ function windowBlock()
         fftPtr += 1;
         magPtr += 1;
       );
-      
-      // Add pitch shifted version
-      /*( sAmount > 0 ) ? (
-        fftPtr = sharedBuffer;
-        magPtr = mag_mem;
-        loop( fftSize - 1,
-          magPtr[] += sAmount*fftPtr[];
-          fftPtr += 1; magPtr += 1;
-          magPtr[] += sAmount*fftPtr[];
-          fftPtr += 1; magPtr += 1;
-            
-          magPtr += sShift;
-        );
-      );*/
 
       /////////////////////////////
       // End processing here     //
       /////////////////////////////
+      
+      /* Fix issue with peak near nyquist */
+      fwd = 0;
+      loop(4,
+        mag_mem[fwd] = 0;
+        mag_mem[fftSize-fwd] = 0;
+        fwd += 1;
+      );
+      
+      /* TO DO: Investigate why this peak beyond the end of the buffer affects the FFT */
+      fwd = 0;
+      loop(4,
+        fft_mem[fftSize-fwd] = 0;
+        fft_mem[fftSize+fwd] = 0;
+        fwd += 1;
+      );
       
       // Spectra at this point are interleaved                
       // At this point magPtr contains interleaved magnitude  
@@ -1028,17 +1030,35 @@ function serializeNode()
 connectorSize = 16;
 
 function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
-  local(dmx, dmy, diffx, diffy, len, mx, my, nx, ny, ytri1, ytri2, ytri3, xtri1, xtri2, xtri3, xl2, yl2, ang)
-  global(connectorSize, mouse_x, mouse_y)
+  local(dmx, dmy, diffx, diffy, len, mx, my, nx, ny, ytri1, ytri2, ytri3, xtri1, xtri2, xtri3, xl2, yl2, ang,
+        connector_r, connector_g, connector_b)
+  global(connectorSize, mouse_x, mouse_y, render_time)
   instance(overConnector)
   (
-    gfx_set(1,1,1,1);
     xl2 = xmin + w*nx;
     yl2 = ymin + h*ny;
     mx  = (.4*xl+.6*xl2);
     my  = (.4*yl+.6*yl2);
+    gfx_set(.5,.4,.7,.8);
     gfx_line(xl, yl, xl2, yl2, 1);
+    gfx_set(.5,.4,.7,.8+.2*sin(4*render_time));
     gfx_line(xl, yl+1, xl2, yl2+1, 1);
+    
+    gfx_set(0,0,0,1);
+    gfx_circle(mx, my, connectorSize-.5, 0, 1);
+    gfx_circle(mx, my, connectorSize, 0, 0);
+    gfx_circle(mx, my, connectorSize+.5, 0, 1);
+    gfx_circle(mx, my, connectorSize-2.5, 0, 1);
+    gfx_circle(mx, my, connectorSize-3.5, 0, 1);
+    gfx_circle(mx, my, connectorSize+2.5, 0, 1);
+    gfx_circle(mx, my, connectorSize+3.5, 0, 1);
+    gfx_circle(mx, my, connectorSize+4.5, 0, 1);
+    
+    connector_r = .6;
+    connector_g = .6;
+    connector_b = .8;
+    
+    gfx_set(connector_r, connector_g, connector_b,1.0);
     gfx_circle(mx, my, connectorSize-.5, 0, 1);
     gfx_circle(mx, my, connectorSize, 0, 0);
     gfx_circle(mx, my, connectorSize+.5, 0, 1);
@@ -1064,7 +1084,14 @@ function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
     dmx = mx - mouse_x;
     dmy = my - mouse_y;
     ( dmx * dmx + dmy * dmy ) < (connectorSize*connectorSize) ? overConnector = idx;
-    
+
+    gfx_set(connector_r, connector_g, connector_b,.5);
+    gfx_triangle( xtri1-1, ytri1, xtri2-1, ytri2, xtri3-1, ytri3 );
+    gfx_triangle( xtri1+1, ytri1, xtri2+1, ytri2, xtri3+1, ytri3 );
+    gfx_triangle( xtri1, ytri1-1, xtri2, ytri2-1, xtri3, ytri3-1 );
+    gfx_triangle( xtri1, ytri1+1, xtri2, ytri2+1, xtri3, ytri3+1 );
+
+    gfx_set(connector_r, connector_g, connector_b,1.0);
     gfx_triangle( xtri1, ytri1, xtri2, ytri2, xtri3, ytri3 );
   );
 
@@ -1095,7 +1122,7 @@ function drawConnections(xmin, ymin, w, h)
   );
 
 function draw(xmin, ymin, w, h, verb)
-  local(adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS)
+  local(adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS, cr, cg, cb)
   global(gfx_a, gfx_x, gfx_y)
   instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain)
   (     
@@ -1113,12 +1140,12 @@ function draw(xmin, ymin, w, h, verb)
     
     rectify ? (
       rectS = outer-3;
-      gfx_set(1.6,0.2,1,.3);
-      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+      gfx_set(1, 1, 1,.1);
+      //gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
       rectS += 2;
-      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+      //gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
       rectS += 4;
-      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
+      //gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
       rectS += 7;
       gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
     );
@@ -1133,23 +1160,27 @@ function draw(xmin, ymin, w, h, verb)
       );
     );
     
+    cr = .8;
+    cg = .8;
+    cb = .9;
+    
     panSize = 7;
-    gfx_set(0,0,3,.8 - .7*silent);
+    gfx_set(cr*.5,cg*.5,cb*.5,.8 - .7*silent);
     gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize+2, 1);
-    gfx_set(1,1,1,1 - .7*silent);
+    gfx_set(cr,cg,cb,1 - .7*silent);
     gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);    
     
     pingpong ? (
-      gfx_set(0,0,3,.4 - .7*silent);
+      gfx_set(cr*.2,cg*.2,cb*.2,.8 - .7*silent);
       gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize+2, 1);
-      gfx_set(1,1,1,.4 - .7*silent);
+      gfx_set(cr,cg,cb,.4 - .7*silent);
       gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize, 1);    
     );
     
     gfx_set(0,0,.3,.95);
     gfx_circle(xl, yl, outer, 1, 1);    
     
-    gfx_set(0.2+verb,0.35,1.0,.4);
+    gfx_set(0.2,0.25,0.1,.4);
     gfx_circle(xl, yl, outer, 0, 0);
     gfx_circle(xl, yl, outer+.5, 1, 0);
     gfx_circle(xl, yl, outer+1, 0, 1);
@@ -1184,7 +1215,7 @@ function draw(xmin, ymin, w, h, verb)
     );
     
     selected ? (
-      gfx_set(0.2+.5*verb,0.35,1.0,1);
+      gfx_set(0.35,0.4,.7,1);
       gfx_circle(xl, yl, outer, 0, 0);
       gfx_circle(xl, yl, outer+.5, 1, 0);
       gfx_circle(xl, yl, outer+1, 0, 1);
@@ -1197,11 +1228,14 @@ function draw(xmin, ymin, w, h, verb)
       gfx_circle(xl, yl, outer+2, 0, 1);
     );    
     
-    gfx_set(1 - .7*silent, 1 - .7*silent, 1 - .7*silent, alpha);
+    
+//    gfx_set(1 - .7*silent, 1 - .7*silent, 1 - .7*silent, alpha);
+//    gfx_set(.4 - .7*silent, .3 - .7*silent, .8 - .7*silent, alpha);
+    gfx_set(cr, cg, cb, 1);
     
     gfx_a = alpha;
     gfx_arc(xl, yl, r, - $pi, 2*(1-gain)*$pi - $pi, 1);
-    gfx_a = .5*alpha;
+    gfx_a = .2*alpha;
     gfx_arc(xl, yl, r+1, - $pi, 2*(1-gain)*$pi - $pi, 1);
     gfx_arc(xl, yl, r-1, - $pi, 2*(1-gain)*$pi - $pi, 1);
     
@@ -2255,7 +2289,7 @@ printRight("T - Scale by feedback\n");
   node8.selected  ? node8.grain  = node8.grain  ? 0 : 1;
   node9.selected  ? node9.grain  = node9.grain  ? 0 : 1;
   node10.selected ? node10.grain = node10.grain ? 0 : 1;
-  node11.selected ? node11.grain = node11.grain ? 0 : 1;
+  //node11.selected ? node11.grain = node11.grain ? 0 : 1;
   init();
 );
 
@@ -2349,9 +2383,9 @@ function convertToNewFormat()
   mouse_wheel = 0;
 );
 
-nSelected = node1.selected + node2.selected + node3.selected + node4.selected + node5.selected + node6.selected + node7.selected + node8.selected + node9.selected + node10.selected + node11.selected*2;
+nSelected = node1.selected + node2.selected + node3.selected + node4.selected + node5.selected + node6.selected + node7.selected + node8.selected + node9.selected + node10.selected + node11.selected*1;
 
-function processRegularCtrls(cX, cY)
+function processVerbCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf,
   dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob)
@@ -2379,14 +2413,8 @@ function processRegularCtrls(cX, cY)
     cX += 4*knobSpacing;
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
-    feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount.", 0);
+    feedbackKnob.drawKnob(cX, cY, knobSize, "Decay time", "Feedback amount.", 0);
     feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = clamp(feedbackKnob.value,0,.999);
-    
-    cX += 4*knobSpacing;
-    panningKnob.active = 1;
-    panningKnob.value = pan;
-    panningKnob.drawKnob(cX, cY, knobSize, "Panning", "Panning.", 0);
-    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
     
     cX += 4*knobSpacing;
     lpfKnob.active = 1;
@@ -2400,6 +2428,12 @@ function processRegularCtrls(cX, cY)
     );
     
     cX += 4*knobSpacing;
+    panningKnob.active = 1;
+    panningKnob.value = pan;
+    panningKnob.drawKnob(cX, cY, knobSize, "Panning", "Panning.", 0);
+    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
+    
+    cX += 4*knobSpacing;
     hpfKnob.active = 1;
     hpfKnob.value = hpf;
     hpfKnob.drawKnob(cX, cY, knobSize, "High pass", "High pass filter.", 0);
@@ -2409,6 +2443,77 @@ function processRegularCtrls(cX, cY)
         lpf = hpf;
       );
     );
+    
+    cX += .25*knobSpacing;
+  );
+
+function processRegularCtrls(cX, cY)
+  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime,
+  dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify,
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob)
+  local(knobSize, knobSpacing)
+  global(mouse_x, mouse_y, mouse_cap, scaling)
+  (
+    gfx_setfont(4);
+    knobSize = 35*(1+scaling);
+    knobSpacing = 25*(1+scaling);
+    
+    inputGainKnob.active = 1;
+    inputGainKnob.value = 1 - gain;
+    inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
+    inputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? gain = 1-inputGainKnob.value;
+        
+    cX += 4*knobSpacing;
+    outputGainKnob.active = 1;
+    outputGainKnob.value = 1 - y;
+    outputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
+    outputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+      y = 1 - outputGainKnob.value;
+      this.updateToSliderRec();
+    );
+    
+    cX += 4*knobSpacing;
+    timeKnob.active = 1;
+    timeKnob.value = x;
+    timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time.", 0);
+    timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
+      x = clamp(timeKnob.value,0,1);
+      dtime = xToTime(x);
+    );
+    
+    cX += 4*knobSpacing;
+    feedbackKnob.active = 1;
+    feedbackKnob.value = fb;
+    feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount.", 0);
+    feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = clamp(feedbackKnob.value,0,.999);
+    
+    cX += 4*knobSpacing;
+    panningKnob.active = 1;
+    panningKnob.value = pan;
+    panningKnob.drawKnob(cX, cY, knobSize, "Panning", "Panning.", 0);
+    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
+    
+    cX += 4*knobSpacing;
+    hpfKnob.active = 1;
+    hpfKnob.value = hpf;
+    hpfKnob.drawKnob(cX, cY, knobSize, "High pass", "High pass filter.", 0);
+    hpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+      hpf = hpfKnob.value;
+      lpf < hpf ? (
+        lpf = hpf;
+      );
+    );
+    
+    cX += 4*knobSpacing;
+    lpfKnob.active = 1;
+    lpfKnob.value = lpf;
+    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter.", 0);
+    lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+      lpf = lpfKnob.value;
+      lpf < hpf ? (
+        hpf = lpf;
+      );
+    );    
     
     cX += .25*knobSpacing;
   );
@@ -2481,6 +2586,7 @@ function processGrainCtrls(cX, cY)
   node8.selected ? ( selectedNode = 8; cX += node8.processRegularCtrls(cX, cY); node8.processGrainCtrls(cX, cY); ) :
   node9.selected ? ( selectedNode = 9; cX += node9.processRegularCtrls(cX, cY); node9.processGrainCtrls(cX, cY); ) :
   node10.selected ? ( selectedNode = 10; cX += node10.processRegularCtrls(cX, cY); node10.processGrainCtrls(cX, cY); );
+  node11.selected ? ( selectedNode = 11; cX += node11.processVerbCtrls(cX, cY); );
   
   // Band indicator
   gfx_set(1,1,1,1);
