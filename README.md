@@ -125,7 +125,7 @@ Tone stacks contains some bi-linearly transformed versions of these filters.
 It also has an option for linear phase FIR crossovers instead of the default IIR filters. IIRs cost less CPU and introduce no preringing or latency. The linear phase FIRs however prevent phase distortion (which can be important in some mixing settings), but introduce latency compensation. Note that when using the linear phase filters, it is not recommended to modulate the crossover frequencies as this introduces crackles.
 
 # ReflectoSaurus
-![Reflectosaurus](https://imgur.com/aEhOMVo.png)
+![Reflectosaurus](https://i.imgur.com/V88Kbiw.png)
 Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
 
 Nodes can be routed to each-other to create complex effects. Routing sends are sent out before applying the feedback gain, but after the filters. The arc around the routing arrow indicates the volume at which it is being sent to the other node.
@@ -135,10 +135,6 @@ Delays/Grid can optionally be synchronized to host tempo on 3/4, 4/4 or 5/4 rhyt
 ![InfographicReflectoSaurus](https://i.imgur.com/a4ISztr.png)
 
 Examples of possibilities:
-
-https://instaud.io/3SRO
-
-https://instaud.io/3SZq
 
 https://www.youtube.com/watch?v=bGgYUSdWiAA
 
