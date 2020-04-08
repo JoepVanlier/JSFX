@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.23
+version: 0.24
 author: Joep Vanlier
-changelog: Fix reverb issue with peak near Nyquist.
+changelog: Added more non-linear waveshaping options for the delay nodes. Tweaked UI a bit.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -198,7 +198,32 @@ function updateBuffer2(L, R)
     scopeptr > scopebuffermax ? scopeptr = scopebuffer;
   );
   
+  function tanh(x)
+  local()
+  global()
+  instance()
+  (
+    (2/(1+exp(-2*x)))-1.0
+  );  
   
+function smoothSaturator(x)
+local(cterm, indep,
+      p0, p1, p2, p3, p4, p5, p6, p7)
+global()
+(
+    p0 = -0.43497619473852767;
+    p1 = -0.5460978062661744;
+    p2 = -0.9288977638330088;
+    p3 = -1.8931725230583496;
+    p4 = -1.901829522587536;
+    p5 = -0.7951494375999134;
+    p6 = -0.35701520925330404;
+    
+    indep = p2 + p3*x + p6*x*x;
+    cterm = indep < 0 ? 1 : cterm > $pi ? -1 : cos(indep);
+    p4 * tanh(p0 + p1*x) + p5 * cterm
+);
+   
 /***************************/
 /* Reverb section          */
 /***************************/  
@@ -665,14 +690,6 @@ function yToVol(y)
       ( hpf > 0.0 && hpf != lhpf ) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); lhpf = hpf; );
     );
   );
-
-  function tanh(x)
-  local()
-  global()
-  instance()
-  (
-    (2/(1+exp(-2*x)))-1.0
-  );
   
 POSITION_LOC = 10;
 function updateFromSlider()
@@ -826,10 +843,10 @@ function rectify(in)
   );  
 
 function process(l_in, r_in)
-  local(l, r, tmp, lr, ll)
+  local(l, r, tmp, lr, ll, factor, t)
   global(lOut, rOut, srate)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, 
-           pingpong, rectify,
+           pingpong, rectify, left_sat, right_sat, modifier,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
     ( !mute || solo ) ? (
@@ -857,15 +874,48 @@ function process(l_in, r_in)
       lastR = r * rPanTerm;
 
       rectify ? (
-        // Higher quality anti-aliasing rectification
-        // decided against this for performance reasons
-        //l = this.rectl.rectify(l);
-        //r = this.rectr.rectify(r);
-        l = abs(l);
-        r = abs(r);
-        
-        l = this.dcfl.fixdc(l);
-        r = this.dcfr.fixdc(r);
+        rectify == 1 ? (
+          // Higher quality anti-aliasing rectification
+          // decided against this for performance reasons
+          //l = this.rectl.rectify(l);
+          //r = this.rectr.rectify(r);
+          l = abs(l);
+          r = abs(r);
+          
+          l = this.dcfl.fixdc(l);
+          r = this.dcfr.fixdc(r);
+        ) : ( rectify == 2 ) ?
+        (
+          l = tanh(2*l)*.5;
+          r = tanh(2*r)*.5;
+        ) : ( rectify == 3 ) ? 
+        (
+          l = .5*l;
+          r = .5*r;
+          ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
+          ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
+        ) : ( rectify == 4 ) ?
+        (
+          l = smoothSaturator(2*l)*.5;
+          r = smoothSaturator(2*r)*.5;
+          l = this.dcfl.fixdc(l);
+          r = this.dcfr.fixdc(r);
+        ) : ( rectify == 5 ) ? (
+          /* Crossover distortion */
+          l = l * 2;
+          r = r * 2;
+          ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+          ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+          
+          factor = -15.09587456;
+          
+          t = l*l;
+          l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(factor*t));
+          t = r*r;
+          r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(factor*t));
+          l = l * .5;
+          r = r * .5;
+        );
       );
   
       pingpong ? (
@@ -1925,17 +1975,17 @@ local( oldDest, oldMode, ang1, ang2, alpha, q, centerNoise, bump, cx, cy, angSiz
   gfx_mode = oldMode;
 );
 
-font_color_r = 1;
-font_color_g = 1;
-font_color_b = 1;
+font_color_r = .7;
+font_color_g = .6;
+font_color_b = .8;
 font_color_a = 1;
 line_color_r = .3;
 line_color_g = 0;
 line_color_b = 1;
 line_color_a = .7;
-knob_font_color_r = 0;
-knob_font_color_g = 0;
-knob_font_color_b = 0;
+knob_font_color_r = .4;
+knob_font_color_g = .3;
+knob_font_color_b = .6;
 knob_font_color_a = 1;
 
 FONT_GRID = 4;
@@ -2150,85 +2200,88 @@ ddtime  = ( leftTime - lastLeftTime );
 dblclick = ( (left > 0) && (lastleft == 0) && ( ( leftTime - lastLeftTime ) < .2 ) ) ? 1 : 0;
 lastLeftTime = leftTime;
 
-!lastleft ? multiSelect = 0;
-multiSelect == 0 ? (
-   // These functions will fill global nodeCap with the capture mode that occurred
-   // 1 - LMB, 2 - RMB
-   node1.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node2.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node3.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node4.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node5.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node6.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node7.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node8.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node9.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
-   node10.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
-   node11.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
+comboboxOpen == 0 ? (
+  !lastleft ? multiSelect = 0;
+  multiSelect == 0 ? (
+     // These functions will fill global nodeCap with the capture mode that occurred
+     // 1 - LMB, 2 - RMB
+     node1.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node2.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node3.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node4.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node5.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node6.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node7.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node8.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node9.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
+     node10.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
+     node11.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
+    
+     // An unselected one was selected. Deselect all others
+     nodeCap < 0 ? (
+      node1.amIChosen();
+      node2.amIChosen();
+      node3.amIChosen();
+      node4.amIChosen();
+      node5.amIChosen();
+      node6.amIChosen();
+      node7.amIChosen();
+      node8.amIChosen();
+      node9.amIChosen();
+      node10.amIChosen();
+      node11.amIChosen();
+      nodeCap = abs(nodeCap);
+     );
+     
+     node1.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node2.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node3.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node4.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node5.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node6.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node7.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node8.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node9.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node10.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
+     node11.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
   
-   // An unselected one was selected. Deselect all others
-   nodeCap < 0 ? (
-    node1.amIChosen();
-    node2.amIChosen();
-    node3.amIChosen();
-    node4.amIChosen();
-    node5.amIChosen();
-    node6.amIChosen();
-    node7.amIChosen();
-    node8.amIChosen();
-    node9.amIChosen();
-    node10.amIChosen();
-    node11.amIChosen();
-    nodeCap = abs(nodeCap);
-   );
-   
-   node1.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node2.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node3.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node4.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node5.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node6.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node7.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node8.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node9.nodeProcessMouse(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node10.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-   node11.nodeProcessMouse(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap, nodeCap, lastMouseX, lastMouseY, dblclick);
-
-  lastMouseX = mouse_x;
-  lastMouseY = mouse_y;
-  
-  !nodeCap ? (
-    // No nodes manipulated => Do multi-select
-    ( mouse_x > w1x ) && ( mouse_y > w1y ) && ( mouse_x < ( w1x + w1w ) ) && ( mouse_y < ( w1y + w1h ) ) ? (
-      ( ( lastleft == 0 ) && ( left == 1 ) ) ? (
-        multiSelect = 1;
-        refx = mouse_x;
-        refy = mouse_y;
+    lastMouseX = mouse_x;
+    lastMouseY = mouse_y;
+    
+    !nodeCap ? (
+      // No nodes manipulated => Do multi-select
+      ( mouse_x > w1x ) && ( mouse_y > w1y ) && ( mouse_x < ( w1x + w1w ) ) && ( mouse_y < ( w1y + w1h ) ) ? (
+        ( ( lastleft == 0 ) && ( left == 1 ) ) ? (
+          multiSelect = 1;
+          refx = mouse_x;
+          refy = mouse_y;
+        );
       );
     );
-  );
-) : ( multiSelect == 1 ) ? (
-  xmi = min(refx, mouse_x);
-  xma = max(refx, mouse_x);
-  ymi = min(refy, mouse_y);
-  yma = max(refy, mouse_y);
-  gfx_set(1, 1, 1, .4);
-  gfx_rect(xmi, ymi, xma-xmi, yma-ymi);
-  // Select nodes upon release
-  !left ? (
-    node1.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node2.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node3.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node4.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node5.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node6.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node7.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node8.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node9.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node10.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
-    node11.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+  ) : ( multiSelect == 1 ) ? (
+    xmi = min(refx, mouse_x);
+    xma = max(refx, mouse_x);
+    ymi = min(refy, mouse_y);
+    yma = max(refy, mouse_y);
+    gfx_set(1, 1, 1, .4);
+    gfx_rect(xmi, ymi, xma-xmi, yma-ymi);
+    // Select nodes upon release
+    !left ? (
+      node1.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node2.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node3.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node4.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node5.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node6.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node7.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node8.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node9.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node10.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+      node11.select(w1x, w1y, w1w, w1h, xmi, xma, ymi, yma);
+    );
   );
 );
+
 
   function printRight(str)
   (
@@ -2237,8 +2290,8 @@ multiSelect == 0 ? (
     gfx_x = w1x+w1w-tx-5;
     gfx_printf(str);
     gfx_y = gfx_y + 1;
-    gfx_x = w1x+w1w-tx-5;
-    gfx_set(1,1,1,1);
+    gfx_x = w1x+w1w-tx-15;
+    gfx_set(font_color_r,font_color_g,font_color_b,1);
     gfx_printf(str);
     gfx_y = gfx_y + ty;
   );
@@ -2387,14 +2440,11 @@ nSelected = node1.selected + node2.selected + node3.selected + node4.selected + 
 
 function processVerbCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf,
-  dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob)
-  local(knobSize, knobSpacing)
-  global(mouse_x, mouse_y, mouse_cap, scaling)
+  local()
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing)
   (
     gfx_setfont(4);
-    knobSize = 35*(1+scaling);
-    knobSpacing = 25*(1+scaling);
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
@@ -2404,7 +2454,7 @@ function processVerbCtrls(cX, cY)
     cX += 4*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
-    outputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
+    outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Input gain.", 0);
     outputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
       y = 1 - outputGainKnob.value;
       this.updateToSliderRec();
@@ -2444,19 +2494,16 @@ function processVerbCtrls(cX, cY)
       );
     );
     
-    cX += .25*knobSpacing;
+    cX += 4*knobSpacing
   );
 
 function processRegularCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime,
-  dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, pingpong, rectify,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob)
-  local(knobSize, knobSpacing)
-  global(mouse_x, mouse_y, mouse_cap, scaling)
+  local()
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing)
   (
     gfx_setfont(4);
-    knobSize = 35*(1+scaling);
-    knobSpacing = 25*(1+scaling);
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
@@ -2466,7 +2513,7 @@ function processRegularCtrls(cX, cY)
     cX += 4*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
-    outputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
+    outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Input gain.", 0);
     outputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
       y = 1 - outputGainKnob.value;
       this.updateToSliderRec();
@@ -2515,19 +2562,17 @@ function processRegularCtrls(cX, cY)
       );
     );    
     
-    cX += .25*knobSpacing;
+    cX += 4*knobSpacing
   );
 
 // Draw grain controls
 function processGrainCtrls(cX, cY)
   instance(grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, 
                   lengthKnob,  jitterKnob,  overlapKnob,  speedKnob,  panSpreadKnob,  detuneKnob)
-  local(knobSize, knobSpacing)
-  global(mouse_x, mouse_y, mouse_cap, scaling)
+  local()
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing)
   (
     gfx_setfont(4);
-    knobSize = 35*(1+scaling);
-    knobSpacing = 25*(1+scaling);
     grain ? (
       lengthKnob.active = 1;
       lengthKnob.value = (grainLength-40)/260;
@@ -2570,32 +2615,55 @@ function processGrainCtrls(cX, cY)
       detuneKnob.value = grainSpeedSpread*4;
       detuneKnob.drawKnob(cX, cY, knobSize, "Detune", "Detune.", 0);
       detuneKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? grainSpeedSpread = detuneKnob.value*.25;
+      cX += 4*knobSpacing
     );
+    
+    cX
   );
+
+function processShapers(cX, cY)
+  instance(rectify 
+           shaperSelect)
+  local(nShapers)
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open)
+(
+  /* Combobox to select shaper */
+  nShapers = 6;
+  cX = cX - 20*(1+scaling);
+  cY = cY - 20*(1+scaling);
+  shaperSelect.combobox(cX, cY, 120*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
+  shaperSelect.combobox_setcuritem(rectify);
+  shaperSelect.combobox_draw();  
+  shaperSelect.combobox_draw_top();
+  shaperSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    rectify = shaperSelect.curitem;
+  );
+);
+
+knobSize = 30*(1+scaling);
+knobSpacing = 22*(1+scaling);
 
 ( nSelected == 1 ) ? (
   cY = w1h + .5*(gfx_h-w1h);
-  cX = 100*(1+scaling);
-  node1.selected ? ( selectedNode = 1; cX += node1.processRegularCtrls(cX, cY); node1.processGrainCtrls(cX, cY); ) :
-  node2.selected ? ( selectedNode = 2; cX += node2.processRegularCtrls(cX, cY); node2.processGrainCtrls(cX, cY); ) :
-  node3.selected ? ( selectedNode = 3; cX += node3.processRegularCtrls(cX, cY); node3.processGrainCtrls(cX, cY); ) :
-  node4.selected ? ( selectedNode = 4; cX += node4.processRegularCtrls(cX, cY); node4.processGrainCtrls(cX, cY); ) :
-  node5.selected ? ( selectedNode = 5; cX += node5.processRegularCtrls(cX, cY); node5.processGrainCtrls(cX, cY); ) :
-  node6.selected ? ( selectedNode = 6; cX += node6.processRegularCtrls(cX, cY); node6.processGrainCtrls(cX, cY); ) :
-  node7.selected ? ( selectedNode = 7; cX += node7.processRegularCtrls(cX, cY); node7.processGrainCtrls(cX, cY); ) :
-  node8.selected ? ( selectedNode = 8; cX += node8.processRegularCtrls(cX, cY); node8.processGrainCtrls(cX, cY); ) :
-  node9.selected ? ( selectedNode = 9; cX += node9.processRegularCtrls(cX, cY); node9.processGrainCtrls(cX, cY); ) :
-  node10.selected ? ( selectedNode = 10; cX += node10.processRegularCtrls(cX, cY); node10.processGrainCtrls(cX, cY); );
-  node11.selected ? ( selectedNode = 11; cX += node11.processVerbCtrls(cX, cY); );
+  cX = 70*(1+scaling);
+  node1.selected ? ( selectedNode = 1; cX = node1.processRegularCtrls(cX, cY); cX = node1.processGrainCtrls(cX, cY); node1.processShapers(cX, cY); ) :
+  node2.selected ? ( selectedNode = 2; cX = node2.processRegularCtrls(cX, cY); cX = node2.processGrainCtrls(cX, cY); node2.processShapers(cX, cY); ) :
+  node3.selected ? ( selectedNode = 3; cX = node3.processRegularCtrls(cX, cY); cX = node3.processGrainCtrls(cX, cY); node3.processShapers(cX, cY); ) :
+  node4.selected ? ( selectedNode = 4; cX = node4.processRegularCtrls(cX, cY); cX = node4.processGrainCtrls(cX, cY); node4.processShapers(cX, cY); ) :
+  node5.selected ? ( selectedNode = 5; cX = node5.processRegularCtrls(cX, cY); cX = node5.processGrainCtrls(cX, cY); node5.processShapers(cX, cY); ) :
+  node6.selected ? ( selectedNode = 6; cX = node6.processRegularCtrls(cX, cY); cX = node6.processGrainCtrls(cX, cY); node6.processShapers(cX, cY); ) :
+  node7.selected ? ( selectedNode = 7; cX = node7.processRegularCtrls(cX, cY); cX = node7.processGrainCtrls(cX, cY); node7.processShapers(cX, cY); ) :
+  node8.selected ? ( selectedNode = 8; cX = node8.processRegularCtrls(cX, cY); cX = node8.processGrainCtrls(cX, cY); node8.processShapers(cX, cY); ) :
+  node9.selected ? ( selectedNode = 9; cX = node9.processRegularCtrls(cX, cY); cX = node9.processGrainCtrls(cX, cY); node9.processShapers(cX, cY); ) :
+  node10.selected ? ( selectedNode = 10; cX = node10.processRegularCtrls(cX, cY); cX = node10.processGrainCtrls(cX, cY); node10.processShapers(cX, cY); );
+  node11.selected ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); );
   
   // Band indicator
-  gfx_set(1,1,1,1);
   sprintf(16, "Node %d", selectedNode);
   vLabel.drawVertLabel(8, w1h, 16, gfx_h-w1h, BAND_FONT, 3);
   
 ) : (
   // Band indicator
-  gfx_set(1,1,1,1);
   sprintf(16, "-", selectedNode);
   vLabel.drawVertLabel(8, w1h, 16, gfx_h-w1h, BAND_FONT, 3);
 );
