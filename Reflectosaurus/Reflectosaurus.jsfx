@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.24
+version: 0.25
 author: Joep Vanlier
-changelog: Added more non-linear waveshaping options for the delay nodes. Tweaked UI a bit.
+changelog: Bugfix ping-pong delay. Added button to enable ping-pong delay. Added strength slider for saturation fx. Made scaling on the rendering of the feedback a bit more sane. Added mid/side processing.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -728,9 +728,12 @@ function updateToSliderRec()
 function updateNodeBlock()
   local()
   global()
-  instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11)
+  instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling)
   (
     recv = fromNode1 || fromNode2 || fromNode3 || fromNode4 || fromNode5 || fromNode6 || fromNode7 || fromNode8 || fromNode9 || fromNode10 || fromNode11;
+    
+    ceiling     = exp(.11512925464970228420089957273422 * saturationGain); //log(10)/20 = .11512925464970228420089957273422;
+    invCeiling = 1.0 / ceiling;
  );
 
 function getReceives()
@@ -846,14 +849,20 @@ function process(l_in, r_in)
   local(l, r, tmp, lr, ll, factor, t)
   global(lOut, rOut, srate)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, 
-           pingpong, rectify, left_sat, right_sat, modifier,
+           pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
       rIn = r_in * invol;
 
-      this.getReceives();
+      this.getReceives();    
+    
+      midSide ? (
+        t = lIn;
+        lIn = (lIn + rIn) * .5;
+        rIn = (t - rIn) * .5;
+      );
     
       grain ? (
         granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
@@ -886,24 +895,24 @@ function process(l_in, r_in)
           r = this.dcfr.fixdc(r);
         ) : ( rectify == 2 ) ?
         (
-          l = tanh(2*l)*.5;
-          r = tanh(2*r)*.5;
+          l = tanh(ceiling*l)*invCeiling;
+          r = tanh(ceiling*r)*invCeiling;
         ) : ( rectify == 3 ) ? 
         (
-          l = .5*l;
-          r = .5*r;
-          ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
-          ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
+          l = .5*l*ceiling;
+          r = .5*r*ceiling;
+          ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l)*invCeiling;
+          ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r)*invCeiling;
         ) : ( rectify == 4 ) ?
         (
-          l = smoothSaturator(2*l)*.5;
-          r = smoothSaturator(2*r)*.5;
+          l = smoothSaturator(ceiling*l)*invCeiling;
+          r = smoothSaturator(ceiling*r)*invCeiling;
           l = this.dcfl.fixdc(l);
           r = this.dcfr.fixdc(r);
         ) : ( rectify == 5 ) ? (
           /* Crossover distortion */
-          l = l * 2;
-          r = r * 2;
+          l = l * ceiling;
+          r = r * ceiling;
           ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
           ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
           
@@ -913,26 +922,27 @@ function process(l_in, r_in)
           l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(factor*t));
           t = r*r;
           r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(factor*t));
-          l = l * .5;
-          r = r * .5;
+          l = l * invCeiling;
+          r = r * invCeiling;
         );
       );
   
       pingpong ? (
-        tmp = l*lPanTerm;
-        l = r*rPanTerm;
-        r = tmp;
-        buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
+        buffer.updateBuffer2(fbcoeff*r + lIn*lPanTerm, fbcoeff*l + rIn*rPanTerm);
         
         l = activevol*l*play;
         r = activevol*r*play;  
       ) : (
-        l = l;
-        r = r;
         buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
         
         l = activevol*l*lPanTerm*play;
         r = activevol*r*rPanTerm*play;  
+      );
+
+      midSide ? (
+        t = l;
+        l = l + r;
+        r = t - r;
       );
 
       lOut += l;
@@ -1020,7 +1030,7 @@ function serializeNode()
   local()
   global(readread, SyncMode)
   instance( x, y, active,
-            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain,
+            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
             mute, solo, play,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
@@ -1067,9 +1077,12 @@ function serializeNode()
     file_var( 0, grainPanSpread );
     file_var( 0, grainSpeedSpread );
     
+    file_var( 0, saturationGain );    
+    file_var( 0, midside );
+    
     /* Memory to expand into when features are added */
     memset(0,0,100);
-    file_mem( 0, 0, 75 );
+    file_mem( 0, 0, 73 ); /* Reduce this by one when you want distortion */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -1172,7 +1185,7 @@ function drawConnections(xmin, ymin, w, h)
   );
 
 function draw(xmin, ymin, w, h, verb)
-  local(adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS, cr, cg, cb)
+  local(adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS, cr, cg, cb, fb)
   global(gfx_a, gfx_x, gfx_y)
   instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain)
   (     
@@ -1180,8 +1193,8 @@ function draw(xmin, ymin, w, h, verb)
     r = 4;
     alpha = 1.0;
     tf = 100*dtime;
-    radius = exp(-3*(1.0-fbcoeff));
-    
+    radius = .13*log(1.0+200*fbcoeff);
+     
     adv = min(0.99, radius);
     xl = floor(xmin + x*w);
     yl = floor(ymin + y*h);
@@ -2282,12 +2295,13 @@ comboboxOpen == 0 ? (
   );
 );
 
-
   function printRight(str)
   (
     gfx_set(0,0,0,1);
     gfx_measurestr(str, tx, ty);
-    gfx_x = w1x+w1w-tx-5;
+    gfx_x = w1x+w1w-tx-16;
+    gfx_printf(str);
+    gfx_x = w1x+w1w-tx-17;
     gfx_printf(str);
     gfx_y = gfx_y + 1;
     gfx_x = w1x+w1w-tx-15;
@@ -2450,7 +2464,7 @@ function processVerbCtrls(cX, cY)
     inputGainKnob.value = 1 - gain;
     inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
     inputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? gain = 1-inputGainKnob.value;
-        
+    
     cX += 4*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
@@ -2498,10 +2512,11 @@ function processVerbCtrls(cX, cY)
   );
 
 function processRegularCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob)
+  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside,
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle)
   local()
-  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing)
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
+         widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a)
   (
     gfx_setfont(4);
     
@@ -2532,12 +2547,22 @@ function processRegularCtrls(cX, cY)
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
     feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount.", 0);
-    feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = clamp(feedbackKnob.value,0,.999);
+    feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
     
     cX += 4*knobSpacing;
+    pingpongToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pingpong, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Ping pong?");
+    pingpong = pingpongToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+    midsideToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, midside, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Mid/Side processing");
+    midside = midsideToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
     panningKnob.active = 1;
     panningKnob.value = pan;
-    panningKnob.drawKnob(cX, cY, knobSize, "Panning", "Panning.", 0);
+    midside ? (
+      panningKnob.drawKnob(cX, cY, knobSize, "[M]  Panning  [S]", "Panning.", 0);
+    ) : (
+      panningKnob.drawKnob(cX, cY, knobSize, "[L]  Panning  [R]", "Panning.", 0);
+    );
     panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
     
     cX += 4*knobSpacing;
@@ -2622,26 +2647,41 @@ function processGrainCtrls(cX, cY)
   );
 
 function processShapers(cX, cY)
-  instance(rectify 
-           shaperSelect)
+  instance(rectify, saturationGain, 
+           shaperSelect, ceilingKnob)
   local(nShapers)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open)
 (
   /* Combobox to select shaper */
   nShapers = 6;
   cX = cX - 20*(1+scaling);
-  cY = cY - 20*(1+scaling);
-  shaperSelect.combobox(cX, cY, 120*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
+  shaperSelect.combobox(cX, cY - 30*(1+scaling), 120*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(rectify);
   shaperSelect.combobox_draw();  
   shaperSelect.combobox_draw_top();
   shaperSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? (
     rectify = shaperSelect.curitem;
   );
+  
+  ceilingKnob.active = 1;
+  ceilingKnob.value = saturationGain/36;
+  ceilingKnob.drawKnob(cX+.6*knobSize, cY+.6*knobSize, .5*knobSize, "Strength", "Strength.", 0);
+  ceilingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? saturationGain = ceilingKnob.value*36;
+  
+  cX += 4*knobSpacing
 );
 
 knobSize = 30*(1+scaling);
 knobSpacing = 22*(1+scaling);
+buttonSize = floor(.3 * knobSpacing);
+widget_r = .3;
+widget_g = .1;
+widget_b = .3;
+widget_a = 1.0;
+toggle_r = .7;
+toggle_g = .2;
+toggle_b = .6;
+toggle_a = 1.0;
 
 ( nSelected == 1 ) ? (
   cY = w1h + .5*(gfx_h-w1h);
