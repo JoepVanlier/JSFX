@@ -1,15 +1,15 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.25
+version: 0.26
 author: Joep Vanlier
-changelog: Bugfix ping-pong delay. Added button to enable ping-pong delay. Added strength slider for saturation fx. Made scaling on the rendering of the feedback a bit more sane. Added mid/side processing.
+changelog: Added higher quality resampling for the delay chain. Improve buffering mechanism. Enable tooltips. Add shine to the reverb node. Add global controls. Added warmth parameter to saturator.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
 import Reflectosaurus_grainlib.jsfx-inc
 import Reflectosaurus_widgets.jsfx-inc
 
-slider1:drywet=1.0<0,1,.001>Dry/Wet
+slider1:drywet=1.0<0,1,.001>-Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>Mode
 slider3:Snap=0<0,1,1{Off,On}>Snap
 
@@ -36,9 +36,10 @@ slider29:Y10=0<0,1,.000000001>-Y10
 slider30:X11=0<0,1,.000000001>-X11
 slider31:Y11=0<0,1,.000000001>-Y11
 
-slider64:WetGain=0<-32,32,1>Gain
+slider64:WetGain=0<-32,32,.001>-Gain
 
 @init
+HQ = 1;
 globalFeedback = 1;
 update_alpha = log(2) / (0.28881132523331055*srate/4);
 inv_update_alpha = 1.0 - update_alpha;
@@ -167,7 +168,7 @@ function readBuffer()
     c2 * (1.0-frac) + c1 * frac
   );
   
-function readBuffer2()
+function readBuffer2_old()
   local(c1l, c2l, c1r, c2r)
   global()
   instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR)
@@ -185,6 +186,64 @@ function readBuffer2()
 
     outL = c2l * (1.0-frac) + c1l * frac;
     outR = c2r * (1.0-frac) + c1r * frac;
+  );
+  
+function readBuffer2()
+  local(c2l, c2r)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
+           c1l, c1r)
+  (    
+    c2l = readptr[];
+    c2r = readptr[1];
+    
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+
+    outL = c2l * (1.0-frac) + c1l * frac;
+    outR = c2r * (1.0-frac) + c1r * frac;
+    
+    c1l = c2l;
+    c1r = c2r;
+  );
+  
+function readBuffer2_HQ()
+  local(t, t2
+        a0l, a1l, a2l, a3l,
+        a0r, a1r, a2r, a3r)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
+           d0l, d1l, d2l, d3l,
+           d0r, d1r, d2r, d3r,          
+           )
+  (
+    d3l = d2l;
+    d2l = d1l;
+    d1l = d0l;    
+    d3r = d2r;
+    d2r = d1r;
+    d1r = d0r;
+    d0l = readptr[];
+    d0r = readptr[1];
+    
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+
+    t = frac;
+    t2 = t * t;
+    
+    a0l = d0l - d1l - d3l + d2l;
+    a1l = d3l - d2l - a0l;
+    a2l = d1l - d3l;
+    a3l = d2l;
+    
+    a0r = d0r - d1r - d3r + d2r;
+    a1r = d3r - d2r - a0r;
+    a2r = d1r - d3r;
+    a3r = d2r;
+
+    outL = a0l*t*t2+a1l*t2+a2l*t+a3l;
+    outR = a0r*t*t2+a1r*t2+a2r*t+a3r;
   );  
   
 function updateBuffer2(L, R)
@@ -277,7 +336,7 @@ function windowBlock()
 
  function processBlockVerb(outputPtr)
     instance(fft_mem, fftSize, nSamples, mag_mem, phase_mem, offset, 
-             dampFactor, sharedBuffer, outputBufStart, outputBufEnd)
+             dampFactor, sharedBuffer, outputBufStart, outputBufEnd, shine)
     local(ifftSize, fwd, bwd, chnk1, 
           r1, r2, i1, i2, re1, im1, re2, im2, x1, x2, x1sq, x2sq, sqlen, isqlen, ang1, ang2,
           cMag, cPhase, outPtr, fftPtr, fftPtr2, magPtr, magPtr2, phasePtr, 
@@ -316,13 +375,18 @@ function windowBlock()
         
         magPtr[]    = sqrt(re1*re1 + im1*im1); magPtr += 1;
         magPtr[]    = sqrt(re2*re2 + im2*im2); magPtr += 1;
-        
-        // Since we dump the phase anyway, don't compute it.
-        // phasePtr[]  = atan2(im1,re1); phasePtr += 1;
-        // phasePtr[]  = atan2(im2,re2); phasePtr += 1;
-        
         fwd += 2;
       );      
+      
+      shine ? (
+        i = 0;
+        loop( fftSize/2,
+          i2 = 2*i;
+          sharedBuffer[i2]      += shine*(1-dampFactor)*sharedBuffer[i];
+          sharedBuffer[i2 + 1]  += shine*(1-dampFactor)*sharedBuffer[i + 1];
+          i += 2;
+        );
+      );
       
       /////////////////////////////
       // Perform processing here //
@@ -338,7 +402,7 @@ function windowBlock()
         );
         fftPtr += 1;
         magPtr += 1;
-      );
+      );      
       
       // Add basic verb from magnitude
       fftPtr = sharedBuffer;
@@ -531,12 +595,14 @@ function initializeVerb(bufferPos)
 function processVerb(inL, inR)
   global()
   local()
-  instance(verbBuf, verbBuf2, outL, outR, verbOutputPtr, verbOutputBufStart, verbOutputBufEnd, damp, mode)
+  instance(verbBuf, verbBuf2, outL, outR, verbOutputPtr, verbOutputBufStart, verbOutputBufEnd, damp, mode, shine)
   (  
     verbBuf.dampFactor = damp;
     verbBuf2.dampFactor = damp;
     verbBuf.mode = mode;
     verbBuf2.mode = mode;
+    verbBuf.shine = shine;
+    verbBuf2.shine = shine;
     
     verbBuf.updateVerb(verbOutputPtr, inL, inR);
     verbBuf2.updateVerb(verbOutputPtr, inL, inR);
@@ -620,6 +686,38 @@ function eval_linearSVF_HP(v0)
     
     v0 - k*v1 - v2
   );
+
+  // Tilt filters used for the saturator's warmth  parameter
+  function init_tilt(freq, res, A)
+    global(srate, slider54)
+    local(g, k)
+    instance(ic1eq, ic2eq, A, a1, a2, a3, m0, m1, m2)
+    (
+      g = tan(.5 * $pi * freq) / sqrt(A);
+      k = 2 - 2*res;
+      
+      a1 = 1/(1+g*(g+k));
+      a2 = g*a1;
+      a3 = g*a2;
+      
+      m0 = 1;
+      m1 = k*(A-1);
+      m2 = (A*A - 1);
+    );
+
+  function eval_tilt(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3*v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;    
+      
+      (v0 + m1 * v1 + m2 * v2)
+    );
 
 function xToTime(x)
   global(mintime, maxtime, xmin, xmax, srate, SyncMode)
@@ -726,14 +824,26 @@ function updateToSliderRec()
   );
 
 function updateNodeBlock()
-  local()
-  global()
-  instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling)
+  local(omega_tilt)
+  global(srate)
+  instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
+  l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain)
   (
     recv = fromNode1 || fromNode2 || fromNode3 || fromNode4 || fromNode5 || fromNode6 || fromNode7 || fromNode8 || fromNode9 || fromNode10 || fromNode11;
     
     ceiling     = exp(.11512925464970228420089957273422 * saturationGain); //log(10)/20 = .11512925464970228420089957273422;
     invCeiling = 1.0 / ceiling;
+    
+    warmth != lwarmth ? (
+      tilt_gain = 10^(12*warmth / 20);
+      inverse_tilt_gain = 1.0 / tilt_gain;
+      omega_tilt = 3200 / srate;
+      l_tilt.init_tilt(omega_tilt, 0, tilt_gain);
+      r_tilt.init_tilt(omega_tilt, 0, tilt_gain);
+      l_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
+      r_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
+      lwarmth = warmth;
+    );
  );
 
 function getReceives()
@@ -847,10 +957,11 @@ function rectify(in)
 
 function process(l_in, r_in)
   local(l, r, tmp, lr, ll, factor, t)
-  global(lOut, rOut, srate)
-  instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, 
+  global(lOut, rOut, srate, HQ)
+  instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
-           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
+           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread
+           l_itilt, r_itilt, l_tilt, r_tilt, tilt_gain, inverse_tilt_gain)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -871,7 +982,8 @@ function process(l_in, r_in)
         l = granulator.L;
         r = granulator.R;
       ) : (
-        buffer.readBuffer2();
+        HQ ? buffer.readBuffer2_HQ() : buffer.readBuffer2();
+        
         l = buffer.outL;
         r = buffer.outR;
       );
@@ -883,6 +995,12 @@ function process(l_in, r_in)
       lastR = r * rPanTerm;
 
       rectify ? (
+        // De-emphasize before shaper for warmth
+        warmth != 0 ? (
+          l=l_itilt.eval_tilt(l)*tilt_gain;
+          r=r_itilt.eval_tilt(r)*tilt_gain;
+        );
+              
         rectify == 1 ? (
           // Higher quality anti-aliasing rectification
           // decided against this for performance reasons
@@ -925,6 +1043,12 @@ function process(l_in, r_in)
           l = l * invCeiling;
           r = r * invCeiling;
         );
+        
+        // Re-emphasize after shaper for warmth
+        warmth != 0 ? (
+          l=l_tilt.eval_tilt(l)*inverse_tilt_gain;
+          r=r_tilt.eval_tilt(r)*inverse_tilt_gain;
+        );
       );
   
       pingpong ? (
@@ -955,7 +1079,7 @@ function process(l_in, r_in)
 function processVerbNode(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
-  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR)
+  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -964,6 +1088,8 @@ function processVerbNode(l_in, r_in)
       this.getReceives();
       
       verb.damp = fbcoeff;
+      verb.shine = shine;
+      verb.mode = 1.0-pingpong;
       verb.processVerb(lIn, rIn);
       
       l = verb.outL;
@@ -1031,7 +1157,7 @@ function serializeNode()
   global(readread, SyncMode)
   instance( x, y, active,
             dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
-            mute, solo, play,
+            mute, solo, play, shine, warmth,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
@@ -1079,10 +1205,12 @@ function serializeNode()
     
     file_var( 0, saturationGain );    
     file_var( 0, midside );
+    file_var( 0, shine );
+    file_var( 0, warmth );
     
     /* Memory to expand into when features are added */
     memset(0,0,100);
-    file_mem( 0, 0, 73 ); /* Reduce this by one when you want distortion */
+    file_mem( 0, 0, 71 ); /* Reduce this by one when you want distortion */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -1185,9 +1313,9 @@ function drawConnections(xmin, ymin, w, h)
   );
 
 function draw(xmin, ymin, w, h, verb)
-  local(adv, alpha, xl, yl, tf, logLevel, outer, panSize, silent, radius, rectS, cr, cg, cb, fb)
+  local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb)
   global(gfx_a, gfx_x, gfx_y)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer)
   (     
     silent = max(0,1-play);
     r = 4;
@@ -1359,6 +1487,22 @@ function select(xmin, ymin, w, h, xselectmin, xselectmax, yselectmin, yselectmax
     selected = ( xl > xselectmin ) && ( xl < xselectmax ) && ( yl > yselectmin ) && ( yl < yselectmax ) ? 1 : 0;
   );
 
+function mouse_over(mousex, mousey, xmin, ymin, w, h)
+  local(x1, y1, dx, dy)
+  instance(dtime, x, y, outer)
+  (
+    x = timeToX(dtime);
+    xl = xmin + x*w;
+    yl = ymin + y*h;
+    
+    dx = mousex - xl;
+    dy = mousey - yl;
+    
+    /* Yeah! We're in range! */
+    ( (dx*dx + dy*dy) < (outer*outer) ) ? 1 : 0
+);
+
+
 function amIChosen()
   local()
   global()
@@ -1368,13 +1512,12 @@ function amIChosen()
   );
 
 function tryNodeConnect(xmin, ymin, w, h, from, mousex, mousey)
-  local(xl, yl, outer, dx, dy)
+  local(xl, yl, dx, dy)
   instance(dtime, x, y, fbcoeff,
-           fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11)
+           fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, outer)
   global()
   (
     x = timeToX(dtime);
-    outer = 8+4.15*ceil(log(.2)/log(fbcoeff)); 
     xl = xmin + x*w;
     yl = ymin + y*h;
     
@@ -1682,6 +1825,8 @@ node8.serializeNode();
 node9.serializeNode();
 node10.serializeNode();
 node11.serializeNode();
+
+file_var(0, HQ);
 
 @slider
 
@@ -2013,6 +2158,9 @@ gfx_setfont(KNOB_FONT, "Arial", 14);
 KNOB_FONT2 = 7;
 gfx_setfont(KNOB_FONT2, "Arial", 13);
 
+HINT_FONT = 8;
+gfx_setfont(HINT_FONT, "Arial", 13);
+
 function drawWindow(x, y, w, h)
   local(dx, dy, Nx, Ny, pw, ph, xValue, yLevel, dyL, dxL, i, ct)
   global(gfx_x, gfx_y, FONT_GRID, SyncMode,
@@ -2323,6 +2471,11 @@ printRight("R - Rectify\n");
 printRight("Wheel - Direct In Gain\n");
 printRight("G - Grain\n");
 printRight("T - Scale by feedback\n");
+HQ ? (
+  printRight("H - HQ resampling [ON]");
+) : (
+  printRight("H - HQ resampling [OFF]");
+);
 
 // F1 - reset delay lines
 ( lastchar == 26161 ) ? (
@@ -2342,6 +2495,10 @@ printRight("T - Scale by feedback\n");
   node9.selected  ? node9.mute  = node9.mute  ? 0 : 1;
   node10.selected ? node10.mute = node10.mute ? 0 : 1;
   node11.selected ? node11.mute = node11.mute ? 0 : 1;
+);
+
+( lastchar == 104 ) ? (
+  HQ = 1 - HQ;
 );
 
 // Grain
@@ -2453,8 +2610,8 @@ function convertToNewFormat()
 nSelected = node1.selected + node2.selected + node3.selected + node4.selected + node5.selected + node6.selected + node7.selected + node8.selected + node9.selected + node10.selected + node11.selected*1;
 
 function processVerbCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob)
+  instance(gain, vol, y, fb, pan, lpf, hpf, shine,
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob)
   local()
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing)
   (
@@ -2462,13 +2619,13 @@ function processVerbCtrls(cX, cY)
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
-    inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
+    inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain", 0);
     inputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? gain = 1-inputGainKnob.value;
     
     cX += 4*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
-    outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Input gain.", 0);
+    outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Input gain", 0);
     outputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
       y = 1 - outputGainKnob.value;
       this.updateToSliderRec();
@@ -2477,25 +2634,25 @@ function processVerbCtrls(cX, cY)
     cX += 4*knobSpacing;
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
-    feedbackKnob.drawKnob(cX, cY, knobSize, "Decay time", "Feedback amount.", 0);
+    feedbackKnob.drawKnob(cX, cY, knobSize, "Decay time", "Decay time\n\nLength of the reverb tail.", 0);
     feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = clamp(feedbackKnob.value,0,.999);
+    
+    cX += 4*knobSpacing;
+    panningKnob.active = 1;
+    panningKnob.value = pan;
+    panningKnob.drawKnob(cX, cY, knobSize, "[L]  Panning  [R]", "Panning", 0);
+    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
     
     cX += 4*knobSpacing;
     lpfKnob.active = 1;
     lpfKnob.value = lpf;
-    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter.", 0);
+    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter", 0);
     lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
       lpf = lpfKnob.value;
       lpf < hpf ? (
         hpf = lpf;
       );
     );
-    
-    cX += 4*knobSpacing;
-    panningKnob.active = 1;
-    panningKnob.value = pan;
-    panningKnob.drawKnob(cX, cY, knobSize, "Panning", "Panning.", 0);
-    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
     
     cX += 4*knobSpacing;
     hpfKnob.active = 1;
@@ -2507,6 +2664,12 @@ function processVerbCtrls(cX, cY)
         lpf = hpf;
       );
     );
+    
+    cX += 4*knobSpacing;
+    shineKnob.active = 1;
+    shineKnob.value = shine;
+    shineKnob.drawKnob(cX, cY, knobSize, "Shine", "Shine.\n\nMake copies of spectrum to higher octaves.\nCan be used to add extra brightness.", 0);
+    shineKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.2) ? shine = shineKnob.value;
     
     cX += 4*knobSpacing
   );
@@ -2522,13 +2685,13 @@ function processRegularCtrls(cX, cY)
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
-    inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.", 0);
+    inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.\n\nControls how much of the input is\npumped into the delay line.", 0);
     inputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? gain = 1-inputGainKnob.value;
         
     cX += 4*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
-    outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Input gain.", 0);
+    outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Output gain\n\nControls how much of the signal\nis routed to the output.", 0);
     outputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
       y = 1 - outputGainKnob.value;
       this.updateToSliderRec();
@@ -2537,7 +2700,7 @@ function processRegularCtrls(cX, cY)
     cX += 4*knobSpacing;
     timeKnob.active = 1;
     timeKnob.value = x;
-    timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time.", 0);
+    timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time\n\nControls the distance between each delay.", 0);
     timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
       x = clamp(timeKnob.value,0,1);
       dtime = xToTime(x);
@@ -2546,14 +2709,14 @@ function processRegularCtrls(cX, cY)
     cX += 4*knobSpacing;
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
-    feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount.", 0);
+    feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount\n\nControls how quickly the delay decays.", 0);
     feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
     
     cX += 4*knobSpacing;
-    pingpongToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pingpong, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Ping pong?");
+    pingpongToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pingpong, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
     pingpong = pingpongToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
-    midsideToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, midside, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Mid/Side processing");
+    midsideToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, midside, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle mid/side\nprocessing");
     midside = midsideToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     panningKnob.active = 1;
@@ -2568,7 +2731,7 @@ function processRegularCtrls(cX, cY)
     cX += 4*knobSpacing;
     hpfKnob.active = 1;
     hpfKnob.value = hpf;
-    hpfKnob.drawKnob(cX, cY, knobSize, "High pass", "High pass filter.", 0);
+    hpfKnob.drawKnob(cX, cY, knobSize, "High pass", "High pass filter.\n\nControls cutoff frequency of high pass filter.", 0);
     hpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
       hpf = hpfKnob.value;
       lpf < hpf ? (
@@ -2579,7 +2742,7 @@ function processRegularCtrls(cX, cY)
     cX += 4*knobSpacing;
     lpfKnob.active = 1;
     lpfKnob.value = lpf;
-    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter.", 0);
+    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter.\n\nControls cutoff frequency of low pass filter.", 0);
     lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
       lpf = lpfKnob.value;
       lpf < hpf ? (
@@ -2601,28 +2764,28 @@ function processGrainCtrls(cX, cY)
     grain ? (
       lengthKnob.active = 1;
       lengthKnob.value = (grainLength-40)/260;
-      lengthKnob.drawKnob(cX, cY, knobSize, "Length", "Grain Length.", 0);
+      lengthKnob.drawKnob(cX, cY, knobSize, "Length", "Grain length\n\nControls how long each grain sample is.", 0);
       lengthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? grainLength = lengthKnob.value*260+40;
       
       cX += 4*knobSpacing;
       
       overlapKnob.active = 1;
       overlapKnob.value = grainOverlap;
-      overlapKnob.drawKnob(cX, cY, knobSize, "Overlap", "Grain Overlap.", 0);
+      overlapKnob.drawKnob(cX, cY, knobSize, "Overlap", "Grain overlap\n\nControls how much the grains overlap.\nIncrease it for a denser sound (note\nthat this increases CPU).\n", 0);
       overlapKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.75) ? grainOverlap = overlapKnob.value;
       
       cX += 4*knobSpacing;
     
       jitterKnob.active = 1;
       jitterKnob.value = grainJitter/10;
-      jitterKnob.drawKnob(cX, cY, knobSize, "Jitter", "Position Jitter.", 0);
+      jitterKnob.drawKnob(cX, cY, knobSize, "Jitter", "Position jitter.\n\nControls how spread out the\ngrains are taken from the\ndelay buffer. Longer creates\nmore complex sounds.", 0);
       jitterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.3) ? grainJitter = jitterKnob.value*10;
       
       cX += 4*knobSpacing;
       
       panSpreadKnob.active = 1;
       panSpreadKnob.value = grainPanSpread;
-      panSpreadKnob.drawKnob(cX, cY, knobSize, "Spread", "Pan Jitter.", 0);
+      panSpreadKnob.drawKnob(cX, cY, knobSize, "Spread", "Spread\n\nControls pan randomization.\nIncrease for more width.", 0);
       panSpreadKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? grainPanSpread = panSpreadKnob.value;
       
       cX += 4*knobSpacing;
@@ -2631,14 +2794,13 @@ function processGrainCtrls(cX, cY)
       speedKnob.value = ((log(grainSpeed)/log(2))+2)*.25;
       sprintf(5, "%.3g", grainSpeed);
       speedKnob.label = 5;
-      speedKnob.drawKnob(cX, cY, knobSize, "Pitch", "Control grain pitch.", 0);
+      speedKnob.drawKnob(cX, cY, knobSize, "Pitch", "Pitch\n\nControl grain pitch.", 0);
       speedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? grainSpeed = 2^(4*speedKnob.value-2);
-      
       cX += 4*knobSpacing;
       
       detuneKnob.active = 1;
       detuneKnob.value = grainSpeedSpread*4;
-      detuneKnob.drawKnob(cX, cY, knobSize, "Detune", "Detune.", 0);
+      detuneKnob.drawKnob(cX, cY, knobSize, "Detune", "Detune\n\nControls relative tuning of the grains.", 0);
       detuneKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? grainSpeedSpread = detuneKnob.value*.25;
       cX += 4*knobSpacing
     );
@@ -2647,15 +2809,23 @@ function processGrainCtrls(cX, cY)
   );
 
 function processShapers(cX, cY)
-  instance(rectify, saturationGain, 
-           shaperSelect, ceilingKnob)
-  local(nShapers)
+  instance(rectify, saturationGain, warmth,
+           shaperSelect, ceilingKnob, warmthKnob)
+  local(nShapers, x_start, y_start)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open)
 (
   /* Combobox to select shaper */
-  nShapers = 6;
+  nShapers = 6;  
   cX = cX - 20*(1+scaling);
-  shaperSelect.combobox(cX, cY - 30*(1+scaling), 120*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
+  
+  gfx_set(.1, .1, .1, 1);
+  x_start = cX - 2*(1+scaling);
+  y_start = cY - 30*(1+scaling);
+  gfx_line(x_start-6, y_start-6, x_start-6, y_start+82*(1+scaling));
+  gfx_line(x_start-6, y_start-6, x_start+95*(1+scaling), y_start-6);
+  gfx_line(x_start+95*(1+scaling), y_start-6, x_start+95*(1+scaling), y_start+82*(1+scaling));
+  gfx_line(x_start-6, y_start+82*(1+scaling), x_start+95*(1+scaling), y_start+82*(1+scaling));
+  shaperSelect.combobox(x_start, y_start-1, 90*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(rectify);
   shaperSelect.combobox_draw();  
   shaperSelect.combobox_draw_top();
@@ -2663,10 +2833,15 @@ function processShapers(cX, cY)
     rectify = shaperSelect.curitem;
   );
   
-  ceilingKnob.active = 1;
+  ceilingKnob.active = rectify > 0;
   ceilingKnob.value = saturationGain/36;
-  ceilingKnob.drawKnob(cX+.6*knobSize, cY+.6*knobSize, .5*knobSize, "Strength", "Strength.", 0);
+  ceilingKnob.drawKnob(cX+.6*knobSize, cY+.5*knobSize, .5*knobSize, "Strength", "Strength\n\nControls the saturation level of the saturator.", 0);
   ceilingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? saturationGain = ceilingKnob.value*36;
+  
+  warmthKnob.active = rectify > 0;
+  warmthKnob.value = warmth;
+  warmthKnob.drawKnob(cX+2.2*knobSize, cY+.5*knobSize, .5*knobSize, "Warmth", "Warmth\n\nAdds warmth to the saturation by\nde-emphasizing bass before saturation\nand re-emphasizing it after.", 0);
+  warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? warmth = warmthKnob.value;
   
   cX += 4*knobSpacing
 );
@@ -2683,30 +2858,52 @@ toggle_g = .2;
 toggle_b = .6;
 toggle_a = 1.0;
 
-( nSelected == 1 ) ? (
-  cY = w1h + .5*(gfx_h-w1h);
-  cX = 70*(1+scaling);
-  node1.selected ? ( selectedNode = 1; cX = node1.processRegularCtrls(cX, cY); cX = node1.processGrainCtrls(cX, cY); node1.processShapers(cX, cY); ) :
-  node2.selected ? ( selectedNode = 2; cX = node2.processRegularCtrls(cX, cY); cX = node2.processGrainCtrls(cX, cY); node2.processShapers(cX, cY); ) :
-  node3.selected ? ( selectedNode = 3; cX = node3.processRegularCtrls(cX, cY); cX = node3.processGrainCtrls(cX, cY); node3.processShapers(cX, cY); ) :
-  node4.selected ? ( selectedNode = 4; cX = node4.processRegularCtrls(cX, cY); cX = node4.processGrainCtrls(cX, cY); node4.processShapers(cX, cY); ) :
-  node5.selected ? ( selectedNode = 5; cX = node5.processRegularCtrls(cX, cY); cX = node5.processGrainCtrls(cX, cY); node5.processShapers(cX, cY); ) :
-  node6.selected ? ( selectedNode = 6; cX = node6.processRegularCtrls(cX, cY); cX = node6.processGrainCtrls(cX, cY); node6.processShapers(cX, cY); ) :
-  node7.selected ? ( selectedNode = 7; cX = node7.processRegularCtrls(cX, cY); cX = node7.processGrainCtrls(cX, cY); node7.processShapers(cX, cY); ) :
-  node8.selected ? ( selectedNode = 8; cX = node8.processRegularCtrls(cX, cY); cX = node8.processGrainCtrls(cX, cY); node8.processShapers(cX, cY); ) :
-  node9.selected ? ( selectedNode = 9; cX = node9.processRegularCtrls(cX, cY); cX = node9.processGrainCtrls(cX, cY); node9.processShapers(cX, cY); ) :
-  node10.selected ? ( selectedNode = 10; cX = node10.processRegularCtrls(cX, cY); cX = node10.processGrainCtrls(cX, cY); node10.processShapers(cX, cY); );
-  node11.selected ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); );
-  
+cY = w1h + .5*(gfx_h-w1h);
+cX = 70*(1+scaling);
+
+gfx_x = 0;
+gfx_y = 100;
+selectedNode = 0;
+(nSelected < 2) && (multiSelect == 0) ? (
+  node1.selected || (nSelected == 0 && node1.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 1; cX = node1.processRegularCtrls(cX, cY); cX = node1.processGrainCtrls(cX, cY); node1.processShapers(cX, cY); ) :
+  node2.selected || (nSelected == 0 && node2.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 2; cX = node2.processRegularCtrls(cX, cY); cX = node2.processGrainCtrls(cX, cY); node2.processShapers(cX, cY); ) :
+  node3.selected || (nSelected == 0 && node3.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 3; cX = node3.processRegularCtrls(cX, cY); cX = node3.processGrainCtrls(cX, cY); node3.processShapers(cX, cY); ) :
+  node4.selected || (nSelected == 0 && node4.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 4; cX = node4.processRegularCtrls(cX, cY); cX = node4.processGrainCtrls(cX, cY); node4.processShapers(cX, cY); ) :
+  node5.selected || (nSelected == 0 && node5.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 5; cX = node5.processRegularCtrls(cX, cY); cX = node5.processGrainCtrls(cX, cY); node5.processShapers(cX, cY); ) :
+  node6.selected || (nSelected == 0 && node6.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 6; cX = node6.processRegularCtrls(cX, cY); cX = node6.processGrainCtrls(cX, cY); node6.processShapers(cX, cY); ) :
+  node7.selected || (nSelected == 0 && node7.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 7; cX = node7.processRegularCtrls(cX, cY); cX = node7.processGrainCtrls(cX, cY); node7.processShapers(cX, cY); ) :
+  node8.selected || (nSelected == 0 && node8.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 8; cX = node8.processRegularCtrls(cX, cY); cX = node8.processGrainCtrls(cX, cY); node8.processShapers(cX, cY); ) :
+  node9.selected || (nSelected == 0 && node9.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 9; cX = node9.processRegularCtrls(cX, cY); cX = node9.processGrainCtrls(cX, cY); node9.processShapers(cX, cY); ) :
+  node10.selected || (nSelected == 0 && node10.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 10; cX = node10.processRegularCtrls(cX, cY); cX = node10.processGrainCtrls(cX, cY); node10.processShapers(cX, cY); );
+  node11.selected || (nSelected == 0 && node11.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); );
+);
+
+(selectedNode > 0) ? (
   // Band indicator
   sprintf(16, "Node %d", selectedNode);
   vLabel.drawVertLabel(8, w1h, 16, gfx_h-w1h, BAND_FONT, 3);
   
 ) : (
   // Band indicator
-  sprintf(16, "-", selectedNode);
+  sprintf(16, "Global", selectedNode);
   vLabel.drawVertLabel(8, w1h, 16, gfx_h-w1h, BAND_FONT, 3);
+  
+  gainKnob.active = 1;
+  gainKnob.value = (WetGain+32)/64;
+  gainKnob.drawKnob(cX, cY, knobSize, "Gain", "Gain\n\nOverall output gain.", 0);
+  gainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( 
+    WetGain = gainKnob.value*64-32;
+    updateGain();
+  );
+  gain_string = 100;
+  gainKnob.label = sprintf(gain_string, "%.1f dB", WetGain);
+  
+  cX += 4*knobSpacing;
+  drywetKnob.active = 1;
+  drywetKnob.value = drywet;
+  drywetKnob.drawKnob(cX, cY, knobSize, "Dry/Wet", "Dry/Wet.", 0);
+  drywetKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? drywet = drywetKnob.value
 );
 
 updateToSliderAll();
-
+hinter.drawHint_draw();
