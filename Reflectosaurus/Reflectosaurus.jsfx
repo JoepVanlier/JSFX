@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.27
+version: 0.29
 author: Joep Vanlier
-changelog: Compact the grain controls a bit.
+changelog: Added flutter. Bugfix HQ interpolation. Allow saturation of reverb node. Workaround for JSFX issue. Prevent interpolation between presets because it sounds annoying. Make sure time synchronization is preserved when BPM is changed or preset is loaded.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -35,14 +35,59 @@ slider28:X10=0<0,1,.000000001>-X10
 slider29:Y10=0<0,1,.000000001>-Y10
 slider30:X11=0<0,1,.000000001>-X11
 slider31:Y11=0<0,1,.000000001>-Y11
-
 slider64:WetGain=0<-32,32,.001>-Gain
 
 @init
-HQ = 1;
 globalFeedback = 1;
-update_alpha = log(2) / (0.28881132523331055*srate/4);
-inv_update_alpha = 1.0 - update_alpha;
+quickSwitch = 1;
+
+  /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
+  function init_HP6(freq)
+    global(srate)
+    local(res)
+    instance(g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      g = tan( $pi * freq );
+      
+      k1  = 1.93185165257814; // sqrt(2+sqrt(3))
+      a1_1 = 1/(1+g*(g+k1));
+      
+      k2 = 1.41421356474619; // sqrt(2)
+      a1_2 = 1/(1+g*(g+k2));
+      
+      k3 = 0.517638090205042; // sqrt(2-sqrt(3))
+      a1_3 = 1/(1+g*(g+k3));
+      
+      a2_1 = g*a1_1;
+      a2_2 = g*a1_2;
+      a2_3 = g*a1_3;
+    );
+
+  function eval_HP6(v0)
+    global()
+    local(v1, v2, hp)
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq,
+             g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      v1 = a1_1 * ic1eq + a2_1*(v0-ic2eq);
+      v2 = ic2eq + g*v1;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;
+      hp    = v0 - k1*v1 - v2;
+      
+      v1 = a1_2 * ic3eq + a2_2*(hp-ic4eq);
+      v2 = ic4eq + g*v1;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      hp    = hp - k2*v1 - v2;
+      
+      v1 = a1_3 * ic5eq + a2_3*(hp-ic6eq);
+      v2 = ic6eq + g*v1;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;
+      
+      hp    = hp - k3*v1 - v2;
+    );  
 
 function updateGain()
   global(gainFactor, WetGain)
@@ -142,14 +187,34 @@ function draw_buffer(x, y, w, h, mul, fill)
     );
   );  
   
-function setOffset(offset)
+function setOffset(offset, hq_active)
   local()
   global()
-  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac)
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac,
+           a0, a1, a2, a3, a4, t, tm1, tm2, tm3, tm4, tm5)
   (
     readptr   = scopeptr;
     frac      = offset - floor(offset);
-    readptr  -= floor(offset);
+    
+    hq_active ? (
+      readptr  -= floor(offset) + 2;
+      frac += 2;
+      
+      /* Lagrangian interpolation */
+      t = frac;
+      tm1 = t-1.0;
+      tm2 = t-2.0;
+      tm3 = t-3.0;
+      tm4 = t-4.0;
+      
+      a0 = tm1 * tm2 * tm3 * tm4 / 24; // 1/24
+      a1 = - t * tm2 * tm3 * tm4 / 6; //1/6
+      a2 = t * tm1 * tm3 * tm4 / 4;
+      a3 = - t * tm1 * tm2 * tm4 / 6;
+      a4 = t * tm1 * tm2 * tm3 / 24; // 1/24
+    ) : (
+      readptr  -= floor(offset);
+    );
     readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer);
   );
    
@@ -208,18 +273,19 @@ function readBuffer2()
   );
   
 function readBuffer2_HQ()
-  local(t, t2
-        a0l, a1l, a2l, a3l,
-        a0r, a1r, a2r, a3r)
+  local(t, t2)
   global()
   instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
-           d0l, d1l, d2l, d3l,
-           d0r, d1r, d2r, d3r,          
+           a0, a1, a2, a3, a4,
+           d0l, d1l, d2l, d3l, d4l,
+           d0r, d1r, d2r, d3r, d4r,     
            )
   (
+    d4l = d3l;
     d3l = d2l;
     d2l = d1l;
-    d1l = d0l;    
+    d1l = d0l;
+    d4r = d3r; 
     d3r = d2r;
     d2r = d1r;
     d1r = d0r;
@@ -228,31 +294,28 @@ function readBuffer2_HQ()
     
     readptr += 2;
     readptr > scopebuffermax ? readptr = scopebuffer;
-
-    t = frac;
-    t2 = t * t;
     
-    a0l = d0l - d1l - d3l + d2l;
-    a1l = d3l - d2l - a0l;
-    a2l = d1l - d3l;
-    a3l = d2l;
+    /*t = frac;
+    tm1 = t-1.0;
+    tm2 = t-2.0;
     
-    a0r = d0r - d1r - d3r + d2r;
-    a1r = d3r - d2r - a0r;
-    a2r = d1r - d3r;
-    a3r = d2r;
-
-    outL = a0l*t*t2+a1l*t2+a2l*t+a3l;
-    outR = a0r*t*t2+a1r*t2+a2r*t+a3r;
+    a0 = 0.5 * tm1 * tm2;
+    a1 = -t * tm2;
+    a2 = 0.5 * t * tm1;
+    a3 = 0;
+    a4 = 0;*/
+    
+    outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
+    outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
   );  
   
-function updateBuffer2(L, R)
+function updateBuffer2(ll, rr)
   local()
   global()
   instance(scopeptr, scopebuffermax, scopebuffer)
   (
-    scopeptr[] = L;
-    scopeptr[1] = R;
+    scopeptr[] = ll;
+    scopeptr[1] = rr;
     scopeptr += 2;
     scopeptr > scopebuffermax ? scopeptr = scopebuffer;
   );
@@ -617,19 +680,32 @@ function processVerb(inL, inR)
   
 function f_trafo(freq)
   local()
-  global(slider54, legacyCutoff)
+  global()
   instance()
   (
-    exp( (1-freq) * log(20/22050) ) * $pi / (max(1,slider54));
+    exp( (1-freq) * log(20/22050) ) * $pi;
   );
 
 
 function init_linearSVF(freq, res)
-  global(srate, slider54)
+  global()
   local(g)
   instance(ic1eq, ic2eq, k, a1, a2, a3)
   (
     g = tan(.5 * f_trafo(freq));
+    k = 2 - 2*res;
+    
+    a1 = 1/(1+g*(g+k));
+    a2 = g*a1;
+    a3 = g*a2;
+  );
+  
+function init_linearSVF_direct(freq, res)
+  global()
+  local(g)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    g = tan($pi * freq);
     k = 2 - 2*res;
     
     a1 = 1/(1+g*(g+k));
@@ -689,7 +765,7 @@ function eval_linearSVF_HP(v0)
 
   // Tilt filters used for the saturator's warmth  parameter
   function init_tilt(freq, res, A)
-    global(srate, slider54)
+    global()
     local(g, k)
     instance(ic1eq, ic2eq, A, a1, a2, a3, m0, m1, m2)
     (
@@ -718,6 +794,57 @@ function eval_linearSVF_HP(v0)
       
       (v0 + m1 * v1 + m2 * v2)
     );
+
+function octaver_reset()
+  local()
+  global()
+  instance(flipflopState)
+  (
+    flipflopState = 1;
+    this.svf.reset_linearSVF();
+    this.svf2.reset_linearSVF();
+    this.svf3.reset_linearSVF();
+    this.svf4.reset_linearSVF();
+  );   
+    
+function octaver_eval(sample)
+  local(os)
+  global(srate, israte)
+  instance(lpsample, flipflopState, h1, cnt, bal1, f_est, sidx)
+  (
+    os = 1;
+    sidx += 1;
+    lpsample = this.svf3.eval_linearSVF_LP( this.svf4.eval_linearSVF_HP( sample ) );
+    (lpsample > 0 && h1 < 0 && sidx > 100) ? (
+      cnt += 1;
+      flipflopState = -flipflopState;
+      f_est = .7 * f_est + .3 * ( os / sidx );
+      sidx = 0;
+    );
+    
+    cnt > 1 ?
+    (
+      cnt = 0;
+    );
+    
+    h1 = lpsample;
+    (1-bal1) * ( this.svf.eval_linearSVF_LP( sample*flipflopState ) );
+  );
+
+function octaver_init(filterfreq)
+  local(f_est)
+  global()
+  instance(flipflopState, bal1)
+  (
+    bal1 = filterFreq;
+    
+    f_est = .005;
+    this.svf.init_linearSVF_direct( f_est, 0 );
+    this.svf2.init_linearSVF_direct( .5*f_est, 0 );
+    this.svf3.init_linearSVF( .0005, 0 );
+    this.svf4.init_linearSVF( .01, 0 );
+  );
+  
 
 function xToTime(x)
   global(mintime, maxtime, xmin, xmax, srate, SyncMode)
@@ -756,10 +883,19 @@ function yToVol(y)
     exp(-1.5*y*log(10)) 
   );  
   
+  function flutter()
+  local()
+  global(srate, update_alpha, inv_update_alpha)
+  instance(flutter, cFlutter, flutterLpf)
+  (
+    cFlutter = update_alpha * flutter + inv_update_alpha * cFlutter;
+    cFlutter * srate * flutterLpf.eval_linearSVF_BP(rand() - 0.5) / 100
+  );
+  
   function updateNode()
-  local(newdtime)
-  global(srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
-  instance(fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo)
+  local(newdtime, current_dtime)
+  global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
+  instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -769,8 +905,11 @@ function yToVol(y)
     ( !mute || solo ) ? (
       newdtime = update_alpha * srate * dtime + inv_update_alpha * olddtime;
       diff = olddtime - newdtime;
-      ( abs( diff ) > .0000001 || ( invollast == 99999 ) ) ? (
-        buffer.setOffset(newdtime - floor(newdtime) + floor(newdtime*.5)*2 );       
+      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || (HQ != hq_active) ) ? (
+        hq_active = HQ;
+        current_dtime = newdtime;
+        flutter ? current_dtime += this.flutter();
+        buffer.setOffset(current_dtime - floor(current_dtime) + floor(current_dtime*.5)*2, HQ );
       );
       olddtime = newdtime;
       
@@ -827,12 +966,17 @@ function updateNodeBlock()
   local(omega_tilt)
   global(srate)
   instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
-  l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain)
+  l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain,
+  octaver, rectify)
   (
     recv = fromNode1 || fromNode2 || fromNode3 || fromNode4 || fromNode5 || fromNode6 || fromNode7 || fromNode8 || fromNode9 || fromNode10 || fromNode11;
     
     ceiling     = exp(.11512925464970228420089957273422 * saturationGain); //log(10)/20 = .11512925464970228420089957273422;
     invCeiling = 1.0 / ceiling;
+
+    rectify == 6 ? (
+      this.octaver.octaver_init(1-saturationGain/36);   
+    );
     
     warmth != lwarmth ? (
       tilt_gain = 10^(12*warmth / 20);
@@ -920,6 +1064,9 @@ function getReceives()
         rIn = rIn + fromNode11 * node11.lastR;
       );
     );
+    
+    lIn = tanh(lIn);
+    rIn = tanh(rIn);
   );
 
 eps = 0.0000000001;
@@ -955,13 +1102,86 @@ function rectify(in)
     DC_fixed
   );  
 
+function processWaveshapers(l, r)
+instance(warmth, tilt_gain, ceiling, invCeiling, rectify,
+         l_itilt, r_itilt, l_tilt, r_tilt, tilt_gain, inverse_tilt_gain,
+         shaped_r)
+global()
+local(factor, t)
+(
+    // De-emphasize before shaper for warmth
+    warmth != 0 ? (
+      l=l_itilt.eval_tilt(l)*tilt_gain;
+      r=r_itilt.eval_tilt(r)*tilt_gain;
+    );
+              
+    rectify == 1 ? (
+      // Higher quality anti-aliasing rectification
+      // decided against this for performance reasons
+      //l = this.rectl.rectify(l);
+      //r = this.rectr.rectify(r);
+      l = abs(l);
+      r = abs(r);
+          
+      l = this.dcfl.fixdc(l);
+      r = this.dcfr.fixdc(r);
+    ) : ( rectify == 2 ) ?
+    (
+      l = tanh(ceiling*l)*invCeiling;
+      r = tanh(ceiling*r)*invCeiling;
+    ) : ( rectify == 3 ) ? 
+    (
+      l = .5*l*ceiling;
+      r = .5*r*ceiling;
+      ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
+      ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
+      l = l * invCeiling;
+      r = r * invCeiling;
+    ) : ( rectify == 4 ) ?
+    (
+      l = smoothSaturator(ceiling*l)*invCeiling;
+      r = smoothSaturator(ceiling*r)*invCeiling;
+      l = this.dcfl.fixdc(l);
+      r = this.dcfr.fixdc(r);
+    ) : ( rectify == 5 ) ? (
+      /* Crossover distortion */
+      l = l * ceiling;
+      r = r * ceiling;
+      ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
+      ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
+          
+      factor = -15.09587456;
+          
+      t = l*l;
+      l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(factor*t));
+      t = r*r;
+      r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(factor*t));
+      l = l * invCeiling;
+      r = r * invCeiling;
+    ) : ( rectify == 6 ) ? (
+      t = this.octaver.octaver_eval(l+r);
+      l = this.octaver.bal1 * l + t*.5;
+      r = this.octaver.bal1 * r + t*.5;
+    );
+        
+    // Re-emphasize after shaper for warmth
+    warmth != 0 ? (
+      l=l_tilt.eval_tilt(l)*inverse_tilt_gain;
+      r=r_tilt.eval_tilt(r)*inverse_tilt_gain;
+    );
+    
+    shaped_r = r;
+    l
+  );
+
 function process(l_in, r_in)
-  local(l, r, tmp, lr, ll, factor, t)
-  global(lOut, rOut, srate, HQ)
+  local(tmp, lr, ll, t, l, r)
+  global(lOut, rOut, srate)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
-           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread
-           l_itilt, r_itilt, l_tilt, r_tilt, tilt_gain, inverse_tilt_gain)
+           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread,
+           shaper, shaped_r, hq_active
+           )
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -982,7 +1202,7 @@ function process(l_in, r_in)
         l = granulator.L;
         r = granulator.R;
       ) : (
-        HQ ? buffer.readBuffer2_HQ() : buffer.readBuffer2();
+        hq_active ? buffer.readBuffer2_HQ() : buffer.readBuffer2();
         
         l = buffer.outL;
         r = buffer.outR;
@@ -995,60 +1215,10 @@ function process(l_in, r_in)
       lastR = r * rPanTerm;
 
       rectify ? (
-        // De-emphasize before shaper for warmth
-        warmth != 0 ? (
-          l=l_itilt.eval_tilt(l)*tilt_gain;
-          r=r_itilt.eval_tilt(r)*tilt_gain;
-        );
-              
-        rectify == 1 ? (
-          // Higher quality anti-aliasing rectification
-          // decided against this for performance reasons
-          //l = this.rectl.rectify(l);
-          //r = this.rectr.rectify(r);
-          l = abs(l);
-          r = abs(r);
-          
-          l = this.dcfl.fixdc(l);
-          r = this.dcfr.fixdc(r);
-        ) : ( rectify == 2 ) ?
-        (
-          l = tanh(ceiling*l)*invCeiling;
-          r = tanh(ceiling*r)*invCeiling;
-        ) : ( rectify == 3 ) ? 
-        (
-          l = .5*l*ceiling;
-          r = .5*r*ceiling;
-          ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l)*invCeiling;
-          ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r)*invCeiling;
-        ) : ( rectify == 4 ) ?
-        (
-          l = smoothSaturator(ceiling*l)*invCeiling;
-          r = smoothSaturator(ceiling*r)*invCeiling;
-          l = this.dcfl.fixdc(l);
-          r = this.dcfr.fixdc(r);
-        ) : ( rectify == 5 ) ? (
-          /* Crossover distortion */
-          l = l * ceiling;
-          r = r * ceiling;
-          ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
-          ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
-          
-          factor = -15.09587456;
-          
-          t = l*l;
-          l = (0.78779516*l/(1+abs(l)-3.39263197*t+2.20506682*abs(l)*t)) * (1-exp(factor*t));
-          t = r*r;
-          r = (0.78779516*r/(1+abs(r)-3.39263197*t+2.20506682*abs(r)*t)) * (1-exp(factor*t));
-          l = l * invCeiling;
-          r = r * invCeiling;
-        );
-        
-        // Re-emphasize after shaper for warmth
-        warmth != 0 ? (
-          l=l_tilt.eval_tilt(l)*inverse_tilt_gain;
-          r=r_tilt.eval_tilt(r)*inverse_tilt_gain;
-        );
+        // Note: I tried to make l, r part of this instance and call with this.processWaveshapers,
+        // but this seemed to cause memory errors. JSFX bug maybe?
+        l = this.processWaveshapers(l, r);
+        r = shaped_r;
       );
   
       pingpong ? (
@@ -1079,7 +1249,7 @@ function process(l_in, r_in)
 function processVerbNode(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
-  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong)
+  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -1100,6 +1270,13 @@ function processVerbNode(l_in, r_in)
       
       lastL = l * lPanTerm;
       lastR = r * rPanTerm;
+      
+      rectify ? (
+        // Note: I tried to make l, r part of this instance and call with this.processWaveshapers,
+        // but this seemed to cause memory errors. JSFX bug maybe?
+        l = this.processWaveshapers(l, r);
+        r = shaped_r;
+      );
     
       l = activevol*l*lPanTerm*play;
       r = activevol*r*rPanTerm*play;
@@ -1114,7 +1291,8 @@ function processVerbNode(l_in, r_in)
 function initNode(_memloc, _dtime, _y, idx, off)
   local()
   instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR, lpl, lpr, hpl, hpr,
-           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
+           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, flutterLpf,
+           octaver, octaver)
   global(bufsize, srate)
   (
     me = idx;
@@ -1128,13 +1306,17 @@ function initNode(_memloc, _dtime, _y, idx, off)
     fblast = -9999;
     llpf = -9999;
     lhpf = -9999;
-    invollast = 99999;    
+    invollast = 99999;        
+    
+    octaver.octaver_reset();
     
     /* Cleanly reset the nodes */
     lpl.reset_linearSVF();
     hpl.reset_linearSVF();
     lpr.reset_linearSVF();
     hpr.reset_linearSVF();
+    flutterLpf.init_linearSVF_direct(8/srate, 0.999); /* Note that flutter gets updated every fourth sample, cutoff ~2 Hz */
+    flutterLpf.reset_linearSVF();
     
     granulator.granulator_init();
     
@@ -1154,10 +1336,10 @@ function initFFTNode(loc)
 
 function serializeNode()
   local()
-  global(readread, SyncMode)
+  global(readread, SyncMode, quickSwitch)
   instance( x, y, active,
             dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
-            mute, solo, play, shine, warmth,
+            mute, solo, play, shine, warmth, flutter,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
@@ -1207,14 +1389,16 @@ function serializeNode()
     file_var( 0, midside );
     file_var( 0, shine );
     file_var( 0, warmth );
+    file_var( 0, flutter );
     
     /* Memory to expand into when features are added */
-    memset(0,0,100);
-    file_mem( 0, 0, 71 ); /* Reduce this by one when you want distortion */
+    memset(0,0,70);
+    file_mem( 0, 0, 70 ); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
       this.updateToSlider();
+      quickSwitch = 1;
     );
   );
 
@@ -1232,7 +1416,7 @@ function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
     my  = (.4*yl+.6*yl2);
     gfx_set(.5,.4,.7,.8);
     gfx_line(xl, yl, xl2, yl2, 1);
-    gfx_set(.5,.4,.7,.8+.2*sin(4*render_time));
+    gfx_set(.5,.4,.7,.6+.4*sin(14*render_time));
     gfx_line(xl, yl+1, xl2, yl2+1, 1);
     
     gfx_set(0,0,0,1);
@@ -1249,7 +1433,7 @@ function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
     connector_g = .6;
     connector_b = .8;
     
-    gfx_set(connector_r, connector_g, connector_b,1.0);
+    gfx_set(connector_r, connector_g, connector_b,.9+.1*sin(14*render_time));
     gfx_circle(mx, my, connectorSize-.5, 0, 1);
     gfx_circle(mx, my, connectorSize, 0, 0);
     gfx_circle(mx, my, connectorSize+.5, 0, 1);
@@ -1810,6 +1994,25 @@ function updateToSliderAll()
 
 Init();
 
+function rescaleToTempo(ratio)
+(
+  node1.dtime = node1.dtime * ratio;
+  node2.dtime = node2.dtime * ratio;
+  node3.dtime = node3.dtime * ratio;
+  node4.dtime = node4.dtime * ratio;
+  node5.dtime = node5.dtime * ratio;
+  node6.dtime = node6.dtime * ratio;
+  node7.dtime = node7.dtime * ratio;
+  node8.dtime = node8.dtime * ratio;
+  node9.dtime = node9.dtime * ratio;
+  node10.dtime = node10.dtime * ratio;
+  node11.dtime = node11.dtime * ratio;
+  
+);
+
+dc0.init_HP6(9/srate);
+dc1.init_HP6(9/srate);
+
 @serialize
 file_var(0, maxTime);
 file_var(0, minTime);
@@ -1827,10 +2030,56 @@ node10.serializeNode();
 node11.serializeNode();
 
 file_var(0, HQ);
+ctempo = tempo;
+file_var(0, ctempo);
+csync = SyncMode;
+file_var(0, csync);
+
+// Would've been nicer to do this at the node level, but too late now.
+( file_avail(0) >= 0 ) ? (
+  (csync > 0) ? (
+    (tempo / ctempo != 1) ? (
+      ctempo > 0 ? (
+        rescaleToTempo(tempo / ctempo);
+        updateToSliderAll()
+      );
+    );
+  );
+  updateToSliderAll();
+);
+
+file_var(0, dc_correction);
 
 @slider
 
 @block
+(tempo != current_tempo) ? (  
+  SyncMode > 0 ? (
+    current_tempo > 0 ? (
+      rescaleToTempo(tempo / current_tempo);
+      updateToSliderAll();
+    );
+  );
+  
+  current_tempo = tempo;
+);
+
+
+// Interpolation speed for the time and gain. This creates that more tapey effect.
+// We want the user to be able to disable this temporarily if they just want a sudden
+// transition.
+(quickSwitch > 0) ? (
+  (quickSwitch == 1) ? (
+    quickSwitch = 2;
+    update_alpha = 1.0;
+    inv_update_alpha = 0.0;
+  ) : ( quickSwitch == 2 ) ? (
+    quickSwitch = 0;
+    update_alpha = log(2) / (0.28881132523331055*srate/4);
+    inv_update_alpha = 1.0 - update_alpha;
+  );
+);
+
 !node1.mute  ? node1.play  = 1 : node1.play  = 0;
 !node2.mute  ? node2.play  = 1 : node2.play  = 0;
 !node3.mute  ? node3.play  = 1 : node3.play  = 0;
@@ -1897,23 +2146,29 @@ samples % 4 == 0 ? (
 );
 
 fade = startFade.evaluateFade();
-spl0 *= fade;
-spl1 *= fade;
+l = spl0 * fade;
+r = spl1 * fade;
 
-node1.process(spl0, spl1);
-node2.process(spl0, spl1);
-node3.process(spl0, spl1);
-node4.process(spl0, spl1);
-node5.process(spl0, spl1);
-node6.process(spl0, spl1);
-node7.process(spl0, spl1);
-node8.process(spl0, spl1);
-node9.process(spl0, spl1);
-node10.process(spl0, spl1);
-node11.processVerbNode(spl0, spl1);
+// This thing hates DC, so let's make sure it doesn't get in.
+dc_correction ? (
+  l = dc0.eval_HP6(l);
+  r = dc1.eval_HP6(r);
+);
 
-spl0 = spl0 * (1-drywet) + lOut * drywet * gainFactor;
-spl1 = spl1 * (1-drywet) + rOut * drywet * gainFactor;
+node1.process(l, r);
+node2.process(l, r);
+node3.process(l, r);
+node4.process(l, r);
+node5.process(l, r);
+node6.process(l, r);
+node7.process(l, r);
+node8.process(l, r);
+node9.process(l, r);
+node10.process(l, r);
+node11.processVerbNode(l, r);
+
+spl0 = l * (1-drywet) + lOut * drywet * gainFactor;
+spl1 = r * (1-drywet) + rOut * drywet * gainFactor;
 
 @gfx
 render_time = render_time + 1/60;
@@ -2199,7 +2454,6 @@ function drawWindow(x, y, w, h)
     loop(Ny-1,
       gfx_set(0, 0, 0, .7);
       gfx_line(x, gfx_y-1, x+w, gfx_y-1);
-      //gfx_set(line_color_r, line_color_g, line_color_b, line_color_a);
       gfx_line(x, gfx_y, x+w, gfx_y);
       gfx_line(x, gfx_y+1, x+w, gfx_y+1);
       gfx_set(0, 0, 0, .2);
@@ -2207,8 +2461,6 @@ function drawWindow(x, y, w, h)
       
       gfx_x = x+w + 10;
       gfx_y -= .5*ph;
-      //gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
-      //gfx_printf("%d dB", 20*log10(yToVol(1-yLevel)) );
       
       gfx_y += dy + .5*ph;
       yLevel -= dyL;
@@ -2221,7 +2473,6 @@ function drawWindow(x, y, w, h)
     loop(Nx+1,
       gfx_set(0, 0, 0, .7);
       gfx_line(gfx_x-1, y, gfx_x-1, y+h);
-      //gfx_set(line_color_r, line_color_g, line_color_b, line_color_a);
       gfx_line(gfx_x, y, gfx_x, y+h);
       gfx_set(0, 0, 0, .7);
       gfx_line(gfx_x+1, y, gfx_x+1, y+h);
@@ -2292,7 +2543,7 @@ function drawWindowText(x, y, w, h)
       ct = 1000*xToTime(xValue);
       gfx_x += .2*pw;
       gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
-      ( abs(ct - floor(ct+.5)) < .1 ) ? gfx_printf("%d", floor(ct+.5)) : gfx_printf("%.1f", ct);
+      ( abs(ct - floor(ct+.5)) < .1 ) ? gfx_printf("%d", floor(.5*ct+.5)) : gfx_printf("%.1f", .5*ct);
       
       gfx_x = x + dx * i;
       xValue += dxL;
@@ -2675,8 +2926,8 @@ function processVerbCtrls(cX, cY)
   );
 
 function processRegularCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle)
+  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter,
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob)
   local()
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a)
@@ -2748,7 +2999,13 @@ function processRegularCtrls(cX, cY)
       lpf < hpf ? (
         hpf = lpf;
       );
-    );    
+    );
+    
+    cX += 4*knobSpacing;
+    flutterKnob.active = 1;
+    flutterKnob.value = flutter;
+    flutterKnob.drawKnob(cX, cY, knobSize, "Flutter", "Flutter.\n\nControls random variability in delay time.", 0);
+    flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? flutter = flutterKnob.value;
     
     cX += 4*knobSpacing
   );
@@ -2806,7 +3063,6 @@ function processGrainCtrls(cX, cY)
       panSpreadKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? grainPanSpread = panSpreadKnob.value;
       
       cX += 2.5*knobSpacing;
-      
       speedKnob.active = 1;
       speedKnob.value = ((log(grainSpeed)/log(2))+2)*.25;
       sprintf(5, "%.3g", grainSpeed);
@@ -2833,7 +3089,7 @@ function processShapers(cX, cY)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open)
 (
   /* Combobox to select shaper */
-  nShapers = 6;  
+  nShapers = 7;  
   cX = cX - 20*(1+scaling);
   
   gfx_set(.1, .1, .1, 1);
@@ -2893,7 +3149,7 @@ selectedNode = 0;
   node8.selected || (nSelected == 0 && node8.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 8; cX = node8.processRegularCtrls(cX, cY); cX = node8.processShapers(cX, cY); node8.processGrainCtrls(cX, cY); ) :
   node9.selected || (nSelected == 0 && node9.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 9; cX = node9.processRegularCtrls(cX, cY); cX = node9.processShapers(cX, cY); node9.processGrainCtrls(cX, cY); ) :
   node10.selected || (nSelected == 0 && node10.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 10; cX = node10.processRegularCtrls(cX, cY); cX = node10.processShapers(cX, cY); node10.processGrainCtrls(cX, cY); );
-  node11.selected || (nSelected == 0 && node11.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); );
+  node11.selected || (nSelected == 0 && node11.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); cX = node11.processShapers(cX, cY); );
 );
 
 (selectedNode > 0) ? (
@@ -2915,6 +3171,9 @@ selectedNode = 0;
   );
   gain_string = 100;
   gainKnob.label = sprintf(gain_string, "%.1f dB", WetGain);
+  
+  dcCorrectionToggle.drawToggle(cX-1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, dc_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal");
+  dc_correction = dcCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   cX += 4*knobSpacing;
   drywetKnob.active = 1;
