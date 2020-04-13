@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (work in progress | do not use)
 tags: multi-tap delay plugin
-version: 0.29
+version: 0.30
 author: Joep Vanlier
-changelog: Added flutter. Bugfix HQ interpolation. Allow saturation of reverb node. Workaround for JSFX issue. Prevent interpolation between presets because it sounds annoying. Make sure time synchronization is preserved when BPM is changed or preset is loaded.
+changelog: Critical bugfix flutter. Critical bugfix bpm scaling.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -187,14 +187,18 @@ function draw_buffer(x, y, w, h, mul, fill)
     );
   );  
   
-function setOffset(offset, hq_active)
-  local()
+function setOffset(current_dtime, hq_active)
+  local(offset)
   global()
   instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac,
            a0, a1, a2, a3, a4, t, tm1, tm2, tm3, tm4, tm5)
   (
     readptr   = scopeptr;
-    frac      = offset - floor(offset);
+    
+    offset = current_dtime - floor(current_dtime) + floor(current_dtime*.5)*2;
+    
+    frac      = current_dtime * .5 - floor(current_dtime * .5);
+    //frac      = offset - floor(offset);
     
     hq_active ? (
       readptr  -= floor(offset) + 2;
@@ -213,7 +217,7 @@ function setOffset(offset, hq_active)
       a3 = - t * tm1 * tm2 * tm4 / 6;
       a4 = t * tm1 * tm2 * tm3 / 24; // 1/24
     ) : (
-      readptr  -= floor(offset);
+      readptr -= floor(offset);
     );
     readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer);
   );
@@ -233,13 +237,11 @@ function readBuffer()
     c2 * (1.0-frac) + c1 * frac
   );
   
-function readBuffer2_old()
+function readBuffer2()
   local(c1l, c2l, c1r, c2r)
   global()
   instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR)
   (
-    readptr > scopebuffermax ? readptr = scopebuffer;
-  
     c1l = readptr[];
     c1r = readptr[1];
     readptr += 2;
@@ -253,7 +255,7 @@ function readBuffer2_old()
     outR = c2r * (1.0-frac) + c1r * frac;
   );
   
-function readBuffer2()
+function readBuffer2_bad()
   local(c2l, c2r)
   global()
   instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
@@ -273,6 +275,49 @@ function readBuffer2()
   );
   
 function readBuffer2_HQ()
+  local(t, t2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
+           a0, a1, a2, a3, a4,
+           d0l, d1l, d2l, d3l, d4l,
+           d0r, d1r, d2r, d3r, d4r,     
+           )
+  (
+    d4l = readptr[];
+    d4r = readptr[1];
+    
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    d3l = readptr[];
+    d3r = readptr[1];
+    
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    d2l = readptr[];
+    d2r = readptr[1];
+    
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    d1l = readptr[];
+    d1r = readptr[1];
+    
+    readptr += 2;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+        
+    d0l = readptr[];
+    d0r = readptr[1];
+    
+    readptr -= 6;
+   // readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer);
+     
+    outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
+    outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
+  );
+  
+function readBuffer2_HQ_bad()
   local(t, t2)
   global()
   instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
@@ -307,7 +352,7 @@ function readBuffer2_HQ()
     
     outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
     outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
-  );  
+  );    
   
 function updateBuffer2(ll, rr)
   local()
@@ -885,11 +930,12 @@ function yToVol(y)
   
   function flutter()
   local()
-  global(srate, update_alpha, inv_update_alpha)
+  global(srate, update_alpha, inv_update_alpha, samples)
   instance(flutter, cFlutter, flutterLpf)
   (
     cFlutter = update_alpha * flutter + inv_update_alpha * cFlutter;
-    cFlutter * srate * flutterLpf.eval_linearSVF_BP(rand() - 0.5) / 100
+    cFlutter * srate * flutterLpf.eval_linearSVF_BP(rand()) / 100;
+    cFlutter * srate * (.5+.5*sin(4*samples/srate))/10
   );
   
   function updateNode()
@@ -909,7 +955,7 @@ function yToVol(y)
         hq_active = HQ;
         current_dtime = newdtime;
         flutter ? current_dtime += this.flutter();
-        buffer.setOffset(current_dtime - floor(current_dtime) + floor(current_dtime*.5)*2, HQ );
+        buffer.setOffset(current_dtime, HQ );
       );
       olddtime = newdtime;
       
@@ -2010,8 +2056,8 @@ function rescaleToTempo(ratio)
   
 );
 
-dc0.init_HP6(9/srate);
-dc1.init_HP6(9/srate);
+dc0.init_HP6(19/srate);
+dc1.init_HP6(19/srate);
 
 @serialize
 file_var(0, maxTime);
@@ -2039,7 +2085,7 @@ file_var(0, csync);
 ( file_avail(0) >= 0 ) ? (
   (csync > 0) ? (
     (tempo / ctempo != 1) ? (
-      ctempo > 0 ? (
+      (ctempo > 0) && (tempo > 0) ? (
         rescaleToTempo(tempo / ctempo);
         updateToSliderAll()
       );
@@ -2055,7 +2101,7 @@ file_var(0, dc_correction);
 @block
 (tempo != current_tempo) ? (  
   SyncMode > 0 ? (
-    current_tempo > 0 ? (
+    (current_tempo > 0) && (tempo > 0) ? (   
       rescaleToTempo(tempo / current_tempo);
       updateToSliderAll();
     );
