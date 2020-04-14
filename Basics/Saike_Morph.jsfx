@@ -1,10 +1,13 @@
 desc:Saike Morphing Filter
 tags: filter non-linear
-version: 0.11
+version: 0.14
 author: Joep Vanlier
-changelog: 
-  + Added higher order linear SVF.
+changelog: Added Moog emulation (based on paper by Stefano D'Angelo), Added LFOs.
 license: MIT
+
+Attribution: Moog filter implementation was based on the paper:
+S. D'Angelo and V. Vaelimaeki, "Generalized Moog Ladder Filter: Part II - Explicit Non linear Model through a Novel Delay-Free
+Loop Implementation Method". IEEE Trans. Audio,Speech, and Lang. Process., vol. 22, no. 12, pp. 1873-1883, December 2014.
 
 in_pin:left input
 in_pin:right input
@@ -13,11 +16,17 @@ out_pin:right output
 
 slider1:0<-6,48,1>Drive (dB)
 slider2:0<-6,48,1>Post Boost (dB)
-slider12:filter_type=1<0,1,1{Linear,MS-20,Linear x2}>Filter type
+slider12:filter_type=1<0,1,1{Linear,MS-20,Linear x2,Moog}>Filter type
 slider13:.6<0,1,.0001>Cutoff
 slider14:0.7<0,1,.0001>Resonance
 slider15:morph=0<0,1,.0001>Morph
-slider6:inertia=200<0,200,.001>Inertia [ms]
+
+slider17:m_lfo_amnt=0<0,1,.00001>Morph LFO amount
+slider18:m_lfo_speed=0<0,120,.001>Morph LFO speed [Hz]
+slider20:c_lfo_amnt=0<0,1,.00001>Cutoff LFO amount
+slider21:c_lfo_speed=0<0,120,.001>Cutoff LFO speed [Hz]
+
+slider6:inertia=60<0,200,.001>Inertia [ms]
 slider60:oversampling=1<1,8,1>Oversampling
 
 @init
@@ -25,15 +34,17 @@ slider60:oversampling=1<1,8,1>Oversampling
   epsilon = 0.00000000001;
   epsilon = 0.00000001;
   maxiter = 6;
-  safety_limit = 0.935;
+  safety_limit_ms20 = 0.935;
+  safety_limit_moog = 0.25; // Above this level the model suffers from numerical difficulties. Ensures fc < fs/8.
 
+  lfo_time = 0;
 
 function init_linearSVF(freq, res)
   global(oversampling)
   local(g)
   instance(f0, ic1eq, ic2eq, k, a1, a2, a3)
   (
-    f0 = exp( (1-freq) * log(20/22050) ) / (max(1,oversampling));
+    f0 = exp( (1-freq) * log(20/22050) ) / oversampling;
     g = tan(.5 * $pi * f0);
     k = 2 - 2*res;
     
@@ -125,6 +136,123 @@ function eval_linearSVF_BR(v0)
     b = 135135.0 + s2 * (62370.0 + s2 * (3150.0 + s2 * 28.0));
     c = a / b;
     (c < -1) ? c = -1 : (c > 1) ? c = 1 : c;
+  );
+  
+  function init_moog(cutoff, resonance)
+  local(fs, fc, g, p0s, nmp, gN, kgN, p0g, tmp, acc)
+  global(srate, oversampling)
+  instance(VT2, rg1, rg2, rg3, rg4, qg1, qg2, qg3, qg4, si1, sf1, sg1, si2, sf2, sg2, si3, sf3, sg3, si4, sf4, sg4, k0g, k0s, VT2i, q0s, r1s, k)
+  (
+    k    = resonance* 3.9999999999999987;
+    fc   = .5 * srate * exp( (1-cutoff) * log(20/22050) );
+    fs   = srate * oversampling;
+    g    = tan($pi * fc / fs) / sqrt(1.0 + sqrt(k) - 2 * pow(k, 0.25) * 0.7071067811865476);
+    VT2  = 0.052;
+    VT2i = 19.23076923076923;
+  
+    // Ladder stages
+    p0s = 1.0 / (1.0 + g);
+    q0s = 1.0 - g;
+    r1s = -g;
+    k0s = VT2 * g * p0s;
+  
+    // Global filter
+    nmp = (1.0 - p0s);
+    gN  = nmp * nmp * nmp * nmp;
+    kgN = k * gN;
+    p0g = 1.0 / (1.0 + kgN);
+    k0g = -VT2i * p0g;
+    
+    rg1 = -4.0*kgN;
+    rg2 = -6.0*kgN;
+    rg3 = -4.0*kgN;
+    rg4 = -1.0*kgN;
+    acc = tmp = p0s*(g - 1.0);
+    qg1 = -4.0*(kgN + acc);
+    acc = acc*tmp;
+    qg2 = -6.0*(kgN + acc);
+    acc = acc*tmp;
+    qg3 = -4.0*(kgN + acc);
+    acc = acc*tmp;
+    qg4 = -1.0*(kgN + acc);
+  );
+  
+  function eval_moog(x)
+  local(yi, yd, yf)
+  global()
+  instance(rg1, rg2, rg3, rg4, qg1, qg2, qg3, qg4, si1, sf1, sg1, si2, sf2, sg2, si3, sf3, sg3, si4, sf4, sg4, k0g, k0s, VT2i, q0s, r1s, k,
+           A, B, C, D, y, yo)
+  (
+    yo = tanh(k0g * (x + sg1));
+    A = yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf1);
+    y    = yd + si1;
+    yo   = tanh(VT2i * y);
+    B = yo;
+  
+    si1 = yd + y;
+    sf1 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf2);
+    y    = yd + si2;
+    yo   = tanh(VT2i * y);
+    C = yo;
+  
+    si2 = yd + y;
+    sf2 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf3);
+    y    = yd + si3;
+    yo   = tanh(VT2i * y);
+    D = yo;
+  
+    si3 = yd + y;
+    sf3 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf4);
+    y    = yd + si4;
+    yo   = tanh(VT2i * y);
+  
+    si4 = yd + y;
+    sf4 = r1s * yi - q0s * yo;
+    yf = k * y;
+  
+    sg1 = rg1 * x + qg1 * yf + sg2;
+    sg2 = rg2 * x + qg2 * yf + sg3;
+    sg3 = rg3 * x + qg3 * yf + sg4;
+    sg4 = rg4 * x + qg4 * yf;
+  );
+  
+  function mix_moog(x, choice, frac)
+  local()
+  global()
+  instance(VT, VT2, VT2i, A, B, C, D, y, yo, k, f1, f2)
+  (
+    this.eval_moog(x*VT2);
+    
+    (choice == 0) ? (
+      f1 = y * (1 + k); // LP
+      f2 = VT2 * (2*C - 2*B); // BP
+    ) : (choice == 1) ? (
+      f1 = VT2 * (2*C - 2*B); // BP
+      //f1 = VT2 * (4*C - 8*B + 4*yo)/6; // BP
+      f2 = VT2 * (A - 4 * B + 6 * C - 4 * D + yo); // HP
+    ) : (choice == 2) ? (
+      frac = frac * frac; /* Make sure the HP gets some space */
+      frac = frac * frac;
+      f1 = VT2 * (A - 4 * B + 6 * C - 4 * D + yo); // HP
+      f2 = VT2 * (A - 4 * B + 6 * C - 4 * D); // Notch
+    ) : (choice == 3) ? (
+      f1 = VT2 * (A - 4 * B + 6 * C - 4 * D); // Notch
+      f2 = y * (1 + k); // LP
+    );
+    
+    (f2 * frac + f1 * (1.0-frac))*VT2i
   );
   
   function f_g(s)
@@ -649,23 +777,39 @@ sinc_flt3   = 60000;
 sinc_flt4   = 70000;
 sinc_tmp    = 80000;
 
+current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/22050));
+
 @slider
+current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/22050));
+
 initialize_interpolators();
 
 (filter_type == 1) || (oversampling == 1) ? (
-  slider13 > safety_limit ? (
-    slider_automate(slider13 = safety_limit);
+  slider13 > safety_limit_ms20 ? (
+    slider_automate(slider13 = safety_limit_ms20);
     warning = 75;
   );
 );
 
+(filter_type == 3) ?
+(
+  slider13 > current_safety_moog ? (
+    slider_automate(slider13 = current_safety_moog);
+    warning = 75;
+  );
+);
+
+israte = 2.0*$pi/srate;
+
 @block
+    israte = 1/srate;
+    
     cutoff_interpolator.interpolator_block();
     reso_interpolator.interpolator_block();
     morph_interpolator.interpolator_block();
     drive_interpolator.interpolator_block();
     gain_interpolator.interpolator_block();
-
+    
    // Update the oversampling filters when needed.
    ( oversampling != lastOversample ) ? 
    (
@@ -680,6 +824,8 @@ initialize_interpolators();
   );
 
 @sample 
+  lfo_time += israte;
+
  function processSample_ms20(s, choice)
  local()
  instance(BP, HP, BR, LP)
@@ -695,6 +841,11 @@ initialize_interpolators();
       // LP is last and first
       s = LP.eval_MS20_nonlin_tanh(s)
     );
+  );
+  
+  function clamp(v, lb, ub)
+  (
+    min(ub, max(v, lb))
   );
   
  function processSample_lin(s, choice)
@@ -725,6 +876,9 @@ initialize_interpolators();
   sliderReso = reso_interpolator.interpolate();
   sliderMorph = morph_interpolator.interpolate();
   
+  c_lfo_amnt > 0 ? sliderCutoff = clamp(sliderCutoff + c_lfo_amnt * sin(c_lfo_speed * lfo_time), 0, 1);
+  m_lfo_amnt > 0 ? sliderMorph = clamp(sliderMorph + m_lfo_amnt * sin(m_lfo_speed * lfo_time), 0, 1);
+  
   filter_type == 0 ? (
     L.LP.init_linearSVF(sliderCutoff, sliderReso);
     R.HP.a1 = L.HP.a1 = R.BR.a1 = L.BR.a1 = R.BP.a1 = L.BP.a1 = R.LP.a1 = L.LP.a1;
@@ -733,7 +887,7 @@ initialize_interpolators();
     R.HP.k = L.HP.k = R.BR.k = L.BR.k = R.BP.k = L.BP.k = R.LP.k = L.LP.k;
   ) : ( filter_type == 1 ) ? (
     (oversampling == 1) ? (
-      sliderCutoff = sliderCutoff > safety_limit ? safety_limit : sliderCutoff;
+      sliderCutoff = sliderCutoff > safety_limit_ms20 ? safety_limit_ms20 : sliderCutoff;
     );
   
     L.LP.init_MS20(sliderCutoff, sliderReso);
@@ -751,6 +905,11 @@ initialize_interpolators();
     R2.HP.a2 = L2.HP.a2 = R2.BR.a2 = L2.BR.a2 = R2.BP.a2 = L2.BP.a2 = R2.LP.a2 = L2.LP.a2 = L.LP.a2;
     R2.HP.a3 = L2.HP.a3 = R2.BR.a3 = L2.BR.a3 = R2.BP.a3 = L2.BP.a3 = R2.LP.a3 = L2.LP.a3 = L.LP.a3;
     R2.HP.k = L2.HP.k = R2.BR.k = L2.BR.k = R2.BP.k = L2.BP.k = R2.LP.k = L2.LP.k = L.LP.k;
+  ) : ( filter_type == 3 ) ? (
+    sliderCutoff = sliderCutoff > current_safety_moog ? current_safety_moog : sliderCutoff;
+  
+    L.moog.init_moog(sliderCutoff, sliderReso);
+    R.moog.init_moog(sliderCutoff, sliderReso);
   );
   
   filter_choice = floor(sliderMorph*4);
@@ -772,11 +931,14 @@ initialize_interpolators();
       ) : ( filter_type == 1 ) ? (
         ssl = L.processSample_ms20(ssl, filter_choice) * i_morph + L.processSample_ms20(ssl, filter_choice + 1) * frac_morph;
         ssr = R.processSample_ms20(ssr, filter_choice) * i_morph + R.processSample_ms20(ssr, filter_choice + 1) * frac_morph;
-      ) : (
+      ) : ( filter_type == 2 ) ? (
         ssl = L.processSample_lin(ssl, filter_choice) * i_morph + L.processSample_lin(ssl, filter_choice + 1) * frac_morph;
         ssr = R.processSample_lin(ssr, filter_choice) * i_morph + R.processSample_lin(ssr, filter_choice + 1) * frac_morph;
         ssl = L2.processSample_lin(ssl, filter_choice) * i_morph + L2.processSample_lin(ssl, filter_choice + 1) * frac_morph;
         ssr = R2.processSample_lin(ssr, filter_choice) * i_morph + R2.processSample_lin(ssr, filter_choice + 1) * frac_morph;
+      ) : (
+        ssl = L.moog.mix_moog(ssl, filter_choice, frac_morph);
+        ssr = R.moog.mix_moog(ssr, filter_choice, frac_morph);
       );
       
       sincDownL.advanceHist(ssl);
@@ -792,11 +954,14 @@ initialize_interpolators();
     ) : ( filter_type == 1 ) ? (
       spl0 = L.processSample_ms20(spl0, filter_choice) * i_morph + L.processSample_ms20(spl0, filter_choice + 1) * frac_morph;
       spl1 = R.processSample_ms20(spl1, filter_choice) * i_morph + R.processSample_ms20(spl1, filter_choice + 1) * frac_morph;
-    ) : (
+    ) : ( filter_type == 2 ) ? (
       spl0 = L.processSample_lin(spl0, filter_choice) * i_morph + L.processSample_lin(spl0, filter_choice + 1) * frac_morph;
       spl1 = R.processSample_lin(spl1, filter_choice) * i_morph + R.processSample_lin(spl1, filter_choice + 1) * frac_morph;
       spl0 = L2.processSample_lin(spl0, filter_choice) * i_morph + L2.processSample_lin(spl0, filter_choice + 1) * frac_morph;
       spl1 = R2.processSample_lin(spl1, filter_choice) * i_morph + R2.processSample_lin(spl1, filter_choice + 1) * frac_morph;
+    ) : ( filter_type == 3 ) ? (
+      spl0 = L.moog.mix_moog(spl0, filter_choice, frac_morph);
+      spl1 = R.moog.mix_moog(spl1, filter_choice, frac_morph);
     );
   );
   
@@ -812,7 +977,15 @@ gfx_rect(0, 0, gfx_w, gfx_h);
 gfx_set(1, 1, 1, 1);
 gfx_x = xs;
 gfx_y = ys;
-gfx_printf("Cutoff: %d Hz", .5 * srate * exp( (1-slider13) * log(20/22050) ) );
+current_setting = slider13;
+center = .5 * srate * exp( (1-current_setting) * log(20/22050) );
+c_lfo_amnt > 0 ? (
+  bottom = .5 * srate * exp( (1-max(0, current_setting - c_lfo_amnt) ) * log(20/22050) );
+  top = .5 * srate * exp( (1-min(1,current_setting + c_lfo_amnt)) * log(20/22050) );
+  gfx_printf("Cutoff: %d Hz [LFO: %d Hz - %d Hz]", center, bottom, top );
+) : (
+  gfx_printf("Cutoff: %d Hz", center );
+);
 dx = 40;
 
 gfx_x = xs;
@@ -841,6 +1014,9 @@ gfx_line(xs, gfx_y, xs+4*dx, gfx_y);
 xc = xs + 4*morph*dx;
 gfx_line(xc, gfx_y - 5, xc, gfx_y + 5);
 
+gfx_a = .4;
+gfx_rect(xc - 4*m_lfo_amnt*dx, gfx_y - 5, ceil(8*m_lfo_amnt*dx), 10);
+
 gfx_x = 0;
 gfx_y = ys + 50;
 
@@ -848,7 +1024,7 @@ warning > 0 ? (
   gfx_x = 0;
   gfx_y += 25;
   gfx_a = warning / 75;
-  gfx_printf("Warning! Without oversampling, the non-linear filter cannot safely go higher.");
+  gfx_printf("Warning, cutoff clamped! Without oversampling, this non-linear filter cannot safely go higher.");
   warning -= 1;
 );
 
