@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.37
+version: 0.38
 author: Joep Vanlier
-changelog: Add toggle for send saturation. Work on retina compatibility.
+changelog: Add LFO to reflectosaurus.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -43,6 +43,7 @@ slider64:WetGain=0<-32,32,.001>-Gain
 @init
 gfx_ext_retina = 1;
 quickSwitch = 1;
+UPDATE_INTERVAL = 4;
 
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
   function init_HP6(freq)
@@ -1032,9 +1033,10 @@ function yToVol(y)
   );
   
   function updateNode()
-  local(newdtime, current_dtime)
+  local(newdtime, current_dtime, dTimeOffset)
   global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
-  instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter)
+  instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
+           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -1043,12 +1045,18 @@ function yToVol(y)
   
     ( !mute || solo ) ? (
       newdtime = update_alpha * srate * dtime + inv_update_alpha * olddtime;
-      diff = olddtime - newdtime;
+      
+      (lfo > 0) ? ( lfoTime += lfoAdvanceStep;
+        lfoTime += lfoAdvanceStep;
+        dTimeOffset = sin(lfoTime) * lfoDepthFactor;
+        diff = 1;
+      ) : diff = olddtime - newdtime;
+    
       ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || (HQ != hq_active) ) ? (
         hq_active = HQ;
         current_dtime = newdtime;
         flutter ? current_dtime += this.flutter();
-        buffer.setOffset(current_dtime, HQ );
+        buffer.setOffset(current_dtime + dTimeOffset, HQ );
       );
       olddtime = newdtime;
       
@@ -1103,15 +1111,18 @@ function updateToSliderRec()
 
 function updateNodeBlock()
   local(omega_tilt)
-  global(srate)
+  global(srate, UPDATE_INTERVAL)
   instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
   l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain,
-  octaver, rectify)
+  octaver, rectify, lfo, lfoDepth, lfoFrequency, lfoDepthFactor, lfoAdvanceStep)
   (
     recv = fromNode1 || fromNode2 || fromNode3 || fromNode4 || fromNode5 || fromNode6 || fromNode7 || fromNode8 || fromNode9 || fromNode10 || fromNode11;
     
     ceiling     = exp(.11512925464970228420089957273422 * saturationGain); //log(10)/20 = .11512925464970228420089957273422;
     invCeiling = 1.0 / ceiling;
+
+    lfoAdvanceStep = 2.0 * lfoFrequency * $pi * UPDATE_INTERVAL / srate;
+    lfoDepthFactor = lfoDepth * 0.002 * srate; // 0.002 since the sample buffer is packed two samples at a time
 
     rectify == 6 ? (
       this.octaver.octaver_init(1-saturationGain/36);   
@@ -1434,7 +1445,7 @@ function initNode(_memloc, _dtime, _y, idx, off)
   local()
   instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR, lpl, lpr, hpl, hpr,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, flutterLpf,
-           octaver, octaver)
+           octaver, octaver, lfoTime)
   global(bufsize, srate)
   (
     me = idx;
@@ -1448,7 +1459,8 @@ function initNode(_memloc, _dtime, _y, idx, off)
     fblast = -9999;
     llpf = -9999;
     lhpf = -9999;
-    invollast = 99999;        
+    invollast = 99999;     
+    lfoTime = 0;   
     
     octaver.octaver_reset();
     
@@ -1481,7 +1493,7 @@ function serializeNode()
   global(readread, SyncMode, quickSwitch)
   instance( x, y, active,
             dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
-            mute, solo, play, shine, warmth, flutter,
+            mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
   (
@@ -1533,9 +1545,13 @@ function serializeNode()
     file_var( 0, warmth );
     file_var( 0, flutter );
     
+    file_var( 0, lfo );
+    file_var( 0, lfoDepth );
+    file_var( 0, lfoFrequency );
+    
     /* Memory to expand into when features are added */
-    memset(0,0,70);
-    file_mem( 0, 0, 70 ); /* Reduce this by one when you want to add features */
+    memset(0,0,67);
+    file_mem( 0, 0, 67 ); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -2246,7 +2262,7 @@ hp_interpolator.interpolator_block();
     inv_update_alpha = 0.0;
   ) : ( quickSwitch == 2 ) ? (
     quickSwitch = 0;
-    update_alpha = log(2) / (0.28881132523331055*srate/4);
+    update_alpha = log(2) / (0.28881132523331055*srate/UPDATE_INTERVAL);
     inv_update_alpha = 1.0 - update_alpha;
   );
 );
@@ -2304,7 +2320,7 @@ cPos += 50*israte;
 lOut = 0;
 rOut = 0;
 
-samples % 4 == 0 ? (
+samples % UPDATE_INTERVAL == 0 ? (
   node1.updateNode();
   node2.updateNode();
   node3.updateNode();
@@ -3250,7 +3266,7 @@ function processGrainCtrls(cX, cY)
     detuneKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? grainSpeedSpread = detuneKnob.value*.25;
     cX += 2.5*knobSpacing;
     
-    cX
+    cX += 1 * knobSpacing;
   );
 
 function processShapers(cX, cY)
@@ -3292,6 +3308,51 @@ function processShapers(cX, cY)
   warmthKnob.value = warmth;
   warmthKnob.drawKnob(cX+2.2*knobSize, cY+.47*knobSize, .5*knobSize, "Warmth", "Warmth\n\nAdds warmth to the saturation by\nde-emphasizing bass before saturation\nand re-emphasizing it after.", 0);
   warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? warmth = warmthKnob.value;
+  
+  cX += 7*knobSpacing
+);
+
+function processLFO(cX, cY)
+  instance(lfoDepth, lfoFrequency, lfo,
+           lfoDepthKnob, lfoFrequencyKnob, lfoSelect)
+  local(nLFOs, x_start, y_start, x_width, y_height)
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open,
+         edge_r, edge_g, edge_b, edge_a)
+(
+  /* Combobox to select shaper */
+  nLFOs = 2;  
+  cX = cX - 20*(1+scaling);
+  
+  x_start = cX - 2*(1+scaling);
+  y_start = cY - 32*(1+scaling);
+  x_width = 100*(1+scaling);
+  y_height = 82*(1+scaling);
+  
+  sprintf(16, "LFO");
+  drawVertLabel(x_start - knobSpacing, y_start - 4 * (1+scaling), 16, 82*(1+scaling), BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0);
+  
+  gfx_set(edge_r, edge_g, edge_b, edge_a);
+  gfx_line(x_start-6, y_start-6, x_start-6, y_start+y_height);
+  gfx_line(x_start-6, y_start-6, x_start+x_width, y_start-6);
+  gfx_line(x_start+x_width, y_start-6, x_start+x_width, y_start+y_height);
+  gfx_line(x_start-6, y_start+y_height, x_start+x_width, y_start+y_height);
+  lfoSelect.combobox(x_start, y_start, 94*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nLFOs, 4, 1, 1, BAND_FONT, "LFO selection." );
+  lfoSelect.combobox_setcuritem(lfo);
+  lfoSelect.combobox_draw();  
+  lfoSelect.combobox_draw_top();
+  lfoSelect.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    lfo = lfoSelect.curitem;
+  );
+  
+  lfoDepthKnob.active = lfo > 0;
+  lfoDepthKnob.value = lfoDepth * .25;
+  lfoDepthKnob.drawKnob(cX+.6*knobSize, cY+.47*knobSize, .5*knobSize, "Depth", "Depth of the LFO.", 0);
+  lfoDepthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? lfoDepth = 4 * lfoDepthKnob.value;
+  
+  lfoFrequencyKnob.active = lfo > 0;
+  lfoFrequencyKnob.value = lfoFrequency * .2;
+  lfoFrequencyKnob.drawKnob(cX+2.2*knobSize, cY+.47*knobSize, .5*knobSize, "Frequency", "Frequency\n\nFrequency of the LFO..", 0);
+  lfoFrequencyKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? lfoFrequency = 5.0 * lfoFrequencyKnob.value;
   
   cX += 7*knobSpacing
 );
@@ -3406,16 +3467,16 @@ gfx_x = 0;
 gfx_y = 100;
 selectedNode = 0;
 (nSelected < 2) && (multiSelect == 0) ? (
-  node1.selected || (nSelected == 0 && node1.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 1; cX = node1.processRegularCtrls(cX, cY); cX = node1.processShapers(cX, cY); cX = node1.processGrainCtrls(cX, cY); ) :
-  node2.selected || (nSelected == 0 && node2.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 2; cX = node2.processRegularCtrls(cX, cY); cX = node2.processShapers(cX, cY); node2.processGrainCtrls(cX, cY); ) :
-  node3.selected || (nSelected == 0 && node3.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 3; cX = node3.processRegularCtrls(cX, cY); cX = node3.processShapers(cX, cY); node3.processGrainCtrls(cX, cY);) :
-  node4.selected || (nSelected == 0 && node4.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 4; cX = node4.processRegularCtrls(cX, cY); cX = node4.processShapers(cX, cY); node4.processGrainCtrls(cX, cY); ) :
-  node5.selected || (nSelected == 0 && node5.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 5; cX = node5.processRegularCtrls(cX, cY); cX = node5.processShapers(cX, cY); node5.processGrainCtrls(cX, cY); ) :
-  node6.selected || (nSelected == 0 && node6.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 6; cX = node6.processRegularCtrls(cX, cY); cX = node6.processShapers(cX, cY); node6.processGrainCtrls(cX, cY); ) :
-  node7.selected || (nSelected == 0 && node7.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 7; cX = node7.processRegularCtrls(cX, cY); cX = node7.processShapers(cX, cY); node7.processGrainCtrls(cX, cY); ) :
-  node8.selected || (nSelected == 0 && node8.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 8; cX = node8.processRegularCtrls(cX, cY); cX = node8.processShapers(cX, cY); node8.processGrainCtrls(cX, cY); ) :
-  node9.selected || (nSelected == 0 && node9.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 9; cX = node9.processRegularCtrls(cX, cY); cX = node9.processShapers(cX, cY); node9.processGrainCtrls(cX, cY); ) :
-  node10.selected || (nSelected == 0 && node10.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 10; cX = node10.processRegularCtrls(cX, cY); cX = node10.processShapers(cX, cY); node10.processGrainCtrls(cX, cY); );
+  node1.selected || (nSelected == 0 && node1.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 1; cX = node1.processRegularCtrls(cX, cY); cX = node1.processShapers(cX, cY); cX = node1.processGrainCtrls(cX, cY); cX = node1.processLFO(cX, cY); ) :
+  node2.selected || (nSelected == 0 && node2.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 2; cX = node2.processRegularCtrls(cX, cY); cX = node2.processShapers(cX, cY); cX = node2.processGrainCtrls(cX, cY); cX = node2.processLFO(cX, cY); ) :
+  node3.selected || (nSelected == 0 && node3.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 3; cX = node3.processRegularCtrls(cX, cY); cX = node3.processShapers(cX, cY); cX = node3.processGrainCtrls(cX, cY); cX = node3.processLFO(cX, cY); ) :
+  node4.selected || (nSelected == 0 && node4.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 4; cX = node4.processRegularCtrls(cX, cY); cX = node4.processShapers(cX, cY); cX = node4.processGrainCtrls(cX, cY); cX = node4.processLFO(cX, cY); ) :
+  node5.selected || (nSelected == 0 && node5.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 5; cX = node5.processRegularCtrls(cX, cY); cX = node5.processShapers(cX, cY); cX = node5.processGrainCtrls(cX, cY); cX = node5.processLFO(cX, cY); ) :
+  node6.selected || (nSelected == 0 && node6.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 6; cX = node6.processRegularCtrls(cX, cY); cX = node6.processShapers(cX, cY); cX = node6.processGrainCtrls(cX, cY); cX = node6.processLFO(cX, cY); ) :
+  node7.selected || (nSelected == 0 && node7.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 7; cX = node7.processRegularCtrls(cX, cY); cX = node7.processShapers(cX, cY); cX = node7.processGrainCtrls(cX, cY); cX = node7.processLFO(cX, cY); ) :
+  node8.selected || (nSelected == 0 && node8.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 8; cX = node8.processRegularCtrls(cX, cY); cX = node8.processShapers(cX, cY); cX = node8.processGrainCtrls(cX, cY); cX = node8.processLFO(cX, cY); ) :
+  node9.selected || (nSelected == 0 && node9.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 9; cX = node9.processRegularCtrls(cX, cY); cX = node9.processShapers(cX, cY); cX = node9.processGrainCtrls(cX, cY); cX = node9.processLFO(cX, cY); ) :
+  node10.selected || (nSelected == 0 && node10.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 10; cX = node10.processRegularCtrls(cX, cY); cX = node10.processShapers(cX, cY); cX = node10.processGrainCtrls(cX, cY); cX = node10.processLFO(cX, cY); );
   node11.selected || (nSelected == 0 && node11.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); cX = node11.processShapers(cX, cY); );
 );
 
