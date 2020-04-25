@@ -1,8 +1,8 @@
 desc:Saike Tight Compressor
 tags: Tight Compressor
-version: 0.17
+version: 0.18
 author: Joep Vanlier
-changelog: Added oversampling
+changelog: Added stereo linking. Improved performance slightly.
 provides: saike_upsamplers.jsfx-inc
 Copyright (C) 2019 Joep Vanlier
 License: MIT
@@ -22,6 +22,7 @@ slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
 slider10:Topology=0<0,4,1{LogDetect (Smoother),LinDetect (Harsher),LogDetect Non-smooth,LinDetect Non-smooth}>Topology
 slider11:DryWet=1<0,1,.00001>Dry/Wet
 slider12:Oversampling=1<1,8,1>Oversampling factor
+slider13:LinkStereo=1<0,1,1>Link Stereo
 
 @init
 
@@ -214,7 +215,7 @@ function setCompressorOptions( thr, rat, atk, release, knee, makeupToggle )
 /* Level detection log domain */
 function compressor(mx)
   instance( rt, at, yL, makeUp, 
-            xG, c, ya )
+            xG, c, ya, outGain )
   global()
   local(xL, yG)
   (
@@ -235,15 +236,16 @@ function compressor(mx)
     // Calculate gain correction
     c   = -yL;
    
-    // Apply current gain correction
-    mx * 10^((c + makeUp)/20);
+    // Determine current gain correction
+    //outGain = 10^((c + makeUp)/20);
+    outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );  
   
   
 // Topology 3:
 // Level detection linear domain
 function compressor2(mx)
-  instance(rt, at, c, xG, yL, ratio, makeUp)
+  instance(rt, at, c, xG, yL, ratio, makeUp, outGain)
   global()
   local(xL, yG, ya)
   (
@@ -260,14 +262,15 @@ function compressor2(mx)
     
     c = yG - xG;
     
-    mx * 10^((c + makeUp)/20);
+    //outGain = 10^((c + makeUp)/20);
+    outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );  
   
 // Topology 3:
 /* Level detection log domain (decoupled) */
 function compressor_dc(mx)
   instance( rt, at, yL, makeUp, 
-            xG, c, ya )
+            xG, c, ya, outGain )
   global()
   local(xL, yG)
   (
@@ -287,15 +290,16 @@ function compressor_dc(mx)
     // Calculate gain correction
     c   = -yL;
    
-    // Apply current gain correction
-    mx * 10^((c + makeUp)/20);
+    // Determine current gain correction
+    //outGain = 10^((c + makeUp)/20);
+    outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );
   
   
 // Topology 3:
 // Level detection linear domain (decoupled)
 function compressor2_dc(mx)
-  instance(rt, at, c, xG, yL, ratio, makeUp)
+  instance(rt, at, c, xG, yL, ratio, makeUp, outGain)
   global()
   local(xL, yG, ya)
   (
@@ -311,7 +315,8 @@ function compressor2_dc(mx)
     
     c = yG - xG;
     
-    mx * 10^((c + makeUp)/20);
+    //outGain = 10^((c + makeUp)/20);
+    outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );    
   
 function drawGainCurve(floorLevel, current)
@@ -381,23 +386,38 @@ curFIRdelay = getFIRdelay(overSampling);
 
 @sample
 function processSample()
-  global(inL, inR, Topology, outL, outR, 
+  global(inL, inR, Topology, outL, outR, LinkStereo,
          cL.compressor, cR.compressor, cL.compressor2, cR.compressor2, 
          cL.compressor_dc, cR.compressor_dc, cL.compressor2_dc, cR.compressor2_dc, 
          DryWet)
+  local(G)
   (
-    ( Topology == 0 ) ? (
-      outL = cL.compressor(inL);
-      outR = cR.compressor(inR);
-    ) : ( Topology == 1 ) ? (
-      outL = cL.compressor2(inL);
-      outR = cR.compressor2(inR);
-    ) : ( Topology == 2 ) ? (
-      outL = cL.compressor_dc(inL);
-      outR = cR.compressor_dc(inR);
-    ) : ( Topology == 3 ) ? (
-      outL = cL.compressor2_dc(inL);
-      outR = cR.compressor2_dc(inR);
+    LinkStereo ? (
+      ( Topology == 0 ) ? (
+        G = cL.compressor(max(abs(inL), abs(inR)));
+      ) : ( Topology == 1 ) ? (
+        G = cL.compressor2(max(abs(inL), abs(inR)));
+      ) : ( Topology == 2 ) ? (
+        G = cL.compressor_dc(max(abs(inL), abs(inR)));
+      ) : ( Topology == 3 ) ? (
+        G = cL.compressor2_dc(max(abs(inL), abs(inR)));
+      );
+      outL = G * inL;
+      outR = G * inR;
+    ) : (
+      ( Topology == 0 ) ? (
+        outL = cL.compressor(inL) * inL;
+        outR = cR.compressor(inR) * inR;
+      ) : ( Topology == 1 ) ? (
+        outL = cL.compressor2(inL) * inL;
+        outR = cR.compressor2(inR) * inR;
+      ) : ( Topology == 2 ) ? (
+        outL = cL.compressor_dc(inL) * inL;
+        outR = cR.compressor_dc(inR) * inR;
+      ) : ( Topology == 3 ) ? (
+        outL = cL.compressor2_dc(inL) * inL;
+        outR = cR.compressor2_dc(inR) * inR;
+      );
     );
     
     outL = inL * (1-DryWet) + outL * DryWet;
