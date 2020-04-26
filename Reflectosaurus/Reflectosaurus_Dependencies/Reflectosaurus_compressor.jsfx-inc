@@ -1,0 +1,80 @@
+@init
+  /* Gain computer */
+  function calcGain(xG)
+    instance(kWidth, quadF, thresh, ratio, iratio)
+    local(diff, tmp)
+    global()
+    (
+      diff = xG - thresh;
+      
+      // With knee?
+      (kWidth > 0) ? (
+        ( 2*diff < -kWidth ) ? (
+          xG
+        ) : ( (2 * abs(diff)) <= kWidth ) ? (
+          tmp = (diff + 0.5*kWidth);
+          xG + tmp*tmp*quadF
+        ) : (
+          thresh + diff * iratio
+        );
+      ) : (
+        ( xG >= thresh ) ? (
+          thresh + diff * iratio
+        ) : (
+          xG
+        );
+      );
+    );
+
+
+  function setCompressorOptions(thr, rat, s_atk, s_rel, knee, min_attack, max_attack, min_decay, max_decay)
+    instance(rt, at, thresh, ratio, iratio, kWidth, quadF, attack, release)
+    global(srate)
+    local(csrate, alpha, beta, atk)
+    (
+      beta          = log(min_attack);
+      alpha         = log(max_attack)-beta;
+      attack        = exp(alpha * s_atk + beta) - 1;
+      beta          = log(min_decay);
+      alpha         = log(max_decay)-beta;
+      release       = exp(alpha * s_rel + beta);
+    
+      csrate        = srate;
+      thresh        = thr;
+      ratio         = exp(rat*rat);
+      iratio        = 1/ratio;
+      at            = exp(-1/(.5*.001*attack*csrate));
+      rt            = exp(-1/(.5*.001*release*csrate));
+      kWidth        = knee;
+      quadF         = ((1/ratio)-1)/(2*kWidth);
+    );     
+    
+  // Topology 3:
+  /* Level detection log domain */
+  function compressor(l ,r)
+    instance( rt, at, yL, 
+              xG, c, ya, outGain )
+    global()
+    local(xL, yG)
+    (
+      xG  = 20 * log10(max(max(abs(l), abs(r)), 0.000001)); /* Peak */
+     
+      /* Calculate the gain curve */
+      yG = this.calcGain(xG);
+      xL  = xG - yG;
+     
+      // Update smooth peak detector (peak)
+      xL > yL ? (
+        yL = at * yL + (1.0-at) * xL;
+      ) : (
+        ya = max( xL, rt * ya + (1.0-rt) * xL );
+        yL = at * yL + (1.0-at) * ya;
+      );
+     
+      // Calculate gain correction
+      c   = -yL;
+     
+      // Apply current gain correction
+      outGain = exp(.11512925464970228420089957273422 * c); //log(10)/20 = .11512925464970228420089957273422;      
+    );
+

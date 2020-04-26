@@ -1,13 +1,14 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.38
+version: 0.40
 author: Joep Vanlier
-changelog: Add LFO to reflectosaurus.
+changelog: Indicate when hovering over node. Reduce muted node alpha. Add option to hide hints (F1). Added ducking compressor. Fix bug that didn't allow node selection in some cases when it was on top of a signal send. Make knob dot more visible in dials. Added some grouping of the various parameters. Fixed marquee bug. Allow clicking of label for checkbox.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
 import Reflectosaurus_grainlib.jsfx-inc
 import Reflectosaurus_widgets.jsfx-inc
+import Reflectosaurus_compressor.jsfx-inc
 
 slider1:drywet=1.0<0,1,.001>-Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>-Mode
@@ -44,6 +45,8 @@ slider64:WetGain=0<-32,32,.001>-Gain
 gfx_ext_retina = 1;
 quickSwitch = 1;
 UPDATE_INTERVAL = 4;
+
+
 
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
   function init_HP6(freq)
@@ -97,7 +100,7 @@ function updateGlobalFeedback()
   global(globalFeedbackAttn, globalFeedback)
   local()
   (
-    globalFeedback = 10^(-36.0*(1.0-globalFeedbackAttn)/20);
+    globalFeedback = 10^(-36.0*globalFeedbackAttn/20);
   );
 
 function updateRange()
@@ -1661,7 +1664,7 @@ function drawConnections(xmin, ymin, w, h)
 function draw(xmin, ymin, w, h, verb)
   local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp)
   global(gfx_a, gfx_x, gfx_y, render_time, scaling)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over)
   (
     scalefactor = 1+scaling;
     silent = max(0,1-play);
@@ -1750,15 +1753,15 @@ function draw(xmin, ymin, w, h, verb)
     );
     
     selected ? (
-      gfx_set(0.35,0.4,.7,1);
+      gfx_set(0.45,0.4,.7,1);
       gfx_circle(xl, yl, outer, 0, 0);
       gfx_circle(xl, yl, outer+.5, 1, 0);
       gfx_circle(xl, yl, outer+1, 0, 1);
-
+  
       anim = 3*render_time-floor(3*render_time);
       rectS = (1.1+.35*anim)*outer;
       loop(2 * (1+scaling),
-        
+          
         gfx_set(.4, .3, .8, .7-.7*anim);
         gfx_line(xl-rectS, yl-rectS, xl+rectS, yl-rectS);
         gfx_line(xl-rectS, yl+rectS, xl+rectS, yl+rectS);
@@ -1766,6 +1769,12 @@ function draw(xmin, ymin, w, h, verb)
         gfx_line(xl+rectS, yl-rectS, xl+rectS, yl+rectS);
         rectS += 1;
       );
+    ) : ( mouse_over == 1 ) ? (
+      anim = .5 + .5 * sin(render_time*8);
+      gfx_set(0.45,0.4,.7,.1 + .5*anim);
+      gfx_circle(xl, yl, outer, 0, 0);
+      gfx_circle(xl, yl, outer+.5, 1, 0);
+      gfx_circle(xl, yl, outer+1, 0, 1);
     );
     
     solo ? (
@@ -1801,7 +1810,7 @@ function draw(xmin, ymin, w, h, verb)
       alpha>.2
     );
     
-    gfx_a = 1 - .7*silent;
+    gfx_a = 1;
     
     r -= 5*scaling;
     hpf < lpf ? (
@@ -1822,6 +1831,12 @@ function draw(xmin, ymin, w, h, verb)
     
     gfx_set(1, 1, 1, .03);
     gfx_circle(xl, yl, logLevel*8, 1, 1);    
+    
+    silent ? (
+      gfx_set(0.0,0,.0,.7);
+      tmp = outer + 1+scaling;
+      gfx_circle(xl, yl, tmp, 1, 1);
+    );
     
     r = r*r;
   );
@@ -1848,7 +1863,7 @@ function select(xmin, ymin, w, h, xselectmin, xselectmax, yselectmin, yselectmax
 
 function mouse_over(mousex, mousey, xmin, ymin, w, h)
   local(x1, y1, dx, dy)
-  instance(dtime, x, y, outer)
+  instance(dtime, x, y, outer, mouse_over)
   (
     x = timeToX(dtime);
     xl = xmin + x*w;
@@ -1858,16 +1873,20 @@ function mouse_over(mousex, mousey, xmin, ymin, w, h)
     dy = mousey - yl;
     
     /* Yeah! We're in range! */
-    ( (dx*dx + dy*dy) < (outer*outer) ) ? 1 : 0
+    mouse_over = ( (dx*dx + dy*dy) < (outer*outer) ) ? 1 : 0
 );
 
 
 function amIChosen()
   local()
-  global()
+  global(mouse_cap)
   instance(selected)
   (
-    selected = ( selected == 2 ) ? 1 : 0;
+    (mouse_cap & 4) == 0 ? (
+      selected = ( selected == 2 ) ? 1 : 0;
+    ) : (
+      selected == 2 ? selected = 1;
+    );
   );
 
 function tryNodeConnect(xmin, ymin, w, h, from, mousex, mousey)
@@ -1901,7 +1920,7 @@ function tryNodeConnect(xmin, ymin, w, h, from, mousex, mousey)
 
 function overNode(xmin, ymin, w, h, mousex, mousey, mousecap)
   local(dx, dy, dist, xl, yl)
-  global(nodeCap)
+  global(nodeCap, gfx_x, gfx_y, gfx_w, gfx_h)
   instance(overConnector, x, y, r, dtime, lastleft, left, lastright, right, lx, ly, selected, over)
   (
     left  = mousecap & 1;
@@ -1918,19 +1937,48 @@ function overNode(xmin, ymin, w, h, mousex, mousey, mousecap)
     
     ( left ) ? (
       ( (nodeCap == 0) && (lastleft == 0) && (lastright == 0) ) ? (
+        ( over ) ? (
+          nodeCap = 1;
+            
+          /* If this one is not selected, signal that all others have to be deselected */
+          !selected ? (
+            selected = 2;
+            nodeCap = -nodeCap;
+          ) : (
+            (mousecap & 4) == 4 ? selected = 0;
+          );
+        );
+      );
+    ) : ( right ) ? (
+      ( (nodeCap == 0) && (lastright == 0) && (lastleft == 0) ) ? (
+        ( over ) ? (
+          nodeCap = 2;
+           
+          /* If this one is not selected, signal that all others have to be deselected */
+          !selected ? (
+            selected = 2;
+            nodeCap = -nodeCap;
+          );
+        );
+      );
+    ) : ( 
+      nodeCap = 0;
+    );
+  );
+  
+function overSignalCable(mousecap)
+  local()
+  global(nodeCap)
+  instance(overConnector, lastleft, left, lastright, right, selected)
+  (
+    left  = mousecap & 1;
+    right = mousecap & 2;
+    
+    ( left ) ? (
+      ( (nodeCap == 0) && (lastleft == 0) && (lastright == 0) ) ? (
         ( overConnector ) ? (
           nodeCap = -10-overConnector;
           selected = 2;
-        ) : (
-          ( over ) ? (
-            nodeCap = 1;
-            
-            /* If this one is not selected, signal that all others have to be deselected */
-            !selected ? (
-              selected = 2;
-              nodeCap = -nodeCap;
-            );
-          );
         );
       );
     ) : ( right ) ? (
@@ -1938,25 +1986,14 @@ function overNode(xmin, ymin, w, h, mousex, mousey, mousecap)
         ( overConnector ) ? (
           nodeCap = -10-overConnector;
           selected = 2;
-        ) : (
-          ( over ) ? (
-            nodeCap = 2;
-            
-            /* If this one is not selected, signal that all others have to be deselected */
-            !selected ? (
-              selected = 2;
-              nodeCap = -nodeCap;
-            );
-          );
         );
       );
     ) : ( 
       nodeCap = 0;
     );
-    
-    lastleft = left;
-    lastright = right;    
-  );
+  lastleft = left;
+  lastright = right;
+);
 
 function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap, lx, ly, dbl)
   local(left, right, dist, shift, ctrl, alt, from, chy, xl, yl, moved, csync)
@@ -2233,7 +2270,16 @@ file_var(0, csync);
 file_var(0, dc_correction);
 file_var(0, globalFeedbackAttn);
 file_var(0, sendSaturation);
+file_var(0, duckingActive);
+file_var(0, duckingAttack);
+file_var(0, duckingRelease);
+file_var(0, duckingThreshold);
+file_var(0, duckingRatio);
+file_var(0, duckingKnee);
 
+// Some extra padding to make sure that future variables start at zero.
+memset(0,0,100);
+file_mem(0,0,100);
 @slider
 
 @block
@@ -2247,6 +2293,8 @@ file_var(0, sendSaturation);
   
   current_tempo = tempo;
 );
+
+ducker.setCompressorOptions(duckingThreshold, duckingRatio, duckingAttack, duckingRelease, duckingKnee, 1, 120, 15, 400);
 
 gain_interpolator.interpolator_block();
 lp_interpolator.interpolator_block();
@@ -2369,6 +2417,13 @@ hp_cutoff > .00001 ? (
   rOut = hpr.eval_linearSVF_HP(rOut);
 );
 
+// Update the compressor and duck the delay signal if active
+duckingActive ? (
+  duckerGain = ducker.compressor(l, r);
+  lOut *= duckerGain;
+  rOut *= duckerGain;
+);
+
 spl0 = l * (1-drywet) + lOut * drywet * gainFactor;
 spl1 = r * (1-drywet) + rOut * drywet * gainFactor;
 
@@ -2377,10 +2432,39 @@ scaling = gfx_ext_retina == 2 ? 1 : 0;
 render_time = render_time + 1/60;
 lastchar = gfx_getchar();
 
+function line_to_sim(xmin, ymin, w, h, xs, Ny, x1, y1, x2, y2, intensity)
+global(w1x, w1y, height)
+local(c1x, c1y, c2x, c2y, len, steps, dx, dy, xc, yc)
+(
+  c1x = floor((xmin + x1*w - w1x) / xs);
+  c1y = floor((ymin + y1*h - w1y) / xs);
+  c2x = floor((xmin + x2*w - w1x) / xs);
+  c2y = floor((xmin + y2*h - w1y) / xs); 
+  dx = c2x - c1x;
+  dy = c2y - c1y;
+  
+  len = sqrt(dx * dx + dy * dy);
+  steps = len / (.25*xs);
+  dx /= steps;
+  dy /= steps;
+  xc = c1x;
+  yc = c1y;
+  loop(steps,
+    height[floor(xc) * Ny + floor(yc)] += intensity;
+    
+    xc += dx;
+    yc += dy;
+  );
+);
+
 function draw_to_sim(xmin, ymin, w, h, xs, Ny)
 local(cx, cy, intensity)
-global(gfx_a, gfx_x, gfx_y, height, w1x, w1y)
-instance(x, y, level)
+global(gfx_a, gfx_x, gfx_y, height, w1x, w1y,
+       /*node1.x, node2.x, node3.x, node4.x, node5.x, node6.x, node7.x, node8.x, node9.x, node10.x, node11.x, 
+       node1.y, node2.y, node3.y, node4.y, node5.y, node6.y, node7.y, node8.y, node9.y, node10.y, node11.y,
+       node1.level, node2.level, node3.level, node4.level, node5.level, node6.level, node7.level, node8.level, node9.level, node10.level, node11.level*/)
+instance(x, y, level,
+  /*fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11*/)
 (     
   //radius = fbcoeff/(1+.15*verb);
   //adv = min(0.99, radius);
@@ -2389,11 +2473,22 @@ instance(x, y, level)
   
   intensity = 30*level;
   height[cx * Ny + cy] += intensity;
-  
   cx = cx + 1;
   height[cx * Ny + cy] += intensity;
   cx = cx - 2;
   height[cx * Ny + cy] += intensity;  
+  
+  /*fromNode1 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node1.x, node1.y, node1.level * fromNode1 );
+  fromNode2 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node2.x, node2.y, node2.level * fromNode2 );
+  fromNode3 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node3.x, node3.y, node3.level * fromNode3 );
+  fromNode4 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node4.x, node4.y, node4.level * fromNode4 );
+  fromNode5 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node5.x, node5.y, node5.level * fromNode5 );
+  fromNode6 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node6.x, node6.y, node6.level * fromNode6 );
+  fromNode7 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node7.x, node7.y, node7.level * fromNode7 );
+  fromNode8 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node8.x, node8.y, node8.level * fromNode8 );
+  fromNode9 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node9.x, node9.y, node9.level * fromNode9 );
+  fromNode10 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node10.x, node10.y, node10.level * fromNode10);
+  fromNode11 ? line_to_sim(xmin, ymin, w, h, xs, Ny, this.x, this.y, node11.x, node11.y, node11.level * fromNode11 );*/
 );
 
 function simulation(sim_w, sim_h, xs)
@@ -2558,6 +2653,9 @@ gfx_setfont(KNOB_FONT2, "Arial", 13 * (1+scaling));
 
 HINT_FONT = 8;
 gfx_setfont(HINT_FONT, "Arial", 13 * (1+scaling));
+
+TOGGLE_FONT = 9;
+gfx_setfont(TOGGLE_FONT, "Arial", 16 * (1+scaling));
 
 function drawWindow(x, y, w, h)
   local(dx, dy, Nx, Ny, pw, ph, xValue, yLevel, dyL, dxL, i, ct)
@@ -2783,7 +2881,19 @@ comboboxOpen == 0 ? (
      node9.overNode(w1x, w1y, w1w, w1h,  mouse_x, mouse_y, mouse_cap );
      node10.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
      node11.overNode(w1x, w1y, w1w, w1h, mouse_x, mouse_y, mouse_cap );
-    
+     
+     node1.overSignalCable(mouse_cap);
+     node2.overSignalCable(mouse_cap);
+     node3.overSignalCable(mouse_cap);
+     node4.overSignalCable(mouse_cap);
+     node5.overSignalCable(mouse_cap);
+     node6.overSignalCable(mouse_cap);
+     node7.overSignalCable(mouse_cap);
+     node8.overSignalCable(mouse_cap);
+     node9.overSignalCable(mouse_cap);
+     node10.overSignalCable(mouse_cap);
+     node11.overSignalCable(mouse_cap);
+      
      // An unselected one was selected. Deselect all others
      nodeCap < 0 ? (
       node1.amIChosen();
@@ -2826,10 +2936,12 @@ comboboxOpen == 0 ? (
       );
     );
   ) : ( multiSelect == 1 ) ? (
-    xmi = min(refx, mouse_x);
+    xmi = max(w1x-1, min(refx, mouse_x));
     xma = max(refx, mouse_x);
-    ymi = min(refy, mouse_y);
+    ymi = max(w1y-1, min(refy, mouse_y));
     yma = max(refy, mouse_y);
+    xma = min(xma, w1x + w1w + 1);
+    yma = min(yma, w1y + w1h + 1);
     gfx_set(1, 1, 1, .4);
     gfx_rect(xmi, ymi, xma-xmi, yma-ymi);
     // Select nodes upon release
@@ -2865,26 +2977,35 @@ comboboxOpen == 0 ? (
   );
 
 gfx_y = w1y + 10;
-printRight("RMB - Feedback\n");
-printRight("Shift - LPF\n");
-printRight("Ctrl + Shift - HPF\n");
-printRight("Shift + Alt - Add Send\n");
-printRight("Alt - Panning\n");
-printRight("M - Mute\n");
-printRight("S - Solo\n");
-printRight("P - Ping pong\n");
-printRight("R - Rectify\n");
-printRight("Wheel - Direct In Gain\n");
-printRight("G - Grain\n");
-printRight("T - Scale by feedback\n");
-HQ ? (
-  printRight("H - HQ resampling [ON]");
-) : (
-  printRight("H - HQ resampling [OFF]");
+hideHints == 0 ? (
+  printRight("RMB - Feedback\n");
+  printRight("Shift - LPF\n");
+  printRight("Ctrl + Shift - HPF\n");
+  printRight("Shift + Alt - Add Send\n");
+  printRight("Alt - Panning\n");
+  printRight("M - Mute\n");
+  printRight("S - Solo\n");
+  printRight("P - Ping pong\n");
+  printRight("R - Rectify\n");
+  printRight("Wheel - Direct In Gain\n");
+  printRight("G - Grain\n");
+  printRight("A - Select all nodes\n");
+  HQ ? (
+    printRight("H - HQ resampling [ON]");
+  ) : (
+    printRight("H - HQ resampling [OFF]");
+  );
+  printRight("F1 - Toggle hints");
+  printRight("F2 - Reset delay lines");
 );
 
-// F1 - reset delay lines
+// F1 - Hide hints
 ( lastchar == 26161 ) ? (
+  hideHints = 1 - hideHints;
+);
+
+// F2 - reset delay lines
+( lastchar == 26162 ) ? (
   Init();
 );
 
@@ -2966,6 +3087,18 @@ HQ ? (
   node10.selected ? node10.rectify = node10.rectify ? 0 : 1;
 );
 
+( lastchar == 97 ) ? (
+  node1.selected = node2.selected = node3.selected = node4.selected = node5.selected = node6.selected = node7.selected = node8.selected = node9.selected = node10.selected = 1;
+);
+
+//gfx_x = 0;
+//gfx_y= 0;
+//(lastchar > 0) ? (
+//  lc = lastchar;
+//);
+//gfx_printf("%d", lc);
+
+
 // T - transform
 function convertToNewFormat()
   instance(fbCoeff, y)
@@ -3013,20 +3146,38 @@ function convertToNewFormat()
 
 nSelected = node1.selected + node2.selected + node3.selected + node4.selected + node5.selected + node6.selected + node7.selected + node8.selected + node9.selected + node10.selected + node11.selected*1;
 
+function drawPanel(str, x, y, w, h)
+instance()
+local()
+global(BAND_FONT, edge_r, edge_g, edge_b, edge_a)
+(
+  gfx_set(edge_r, edge_g, edge_b, edge_a);
+  drawVertLabel(x, y, str, h, BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0, 1.0);
+  
+  gfx_set(edge_r, edge_g, edge_b, edge_a);
+  gfx_line(x, y, x, y+h);
+  gfx_line(x, y, x+w, y);
+  gfx_line(x+w, y, x+w, y+h);
+  gfx_line(x, y+h, x+w, y+h);
+);
+
+
 function processVerbCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, shine,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob)
   local()
-  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing)
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad)
   (
     gfx_setfont(4);
+    
+    drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
     inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain", 0);
     inputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? gain = 1-inputGainKnob.value;
     
-    cX += 4*knobSpacing;
+    cX += 3.5*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
     outputGainKnob.drawKnob(cX, cY, knobSize, "Out Gain", "Input gain", 0);
@@ -3035,30 +3186,29 @@ function processVerbCtrls(cX, cY)
       this.updateToSliderRec();
     );
     
-    cX += 4*knobSpacing;
+    cX += 3.5*knobSpacing;
+    panningKnob.active = 1;
+    panningKnob.value = pan;
+    panningKnob.drawKnob(cX, cY, knobSize, "[L] Panning [R]", "Panning", 0);
+    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;    
+    cX += 5*knobSpacing;
+    
+    drawPanel("REVERB", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
+    
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
     feedbackKnob.drawKnob(cX, cY, knobSize, "Decay time", "Decay time\n\nLength of the reverb tail.", 0);
     feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = clamp(feedbackKnob.value,0,.999);
     
-    cX += 4*knobSpacing;
-    panningKnob.active = 1;
-    panningKnob.value = pan;
-    panningKnob.drawKnob(cX, cY, knobSize, "[L]  Panning  [R]", "Panning", 0);
-    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
+    cX += 3.5*knobSpacing;
+    shineKnob.active = 1;
+    shineKnob.value = shine;
+    shineKnob.drawKnob(cX, cY, knobSize, "Shine", "Shine.\n\nMake copies of spectrum to higher octaves.\nCan be used to add extra brightness.", 0);
+    shineKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.2) ? shine = shineKnob.value;    
+
+    cX += 5*knobSpacing;
     
-    cX += 4*knobSpacing;
-    lpfKnob.active = 1;
-    lpfKnob.value = lpf;
-    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter", 0);
-    lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-      lpf = lpfKnob.value;
-      lpf < hpf ? (
-        hpf = lpf;
-      );
-    );
-    
-    cX += 4*knobSpacing;
+    drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
     hpfKnob.active = 1;
     hpfKnob.value = hpf;
     hpfKnob.drawKnob(cX, cY, knobSize, "High pass", "High pass filter.", 0);
@@ -3069,13 +3219,18 @@ function processVerbCtrls(cX, cY)
       );
     );
     
-    cX += 4*knobSpacing;
-    shineKnob.active = 1;
-    shineKnob.value = shine;
-    shineKnob.drawKnob(cX, cY, knobSize, "Shine", "Shine.\n\nMake copies of spectrum to higher octaves.\nCan be used to add extra brightness.", 0);
-    shineKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.2) ? shine = shineKnob.value;
+    cX += 3.5*knobSpacing;
+    lpfKnob.active = 1;
+    lpfKnob.value = lpf;
+    lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter", 0);
+    lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+      lpf = lpfKnob.value;
+      lpf < hpf ? (
+        hpf = lpf;
+      );
+    );
     
-    cX += 4*knobSpacing
+    cX += 3.75*knobSpacing
   );
 
 function processRegularCtrls(cX, cY)
@@ -3083,9 +3238,12 @@ function processRegularCtrls(cX, cY)
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
-         widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a)
+         widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
+         panelY, panelHeight, panelPad)
   (
     gfx_setfont(4);
+    
+    drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
@@ -3094,7 +3252,7 @@ function processRegularCtrls(cX, cY)
     inputGainKnob.drawKnob(cX, cY, knobSize, "In Gain", "Input gain.\n\nControls how much of the input is\npumped into the delay line.", 0);
     inputGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? gain = 1-inputGainKnob.value;
         
-    cX += 4*knobSpacing;
+    cX += 3.5*knobSpacing;
     outputGainKnob.active = 1;
     outputGainKnob.value = 1 - y;
     outputGainKnob.label = sprintf(gain_string, "%.1f dB", 20*log10(yToVol(y)));
@@ -3104,7 +3262,26 @@ function processRegularCtrls(cX, cY)
       this.updateToSliderRec();
     );
     
-    cX += 4*knobSpacing;
+    cX += 3.5*knobSpacing;
+    
+    panningKnob.active = 1;
+    panningKnob.value = pan;
+    panningKnob.label = sprintf(gain_string, "%d°", 180*pan - 90);
+    midside ? (
+      panningKnob.drawKnob(cX, cY, knobSize, "[M] Panning [S]", "Panning.", 0);
+    ) : (
+      panningKnob.drawKnob(cX, cY, knobSize, "[L] Panning [R]", "Panning.", 0);
+    );
+    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
+    
+    pingpongToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pingpong, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
+    pingpong = pingpongToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    midsideToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, midside, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle mid/side\nprocessing");
+    midside = midsideToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    cX += 5*knobSpacing;
+    
+    drawPanel("DELAY", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     timeKnob.active = 1;
     timeKnob.value = x;
     
@@ -3120,31 +3297,22 @@ function processRegularCtrls(cX, cY)
       dtime = xToTime(x);
     );
     
-    cX += 4*knobSpacing;
+    cX += 3.5*knobSpacing;
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
     feedbackKnob.label = sprintf(gain_string, "%.1f dB", 20*log10(.95*exp(-4.0*(1.0-fb))));
     feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount\n\nControls how quickly the delay decays.", 0);
     feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
     
-    cX += 4*knobSpacing;
-    pingpongToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pingpong, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
-    pingpong = pingpongToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-    midsideToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, midside, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle mid/side\nprocessing");
-    midside = midsideToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    cX += 3.5*knobSpacing;
+    flutterKnob.active = 1;
+    flutterKnob.value = flutter;
+    flutterKnob.drawKnob(cX, cY, knobSize, "Flutter", "Flutter.\n\nControls random variability in delay time.", 0);
+    flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? flutter = flutterKnob.value;    
     
-    panningKnob.active = 1;
-    panningKnob.value = pan;
-    panningKnob.label = sprintf(gain_string, "%d°", 180*pan - 90);
-    midside ? (
-      panningKnob.drawKnob(cX, cY, knobSize, "[M]  Panning  [S]", "Panning.", 0);
-    ) : (
-      panningKnob.drawKnob(cX, cY, knobSize, "[L]  Panning  [R]", "Panning.", 0);
-    );
-    panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;
+    cX += 5*knobSpacing;
     
-    cX += 4*knobSpacing;
+    drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
     hpfKnob.active = 1;
     hpfKnob.value = hpf;
 
@@ -3162,7 +3330,7 @@ function processRegularCtrls(cX, cY)
       );
     );
     
-    cX += 4*knobSpacing;
+    cX += 3.5*knobSpacing;
     tmp = f_trafo_hz(lpf);
     tmp < 1000 ? (
       lpfKnob.label = sprintf(gain_string, "%d Hz", tmp);
@@ -3179,14 +3347,9 @@ function processRegularCtrls(cX, cY)
       );
     );
     
-    cX += 4*knobSpacing;
-    flutterKnob.active = 1;
-    flutterKnob.value = flutter;
-    flutterKnob.drawKnob(cX, cY, knobSize, "Flutter", "Flutter.\n\nControls random variability in delay time.", 0);
-    flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? flutter = flutterKnob.value;
-    
-    cX += 4*knobSpacing
+    cX += 3.75*knobSpacing
   );
+
 
 // Draw grain controls
 function processGrainCtrls(cX, cY)
@@ -3195,25 +3358,15 @@ function processGrainCtrls(cX, cY)
   local(y_spacing, smallknobsize, x_start, y_start, panel_width, y_font_offset)
   global(mouse_x, mouse_y, mouse_cap, scaling, buttonSize, knobSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, 
-         edge_r, edge_g, edge_b, edge_a, BAND_FONT)
+         edge_r, edge_g, edge_b, edge_a, BAND_FONT, panelY, panelPad, panelHeight)
   (
     gfx_setfont(4);
-
-    cX -= .5*knobSpacing;
     
-    
+    panel_width = 120 * (1+scaling);
     x_start = cX - 2*(1+scaling);
-    y_start = cY - 32*(1+scaling);
+    y_start = panelY;
     
-    sprintf(16, "GRAIN");
-    drawVertLabel(x_start - knobSpacing*1.7, y_start, 16, 72*(1+scaling), BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0);
-    
-    panel_width = 120*(1+scaling);
-    gfx_set(edge_r, edge_g, edge_b, edge_a);
-    gfx_line(x_start-knobSpacing, y_start-6, x_start-knobSpacing, y_start+82*(1+scaling));
-    gfx_line(x_start-knobSpacing, y_start-6, x_start+panel_width, y_start-6);
-    gfx_line(x_start+panel_width, y_start-6, x_start+panel_width, y_start+82*(1+scaling));
-    gfx_line(x_start-knobSpacing, y_start+82*(1+scaling), x_start+panel_width, y_start+82*(1+scaling));    
+    drawPanel("GRAIN", x_start - knobSpacing, y_start-panelPad, panel_width + knobSpacing, panelHeight);
     
     y_spacing = .95 * knobSpacing;
     smallknobsize = .42*knobSize;
@@ -3264,9 +3417,7 @@ function processGrainCtrls(cX, cY)
     detuneKnob.y_font_offset = y_font_offset;
     detuneKnob.drawKnob(cX, cY+y_spacing, smallknobsize, "Detune", "Detune\n\nControls relative tuning of the grains.", 0);
     detuneKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? grainSpeedSpread = detuneKnob.value*.25;
-    cX += 2.5*knobSpacing;
-    
-    cX += 1 * knobSpacing;
+    cX += 2.75*knobSpacing;
   );
 
 function processShapers(cX, cY)
@@ -3274,23 +3425,16 @@ function processShapers(cX, cY)
            shaperSelect, ceilingKnob, warmthKnob)
   local(nShapers, x_start, y_start)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open,
-         edge_r, edge_g, edge_b, edge_a)
+         edge_r, edge_g, edge_b, edge_a, panelY, panelPad, panelHeight)
 (
   /* Combobox to select shaper */
   nShapers = 7;  
-  cX = cX - 20*(1+scaling);
   
   x_start = cX - 2*(1+scaling);
-  y_start = cY - 32*(1+scaling);
-  
-  sprintf(16, "SATURATION");
-  drawVertLabel(x_start - knobSpacing, y_start - 4 * (1+scaling), 16, 82*(1+scaling), BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0);
-  
-  gfx_set(edge_r, edge_g, edge_b, edge_a);
-  gfx_line(x_start-6, y_start-6, x_start-6, y_start+82*(1+scaling));
-  gfx_line(x_start-6, y_start-6, x_start+95*(1+scaling), y_start-6);
-  gfx_line(x_start+95*(1+scaling), y_start-6, x_start+95*(1+scaling), y_start+82*(1+scaling));
-  gfx_line(x_start-6, y_start+82*(1+scaling), x_start+95*(1+scaling), y_start+82*(1+scaling));
+  y_start = panelY;
+ 
+  drawPanel("SATURATION", x_start - panelPad, y_start - panelPad, 101*(1+scaling), panelHeight);
+   
   shaperSelect.combobox(x_start, y_start, 90*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(rectify);
   shaperSelect.combobox_draw();  
@@ -3309,7 +3453,7 @@ function processShapers(cX, cY)
   warmthKnob.drawKnob(cX+2.2*knobSize, cY+.47*knobSize, .5*knobSize, "Warmth", "Warmth\n\nAdds warmth to the saturation by\nde-emphasizing bass before saturation\nand re-emphasizing it after.", 0);
   warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? warmth = warmthKnob.value;
   
-  cX += 7*knobSpacing
+  cX += 6.75*knobSpacing
 );
 
 function processLFO(cX, cY)
@@ -3317,25 +3461,18 @@ function processLFO(cX, cY)
            lfoDepthKnob, lfoFrequencyKnob, lfoSelect)
   local(nLFOs, x_start, y_start, x_width, y_height)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, BAND_FONT, combobox_open,
-         edge_r, edge_g, edge_b, edge_a)
+         edge_r, edge_g, edge_b, edge_a, panelY, panelPad, panelHeight)
 (
   /* Combobox to select shaper */
-  nLFOs = 2;  
-  cX = cX - 20*(1+scaling);
+  nLFOs = 2;
   
   x_start = cX - 2*(1+scaling);
-  y_start = cY - 32*(1+scaling);
+  y_start = panelY;
   x_width = 100*(1+scaling);
   y_height = 82*(1+scaling);
   
-  sprintf(16, "LFO");
-  drawVertLabel(x_start - knobSpacing, y_start - 4 * (1+scaling), 16, 82*(1+scaling), BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0);
+  drawPanel("LFO", x_start - panelPad, y_start - panelPad, x_width + panelPad, panelHeight);
   
-  gfx_set(edge_r, edge_g, edge_b, edge_a);
-  gfx_line(x_start-6, y_start-6, x_start-6, y_start+y_height);
-  gfx_line(x_start-6, y_start-6, x_start+x_width, y_start-6);
-  gfx_line(x_start+x_width, y_start-6, x_start+x_width, y_start+y_height);
-  gfx_line(x_start-6, y_start+y_height, x_start+x_width, y_start+y_height);
   lfoSelect.combobox(x_start, y_start, 94*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nLFOs, 4, 1, 1, BAND_FONT, "LFO selection." );
   lfoSelect.combobox_setcuritem(lfo);
   lfoSelect.combobox_draw();  
@@ -3365,32 +3502,23 @@ function processSettings(cX, cY)
          dc_correction, sendSaturation,
          widget_r, widget_g, widget_b, widget_a,
          toggle_r, toggle_g, toggle_b, toggle_a,
-         knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a)
+         knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a,
+         panelY, panelPad, panelHeight)
   instance(dcCorrectionToggle, sendSaturationToggle)
   (
     gfx_set(edge_r, edge_g, edge_b, edge_a);
     x_start = cX - 2*(1+scaling);
-    y_start = cY - 32*(1+scaling);
+    y_start = panelY;
     width = 112 * (1+scaling);
-    sprintf(16, "SETTINGS");
-    drawVertLabel(x_start - knobSpacing, y_start, 16, 72*(1+scaling), BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0);
-    gfx_line(x_start-6, y_start-6, x_start-6, y_start+82*(1+scaling));
-    gfx_line(x_start-6, y_start-6, x_start+width*(1+scaling), y_start-6);
-    gfx_line(x_start+width*(1+scaling), y_start-6, x_start+width*(1+scaling), y_start+82*(1+scaling));
-    gfx_line(x_start-6, y_start+82*(1+scaling), x_start+width*(1+scaling), y_start+82*(1+scaling));
     
+    drawPanel("SETTINGS", x_start - panelPad, y_start - panelPad, width + panelPad, panelHeight);
+
+    dcCorrectionToggle.label = "DC Correction";
     dcCorrectionToggle.drawToggle(cX+1.9*(1+scaling), cy - knobSpacing, buttonSize, buttonSize, dc_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal.\n\nDisable when not needed as it costs CPU.");
-    gfx_x = cX + 2*buttonSize + 1;
-    gfx_y = cY - 4*(1+scaling) - knobSpacing - 1;
-    gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
-    gfx_printf("Correct DC");
     dc_correction = dcCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
+    sendSaturationToggle.label = "Saturate sends";
     sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + .5*buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.\n\nDisable when not needed as it costs CPU.");
-    gfx_x = cX + 2*buttonSize + 1;
-    gfx_y = cY - 4*(1+scaling) - 1 + .5*buttonSize;
-    gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
-    gfx_printf("Saturate sends");
     sendSaturation = sendSaturationToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     /*sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + knobSpacing + buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.");
@@ -3406,19 +3534,15 @@ local(x_start, y_start, nModes, nDensity, width)
 global(buttonSize, knobSpacing, scaling, BAND_FONT, syncMode, mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y, Snap, gridDensity,
        widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
        knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a, KNOB_FONT,
-       edge_r, edge_g, edge_b, edge_a)
+       edge_r, edge_g, edge_b, edge_a, panelY, panelHeight, panelPad)
 instance(snap_select, grid_density_select, snap_toggle)
 (
   gfx_set(edge_r, edge_g, edge_b, edge_a);
-  x_start = cX - 2*(1+scaling);
-  y_start = cY - 32*(1+scaling);
-  width = 98;
-  sprintf(16, "TIMING");
-  drawVertLabel(x_start - knobSpacing, y_start, 16, 72*(1+scaling), BAND_FONT, 3, edge_r, edge_g, edge_b, 1.0);
-  gfx_line(x_start-6, y_start-6, x_start-6, y_start+82*(1+scaling));
-  gfx_line(x_start-6, y_start-6, x_start+width*(1+scaling), y_start-6);
-  gfx_line(x_start+width*(1+scaling), y_start-6, x_start+width*(1+scaling), y_start+82*(1+scaling));
-  gfx_line(x_start-6, y_start+82*(1+scaling), x_start+width*(1+scaling), y_start+82*(1+scaling));
+  x_start = cX;
+  y_start = panelY;
+  width = 98 * (1+scaling);
+  
+  drawPanel("TIMING", x_start - panelPad, y_start - panelPad, width + panelPad, panelHeight);
   
   nModes = 6;
   gfx_set(edge_r, edge_g, edge_b, edge_a);
@@ -3438,14 +3562,110 @@ instance(snap_select, grid_density_select, snap_toggle)
   grid_density_select.combobox_processMouse(mouse_x, mouse_y, mouse_cap) ? gridDensity = grid_density_select.curitem;
   
   cY += 1.2*knobSpacing;
-  snap_toggle.drawToggle(cX+1.9*(1+scaling), cy+4*(1+scaling), buttonSize, buttonSize, Snap, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal");
+  snap_toggle.label = "Snap to grid";
+  snap_toggle.drawToggle(cX+1.9*(1+scaling), cy+4*(1+scaling), buttonSize, buttonSize, Snap, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Snap to grid.");
   Snap = snap_toggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-  gfx_x = cX + 2*buttonSize + 1;
-  gfx_y = cY - 1;
-  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
-  gfx_printf("Snap to grid");
   
   cX + width * (1+scaling) + 2 * knobSpacing;
+);
+
+function processDucking(cX, cY)
+local(x_start, y_start, nModes, nDensity, width, height, y_font_offset, vu_start, smallknobsize, smallknobspacing, pad, 
+      steps, floorLevel, xc, yc, N, idx)
+global(buttonSize, knobSpacing, scaling, BAND_FONT, syncMode, mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y,
+       widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
+       knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a, KNOB_FONT,
+       edge_r, edge_g, edge_b, edge_a, y_spacing, knobSize,
+       duckingActive, duckingAttack, duckingRelease, duckingThreshold, duckingRatio, duckingKnee, render_time
+       ducker.attack, ducker.release, ducker.ratio, ducker.c,
+       panelY, panelPad, panelHeight)
+instance(attackKnob, releaseKnob, thresholdKnob, ratioKnob, duckingToggle)
+(
+  gfx_set(edge_r, edge_g, edge_b, edge_a);
+  x_start = cX - 2*(1+scaling);
+  y_start = panelY;
+  width = 200*(1+scaling);
+  height = 82*(1+scaling);
+//  y_spacing = .95 * knobSpacing;
+  smallknobsize = .7*knobSize;
+  smallknobspacing = .57*knobSpacing;
+  y_font_offset = 2 * (1+scaling);
+  y_spacing = .95 * knobSpacing;
+  y_font_offset = 2 * (1+scaling);
+  pad = 6*(1+scaling);
+  
+  drawPanel("DUCKING", x_start - panelPad, y_start - panelPad, width + panelPad, panelHeight);
+
+  duckingToggle.drawToggle(cX - .15*smallknobsize, y_start, buttonSize-2, buttonSize-2, duckingActive, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Ducking.\n\nEnable sidechain compression\non the delays. This helps\nfree up space when playing\nmelodies, allowing the delay\nto breathe only when you're\nnot playing.");
+  duckingActive = duckingToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  cY -= .8 * smallknobspacing;
+  cX += 1.6 * smallknobspacing;
+  thresholdKnob.active = duckingActive > 0;
+  thresholdKnob.value = 1 + duckingThreshold / 40;
+  thresholdKnob.y_font_offset = y_font_offset;
+  thresholdKnob.label = sprintf(100, "%.1f", (thresholdKnob.value - 1.0) * 40);
+  thresholdKnob.drawKnob(cX, cY, smallknobsize, "Thr. [dB]", "Threshold\n\nSets compressor threshold.", 0);
+  thresholdKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? duckingThreshold = (thresholdKnob.value - 1.0) * 40;
+  cX += 4 * smallknobspacing;
+
+  ratioKnob.active = duckingActive > 0;
+  ratioKnob.value = duckingRatio * 0.5;
+  ratioKnob.y_font_offset = y_font_offset;  
+  ratioKnob.label = sprintf(100, "1:%d", ducker.ratio);
+  ratioKnob.drawKnob(cX, cY, smallknobsize, "Ratio [-]", "Ratio\n\nCompression ratio.", 0);
+  ratioKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? duckingRatio = 2 * ratioKnob.value;
+  
+  cX += 4 * smallknobspacing;
+  attackKnob.active = duckingActive > 0;
+  attackKnob.value = duckingAttack;
+  attackKnob.y_font_offset = y_font_offset;  
+  attackKnob.label = sprintf(100, "%.1f", ducker.attack);
+  attackKnob.drawKnob(cX, cY, smallknobsize, "Atk. [ms]", "Attack\n\nCompressor attack.", 0);
+  attackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? duckingAttack = attackKnob.value;
+  
+  cX += 4 * smallknobspacing;
+  releaseKnob.active = duckingActive > 0;
+  releaseKnob.value = duckingRelease;
+  releaseKnob.y_font_offset = y_font_offset;
+  releaseKnob.label = sprintf(100, "%.1f", ducker.release);
+  releaseKnob.drawKnob(cX, cY, smallknobsize, "Rel. [ms]", "Release\n\nCompressor release.", 0);
+  releaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? duckingRelease = releaseKnob.value;
+  
+  cX += 4 * smallknobspacing;
+  
+  vu_start = y_start + .77 * height;
+  xc = x_start + width - pad;
+  yc = vu_start;
+  gfx_set(edge_r, edge_g, edge_b, edge_a * .4 + .6*duckingActive);
+  gfx_line(x_start, yc-1, x_start + width - pad, yc-1 );
+  floorLevel = 40;
+  steps = floor( (width-pad) * (-ducker.c/floorLevel) / 2 );
+
+  duckingActive > 0 ? (
+    gfx_set(1, 0, .5, .8 + .1 * sin(5*render_time));
+    loop(steps,
+      gfx_line(xc, yc, xc, yc + 4);
+      xc -= 2;
+    );
+  );  
+  
+  yc += 5 * (1+scaling);
+  gfx_set(edge_r, edge_g, edge_b, edge_a * .4 + .6*duckingActive);
+  gfx_line(x_start, yc, x_start + width - pad, yc );
+  N = 6; idx = 0;
+  xc = x_start + width - pad;
+  steps = (width-pad) / N;
+  loop(N + 1,
+    gfx_line(xc, yc, xc, yc + 4);
+    gfx_x = xc;
+    gfx_y = yc;
+    idx > 0 ? gfx_printf(" -%d", idx * floorLevel / N);
+     xc -= steps;
+    idx += 1;
+  );
+    
+  cX = x_start + width + 2 * knobSpacing;
 );
 
 knobSize = 30*(1+scaling);
@@ -3461,7 +3681,10 @@ toggle_b = .6;
 toggle_a = 1.0;
 
 cY = w1y + w1h + .4*(gfx_h-w1h);
-cX = 70*(1+scaling);
+panelY = cY - 32 * (1+scaling);
+panelPad = 6;
+panelHeight = 88 * (1+scaling);
+cX = 90*(1+scaling);
 
 gfx_x = 0;
 gfx_y = 100;
@@ -3480,15 +3703,20 @@ selectedNode = 0;
   node11.selected || (nSelected == 0 && node11.mouse_over(mouse_x, mouse_y, w1x, w1y, w1w, w1h)) ? ( selectedNode = 11; cX = node11.processVerbCtrls(cX, cY); cX = node11.processShapers(cX, cY); );
 );
 
+
+
 (selectedNode > 0) ? (
   // Band indicator
-  sprintf(16, "Node %d", selectedNode);
-  vLabel.drawVertLabel(8, w1y + w1h, 16, gfx_h-w1h - w1y, BAND_FONT, 3, font_color_r, font_color_g, font_color_b, font_color_a);
-  
+  sprintf(16, "NODE %d", selectedNode);
+  gfx_set(edge_r, edge_g, edge_b, edge_a);
+  gfx_rect(8, panelY - panelPad, 16, panelHeight);
+  vLabel.drawVertLabel(8,  panelY - panelPad, 16, panelHeight, BAND_FONT, 3, font_color_r, font_color_g, font_color_b, .7, 0);  
 ) : (
   // Band indicator
-  sprintf(16, "Global", selectedNode);
-  vLabel.drawVertLabel(8, w1y + w1h, 16, gfx_h-w1h - w1y, BAND_FONT, 3, font_color_r, font_color_g, font_color_b, font_color_a);
+  sprintf(16, "GLOBAL", selectedNode);
+  gfx_set(edge_r, edge_g, edge_b, edge_a);
+  gfx_rect(8, panelY - panelPad, 16, panelHeight);
+  vLabel.drawVertLabel(8,  panelY - panelPad, 16, panelHeight, BAND_FONT, 3, font_color_r, font_color_g, font_color_b, .7, 0);
   gainKnob.active = 1;
   gainKnob.value = (WetGain+32)/64;
   gain_string = 100;
@@ -3496,23 +3724,27 @@ selectedNode = 0;
   gainKnob.drawKnob(cX, cY, knobSize, "Gain", "Gain\n\nOverall output gain.", 0);
   gainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? WetGain = gainKnob.value*64-32;  
   
-  cX += 4*knobSpacing;
+  drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
+  
+  cX += 3.5*knobSpacing;
   drywetKnob.active = 1;
   drywetKnob.value = drywet;
   drywetKnob.drawKnob(cX, cY, knobSize, "Dry/Wet", "Dry/Wet.", 0);
   drywetKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? drywet = drywetKnob.value;
   
-  cX += 4*knobSpacing;
+  cX += 3.5*knobSpacing;
   globalFeedbackKnob.active = 1;
-  globalFeedbackKnob.value = globalFeedbackAttn;
-  globalFeedbackKnob.label = sprintf(gain_string, "%.1f dB", 36 * globalFeedbackAttn - 36);
-  globalFeedbackKnob.drawKnob(cX, cY, knobSize, "Global Feedback", "Global Feedback\n\nThis slider can be used to\nattenuate all feedbacks at\na global level.", 0);
+  globalFeedbackKnob.value = 1.0 - globalFeedbackAttn;
+  globalFeedbackKnob.label = sprintf(gain_string, "%.1f dB", -36 * globalFeedbackAttn);
+  globalFeedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Global Feedback\n\nThis slider can be used to\nattenuate all feedbacks at\na global level.", 0);
   globalFeedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1.0) ? ( 
-    globalFeedbackAttn = globalFeedbackKnob.value;
+    globalFeedbackAttn = 1.0 - globalFeedbackKnob.value;
     updateGlobalFeedback();
   );
 
-  cX += 4*knobSpacing;
+  cX += 5*knobSpacing;
+  
+  drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
   hpKnob.active = 1;
   hpKnob.value = HP;
   gain_string = 100;
@@ -3525,7 +3757,7 @@ selectedNode = 0;
   hpKnob.drawKnob(cX, cY, knobSize, "High pass", "Global high pass filter frequency.", 0);
   hpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? HP = hpKnob.value;
 
-  cX += 4*knobSpacing;
+  cX += 3.5*knobSpacing;
   lpKnob.active = 1;
   lpKnob.value = LP;
   gain_string = 100;
@@ -3540,11 +3772,14 @@ selectedNode = 0;
   
   cX += 3.75 * knobSpacing;
   cX = processTiming(cX, cY);
+  cX = processDucking(cX, cY);
   cX = processSettings(cX, cY);
 );
 
 updateToSliderAll();
-hinter.drawHint_draw();
+hideHints == 0 ? (
+  hinter.drawHint_draw();
+);
 
 /* Draw logo */
 loaded = 0;
