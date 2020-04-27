@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.40
+version: 0.41
 author: Joep Vanlier
-changelog: Indicate when hovering over node. Reduce muted node alpha. Add option to hide hints (F1). Added ducking compressor. Fix bug that didn't allow node selection in some cases when it was on top of a signal send. Make knob dot more visible in dials. Added some grouping of the various parameters. Fixed marquee bug. Allow clicking of label for checkbox.
+changelog: Added Q for lowpass.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -13,8 +13,9 @@ import Reflectosaurus_compressor.jsfx-inc
 slider1:drywet=1.0<0,1,.001>-Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>-Mode
 slider3:Snap=0<0,1,1{Off,On}>-Snap
-slider4:LP=1<0,1,.00001>-Global LP
-slider5:HP=0<0,1,.00001>-Global HP
+slider4:LP=1<0,1,.00001>-Global LP Cutoff
+slider5:HP=0<0,1,.00001>-Global HP Cutoff
+slider6:LPRES=0<0,1,.00001>-Global LP Resonance
 
 slider10:X1=0<0,1,.000000001>-X1
 slider11:Y1=0<0,1,.000000001>-Y1
@@ -749,7 +750,7 @@ function f_trafo_hz(freq)
 function init_linearSVF(freq, res)
   global()
   local(g)
-  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3, resonance_scaling)
   (
     g = tan(.5 * f_trafo(freq));
     k = 2 - 2*res;
@@ -757,6 +758,7 @@ function init_linearSVF(freq, res)
     a1 = 1/(1+g*(g+k));
     a2 = g*a1;
     a3 = g*a2;
+    resonance_scaling = k/(2-(1-.25*k*k));
   );
   
 function init_linearSVF_direct(freq, res)
@@ -783,7 +785,7 @@ function reset_linearSVF()
 function eval_linearSVF_LP(v0)
   global()
   local(v1, v2, v3)
-  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3, resonance_scaling)
   (
     v3 = v0 - ic2eq;
     v1 = a1 * ic1eq + a2 * v3;
@@ -791,7 +793,7 @@ function eval_linearSVF_LP(v0)
     ic1eq = 2*v1 - ic1eq;
     ic2eq = 2*v2 - ic2eq;    
     
-    v2
+    v2 * resonance_scaling
   );  
   
 function eval_linearSVF_BP(v0)
@@ -974,6 +976,7 @@ function octaver_init(filterfreq)
   (
     lp_interpolator.interpolator_init(4);
     hp_interpolator.interpolator_init(5);
+    lpres_interpolator.interpolator_init(6);
     gain_interpolator.interpolator_init(64);
  
     (last_inertia != inertia) ? (
@@ -981,6 +984,7 @@ function octaver_init(filterfreq)
       inertia_cutoff = 1000.0/inertia;
       lp_interpolator.initialize_smoother(inertia_cutoff);
       hp_interpolator.initialize_smoother(inertia_cutoff);
+      lpres_interpolator.initialize_smoother(inertia_cutoff);
       gain_interpolator.initialize_smoother(inertia_cutoff);
       change += 1;
     );
@@ -1039,7 +1043,7 @@ function yToVol(y)
   local(newdtime, current_dtime, dTimeOffset)
   global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
   instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
-           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime)
+           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -1055,17 +1059,17 @@ function yToVol(y)
         diff = 1;
       ) : diff = olddtime - newdtime;
     
-      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || (HQ != hq_active) ) ? (
+      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || lflutter || (HQ != hq_active) ) ? (
         hq_active = HQ;
         current_dtime = newdtime;
         flutter ? current_dtime += this.flutter();
         buffer.setOffset(current_dtime + dTimeOffset, HQ );
+        lflutter = flutter;
       );
       olddtime = newdtime;
       
       activevol = update_alpha * vol + inv_update_alpha * oldvol;
       oldvol = activevol;
-      
       fbc = fb * globalFeedback;
     
       ( y != ylast ) ? ( vol = yToVol(y);  ylast = y; );
@@ -1073,8 +1077,9 @@ function yToVol(y)
       ( fbc != fblast ) ? ( fbcoeff = .95*exp( -4.0 * ( 1.0 - fbc ) ) );  
       ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );
     
-      ( lpf < 1.0 && lpf != llpf ) ? ( lpl.init_linearSVF(lpf, 0); lpr.init_linearSVF(lpf, 0); llpf = lpf; );
-      ( hpf > 0.0 && hpf != lhpf ) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); lhpf = hpf; );
+      lpfActive = lpf < 1.0 || lpfResonance > 0.0;
+      ( lpfActive && (lpf != llpf || lpfResonance != llreso) ) ? ( lpl.init_linearSVF(lpf, .99*lpfResonance); lpr.init_linearSVF(lpf, .99*lpfResonance); llpf = lpf; llreso = lpfResonance; );
+      ( hpf > 0.0 && hpf != lhpf) ? ( hpl.init_linearSVF(hpf, 0); hpr.init_linearSVF(hpf, 0); lhpf = hpf; );
     );
   );
   
@@ -1336,7 +1341,7 @@ function process(l_in, r_in)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread,
-           shaper, shaped_r, hq_active
+           shaper, shaped_r, hq_active, lpfActive
            )
   (
     ( !mute || solo ) ? (
@@ -1364,7 +1369,7 @@ function process(l_in, r_in)
         r = buffer.outR;
       );
       
-      lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
+      lpfActive ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
       hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
   
       lastL = l * lPanTerm;
@@ -1405,7 +1410,7 @@ function process(l_in, r_in)
 function processVerbNode(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
-  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r)
+  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r, lpfActive)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -1421,7 +1426,7 @@ function processVerbNode(l_in, r_in)
       l = verb.outL;
       r = verb.outR;
       
-      lpf < 1.0 ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
+      lpfActive ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
       hpf > 0.0 ? ( l = hpl.eval_linearSVF_HP( l ); r = hpr.eval_linearSVF_HP( r ); );
       
       lastL = l * lPanTerm;
@@ -1495,7 +1500,7 @@ function serializeNode()
   local()
   global(readread, SyncMode, quickSwitch)
   instance( x, y, active,
-            dtime, temposync, fb, lpf, hpf, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
+            dtime, temposync, fb, lpf, hpf, lpfResonance, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
@@ -1551,10 +1556,11 @@ function serializeNode()
     file_var( 0, lfo );
     file_var( 0, lfoDepth );
     file_var( 0, lfoFrequency );
+    file_var( 0, lpfResonance );
     
     /* Memory to expand into when features are added */
-    memset(0,0,67);
-    file_mem( 0, 0, 67 ); /* Reduce this by one when you want to add features */
+    memset(0, 0, 66);
+    file_mem(0, 0, 66); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -2299,6 +2305,7 @@ ducker.setCompressorOptions(duckingThreshold, duckingRatio, duckingAttack, ducki
 gain_interpolator.interpolator_block();
 lp_interpolator.interpolator_block();
 hp_interpolator.interpolator_block();
+lpres_interpolator.interpolator_block();
 
 // Interpolation speed for the time and gain. This creates that more tapey effect.
 // We want the user to be able to disable this temporarily if they just want a sudden
@@ -2406,9 +2413,10 @@ node11.processVerbNode(l, r);
 
 lp_cutoff = lp_interpolator.interpolate();
 hp_cutoff = hp_interpolator.interpolate();
-(abs(lp_cutoff - llpf) > .00000001) ? ( lpl.init_linearSVF(lp_cutoff, 0); lpr.init_linearSVF(lp_cutoff, 0); llpf = lp_cutoff; );
+lp_res = lpres_interpolator.interpolate();
+(abs(lp_cutoff - llpf) > .00000001) || (abs(lp_res - lres) > .00000001) ? ( lpl.init_linearSVF(lp_cutoff, .99*LPRES); lpr.init_linearSVF(lp_cutoff, .99*LPRES); llpf = lp_cutoff; lres = lp_res; );
 (abs(hp_cutoff - lhpf) > .00000001) ? ( hpl.init_linearSVF(hp_cutoff, 0); hpr.init_linearSVF(hp_cutoff, 0); lhpf = hp_cutoff; );
-lp_cutoff < .99999 ? (
+lp_cutoff < .99999 || lpres > 0 ? (
   lOut = lpl.eval_linearSVF_LP(lOut);
   rOut = lpr.eval_linearSVF_LP(rOut);
 );
@@ -3164,8 +3172,9 @@ global(BAND_FONT, edge_r, edge_g, edge_b, edge_a)
 
 function processVerbCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, shine,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob)
-  local()
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob,
+  resonanceKnob, lpfResonance)
+  local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad)
   (
     gfx_setfont(4);
@@ -3208,9 +3217,20 @@ function processVerbCtrls(cX, cY)
 
     cX += 5*knobSpacing;
     
-    drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
+    drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     hpfKnob.active = 1;
     hpfKnob.value = hpf;
+    tmp = f_trafo_hz(hpf);
+    gain_string = 100;
+    tmp < 1000 ? (
+      hpf == 0 ? (
+        hpfKnob.label = sprintf(gain_string, "OFF", tmp);
+      ) : (
+        hpfKnob.label = sprintf(gain_string, "%d Hz", tmp);
+      );
+    ) : (
+      hpfKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
+    );
     hpfKnob.drawKnob(cX, cY, knobSize, "High pass", "High pass filter.", 0);
     hpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
       hpf = hpfKnob.value;
@@ -3222,6 +3242,16 @@ function processVerbCtrls(cX, cY)
     cX += 3.5*knobSpacing;
     lpfKnob.active = 1;
     lpfKnob.value = lpf;
+    tmp = f_trafo_hz(lpf);
+    tmp < 1000 ? (
+      lpfKnob.label = sprintf(gain_string, "%d Hz", tmp);
+    ) : (
+      (lpf < 1.0 || lpfResonance > 0.0) ? (
+        lpfKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
+      ) : (
+        lpfKnob.label = sprintf(gain_string, "OFF");
+      );
+    );
     lpfKnob.drawKnob(cX, cY, knobSize, "Low pass", "Low pass filter", 0);
     lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
       lpf = lpfKnob.value;
@@ -3230,12 +3260,20 @@ function processVerbCtrls(cX, cY)
       );
     );
     
+    cX += 3.5*knobSpacing;
+    resonanceKnob.active = 1;
+    resonanceKnob.value = lpfResonance;
+    resonanceKnob.label = sprintf(gain_string, "%.2f", lpfResonance);
+    resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.\n\nResonance control for LPF.", 0);
+    resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? lpfResonance = resonanceKnob.value;   
+    
     cX += 3.75*knobSpacing
   );
 
 function processRegularCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob)
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob,
+  lpfResonance, resonanceKnob)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
@@ -3312,13 +3350,17 @@ function processRegularCtrls(cX, cY)
     
     cX += 5*knobSpacing;
     
-    drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
+    drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     hpfKnob.active = 1;
     hpfKnob.value = hpf;
 
     tmp = f_trafo_hz(hpf);
     tmp < 1000 ? (
-      hpfKnob.label = sprintf(gain_string, "%d Hz", tmp);
+      hpf == 0 ? (
+        hpfKnob.label = sprintf(gain_string, "OFF", tmp);
+      ) : (
+        hpfKnob.label = sprintf(gain_string, "%d Hz", tmp);
+      );
     ) : (
       hpfKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
     );
@@ -3335,7 +3377,11 @@ function processRegularCtrls(cX, cY)
     tmp < 1000 ? (
       lpfKnob.label = sprintf(gain_string, "%d Hz", tmp);
     ) : (
-      lpfKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
+      (lpf < 1.0 || lpfResonance > 0.0) ? (
+        lpfKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
+      ) : (
+        lpfKnob.label = sprintf(gain_string, "OFF");
+      );
     );
     lpfKnob.active = 1;
     lpfKnob.value = lpf;
@@ -3346,6 +3392,13 @@ function processRegularCtrls(cX, cY)
         hpf = lpf;
       );
     );
+    
+    cX += 3.5*knobSpacing;
+    resonanceKnob.active = 1;
+    resonanceKnob.value = lpfResonance;
+    resonanceKnob.label = sprintf(gain_string, "%.2f", lpfResonance);
+    resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.\n\nResonance control for LPF.", 0);
+    resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? lpfResonance = resonanceKnob.value;    
     
     cX += 3.75*knobSpacing
   );
@@ -3744,13 +3797,17 @@ selectedNode = 0;
 
   cX += 5*knobSpacing;
   
-  drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
+  drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
   hpKnob.active = 1;
   hpKnob.value = HP;
   gain_string = 100;
   tmp = f_trafo_hz(HP);
   tmp < 1000 ? (
-    hpKnob.label = sprintf(gain_string, "%d Hz", tmp);
+    HP == 0 ? (
+      hpKnob.label = sprintf(gain_string, "OFF", tmp);
+    ) : (
+      hpKnob.label = sprintf(gain_string, "%d Hz", tmp);
+    );
   ) : (
     hpKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
   );
@@ -3765,10 +3822,21 @@ selectedNode = 0;
   tmp < 1000 ? (
     lpKnob.label = sprintf(gain_string, "%d Hz", tmp);
   ) : (
-    lpKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
-  );
+    (LP < 1.0 || LPRES > 0.0) ? (
+      lpKnob.label = sprintf(gain_string, "%d kHz", tmp/1000);
+    ) : (
+      lpKnob.label = sprintf(gain_string, "OFF");
+    );
+  );  
   lpKnob.drawKnob(cX, cY, knobSize, "Low pass", "Global low pass filter frequency.", 0);
   lpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? LP = lpKnob.value;
+  
+  cX += 3.5*knobSpacing;
+  resonanceKnob.active = 1;
+  resonanceKnob.value = LPRES;
+  resonanceKnob.label = sprintf(gain_string, "%.2f", LPRES);
+  resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.\n\nResonance control for LPF.", 0);
+  resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? LPRES = resonanceKnob.value; 
   
   cX += 3.75 * knobSpacing;
   cX = processTiming(cX, cY);
