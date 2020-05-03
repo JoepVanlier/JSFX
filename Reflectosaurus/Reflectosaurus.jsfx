@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.43
+version: 0.44
 author: Joep Vanlier
-changelog: Added reverse to grains. Increased reverb size. Added polarity switch option to feedbacks and sends.
+changelog: Added slew limiter to saturators.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -1123,19 +1123,23 @@ function updateNodeBlock()
   local(omega_tilt)
   global(srate, UPDATE_INTERVAL)
   instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
-  l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain,
+  l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain, slew_target,
   octaver, rectify, lfo, lfoDepth, lfoFrequency, lfoDepthFactor, lfoAdvanceStep)
   (
     recv = fromNode1 || fromNode2 || fromNode3 || fromNode4 || fromNode5 || fromNode6 || fromNode7 || fromNode8 || fromNode9 || fromNode10 || fromNode11;
-    
-    ceiling     = exp(.11512925464970228420089957273422 * saturationGain); //log(10)/20 = .11512925464970228420089957273422;
-    invCeiling = 1.0 / ceiling;
 
     lfoAdvanceStep = 2.0 * lfoFrequency * $pi * UPDATE_INTERVAL / srate;
     lfoDepthFactor = lfoDepth * 0.002 * srate; // 0.002 since the sample buffer is packed two samples at a time
 
+    ceiling     = exp(.11512925464970228420089957273422 * saturationGain); //log(10)/20 = .11512925464970228420089957273422;
+    invCeiling = 1.0 / ceiling;
+
     rectify == 6 ? (
       this.octaver.octaver_init(1-saturationGain/36);   
+    );
+    
+    rectify == 7 ? (
+      slew_target = 1.0 - exp(-0.04797052277070928508370815530592 * saturationGain); // 15 * log(10)/20 / 36
     );
     
     warmth != lwarmth ? (
@@ -1264,12 +1268,24 @@ function rectify(in)
   
     DC_fixed
   );  
+  
+slew_factor = .999 * slew_factor + .001 * (0.00075*srate*slew_target);  
+  
+function slew_buffer(x, slew_factor)
+local(diff)
+global()
+instance(lx)
+(
+  diff = tanh(slew_factor*(x - lx))/slew_factor;
+  lx = lx + diff;
+  lx
+);
 
 function processWaveshapers(l, r)
 instance(warmth, tilt_gain, ceiling, invCeiling, rectify,
-         l_itilt, r_itilt, l_tilt, r_tilt, tilt_gain, inverse_tilt_gain,
-         shaped_r)
-global()
+         l_itilt, r_itilt, l_tilt, r_tilt, tilt_gain, inverse_tilt_gain, slew_target,
+         shaped_r, lx, slew_target, slew_factor, l_slew, r_slew)
+global(srate)
 local(factor, t)
 (
     // De-emphasize before shaper for warmth
@@ -1325,6 +1341,12 @@ local(factor, t)
       t = this.octaver.octaver_eval(l+r);
       l = this.octaver.bal1 * l + t*.5;
       r = this.octaver.bal1 * r + t*.5;
+    ) : ( rectify == 7 ) ? (
+      slew_target > 0 ? (
+        slew_factor = .999 * slew_factor + .001 * (0.00075*srate*slew_target);
+        l = l_slew.slew_buffer(l, slew_factor);
+        r = r_slew.slew_buffer(r, slew_factor);
+      );
     );
         
     // Re-emphasize after shaper for warmth
@@ -3581,7 +3603,7 @@ function processShapers(cX, cY)
          edge_r, edge_g, edge_b, edge_a, panelY, panelPad, panelHeight)
 (
   /* Combobox to select shaper */
-  nShapers = 7;
+  nShapers = 8;
   
   x_start = cX - 2*(1+scaling);
   y_start = panelY;
