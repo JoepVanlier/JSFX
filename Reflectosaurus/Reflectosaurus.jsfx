@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.42
+version: 0.43
 author: Joep Vanlier
-changelog: Don't draw boundary condition area.
+changelog: Added reverse to grains. Increased reverb size. Added polarity switch option to feedbacks and sends.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -46,8 +46,6 @@ slider64:WetGain=0<-32,32,.001>-Gain
 gfx_ext_retina = 1;
 quickSwitch = 1;
 UPDATE_INTERVAL = 4;
-
-
 
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
   function init_HP6(freq)
@@ -453,7 +451,7 @@ function windowBlock()
  function processBlockVerb(outputPtr)
     instance(fft_mem, fftSize, nSamples, mag_mem, phase_mem, offset, 
              dampFactor, sharedBuffer, outputBufStart, outputBufEnd, shine)
-    local(ifftSize, fwd, bwd, chnk1, 
+    local(ifftSize, fwd, bwd, chnk1, idamp,
           r1, r2, i1, i2, re1, im1, re2, im2, x1, x2, x1sq, x2sq, sqlen, isqlen, ang1, ang2,
           cMag, cPhase, outPtr, fftPtr, fftPtr2, magPtr, magPtr2, phasePtr, 
           i, last, new)
@@ -467,8 +465,6 @@ function windowBlock()
       fft_permute(fft_mem, fftSize);
   
       magPtr      = mag_mem;
-      phasePtr    = phase_mem;
-      
       re1         = fft_mem[] + fft_mem[];
       re2         = fft_mem[1] + fft_mem[1];
       magPtr[]    = re1; magPtr += 1;
@@ -496,10 +492,11 @@ function windowBlock()
       
       shine ? (
         i = 0;
+        idamp = 1.0 - dampFactor;
         loop( fftSize/2,
           i2 = 2*i;
-          sharedBuffer[i2]      += shine*(1-dampFactor)*sharedBuffer[i];
-          sharedBuffer[i2 + 1]  += shine*(1-dampFactor)*sharedBuffer[i + 1];
+          sharedBuffer[i2]      += shine*idamp*sharedBuffer[i];
+          sharedBuffer[i2 + 1]  += shine*idamp*sharedBuffer[i + 1];
           i += 2;
         );
       );
@@ -578,12 +575,12 @@ function windowBlock()
         x2sq = x2*x2;
         sqlen = x1sq + x2sq;
           
-        isqlen = 1 / sqlen;
+        isqlen = 1.0 / sqlen;
         ang1 = (x1sq - x2sq) * isqlen;
         re1 = cMag * ang1; // Real
-        ang2 = (2 * x1 * x2) * isqlen;
+        ang2 = (2.0 * x1 * x2) * isqlen;
         im1 = cMag * ang2; // Imaginary   
-          
+        
         magPtr += 1;
           
         // Spectrum 2
@@ -638,7 +635,7 @@ function updateVerb(verbOutputPtr, left, right)
     (ptr >= fft_end) ? (
       this.processBlockVerb(verbOutputPtr);
       ptr = fft_mem;
-      memset(ptr, 0, 65536);
+      //memset(ptr, 0, 65536);
     );
       
     ptr[]  = left;    ptr += 1;
@@ -646,7 +643,7 @@ function updateVerb(verbOutputPtr, left, right)
   );
     
 function initFFTBuffer(_fft_mem, _nSamples, _fftSize, _mag_mem, _phase_mem)
-  instance(fft_mem, fft_end, ptr, fftSize, nSamples, mag_mem, phase_mem)
+  instance(fft_mem, ptr, fft_end, fftSize, nSamples, mag_mem, phase_mem)
   local()
   global()
   (
@@ -683,8 +680,8 @@ function initializeVerb(bufferPos)
     /* Temporary buffer */
     sharedBuffer   = bufferPos + 8*bufferDist;
   
-    fftSize     = 2048*8;
-    nSamples    = 1024*8;
+    fftSize     = 2048*8*2;
+    nSamples    = 1024*8*2;
     windowType  = 0;
 
     verbBuf.initFFTBuffer(bufMem, nSamples, fftSize, magMem, phaseMem);  
@@ -1043,7 +1040,7 @@ function yToVol(y)
   local(newdtime, current_dtime, dTimeOffset)
   global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
   instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
-           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter)
+           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -1074,7 +1071,12 @@ function yToVol(y)
     
       ( y != ylast ) ? ( vol = yToVol(y);  ylast = y; );
       ( Gain != invollast ) ? ( invol = Gain<1 ? yToVol(Gain) : 0; invollast = Gain; );
-      ( fbc != fblast ) ? ( fbcoeff = .95*exp( -4.0 * ( 1.0 - fbc ) ) );  
+      ( (fbc != fblast) || (feedbackSign != fbslast) ) ? ( 
+        fbcoeff = .95*exp( -4.0 * ( 1.0 - fbc ) );
+        fblast = fbc;
+        fbslast = feedbackSign;
+        feedbackSign ? fbcoeff = - fbcoeff;
+      );
       ( pan != panlast ) ? ( lPanTerm = cos($pi*pan/2); rPanTerm = sin($pi*pan/2); panlast = pan; );
     
       lpfActive = lpf < 1.0 || lpfResonance > 0.0;
@@ -1340,16 +1342,15 @@ function process(l_in, r_in)
   global(lOut, rOut, srate)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
-           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread,
-           shaper, shaped_r, hq_active, lpfActive
-           )
+           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
+           shaper, shaped_r, hq_active, lpfActive)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
       rIn = r_in * invol;
 
       this.getReceives();    
-    
+        
       midSide ? (
         t = lIn;
         lIn = (lIn + rIn) * .5;
@@ -1357,7 +1358,7 @@ function process(l_in, r_in)
       );
     
       grain ? (
-        granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
+        granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, grainReverse, grainSizeVar, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
         buffer.readptr += 2;
         buffer.readptr > buffer.scopebuffermax ? buffer.readptr = buffer.scopebuffer;
         l = granulator.L;
@@ -1382,6 +1383,7 @@ function process(l_in, r_in)
         r = shaped_r;
       );
   
+      // Entering the delay here
       pingpong ? (
         buffer.updateBuffer2(fbcoeff*r + lIn*lPanTerm, fbcoeff*l + rIn*rPanTerm);
         
@@ -1496,14 +1498,27 @@ function initFFTNode(loc)
     verb.initializeVerb(loc)
   );
 
+function randomizeGrain()
+  local()
+  global()
+  instance(grain, grainLength, grainOverlap, grainPitch, grainJitter, grainSpeedSpread)
+  (
+    grain = rand() > 0.5;
+    grainLength = rand() * 260 + 40;
+    grainOverlap = rand();
+    grainJitter = rand() * 10;
+    grainPitch = 2^(4*rand()-2);
+    grainSpeedSpread = .25 * rand();    
+  );
+
 function serializeNode()
   local()
   global(readread, SyncMode, quickSwitch)
   instance( x, y, active,
             dtime, temposync, fb, lpf, hpf, lpfResonance, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
-            mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency,
+            mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
-            grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread )
+            grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1557,10 +1572,13 @@ function serializeNode()
     file_var( 0, lfoDepth );
     file_var( 0, lfoFrequency );
     file_var( 0, lpfResonance );
+    file_var( 0, feedbackSign );
+    file_var( 0, grainReverse );
+    file_var( 0, grainSizeVar );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 66);
-    file_mem(0, 0, 66); /* Reduce this by one when you want to add features */
+    memset(0, 0, 63);
+    file_mem(0, 0, 63); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -1607,7 +1625,7 @@ function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
     gfx_circle(mx, my, cSize, 0, 0);
     gfx_circle(mx, my, cSize+.5, 0, 1);
     
-    ang = 2*fromLevel*$pi - $pi;
+    ang = 2*abs(fromLevel)*$pi - $pi;
     larc = cSize + 1;
     loop(ceil(3 * scalingfactor),
       gfx_arc(mx, my, larc, -$pi, ang, 1);
@@ -1620,12 +1638,12 @@ function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
     nx    = 10 * scalingfactor * diffx / len;
     ny    = 10 * scalingfactor * diffy / len;
     
-    xtri1 = mx - .5*nx + ny;
-    ytri1 = my - .5*ny - nx;
-    xtri2 = mx - .5*nx - ny;
-    ytri2 = my - .5*ny + nx;
-    xtri3 = mx + nx;
-    ytri3 = my + ny;
+    xtri1 = mx - .6*nx + ny;
+    ytri1 = my - .6*ny - nx;
+    xtri2 = mx - .6*nx - ny;
+    ytri2 = my - .6*ny + nx;
+    xtri3 = mx + 1.2*nx;
+    ytri3 = my + 1.2*ny;
     
     dmx = mx - mouse_x;
     dmy = my - mouse_y;
@@ -1639,6 +1657,25 @@ function drawConnector( xmin, ymin, w, h, xl, yl, nx, ny, idx, fromLevel )
 
     gfx_set(connector_r, connector_g, connector_b,1.0);
     gfx_triangle( xtri1, ytri1, xtri2, ytri2, xtri3, ytri3 );
+    
+
+    fromLevel > 0 ? (
+      gfx_set(0, 0, 0, 1);
+      gfx_line(mx - 4, my, mx + 4, my, 1);
+      gfx_line(mx, my - 4, mx, my + 4, 1);
+      gfx_set(0, 0, 0, .5);
+      gfx_line(mx - 4, my+1, mx + 4, my+1, 1);
+      gfx_line(mx - 4, my-1, mx + 4, my-1, 1);
+      
+      gfx_line(mx + 1, my-4, mx + 1, my+4, 1);
+      gfx_line(mx - 1, my-4, mx - 1, my+4, 1);
+    ) : (
+      gfx_set(0, 0, 0, 1);
+      gfx_line(mx - 4, my, mx + 4, my, 1);
+      gfx_set(0, 0, 0, .5);
+      gfx_line(mx - 4, my+1, mx + 4, my+1, 1);
+      gfx_line(mx - 4, my-1, mx + 4, my-1, 1);
+    );
   );
 
 function drawConnections(xmin, ymin, w, h)
@@ -1668,7 +1705,7 @@ function drawConnections(xmin, ymin, w, h)
   );
 
 function draw(xmin, ymin, w, h, verb)
-  local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp)
+  local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp, xc, yc)
   global(gfx_a, gfx_x, gfx_y, render_time, scaling)
   instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over)
   (
@@ -1677,8 +1714,8 @@ function draw(xmin, ymin, w, h, verb)
     r = 4 * scalefactor;
     alpha = 1.0;
     tf = 100*dtime;
-    radius = .13*log(1.0+200*fbcoeff);
-     
+    radius = .13*log(1.0+200*abs(fbcoeff));
+    
     adv = min(0.99, radius);
     xl = floor(xmin + x*w);
     yl = floor(ymin + y*h);
@@ -1828,6 +1865,14 @@ function draw(xmin, ymin, w, h, verb)
     
     logLevel = log(4000*level-2)*scalefactor;
     silent ? logLevel = 0;
+    
+    fbcoeff < 0 ? (
+      xc = xl + r;
+      yc = yl - r;
+      gfx_line(xc - 4, yc, xc + 4, yc, 1);
+      gfx_line(xc - 4, yc+1, xc + 4, yc+1, 1);
+      gfx_line(xc - 4, yc-1, xc + 4, yc-1, 1);
+    );
     
     gfx_set(1, 1, 1, .03);
     gfx_circle(xl, yl, logLevel*5, 1, 1);
@@ -2017,6 +2062,7 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
           node11.tryNodeConnect,
           gridDensity, scaling )
   instance(x, y, r, dtime, fb, lpf, hpf, pan, selected, lcap,
+           lastleft, lastSignalClick,
            fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, Connecting, me)
   (
     shift = mousecap & 8;
@@ -2032,18 +2078,36 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
     
     left ? (
       ( currentCap > 10 && selected ) ? (
-        chy = (ly-mousey)/h;
-        currentCap == 11 ? fromNode1  = clamp( fromNode1 + chy, 0.001, .999 );
-        currentCap == 12 ? fromNode2  = clamp( fromNode2 + chy, 0.001, .999 );
-        currentCap == 13 ? fromNode3  = clamp( fromNode3 + chy, 0.001, .999 );
-        currentCap == 14 ? fromNode4  = clamp( fromNode4 + chy, 0.001, .999 );
-        currentCap == 15 ? fromNode5  = clamp( fromNode5 + chy, 0.001, .999 );
-        currentCap == 16 ? fromNode6  = clamp( fromNode6 + chy, 0.001, .999 );
-        currentCap == 17 ? fromNode7  = clamp( fromNode7 + chy, 0.001, .999 );
-        currentCap == 18 ? fromNode8  = clamp( fromNode8 + chy, 0.001, .999 );
-        currentCap == 19 ? fromNode9  = clamp( fromNode9 + chy, 0.001, .999 );
-        currentCap == 20 ? fromNode10 = clamp( fromNode10 + chy, 0.001, .999 );
-        currentCap == 21 ? fromNode11 = clamp( fromNode11 + chy, 0.001, .999 );
+        (lcap == 0 && (abs(time_precise() - lastSignalClick) < .15)) ? (
+          // Check for double click
+          currentCap == 11 ? fromNode1 = -fromNode1;
+          currentCap == 12 ? fromNode2 = -fromNode2;
+          currentCap == 13 ? fromNode3 = -fromNode3;
+          currentCap == 14 ? fromNode4 = -fromNode4;
+          currentCap == 15 ? fromNode5 = -fromNode5;
+          currentCap == 16 ? fromNode6 = -fromNode6;
+          currentCap == 17 ? fromNode7 = -fromNode7;
+          currentCap == 18 ? fromNode8 = -fromNode8;
+          currentCap == 19 ? fromNode9 = -fromNode9;
+          currentCap == 20 ? fromNode10 = -fromNode10;
+          currentCap == 21 ? fromNode11 = -fromNode11;
+          lastSignalClick = 1000;
+        ) : (
+          // It wasn't a doubleclick
+          lastSignalClick = time_precise();
+          chy = (ly-mousey)/h;
+          currentCap == 11 ? fromNode1  = sign(fromNode1) * clamp( abs(fromNode1) + chy, 0.001, .999 );
+          currentCap == 12 ? fromNode2  = sign(fromNode2) * clamp( abs(fromNode2) + chy, 0.001, .999 );
+          currentCap == 13 ? fromNode3  = sign(fromNode3) * clamp( abs(fromNode3) + chy, 0.001, .999 );
+          currentCap == 14 ? fromNode4  = sign(fromNode4) * clamp( abs(fromNode4) + chy, 0.001, .999 );
+          currentCap == 15 ? fromNode5  = sign(fromNode5) * clamp( abs(fromNode5) + chy, 0.001, .999 );
+          currentCap == 16 ? fromNode6  = sign(fromNode6) * clamp( abs(fromNode6) + chy, 0.001, .999 );
+          currentCap == 17 ? fromNode7  = sign(fromNode7) * clamp( abs(fromNode7) + chy, 0.001, .999 );
+          currentCap == 18 ? fromNode8  = sign(fromNode8) * clamp( abs(fromNode8) + chy, 0.001, .999 );
+          currentCap == 19 ? fromNode9  = sign(fromNode9) * clamp( abs(fromNode9) + chy, 0.001, .999 );
+          currentCap == 20 ? fromNode10 = sign(fromNode10) * clamp( abs(fromNode10) + chy, 0.001, .999 );
+          currentCap == 21 ? fromNode11 = sign(fromNode11) * clamp( abs(fromNode11) + chy, 0.001, .999 );
+        );
       ) : ( currentCap == 1 && selected ) ? (
         moved = 1;
         ( shift ) ? (
@@ -2091,6 +2155,8 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
         fb = clamp(fb, 0, .999);
       );
     );
+    
+    lastleft = left;
     
     ( ( currentCap == 0 ) && ( lcap > 0 ) ) ? (
       Snap ? (
@@ -2363,7 +2429,7 @@ node11.updateNodeBlock();
 
 updateGlobalFeedback();
 
-israte = 1 / srate;
+israte = 1.0 / srate;
 
 @sample
 samples += 1;
@@ -2467,7 +2533,7 @@ local(c1x, c1y, c2x, c2y, len, steps, dx, dy, xc, yc)
 
 function draw_to_sim(xmin, ymin, w, h, xs, Ny)
 local(cx, cy, intensity)
-global(gfx_a, gfx_x, gfx_y, height, w1x, w1y,
+global(gfx_a, gfx_x, gfx_y, height, w1x, w1y, gainFactor,
        /*node1.x, node2.x, node3.x, node4.x, node5.x, node6.x, node7.x, node8.x, node9.x, node10.x, node11.x, 
        node1.y, node2.y, node3.y, node4.y, node5.y, node6.y, node7.y, node8.y, node9.y, node10.y, node11.y,
        node1.level, node2.level, node3.level, node4.level, node5.level, node6.level, node7.level, node8.level, node9.level, node10.level, node11.level*/)
@@ -2479,7 +2545,7 @@ instance(x, y, level,
   cx = floor((xmin + x*w - w1x) / xs);
   cy = floor((ymin + y*h - w1y) / xs);
   
-  intensity = 30*level;
+  intensity = 50*level*gainFactor;
   height[cx * Ny + cy] += intensity;
   cx = cx + 1;
   height[cx * Ny + cy] += intensity;
@@ -2992,11 +3058,13 @@ hideHints == 0 ? (
   printRight("Shift - LPF\n");
   printRight("Ctrl + Shift - HPF\n");
   printRight("Shift + Alt - Add Send\n");
+  printRight("LMBx2 on Send - Invert\n");
   printRight("Alt - Panning\n");
   printRight("M - Mute\n");
   printRight("S - Solo\n");
   printRight("P - Ping pong\n");
   printRight("R - Rectify\n");
+  printRight("I - Invert polarity\n");
   printRight("Wheel - Direct In Gain\n");
   printRight("G - Grain\n");
   printRight("A - Select all nodes\n");
@@ -3006,7 +3074,7 @@ hideHints == 0 ? (
     printRight("H - HQ resampling [OFF]");
   );
   printRight("F1 - Toggle hints");
-  printRight("F2 - Reset delay lines");
+  printRight("F3  Reset delay lines");
 );
 
 // F1 - Hide hints
@@ -3081,6 +3149,20 @@ hideHints == 0 ? (
   node8.selected  ? node8.pingpong  = node8.pingpong  ? 0 : 1;
   node9.selected  ? node9.pingpong  = node9.pingpong  ? 0 : 1;
   node10.selected ? node10.pingpong = node10.pingpong ? 0 : 1;
+);
+
+// Invert feedback polarity (I)
+( lastchar == 105 ) ? (
+  node1.selected  ? node1.feedbackSign = 1 - node1.feedbackSign;
+  node2.selected  ? node2.feedbackSign = 1 - node2.feedbackSign;
+  node3.selected  ? node3.feedbackSign = 1 - node3.feedbackSign;
+  node4.selected  ? node4.feedbackSign = 1 - node4.feedbackSign;
+  node5.selected  ? node5.feedbackSign = 1 - node5.feedbackSign;
+  node6.selected  ? node6.feedbackSign = 1 - node6.feedbackSign;
+  node7.selected  ? node7.feedbackSign = 1 - node7.feedbackSign;
+  node8.selected  ? node8.feedbackSign = 1 - node8.feedbackSign;
+  node9.selected  ? node9.feedbackSign = 1 - node9.feedbackSign;
+  node10.selected  ? node10.feedbackSign = 1 - node10.feedbackSign;
 );
 
 // Rectify (R)
@@ -3273,9 +3355,9 @@ function processVerbCtrls(cX, cY)
   );
 
 function processRegularCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter,
+  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter, feedbackSign,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob,
-  lpfResonance, resonanceKnob)
+  lpfResonance, resonanceKnob, feedbackSignToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
@@ -3344,6 +3426,9 @@ function processRegularCtrls(cX, cY)
     feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount\n\nControls how quickly the delay decays.", 0);
     feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
     
+    feedbackSignToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, feedbackSign, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Feedback sign\n\nSwitch signal polarity when feeding back.");
+    feedbackSign = feedbackSignToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
     cX += 3.5*knobSpacing;
     flutterKnob.active = 1;
     flutterKnob.value = flutter;
@@ -3408,8 +3493,8 @@ function processRegularCtrls(cX, cY)
 
 // Draw grain controls
 function processGrainCtrls(cX, cY)
-  instance(grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, 
-                  lengthKnob,  jitterKnob,  overlapKnob,  speedKnob,  panSpreadKnob,  detuneKnob, grainToggle)
+  instance(grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
+                  lengthKnob,  jitterKnob,  overlapKnob,  speedKnob,  panSpreadKnob,  detuneKnob, grainToggle, reverseKnob, sizeVarKnob)
   local(y_spacing, smallknobsize, x_start, y_start, panel_width, y_font_offset)
   global(mouse_x, mouse_y, mouse_cap, scaling, buttonSize, knobSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, 
@@ -3417,7 +3502,7 @@ function processGrainCtrls(cX, cY)
   (
     gfx_setfont(4);
     
-    panel_width = 120 * (1+scaling);
+    panel_width = 170 * (1+scaling);
     x_start = cX - 2*(1+scaling);
     y_start = panelY;
     
@@ -3472,7 +3557,20 @@ function processGrainCtrls(cX, cY)
     detuneKnob.y_font_offset = y_font_offset;
     detuneKnob.drawKnob(cX, cY+y_spacing, smallknobsize, "Detune", "Detune\n\nControls relative tuning of the grains.", 0);
     detuneKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? grainSpeedSpread = detuneKnob.value*.25;
-    cX += 2.75*knobSpacing;
+    cX += 2.1*knobSpacing;
+    
+    sizeVarKnob.active = grain;
+    sizeVarKnob.value = grainSizeVar;
+    sizeVarKnob.y_font_offset = y_font_offset;
+    sizeVarKnob.drawKnob(cX, cY-y_spacing, smallknobsize, "Size Var", "Size variability..", 0);
+    sizeVarKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.0) ? grainSizeVar = sizeVarKnob.value;
+    
+    reverseKnob.active = grain;
+    reverseKnob.value = grainReverse;
+    reverseKnob.y_font_offset = y_font_offset;
+    reverseKnob.drawKnob(cX, cY+y_spacing, smallknobsize, "Reverse", "Reverse probability\n\nProbability that grain plays in reverse.", 0);
+    reverseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.0) ? grainReverse = reverseKnob.value;
+    cX += 3.0*knobSpacing;
   );
 
 function processShapers(cX, cY)
@@ -3483,7 +3581,7 @@ function processShapers(cX, cY)
          edge_r, edge_g, edge_b, edge_a, panelY, panelPad, panelHeight)
 (
   /* Combobox to select shaper */
-  nShapers = 7;  
+  nShapers = 7;
   
   x_start = cX - 2*(1+scaling);
   y_start = panelY;
@@ -3784,6 +3882,7 @@ selectedNode = 0;
   cX += 3.5*knobSpacing;
   drywetKnob.active = 1;
   drywetKnob.value = drywet;
+  drywetKnob.label = sprintf(gain_string, "%d", 100*drywet);
   drywetKnob.drawKnob(cX, cY, knobSize, "Dry/Wet", "Dry/Wet.", 0);
   drywetKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? drywet = drywetKnob.value;
   
