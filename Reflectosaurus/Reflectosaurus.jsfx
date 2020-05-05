@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.44
+version: 0.45
 author: Joep Vanlier
-changelog: Added slew limiter to saturators.
+changelog: Added ice to reverb node.
 license: MIT
 provides: Reflectosaurus_Dependencies/*
 
@@ -450,11 +450,12 @@ function windowBlock()
 
  function processBlockVerb(outputPtr)
     instance(fft_mem, fftSize, nSamples, mag_mem, phase_mem, offset, 
-             dampFactor, sharedBuffer, outputBufStart, outputBufEnd, shine)
+             dampFactor, sharedBuffer, outputBufStart, outputBufEnd, shine, ice, ice_panned)
     local(ifftSize, fwd, bwd, chnk1, idamp,
           r1, r2, i1, i2, re1, im1, re2, im2, x1, x2, x1sq, x2sq, sqlen, isqlen, ang1, ang2,
           cMag, cPhase, outPtr, fftPtr, fftPtr2, magPtr, magPtr2, phasePtr, 
-          i, last, new)
+          i, last, new,
+          g_rand1, g_rand2, g_rand3, g_rand4, tmp)
     global(mode)
     ( 
       this.windowBlock();
@@ -493,11 +494,35 @@ function windowBlock()
       shine ? (
         i = 0;
         idamp = 1.0 - dampFactor;
-        loop( fftSize/2,
+        loop(fftSize/2,
           i2 = 2*i;
           sharedBuffer[i2]      += shine*idamp*sharedBuffer[i];
           sharedBuffer[i2 + 1]  += shine*idamp*sharedBuffer[i + 1];
           i += 2;
+        );
+      );
+      
+      ice ? (
+        i = 0;
+        g_rand1 = 2*(1 + floor(rand() * 2));
+        g_rand2 = 0.01 * fftSize + rand() * fftSize/2;
+        g_rand4 = g_rand3 = 100 * rand() * (1.0-dampFactor) * ice;
+        
+        ice_panned ? (
+          tmp = rand();
+          g_rand3 = g_rand3 * sqrt(1.0-tmp);
+          g_rand4 = g_rand4 * sqrt(tmp);      
+        );
+        
+        tmp = 0;
+        loop(fftSize/2,
+          i2 = g_rand1*i;
+          sharedBuffer[i2]      = sharedBuffer[i2] + g_rand3*sharedBuffer[2*i] * tmp;
+          sharedBuffer[i2 + 1]  = sharedBuffer[i2 + 1] + g_rand4*sharedBuffer[2*i + 1] * tmp;
+          tmp         = g_rand2 - i;
+          tmp         = -50 * tmp * tmp;
+          tmp         = exp(tmp / fftSize);
+          i += 1;
         );
       );
       
@@ -708,7 +733,7 @@ function initializeVerb(bufferPos)
 function processVerb(inL, inR)
   global()
   local()
-  instance(verbBuf, verbBuf2, outL, outR, verbOutputPtr, verbOutputBufStart, verbOutputBufEnd, damp, mode, shine)
+  instance(verbBuf, verbBuf2, outL, outR, verbOutputPtr, verbOutputBufStart, verbOutputBufEnd, damp, mode, shine, ice, ice_panned)
   (  
     verbBuf.dampFactor = damp;
     verbBuf2.dampFactor = damp;
@@ -716,6 +741,10 @@ function processVerb(inL, inR)
     verbBuf2.mode = mode;
     verbBuf.shine = shine;
     verbBuf2.shine = shine;
+    verbBuf.ice = ice;
+    verbBuf.ice_panned = ice_panned;
+    verbBuf2.ice = ice;
+    verbBuf2.ice_panned = ice_panned;
     
     verbBuf.updateVerb(verbOutputPtr, inL, inR);
     verbBuf2.updateVerb(verbOutputPtr, inL, inR);
@@ -1434,7 +1463,8 @@ function process(l_in, r_in)
 function processVerbNode(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
-  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r, lpfActive)
+  instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, ice, ice_panned,
+  lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r, lpfActive)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -1445,6 +1475,8 @@ function processVerbNode(l_in, r_in)
       verb.damp = fbcoeff;
       verb.shine = shine;
       verb.mode = 1.0-pingpong;
+      verb.ice = ice;
+      verb.ice_panned = ice_panned;
       verb.processVerb(lIn, rIn);
       
       l = verb.outL;
@@ -1540,7 +1572,8 @@ function serializeNode()
             dtime, temposync, fb, lpf, hpf, lpfResonance, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
-            grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar )
+            grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
+            ice, ice_panned )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1597,10 +1630,12 @@ function serializeNode()
     file_var( 0, feedbackSign );
     file_var( 0, grainReverse );
     file_var( 0, grainSizeVar );
+    file_var( 0, ice );
+    file_var( 0, ice_panned );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 63);
-    file_mem(0, 0, 63); /* Reduce this by one when you want to add features */
+    memset(0, 0, 61);
+    file_mem(0, 0, 61); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -3277,11 +3312,12 @@ global(BAND_FONT, edge_r, edge_g, edge_b, edge_a)
 
 
 function processVerbCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, shine,
+  instance(gain, vol, y, fb, pan, lpf, hpf, shine, ice, ice_panned,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob,
-  resonanceKnob, lpfResonance)
+  resonanceKnob, lpfResonance, iceKnob, icePanToggle)
   local(gain_string, tmp)
-  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad)
+  global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad, buttonSize,
+  widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a)
   (
     gfx_setfont(4);
     
@@ -3308,7 +3344,7 @@ function processVerbCtrls(cX, cY)
     panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;    
     cX += 5*knobSpacing;
     
-    drawPanel("REVERB", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
+    drawPanel("REVERB", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     
     feedbackKnob.active = 1;
     feedbackKnob.value = fb;
@@ -3320,6 +3356,15 @@ function processVerbCtrls(cX, cY)
     shineKnob.value = shine;
     shineKnob.drawKnob(cX, cY, knobSize, "Shine", "Shine.\n\nMake copies of spectrum to higher octaves.\nCan be used to add extra brightness.", 0);
     shineKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.2) ? shine = shineKnob.value;    
+
+    cX += 3.5*knobSpacing;
+    iceKnob.active = 1;
+    iceKnob.value = ice;
+    iceKnob.drawKnob(cX, cY, knobSize, "Ice", "Ice.\n\nMake bandpassed copies of spectrum to higher octaves.\nSounds like little icicles.", 0);
+    iceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.2) ? ice = iceKnob.value;  
+
+    icePanToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, ice_panned, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Random pan of icicles.");
+    ice_panned = icePanToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
     cX += 5*knobSpacing;
     
