@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (alpha)
 tags: multi-tap delay plugin
-version: 0.55
+version: 0.57
 author: Joep Vanlier
-changelog: Nth time is the charm.
+changelog: Added some more colors for the simulation (toggle by clicking on logo).
 license: MIT
 provides:
   Reflectosaurus_Dependencies/*
@@ -11,6 +11,7 @@ provides:
 import Reflectosaurus_grainlib.jsfx-inc
 import Reflectosaurus_widgets.jsfx-inc
 import Reflectosaurus_compressor.jsfx-inc
+import Reflectosaurus_pitchlib.jsfx-inc
 
 slider1:drywet=1.0<0,1,.001>-Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>-Mode
@@ -263,25 +264,6 @@ function readBuffer2()
     outR = c2r * (1.0-frac) + c1r * frac;
   );
   
-function readBuffer2_bad()
-  local(c2l, c2r)
-  global()
-  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
-           c1l, c1r)
-  (    
-    c2l = readptr[];
-    c2r = readptr[1];
-    
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-
-    outL = c2l * (1.0-frac) + c1l * frac;
-    outR = c2r * (1.0-frac) + c1r * frac;
-    
-    c1l = c2l;
-    c1r = c2r;
-  );
-  
 function readBuffer2_HQ()
   local(t, t2)
   global()
@@ -324,43 +306,6 @@ function readBuffer2_HQ()
     outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
     outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
   );
-  
-function readBuffer2_HQ_bad()
-  local(t, t2)
-  global()
-  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
-           a0, a1, a2, a3, a4,
-           d0l, d1l, d2l, d3l, d4l,
-           d0r, d1r, d2r, d3r, d4r,     
-           )
-  (
-    d4l = d3l;
-    d3l = d2l;
-    d2l = d1l;
-    d1l = d0l;
-    d4r = d3r; 
-    d3r = d2r;
-    d2r = d1r;
-    d1r = d0r;
-    d0l = readptr[];
-    d0r = readptr[1];
-    
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-    
-    /*t = frac;
-    tm1 = t-1.0;
-    tm2 = t-2.0;
-    
-    a0 = 0.5 * tm1 * tm2;
-    a1 = -t * tm2;
-    a2 = 0.5 * t * tm1;
-    a3 = 0;
-    a4 = 0;*/
-    
-    outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
-    outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
-  );    
   
 function updateBuffer2(ll, rr)
   local()
@@ -1071,7 +1016,7 @@ function yToVol(y)
   local(newdtime, current_dtime, dTimeOffset)
   global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
   instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
-           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign)
+           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign, shift_pitch, pitch, shifter)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -1087,14 +1032,17 @@ function yToVol(y)
         diff = 1;
       ) : diff = olddtime - newdtime;
     
-      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || lflutter || (HQ != hq_active) ) ? (
+      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || pitch || flutter || lflutter || (HQ != hq_active) ) ? (
         hq_active = HQ;
         current_dtime = newdtime;
         flutter ? current_dtime += this.flutter();
+        pitch ? (current_dtime = max(current_dtime - 1035, 0)); /* Approximate latency comp for the shifter */
         buffer.setOffset(current_dtime + dTimeOffset, HQ );
         lflutter = flutter;
       );
       olddtime = newdtime;
+      
+      pitch ? shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
       
       activevol = update_alpha * vol + inv_update_alpha * oldvol;
       oldvol = activevol;
@@ -1404,7 +1352,7 @@ function process(l_in, r_in)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-           shaper, shaped_r, hq_active, lpfActive)
+           shaper, shaped_r, hq_active, lpfActive, pitch, shifter)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -1418,7 +1366,7 @@ function process(l_in, r_in)
         rIn = (t - rIn) * .5;
       );
     
-      grain ? (
+      grain == 1 ? (
         granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, grainReverse, grainSizeVar, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
         buffer.readptr += 2;
         buffer.readptr > buffer.scopebuffermax ? buffer.readptr = buffer.scopebuffer;
@@ -1429,6 +1377,12 @@ function process(l_in, r_in)
         
         l = buffer.outL;
         r = buffer.outR;
+      );
+      
+      pitch ? (
+        shifter.pitchShifterUpdate(l, r);
+        l = shifter.outL;
+        r = shifter.outR;
       );
       
       lpfActive ? ( l = lpl.eval_linearSVF_LP( l ); r = lpr.eval_linearSVF_LP( r ); );
@@ -1457,6 +1411,18 @@ function process(l_in, r_in)
         r = activevol*r*rPanTerm*play;  
       );
 
+      grain == 2 ? (
+        granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, grainReverse, grainSizeVar, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
+        pingpong ? (
+          l = activevol*granulator.L*play;
+          r = activevol*granulator.R*play;
+        ) : (
+          l = activevol*granulator.L*lPanTerm*play;
+          r = activevol*granulator.R*rPanTerm*play;
+        );
+      );
+      
+
       midSide ? (
         t = l;
         l = l + r;
@@ -1474,13 +1440,19 @@ function processVerbNode(l_in, r_in)
   local(l, r)
   global(lOut, rOut)
   instance(verb, lIn, rIn, buffer, invol, vol, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, ice, ice_panned,
-  lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r, lpfActive)
+  lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, shine, pingpong, rectify, shaped_r, lpfActive, pitch, shifter)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
       rIn = r_in * invol;
     
       this.getReceives();
+      
+      pitch ? (
+        shifter.pitchShifterUpdate(lIn, rIn);
+        lIn = shifter.outL;
+        rIn = shifter.outR;
+      );
       
       verb.damp = fbcoeff;
       verb.shine = shine;
@@ -1515,11 +1487,11 @@ function processVerbNode(l_in, r_in)
     level = .5*(abs(l)+abs(r))*play;
   );
    
-function initNode(_memloc, _dtime, _y, idx, off)
-  local()
+function initNode(_memloc, _dtime, _y, idx, off, pitchbuffer_location, fftmem1, fftmem2)
+  local(transition_region, shifterBufferSize)
   instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR, lpl, lpr, hpl, hpr,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, flutterLpf,
-           octaver, octaver, lfoTime)
+           octaver, octaver, lfoTime, shifter)
   global(bufsize, srate)
   (
     me = idx;
@@ -1528,6 +1500,10 @@ function initNode(_memloc, _dtime, _y, idx, off)
     buffer.resetBuffer();
     lastL = 0;
     lastR = 0;
+    
+    transition_region = 1024;
+    shifterBufferSize = 4 * transition_region;
+    shifter.pitchShifter(1, pitchbuffer_location, shifterBufferSize, fftmem1, fftmem2, transition_region, 1);
     
     panlast = -9999;
     fblast = -9999;
@@ -1583,7 +1559,7 @@ function serializeNode()
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-            ice, ice_panned )
+            ice, ice_panned, shift_pitch, pitch )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1642,10 +1618,12 @@ function serializeNode()
     file_var( 0, grainSizeVar );
     file_var( 0, ice );
     file_var( 0, ice_panned );
+    file_var( 0, shift_pitch );
+    file_var( 0, pitch );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 61);
-    file_mem(0, 0, 61); /* Reduce this by one when you want to add features */
+    memset(0, 0, 59);
+    file_mem(0, 0, 59); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -2291,21 +2269,41 @@ dTap8  = 8*bufSize;
 dTap9  = 9*bufSize;
 dTap10 = 10*bufSize;
 
+pitchBlockSize = 8192; /* We have 64 blocks of this */
+freemem = 11 * bufSize;
+freemem = (fftmem1 = freemem) + pitchBlockSize;
+freemem = (fftmem2 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation1 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation3 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation4 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation5 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation6 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation7 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation8 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation9 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation10 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation11 = freemem) + pitchBlockSize;
+freemem = (globalPitchBuffer = freemem) + pitchBlockSize;
+
+transition_region = 1024;
+shifterBufferSize = 4 * transition_region;
+shifter.pitchShifter(1, globalPitchBuffer, shifterBufferSize, fftmem1, fftmem2, transition_region, 1);
+
 function Init()
   (
     /* Initialize or reset the nodes */
-    node1.initNode(dTap1,   xToTime(0.5),  0.1, 1,  0);
-    node2.initNode(dTap2,   xToTime(0.1),  1.0, 2,  0);
-    node3.initNode(dTap3,   xToTime(0.2),  1.0, 3,  0);
-    node4.initNode(dTap4,   xToTime(0.3),  1.0, 4,  0);
-    node5.initNode(dTap5,   xToTime(0.4),  1.0, 5,  0);
-    node6.initNode(dTap6,   xToTime(0.5),  1.0, 6,  1);
-    node7.initNode(dTap7,   xToTime(0.6),  1.0, 7,  1);
-    node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  1);
-    node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  1);
-    node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 1);
-    node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1);
-    freemem = node11.initFFTNode(12*bufSize);
+    node1.initNode(dTap1,   xToTime(0.5),  0.1, 1,  0, pitchBufferLocation1, fftmem1, fftmem2);
+    node2.initNode(dTap2,   xToTime(0.1),  1.0, 2,  0, pitchBufferLocation2, fftmem1, fftmem2);
+    node3.initNode(dTap3,   xToTime(0.2),  1.0, 3,  0, pitchBufferLocation3, fftmem1, fftmem2);
+    node4.initNode(dTap4,   xToTime(0.3),  1.0, 4,  0, pitchBufferLocation4, fftmem1, fftmem2);
+    node5.initNode(dTap5,   xToTime(0.4),  1.0, 5,  0, pitchBufferLocation5, fftmem1, fftmem2);
+    node6.initNode(dTap6,   xToTime(0.5),  1.0, 6,  1, pitchBufferLocation6, fftmem1, fftmem2);
+    node7.initNode(dTap7,   xToTime(0.6),  1.0, 7,  1, pitchBufferLocation7, fftmem1, fftmem2);
+    node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  1, pitchBufferLocation8, fftmem1, fftmem2);
+    node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  1, pitchBufferLocation9, fftmem1, fftmem2);
+    node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 1, pitchBufferLocation10, fftmem1, fftmem2);
+    node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1, pitchBufferLocation11, fftmem1, fftmem2);
+    freemem = node11.initFFTNode(13*bufSize);
  
     BUF_SIZE = 64000;
     freemem = (height = freemem) + BUF_SIZE;
@@ -2415,6 +2413,9 @@ file_var(0, duckingRelease);
 file_var(0, duckingThreshold);
 file_var(0, duckingRatio);
 file_var(0, duckingKnee);
+file_var(0, pdcToggle);
+file_var(0, shift_pitch);
+file_var(0, pitch);
 
 // Some extra padding to make sure that future variables start at zero.
 memset(0,0,100);
@@ -2431,6 +2432,12 @@ file_mem(0,0,100);
   );
   
   current_tempo = tempo;
+);
+
+pitch && compensate_pdc ? (
+  pdc_bot_ch=0;
+  pdc_top_ch=2;
+  pdc_delay=1035;
 );
 
 ducker.setCompressorOptions(duckingThreshold, duckingRatio, duckingAttack, duckingRelease, duckingKnee, 1, 120, 15, 400);
@@ -2565,6 +2572,13 @@ duckingActive ? (
   rOut *= duckerGain;
 );
 
+pitch ? (
+  shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
+  shifter.pitchShifterUpdate(lOut, rOut);
+  lOut = shifter.outL;
+  rOut = shifter.outR;
+);
+
 spl0 = l * (1-drywet) + lOut * drywet * gainFactor;
 spl1 = r * (1-drywet) + rOut * drywet * gainFactor;
 
@@ -2650,13 +2664,23 @@ function simulation(sim_w, sim_h, xs)
   Nx = sim_w/xs + 1;
   Ny = sim_h/xs + 1;
  
-  c1r = 17/256;
-  c1g = 11/256;
-  c1b = 34/256;
-   
-  c2r = 175/256;
-  c2g = 121/256;
-  c2b = 274/256;
+  colorscheme == 1 ? (
+    c1r = 17/256;
+    c1g = 11/256;
+    c1b = 34/256;
+  
+    c2r = 175/256;
+    c2g = 121/256;
+    c2b = 274/256;
+  ) : (
+    c1r = 31/256;
+    c1g = 21/256;
+    c1b = 50/256;
+     
+    c2r = 180/256;
+    c2g = 93/256;
+    c2b = 103/256;
+  );
   
   dtg = 9.81*0.1;
   dth = .4*0.1;
@@ -3322,8 +3346,8 @@ global(BAND_FONT, edge_r, edge_g, edge_b, edge_a)
 
 
 function processVerbCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, shine, ice, ice_panned,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob,
+  instance(gain, vol, y, fb, pan, lpf, hpf, shine, ice, ice_panned, pitch, shift_pitch,
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob, pitchToggle, pitchKnob
   resonanceKnob, lpfResonance, iceKnob, icePanToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad, buttonSize,
@@ -3331,7 +3355,7 @@ function processVerbCtrls(cX, cY)
   (
     gfx_setfont(4);
     
-    drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
+    drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 14*knobSpacing, panelHeight);
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
@@ -3352,8 +3376,25 @@ function processVerbCtrls(cX, cY)
     panningKnob.value = pan;
     panningKnob.drawKnob(cX, cY, knobSize, "[L] Panning [R]", "Panning", 0);
     panningKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? pan = panningKnob.value;    
-    cX += 5*knobSpacing;
     
+    cX += 3.5*knobSpacing;
+    
+    pitchToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
+    pitch = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    pitchKnob.active = pitch;
+    pitchKnob.value = shift_pitch*0.5 + 0.5;
+    
+    pitchKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
+    pitchKnob.label = gain_string;
+    pitchKnob.drawKnob(cX, cY, knobSize, "Pitch", "Pitch shift.", 0);
+    pitchKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+      shift_pitch = 2 * pitchKnob.value - 1.0;
+      mouse_cap & 2 > 0 ? (
+        shift_pitch = floor(12 * shift_pitch + .5)/12;
+      );
+    );
+    
+    cX += 5*knobSpacing;
     drawPanel("REVERB", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     
     feedbackKnob.active = 1;
@@ -3428,13 +3469,13 @@ function processVerbCtrls(cX, cY)
     resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.\n\nResonance control for LPF.", 0);
     resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? lpfResonance = resonanceKnob.value;   
     
-    cX += 3.75*knobSpacing
+    cX += 5*knobSpacing
   );
 
 function processRegularCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter, feedbackSign,
+  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter, feedbackSign, shift_pitch, pitch,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob,
-  lpfResonance, resonanceKnob, feedbackSignToggle)
+  lpfResonance, resonanceKnob, feedbackSignToggle, pitchKnob, pitchToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
@@ -3442,7 +3483,7 @@ function processRegularCtrls(cX, cY)
   (
     gfx_setfont(4);
     
-    drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
+    drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 14*knobSpacing, panelHeight);
     
     inputGainKnob.active = 1;
     inputGainKnob.value = 1 - gain;
@@ -3478,7 +3519,24 @@ function processRegularCtrls(cX, cY)
     
     midsideToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, midside, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle mid/side\nprocessing");
     midside = midsideToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-    cX += 5*knobSpacing;
+    cX += 3.5*knobSpacing;
+    
+    pitchToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
+    pitch = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    pitchKnob.active = pitch;
+    pitchKnob.value = shift_pitch*0.5 + 0.5;
+    feedbackKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
+    pitchKnob.label = gain_string;
+    pitchKnob.drawKnob(cX, cY, knobSize, "Pitch", "Pitch shift.", 0);
+    pitchKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+      shift_pitch = 2 * pitchKnob.value - 1.0;
+      mouse_cap & 2 > 0 ? (
+        shift_pitch = floor(12 * shift_pitch + .5)/12;
+      );
+    );
+    
+    cX += 5 * knobSpacing;
     
     drawPanel("DELAY", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     timeKnob.active = 1;
@@ -3564,35 +3622,45 @@ function processRegularCtrls(cX, cY)
     resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.\n\nResonance control for LPF.", 0);
     resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? lpfResonance = resonanceKnob.value;    
     
-    cX += 3.75*knobSpacing
+    cX += 5*knobSpacing
   );
 
 
 // Draw grain controls
 function processGrainCtrls(cX, cY)
   instance(grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-                  lengthKnob,  jitterKnob,  overlapKnob,  speedKnob,  panSpreadKnob,  detuneKnob, grainToggle, reverseKnob, sizeVarKnob)
-  local(y_spacing, smallknobsize, x_start, y_start, panel_width, y_font_offset)
+                  lengthKnob,  jitterKnob,  overlapKnob,  speedKnob,  panSpreadKnob,  detuneKnob, grainToggle, reverseKnob, sizeVarKnob, grainToggle2)
+  local(y_spacing, smallknobsize, x_start, y_start, panel_width, y_font_offset, tmp, s_spacing)
   global(mouse_x, mouse_y, mouse_cap, scaling, buttonSize, knobSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, 
          edge_r, edge_g, edge_b, edge_a, BAND_FONT, panelY, panelPad, panelHeight)
   (
     gfx_setfont(4);
     
-    panel_width = 170 * (1+scaling);
-    x_start = cX - 2*(1+scaling);
+    panel_width = 7.6*knobSpacing; //162 * (1+scaling);
+    x_start = cX - 1.75*knobSpacing;
     y_start = panelY;
     
-    drawPanel("GRAIN", x_start - knobSpacing, y_start-panelPad, panel_width + knobSpacing, panelHeight);
+    drawPanel("GRAIN", x_start, y_start-panelPad, panel_width + knobSpacing, panelHeight);
     
     y_spacing = .95 * knobSpacing;
     smallknobsize = .42*knobSize;
     y_font_offset = 2 * (1+scaling);
     
-    grainToggle.drawToggle(cX-.85*knobSpacing, y_start, buttonSize-2, buttonSize-2, grain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Granular synthesis.\n\nEnable granular resampling.");
-    grain = grainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    cX -= .7*knobSpacing;
+    grainToggle2.active = grain > 0;
+    grainToggle2.drawToggle(cX-.45*knobSpacing + panel_width, y_start, buttonSize-2, buttonSize-2, grain > 1, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Do not feed grains back.\n\nMove granular resynthesis outside feedback loop.\nEnabling this will place the granular resynthesis\nafter the feedback routine, not putting granulated\naudio into the feedback loop.\n");
+    grain > 0 ? (
+      grain = grainToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? 2 : 1;
+    );
     
-    cX += .1 * knobSpacing;
+    grainToggle.drawToggle(cX-.85*knobSpacing, y_start, buttonSize-2, buttonSize-2, grain > 0, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Granular synthesis.\n\nEnable granular resampling.");
+    tmp = grainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    tmp > 0 && grain == 0 ? ( grain = 1; );
+    tmp == 0 && grain > 0 ? ( grain = 0; );
+    
+    cX += .05 * knobSpacing;
     
     lengthKnob.active = grain;
     lengthKnob.value = (grainLength-40)/260;
@@ -3647,7 +3715,7 @@ function processGrainCtrls(cX, cY)
     reverseKnob.y_font_offset = y_font_offset;
     reverseKnob.drawKnob(cX, cY+y_spacing, smallknobsize, "Reverse", "Reverse probability\n\nProbability that grain plays in reverse.", 0);
     reverseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.0) ? grainReverse = reverseKnob.value;
-    cX += 3.0*knobSpacing;
+    cX += 3*knobSpacing;
   );
 
 function processShapers(cX, cY)
@@ -3660,12 +3728,12 @@ function processShapers(cX, cY)
   /* Combobox to select shaper */
   nShapers = 9;
   
-  x_start = cX - 2*(1+scaling);
+  x_start = cX - 1.75*knobSpacing;
   y_start = panelY;
  
-  drawPanel("SATURATION", x_start - panelPad, y_start - panelPad, 101*(1+scaling), panelHeight);
+  drawPanel("SATURATION", x_start, y_start - panelPad, 4.75*knobSpacing, panelHeight);
    
-  shaperSelect.combobox(x_start, y_start, 90*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
+  shaperSelect.combobox(x_start + panelPad, y_start, 4.75*knobSpacing - 1.75 * panelPad, 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(rectify);
   shaperSelect.combobox_draw();  
   shaperSelect.combobox_draw_top();
@@ -3675,15 +3743,15 @@ function processShapers(cX, cY)
   
   ceilingKnob.active = rectify > 0;
   ceilingKnob.value = saturationGain/36;
-  ceilingKnob.drawKnob(cX+.6*knobSize, cY+.47*knobSize, .5*knobSize, "Strength", "Strength\n\nControls the saturation level of the saturator.", 0);
+  ceilingKnob.drawKnob(cX-.4*knobSize, cY+.47*knobSize, .5*knobSize, "Strength", "Strength\n\nControls the saturation level of the saturator.", 0);
   ceilingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? saturationGain = ceilingKnob.value*36;
   
   warmthKnob.active = rectify > 0;
   warmthKnob.value = warmth;
-  warmthKnob.drawKnob(cX+2.2*knobSize, cY+.47*knobSize, .5*knobSize, "Warmth", "Warmth\n\nAdds warmth to the saturation by\nde-emphasizing bass before saturation\nand re-emphasizing it after.", 0);
+  warmthKnob.drawKnob(cX+1.2*knobSize, cY+.47*knobSize, .5*knobSize, "Warmth", "Warmth\n\nAdds warmth to the saturation by\nde-emphasizing bass before saturation\nand re-emphasizing it after.", 0);
   warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? warmth = warmthKnob.value;
   
-  cX += 6.75*knobSpacing
+  cX += 6.25*knobSpacing
 );
 
 function processLFO(cX, cY)
@@ -3698,12 +3766,12 @@ function processLFO(cX, cY)
   
   x_start = cX - 2*(1+scaling);
   y_start = panelY;
-  x_width = 100*(1+scaling);
+  x_width = 4.6*knobSpacing;
   y_height = 82*(1+scaling);
   
   drawPanel("LFO", x_start - panelPad, y_start - panelPad, x_width + panelPad, panelHeight);
   
-  lfoSelect.combobox(x_start, y_start, 94*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nLFOs, 4, 1, 1, BAND_FONT, "LFO selection." );
+  lfoSelect.combobox(x_start, y_start, x_width - panelPad, 25*(1+scaling), .4, .4, .8, 1, nLFOs, 4, 1, 1, BAND_FONT, "LFO selection." );
   lfoSelect.combobox_setcuritem(lfo);
   lfoSelect.combobox_draw();  
   lfoSelect.combobox_draw_top();
@@ -3718,7 +3786,7 @@ function processLFO(cX, cY)
   
   lfoFrequencyKnob.active = lfo > 0;
   lfoFrequencyKnob.value = lfoFrequency * .2;
-  lfoFrequencyKnob.drawKnob(cX+2.2*knobSize, cY+.47*knobSize, .5*knobSize, "Frequency", "Frequency\n\nFrequency of the LFO..", 0);
+  lfoFrequencyKnob.drawKnob(cX+2.2*knobSize, cY+.47*knobSize, .5*knobSize, "Freq", "Frequency\n\nFrequency of the LFO..", 0);
   lfoFrequencyKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.1) ? lfoFrequency = 5.0 * lfoFrequencyKnob.value;
   
   cX += 7*knobSpacing
@@ -3733,8 +3801,8 @@ function processSettings(cX, cY)
          widget_r, widget_g, widget_b, widget_a,
          toggle_r, toggle_g, toggle_b, toggle_a,
          knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a,
-         panelY, panelPad, panelHeight)
-  instance(dcCorrectionToggle, sendSaturationToggle)
+         panelY, panelPad, panelHeight, compensate_pdc)
+  instance(dcCorrectionToggle, sendSaturationToggle, pdcToggle)
   (
     gfx_set(edge_r, edge_g, edge_b, edge_a);
     x_start = cX - 2*(1+scaling);
@@ -3750,6 +3818,10 @@ function processSettings(cX, cY)
     sendSaturationToggle.label = "Saturate sends";
     sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + .5*buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.\n\nDisable when not needed as it costs CPU.");
     sendSaturation = sendSaturationToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+    pdcToggle.label = "Pitch PDC";
+    pdcToggle.drawToggle(cX+1.9*(1+scaling), cy + 4.5*buttonSize, buttonSize, buttonSize, compensate_pdc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch delay compensation.\n\nWhen enabled, the plugin reports an\napproximate pdc for the global pitch\nshifting.");
+    compensate_pdc = pdcToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     /*sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + knobSpacing + buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.");
     gfx_x = cX + 2*buttonSize + 1;
@@ -3900,6 +3972,10 @@ instance(attackKnob, releaseKnob, thresholdKnob, ratioKnob, duckingToggle)
 
 knobSize = 30*(1+scaling);
 knobSpacing = 22*(1+scaling);
+
+knobSize = 30*(1+scaling);
+knobSpacing = 21*(1+scaling);
+
 buttonSize = floor(.3 * knobSpacing);
 widget_r = .3;
 widget_g = .1;
@@ -3939,7 +4015,7 @@ selectedNode = 0;
   // Band indicator
   sprintf(16, "NODE %d", selectedNode);
   gfx_set(edge_r, edge_g, edge_b, edge_a);
-  gfx_rect(8, panelY - panelPad, 16, panelHeight);
+  gfx_rect(8, panelY - panelPad, 16*(1+scaling), panelHeight);
   vLabel.drawVertLabel(8,  panelY - panelPad, 16, panelHeight, BAND_FONT, 3, font_color_r, font_color_g, font_color_b, .7, 0);  
 ) : (
   // Band indicator
@@ -3954,7 +4030,7 @@ selectedNode = 0;
   gainKnob.drawKnob(cX, cY, knobSize, "Gain", "Gain\n\nOverall output gain.", 0);
   gainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? WetGain = gainKnob.value*64-32;  
   
-  drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
+  drawPanel("BALANCE", cX - 1.75*knobSpacing, panelY - panelPad, 14*knobSpacing, panelHeight);
   
   cX += 3.5*knobSpacing;
   drywetKnob.active = 1;
@@ -3971,6 +4047,22 @@ selectedNode = 0;
   globalFeedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1.0) ? ( 
     globalFeedbackAttn = 1.0 - globalFeedbackKnob.value;
     updateGlobalFeedback();
+  );
+  
+  cX += 3.5*knobSpacing;
+  pitchToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
+  pitch = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  pitchKnob.active = pitch;
+  pitchKnob.value = shift_pitch*0.5 + 0.5;
+  
+  pitchKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
+  pitchKnob.label = gain_string;
+  pitchKnob.drawKnob(cX, cY, knobSize, "Pitch", "Pitch shift.", 0);
+  pitchKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    shift_pitch = 2 * pitchKnob.value - 1.0;
+    mouse_cap & 2 > 0 ? (
+      shift_pitch = floor(12 * shift_pitch + .5)/12;
+    );
   );
 
   cX += 5*knobSpacing;
@@ -4056,3 +4148,10 @@ gfx_mode=1;
 gfx_a = .5*gfx_a;
 gfx_blit(5, (1+scaling), 0);
 gfx_mode=0;
+
+mouse_cap == 0 && lcap & 1 > 0 ? (
+  gfx_x < 185 * (1+scaling) && gfx_y < 30 * (1+scaling) ? (
+    colorscheme = 1 - colorscheme;
+  );
+);
+lcap = mouse_cap;
