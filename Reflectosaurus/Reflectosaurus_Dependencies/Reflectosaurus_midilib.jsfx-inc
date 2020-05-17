@@ -1,0 +1,111 @@
+MIDI buffer library
+version: 0.01
+author: Joep Vanlier
+license: MIT
+(C) Joep Vanlier 2020
+
+@init
+function initializeMIDI(mem, mWheel, passThrough)
+local()
+global()
+instance(noteMem, modWheel, pass)
+(
+  noteMem = mem;
+  modWheel = mWheel;
+  pass = passThrough;
+);
+
+
+function processMIDIBlock()
+local(offset, msg1, msg2, msg3
+      noteOn, noteOff, mwCC, mWheel)
+global()
+instance(notePtr, noteMem, pass, modWheel, curSample, remainingNotes, nextNote)
+(
+  notePtr = noteMem;
+  while (midirecv(offset,msg1,msg2,msg3)) (
+      noteOn = msg1>$x8F&&msg1<$xA0 && msg3!=0;
+      noteOff = (msg1>$x7F&&msg1<$x90) || (msg1>$x89&&msg1<$xA0 && msg3==0);
+      mwCC = (msg1>$xAF&&msg1<$xC0);
+      
+      noteOn ? (
+      notePtr[] = offset;
+      notePtr += 1;
+      notePtr[] = msg3;
+      notePtr += 1;
+      notePtr[] = msg2;
+      notePtr += 1;
+    ) : ( noteOff ) ? (
+      notePtr[] = offset;
+      notePtr += 1;
+      notePtr[] = -1;
+      notePtr += 1;
+    ) : ( mwCC ) ? (
+      ( modWheel ) ? (
+        notePtr[] = offset;
+        notePtr += 1;
+        notePtr[] = -2;
+        notePtr += 1;
+        notePtr[] = msg2;
+        notePtr += 1;
+        notePtr[] = msg3;
+        notePtr += 1;
+      );
+    );
+    
+    pass ? midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
+  );
+  notePtr[]       = -1337;    // Signal end of note buffer
+  notePtr         = noteMem;
+  curSample       = 0;        // Current sample in block
+  remainingNotes  = 1;        // End of the note buffer?
+  nextNote        = notePtr[];
+);
+
+// Properties that can be polled from sample
+// notesOn - Number of notes active
+// lastVel - Last velocity
+// lastNote - Last played note
+
+function processMIDISample()
+local(cur_cc, noteChange)
+global()
+instance(notesOn, lastVel, lastNote, lastWheel,
+         notePtr, remainingNotes, nextNote,
+         curSample)
+(
+  // Does this plugin respond to MIDI signals?
+  // Take notes from the stack until we hit the end marker -1
+  noteChange = 0;
+  (remainingNotes) ? (
+    while(nextNote == curSample) (
+      notePtr += 1;
+      (notePtr[] > 0) ? ( // note-on
+        noteChange = 1;
+        notesOn = notesOn + 1;
+        lastVel = notePtr[]/127;
+        notePtr += 1;
+        lastNote = notePtr[];
+      ) : (notePtr[] == -1) ? ( // note-off
+        notesOn = notesOn - 1;
+        notesOn = max(0, notesOn);
+      ) : (notePtr[] == -2) ? ( // CC
+        notePtr += 1;
+        cur_cc = notePtr[];
+        notePtr += 1;
+        cur_cc == 1 ? (
+          lastWheel = notePtr[]/128;
+        )
+      );
+      notePtr += 1;
+      
+      // Avoid constantly dereferencing by picking up the next one
+      nextNote = notePtr[];
+      remainingNotes = nextNote != -1337;
+    );
+  );
+  
+  curSample += 1;
+  
+  noteChange
+);

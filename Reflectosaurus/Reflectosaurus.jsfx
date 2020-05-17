@@ -1,8 +1,8 @@
-desc:Saike Reflectosaurus (alpha)
+desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.57
+version: 0.59
 author: Joep Vanlier
-changelog: Added some more colors for the simulation (toggle by clicking on logo).
+changelog: Bugfix theme switching. Minor fixes pitch shifting. Minor optimizations. Adding optional pitch tracking (only makes sense for non synced short delays).
 license: MIT
 provides:
   Reflectosaurus_Dependencies/*
@@ -12,6 +12,7 @@ import Reflectosaurus_grainlib.jsfx-inc
 import Reflectosaurus_widgets.jsfx-inc
 import Reflectosaurus_compressor.jsfx-inc
 import Reflectosaurus_pitchlib.jsfx-inc
+import Reflectosaurus_midilib.jsfx-inc
 
 slider1:drywet=1.0<0,1,.001>-Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>-Mode
@@ -199,15 +200,15 @@ function draw_buffer(x, y, w, h, mul, fill)
 function setOffset(current_dtime, hq_active)
   local(offset)
   global()
-  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac,
-           a0, a1, a2, a3, a4, t, tm1, tm2, tm3, tm4, tm5)
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac, hd,
+           a0, a1, a2, a3, a4, t, tm1, tm2, tm3, tm4, tm5, tm1tm2, tm3tm4)
   (
     readptr   = scopeptr;
     
-    offset = current_dtime - floor(current_dtime) + floor(current_dtime*.5)*2;
+    hd = current_dtime * .5;
+    offset = current_dtime - floor(current_dtime) + floor(hd)*2;
     
-    frac      = current_dtime * .5 - floor(current_dtime * .5);
-    //frac      = offset - floor(offset);
+    frac      = hd - floor(hd);
     
     hq_active ? (
       readptr  -= floor(offset) + 2;
@@ -220,11 +221,14 @@ function setOffset(current_dtime, hq_active)
       tm3 = t-3.0;
       tm4 = t-4.0;
       
-      a0 = tm1 * tm2 * tm3 * tm4 / 24; // 1/24
-      a1 = - t * tm2 * tm3 * tm4 / 6; //1/6
-      a2 = t * tm1 * tm3 * tm4 / 4;
-      a3 = - t * tm1 * tm2 * tm4 / 6;
-      a4 = t * tm1 * tm2 * tm3 / 24; // 1/24
+      tm1tm2 = tm1*tm2;
+      tm3tm4 = tm3*tm4;
+      a0 = tm1tm2 * tm3tm4 * 0.04166666666666666666666666666667; // 1/24
+      a1 = - t * tm2 * tm3tm4 * 0.16666666666666666666666666666667; //1/6
+      a2 = t * tm1 * tm3tm4 * 0.25;
+      tm1tm2 = t*tm1tm2;
+      a3 = - tm1tm2 * tm4 * 0.16666666666666666666666666666667;
+      a4 = tm1tm2 * tm3 * 0.04166666666666666666666666666667; // 1/24
     ) : (
       readptr -= floor(offset);
     );
@@ -404,7 +408,7 @@ function windowBlock()
           i, last, new,
           g_rand1, g_rand2, g_rand3, g_rand4, tmp)
     global(mode)
-    ( 
+    (
       this.windowBlock();
        
       // FFT this block
@@ -440,17 +444,16 @@ function windowBlock()
       
       shine ? (
         i = 0;
-        idamp = 1.0 - dampFactor;
-        loop(fftSize/2,
+        idamp = shine * (1.0 - dampFactor);
+        loop(fftSize/2 - 1,
           i2 = 2*i;
-          sharedBuffer[i2]      += shine*idamp*sharedBuffer[i];
-          sharedBuffer[i2 + 1]  += shine*idamp*sharedBuffer[i + 1];
+          sharedBuffer[i2]      += idamp*sharedBuffer[i];
+          sharedBuffer[i2 + 1]  += idamp*sharedBuffer[i + 1];
           i += 2;
         );
       );
       
       ice ? (
-        i = 0;
         g_rand1 = 2*(1 + floor(rand() * 2));
         g_rand2 = 0.01 * fftSize + rand() * fftSize/2;
         g_rand4 = g_rand3 = 100 * rand() * (1.0-dampFactor) * ice;
@@ -461,14 +464,17 @@ function windowBlock()
           g_rand4 = g_rand4 * sqrt(tmp);      
         );
         
+        i = 0;
         tmp = 0;
         loop(fftSize/2,
           i2 = g_rand1*i;
-          sharedBuffer[i2]      = sharedBuffer[i2] + g_rand3*sharedBuffer[2*i] * tmp;
-          sharedBuffer[i2 + 1]  = sharedBuffer[i2 + 1] + g_rand4*sharedBuffer[2*i + 1] * tmp;
-          tmp         = g_rand2 - i;
-          tmp         = -50 * tmp * tmp;
-          tmp         = exp(tmp / fftSize);
+          i2 < fftSize ? (
+            sharedBuffer[i2]      = sharedBuffer[i2] + g_rand3*sharedBuffer[2*i] * tmp;
+            sharedBuffer[i2 + 1]  = sharedBuffer[i2 + 1] + g_rand4*sharedBuffer[2*i + 1] * tmp;
+            tmp         = g_rand2 - i;
+            tmp         = -50 * tmp * tmp;
+            tmp         = exp(tmp / fftSize);
+          );
           i += 1;
         );
       );
@@ -1014,17 +1020,19 @@ function yToVol(y)
   
   function updateNode()
   local(newdtime, current_dtime, dTimeOffset)
-  global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha)
-  instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
-           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign, shift_pitch, pitch, shifter)
+  global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha, pitchMod)
+  instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, ctime, timeOffset, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
+           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign, pitch, pitchTracking)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
     y < 0 ? y = 0;
     x < 0 ? x = 0;
-  
+    
     ( !mute || solo ) ? (
-      newdtime = update_alpha * srate * dtime + inv_update_alpha * olddtime;
+      ctime = dtime;
+      pitchTracking ? ctime *= pitchMod;
+      newdtime = update_alpha * (srate * ctime + timeOffset) + inv_update_alpha * olddtime;
       
       (lfo > 0) ? ( lfoTime += lfoAdvanceStep;
         lfoTime += lfoAdvanceStep;
@@ -1032,17 +1040,14 @@ function yToVol(y)
         diff = 1;
       ) : diff = olddtime - newdtime;
     
-      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || pitch || flutter || lflutter || (HQ != hq_active) ) ? (
+      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || lflutter || (HQ != hq_active) ) ? (
         hq_active = HQ;
         current_dtime = newdtime;
         flutter ? current_dtime += this.flutter();
-        pitch ? (current_dtime = max(current_dtime - 1035, 0)); /* Approximate latency comp for the shifter */
         buffer.setOffset(current_dtime + dTimeOffset, HQ );
         lflutter = flutter;
       );
       olddtime = newdtime;
-      
-      pitch ? shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
       
       activevol = update_alpha * vol + inv_update_alpha * oldvol;
       oldvol = activevol;
@@ -1101,12 +1106,13 @@ function updateToSliderRec()
 function updateNodeBlock()
   local(omega_tilt)
   global(srate, UPDATE_INTERVAL)
-  instance(recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
+  instance(dtime, recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
   l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain, slew_target, degrade, invdegrade,
-  octaver, rectify, lfo, lfoDepth, lfoFrequency, lfoDepthFactor, lfoAdvanceStep)
+  octaver, rectify, lfo, lfoDepth, lfoFrequency, lfoDepthFactor, lfoAdvanceStep, pitch, shifter, shift_pitch, timeOffset)
   (
     recv = fromNode1 || fromNode2 || fromNode3 || fromNode4 || fromNode5 || fromNode6 || fromNode7 || fromNode8 || fromNode9 || fromNode10 || fromNode11;
 
+    timeOffset = 0;
     lfoAdvanceStep = 2.0 * lfoFrequency * $pi * UPDATE_INTERVAL / srate;
     lfoDepthFactor = lfoDepth * 0.002 * srate; // 0.002 since the sample buffer is packed two samples at a time
 
@@ -1120,6 +1126,11 @@ function updateNodeBlock()
     rectify == 7 ? (
       slew_target = 1.0 - exp(-0.04797052277070928508370815530592 * saturationGain); // 15 * log(10)/20 / 36
     );
+    
+    pitch ? (
+      shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
+    );
+    pitch == 1 ? timeOffset -= 1035; /* Approximate latency comp for the shifter */
     
     rectify == 8 ? (
       degrade = 2 + 2^(.44444444*(36.0-saturationGain));
@@ -1136,6 +1147,9 @@ function updateNodeBlock()
       r_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
       lwarmth = warmth;
     );
+    
+    //timeOffset = max(-srate * dtime + 7, timeOffset);
+    timeOffset < - srate * dtime ? timeOffset = 0;
  );
 
 function getReceives()
@@ -1379,7 +1393,7 @@ function process(l_in, r_in)
         r = buffer.outR;
       );
       
-      pitch ? (
+      (pitch == 1) ? (
         shifter.pitchShifterUpdate(l, r);
         l = shifter.outL;
         r = shifter.outR;
@@ -1411,6 +1425,7 @@ function process(l_in, r_in)
         r = activevol*r*rPanTerm*play;  
       );
 
+
       grain == 2 ? (
         granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, grainReverse, grainSizeVar, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
         pingpong ? (
@@ -1422,7 +1437,12 @@ function process(l_in, r_in)
         );
       );
       
-
+      (pitch == 2) ? (
+        shifter.pitchShifterUpdate(l, r);
+        l = shifter.outL;
+        r = shifter.outR;
+      );
+      
       midSide ? (
         t = l;
         l = l + r;
@@ -1559,7 +1579,7 @@ function serializeNode()
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-            ice, ice_panned, shift_pitch, pitch )
+            ice, ice_panned, shift_pitch, pitch, pitchTracking )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1620,10 +1640,11 @@ function serializeNode()
     file_var( 0, ice_panned );
     file_var( 0, shift_pitch );
     file_var( 0, pitch );
+    file_var( 0, pitchTracking );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 59);
-    file_mem(0, 0, 59); /* Reduce this by one when you want to add features */
+    memset(0, 0, 58);
+    file_mem(0, 0, 58); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -2258,7 +2279,7 @@ bufSize = 65536*8;
 minvol = 0.05;
 maxvol = 1;
 
-dTap1  = 1;
+dTap1  = 1*bufSize;
 dTap2  = 2*bufSize;
 dTap3  = 3*bufSize;
 dTap4  = 4*bufSize;
@@ -2269,11 +2290,12 @@ dTap8  = 8*bufSize;
 dTap9  = 9*bufSize;
 dTap10 = 10*bufSize;
 
-pitchBlockSize = 8192; /* We have 64 blocks of this */
+pitchBlockSize = 4096; /* We have 64 blocks of this */
 freemem = 11 * bufSize;
 freemem = (fftmem1 = freemem) + pitchBlockSize;
 freemem = (fftmem2 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation1 = freemem) + pitchBlockSize;
+freemem = (pitchBufferLocation2 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation3 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation4 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation5 = freemem) + pitchBlockSize;
@@ -2283,7 +2305,9 @@ freemem = (pitchBufferLocation8 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation9 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation10 = freemem) + pitchBlockSize;
 freemem = (pitchBufferLocation11 = freemem) + pitchBlockSize;
+freemem = (midimem = freemem) + 4*pitchBlockSize;
 freemem = (globalPitchBuffer = freemem) + pitchBlockSize;
+midi.initializeMIDI(midimem, 0, 1);
 
 transition_region = 1024;
 shifterBufferSize = 4 * transition_region;
@@ -2423,6 +2447,8 @@ file_mem(0,0,100);
 @slider
 
 @block
+midi.processMIDIBlock();
+
 (tempo != current_tempo) ? (  
   SyncMode > 0 ? (
     (current_tempo > 0) && (tempo > 0) ? (   
@@ -2506,6 +2532,11 @@ updateGlobalFeedback();
 israte = 1.0 / srate;
 
 @sample
+midi.processMIDISample() ? (
+  pitchMod = 2^(-(midi.lastNote - 69)/12);
+  quickSwitch = 1;
+);
+
 samples += 1;
 
 gainFactor = exp(.11512925464970228420089957273422*gain_interpolator.interpolate());
@@ -3347,7 +3378,7 @@ global(BAND_FONT, edge_r, edge_g, edge_b, edge_a)
 
 function processVerbCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, shine, ice, ice_panned, pitch, shift_pitch,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob, pitchToggle, pitchKnob
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob, pitchToggle, pitchKnob, pitchToggle2,
   resonanceKnob, lpfResonance, iceKnob, icePanToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad, buttonSize,
@@ -3379,10 +3410,18 @@ function processVerbCtrls(cX, cY)
     
     cX += 3.5*knobSpacing;
     
-    pitchToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
-    pitch = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    pitchToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 0, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle pitch shifting.");
+    tmp = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     pitchKnob.active = pitch;
     pitchKnob.value = shift_pitch*0.5 + 0.5;
+    tmp > 0 && pitch == 0 ? ( pitch = 1; );
+    tmp == 0 && pitch > 0 ? ( pitch = 0; );
+    
+    pitchToggle2.active = pitch > 0;
+    pitchToggle2.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 1, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Place pitch shifter after feedback.\n");
+    pitch > 0 ? (
+      pitch = pitchToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? 2 : 1;
+    );
     
     pitchKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
     pitchKnob.label = gain_string;
@@ -3472,10 +3511,58 @@ function processVerbCtrls(cX, cY)
     cX += 5*knobSpacing
   );
 
+function roundToNote(x)
+global()
+local(c)
+(
+  c = floor(.5 + 12 * log(x*512/440) / log(2)) / 12;
+  (440/512) * 2^c
+);
+
+function toNote(x)
+global()
+local(c, st, N)
+(
+  c = 12 * log(x*512/440) / log(2);
+  c -= floor(c/12)*12;
+  N = floor(c+.001);
+  c -= N;
+  st = 104;
+  abs(c) > .009999 ? (
+    N == 0 ? ( sprintf(st, "%s %.2f", "A", c)
+    ) : ( N == 1 ) ? ( sprintf(st, "%s %.2f", "A#", c)
+    ) : ( N == 2 ) ? ( sprintf(st, "%s %.2f", "B", c)
+    ) : ( N == 3 ) ? ( sprintf(st, "%s %.2f", "C", c)
+    ) : ( N == 4 ) ? ( sprintf(st, "%s %.2f", "C#", c)
+    ) : ( N == 5 ) ? ( sprintf(st, "%s %.2f", "D", c)
+    ) : ( N == 6 ) ? ( sprintf(st, "%s %.2f", "D#", c)
+    ) : ( N == 7 ) ? ( sprintf(st, "%s %.2f", "E", c)
+    ) : ( N == 8 ) ? ( sprintf(st, "%s %.2f", "F", c)
+    ) : ( N == 9 ) ? ( sprintf(st, "%s %.2f", "F#", c)
+    ) : ( N == 10 ) ? ( sprintf(st, "%s %.2f", "G", c)
+    ) : ( N == 11 ) ? ( sprintf(st, "%s %.2f", "G#", c)
+    )
+  ) : (
+    N == 0 ? ( sprintf(st, "%s", "A", c)
+    ) : ( N == 1 ) ? ( sprintf(st, "%s", "A#")
+    ) : ( N == 2 ) ? ( sprintf(st, "%s", "B")
+    ) : ( N == 3 ) ? ( sprintf(st, "%s", "C")
+    ) : ( N == 4 ) ? ( sprintf(st, "%s", "C#")
+    ) : ( N == 5 ) ? ( sprintf(st, "%s", "D")
+    ) : ( N == 6 ) ? ( sprintf(st, "%s", "D#")
+    ) : ( N == 7 ) ? ( sprintf(st, "%s", "E")
+    ) : ( N == 8 ) ? ( sprintf(st, "%s", "F")
+    ) : ( N == 9 ) ? ( sprintf(st, "%s", "F#")
+    ) : ( N == 10 ) ? ( sprintf(st, "%s", "G")
+    ) : ( N == 11 ) ? ( sprintf(st, "%s", "G#")
+    )
+  );
+);
+
 function processRegularCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter, feedbackSign, shift_pitch, pitch,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob,
-  lpfResonance, resonanceKnob, feedbackSignToggle, pitchKnob, pitchToggle)
+  lpfResonance, resonanceKnob, feedbackSignToggle, pitchKnob, pitchToggle, pitchToggle2, pitchTracking, pitchTrackingToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
@@ -3521,8 +3608,16 @@ function processRegularCtrls(cX, cY)
     midside = midsideToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     cX += 3.5*knobSpacing;
     
-    pitchToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
-    pitch = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    pitchToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 0, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle pitch shifting.");
+    tmp = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    tmp > 0 && pitch == 0 ? ( pitch = 1; );
+    tmp == 0 && pitch > 0 ? ( pitch = 0; );
+    
+    pitchToggle2.active = pitch > 0;
+    pitchToggle2.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 1, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Place pitch shifter after feedback.");
+    pitch > 0 ? (
+      pitch = pitchToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? 2 : 1;
+    );
     
     pitchKnob.active = pitch;
     pitchKnob.value = shift_pitch*0.5 + 0.5;
@@ -3542,17 +3637,29 @@ function processRegularCtrls(cX, cY)
     timeKnob.active = 1;
     timeKnob.value = x;
     
-    dtime < 499 ? (
-      timeKnob.label = sprintf(gain_string, "%d ms", dtime * 500);
+    pitchTracking ? (
+      timeKnob.label = sprintf(gain_string, "%s", toNote(.5/dtime));
     ) : (
-      timeKnob.label = sprintf(gain_string, "%d s", dtime);      
+      dtime < 499 ? (
+        timeKnob.label = sprintf(gain_string, "%d ms", dtime * 500);
+      ) : (
+        timeKnob.label = sprintf(gain_string, "%d s", dtime);      
+      );
     );
     
     timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time\n\nControls the distance between each delay.", 0);
     timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
       x = clamp(timeKnob.value,0,1);
       dtime = xToTime(x);
+      
+      mouse_cap & 2 > 0 ? (
+        pitchTracking ? (
+          dtime = 1.0/roundToNote(1.0/dtime);
+        );
+      );
     );
+    
+    pitchTrackingToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitchTracking, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch tracking\nScale delay by incoming midi note. Enabling this allows you to generate\nresonances that track notes being played. Note that this only works well for\nshort delays. Reference point is at A-4 (meaning input note A4 incurs no\nchange in the delay time.\n"); pitchTracking = pitchTrackingToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     cX += 3.5*knobSpacing;
     feedbackKnob.active = 1;
@@ -3902,7 +4009,7 @@ instance(attackKnob, releaseKnob, thresholdKnob, ratioKnob, duckingToggle)
   duckingActive = duckingToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
   cY -= .8 * smallknobspacing;
-  cX += 1.6 * smallknobspacing;
+  cX += 1.85 * smallknobspacing;
   thresholdKnob.active = duckingActive > 0;
   thresholdKnob.value = 1 + duckingThreshold / 40;
   thresholdKnob.y_font_offset = y_font_offset;
@@ -4050,10 +4157,18 @@ selectedNode = 0;
   );
   
   cX += 3.5*knobSpacing;
-  pitchToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle ping\npong panning");
-  pitch = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  pitchToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 0, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Toggle pitch shifting.");
+  tmp = pitchToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   pitchKnob.active = pitch;
   pitchKnob.value = shift_pitch*0.5 + 0.5;
+  tmp > 0 && pitch == 0 ? ( pitch = 1; );
+  tmp == 0 && pitch > 0 ? ( pitch = 0; );
+  
+  pitchToggle2.active = pitch > 0;
+  pitchToggle2.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 1, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Place pitch shifter after feedback.");
+  pitch > 0 ? (
+    pitch = pitchToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? 2 : 1;
+  );
   
   pitchKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
   pitchKnob.label = gain_string;
@@ -4150,7 +4265,7 @@ gfx_blit(5, (1+scaling), 0);
 gfx_mode=0;
 
 mouse_cap == 0 && lcap & 1 > 0 ? (
-  gfx_x < 185 * (1+scaling) && gfx_y < 30 * (1+scaling) ? (
+  ((mouse_x < (185 * (1+scaling))) && (mouse_y < (30 * (1+scaling)))) ? (
     colorscheme = 1 - colorscheme;
   );
 );
