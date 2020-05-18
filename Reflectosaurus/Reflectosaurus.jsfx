@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.59
+version: 0.60
 author: Joep Vanlier
-changelog: Bugfix theme switching. Minor fixes pitch shifting. Minor optimizations. Adding optional pitch tracking (only makes sense for non synced short delays).
+changelog: Add allpass mode
 license: MIT
 provides:
   Reflectosaurus_Dependencies/*
@@ -1366,7 +1366,7 @@ function process(l_in, r_in)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-           shaper, shaped_r, hq_active, lpfActive, pitch, shifter)
+           shaper, shaped_r, hq_active, lpfActive, pitch, shifter, allpass)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -1416,13 +1416,23 @@ function process(l_in, r_in)
       pingpong ? (
         buffer.updateBuffer2(fbcoeff*r + lIn*lPanTerm, fbcoeff*l + rIn*rPanTerm);
         
-        l = activevol*l*play;
-        r = activevol*r*play;  
+        allpass ? (
+          l = activevol*(l - fbcoeff*(fbcoeff*l + lIn))*play;
+          r = activevol*(r - fbcoeff*(fbcoeff*r + rIn))*play;
+        ) : (
+          l = activevol*l*play;
+          r = activevol*r*play;
+        );
       ) : (
         buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
         
-        l = activevol*l*lPanTerm*play;
-        r = activevol*r*rPanTerm*play;  
+        allpass ? (
+          l = activevol*(l - fbcoeff*(fbcoeff*l + lIn))*lPanTerm*play;
+          r = activevol*(r - fbcoeff*(fbcoeff*r + rIn))*rPanTerm*play;
+        ) : (
+          l = activevol*l*lPanTerm*play;
+          r = activevol*r*rPanTerm*play;        
+        );
       );
 
 
@@ -1579,7 +1589,7 @@ function serializeNode()
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-            ice, ice_panned, shift_pitch, pitch, pitchTracking )
+            ice, ice_panned, shift_pitch, pitch, pitchTracking, allpass )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1641,10 +1651,11 @@ function serializeNode()
     file_var( 0, shift_pitch );
     file_var( 0, pitch );
     file_var( 0, pitchTracking );
+    file_var( 0, allpass );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 58);
-    file_mem(0, 0, 58); /* Reduce this by one when you want to add features */
+    memset(0, 0, 57);
+    file_mem(0, 0, 57); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -1773,7 +1784,7 @@ function drawConnections(xmin, ymin, w, h)
 function draw(xmin, ymin, w, h, verb)
   local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp, xc, yc)
   global(gfx_a, gfx_x, gfx_y, render_time, scaling)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass)
   (
     scalefactor = 1+scaling;
     silent = max(0,1-play);
@@ -1938,6 +1949,18 @@ function draw(xmin, ymin, w, h, verb)
       gfx_line(xc - 4, yc, xc + 4, yc, 1);
       gfx_line(xc - 4, yc+1, xc + 4, yc+1, 1);
       gfx_line(xc - 4, yc-1, xc + 4, yc-1, 1);
+    );
+    
+    allpass ? (
+      xc = xl - r;
+      yc = yl - r;
+      //gfx_printf("A");
+      gfx_line(xc - 4, yc, xc, yc-4, 1);
+      gfx_line(xc - 4, yc+1, xc, yc-3, 1);
+      gfx_line(xc - 4, yc-1, xc, yc-5, 1);
+      gfx_line(xc, yc-4, xc+4, yc, 1);
+      gfx_line(xc, yc-3, xc+4, yc+1, 1);
+      gfx_line(xc, yc-5, xc+4, yc-1, 1);
     );
     
     gfx_set(1, 1, 1, .03);
@@ -2144,7 +2167,7 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
     
     left ? (
       ( currentCap > 10 && selected ) ? (
-        (lcap == 0 && (abs(time_precise() - lastSignalClick) < .15)) ? (
+        (lcap == 0 && (abs(time_precise() - lastSignalClick) < .25)) ? (
           // Check for double click
           currentCap == 11 ? fromNode1 = -fromNode1;
           currentCap == 12 ? fromNode2 = -fromNode2;
@@ -3562,7 +3585,7 @@ local(c, st, N)
 function processRegularCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter, feedbackSign, shift_pitch, pitch,
   inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob,
-  lpfResonance, resonanceKnob, feedbackSignToggle, pitchKnob, pitchToggle, pitchToggle2, pitchTracking, pitchTrackingToggle)
+  lpfResonance, resonanceKnob, feedbackSignToggle, pitchKnob, pitchToggle, pitchToggle2, pitchTracking, pitchTrackingToggle, allpass, allpassToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
@@ -3670,6 +3693,9 @@ function processRegularCtrls(cX, cY)
     
     feedbackSignToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, feedbackSign, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Feedback sign\n\nSwitch signal polarity when feeding back.");
     feedbackSign = feedbackSignToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    allpassToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, allpass, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Allpass toggle\nToggle whether this should be a comb feedback or allpass.");
+    allpass = allpassToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     cX += 3.5*knobSpacing;
     flutterKnob.active = 1;
