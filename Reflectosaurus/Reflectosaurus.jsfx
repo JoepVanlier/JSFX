@@ -1,18 +1,20 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.60
+version: 0.61
 author: Joep Vanlier
-changelog: Add allpass mode
+changelog: Add optional node conversion to reverb
 license: MIT
 provides:
   Reflectosaurus_Dependencies/*
   Reflectosaurus.jsfx.rpl
-
+options:maxmem=12000000
 import Reflectosaurus_grainlib.jsfx-inc
 import Reflectosaurus_widgets.jsfx-inc
 import Reflectosaurus_compressor.jsfx-inc
 import Reflectosaurus_pitchlib.jsfx-inc
 import Reflectosaurus_midilib.jsfx-inc
+import Reflectosaurus_buffers.jsfx-inc
+import Reflectosaurus_allpassverb.jsfx-inc
 
 slider1:drywet=1.0<0,1,.001>-Dry/Wet
 slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>-Mode
@@ -123,205 +125,6 @@ function updateRange()
 );
 updateRange();
 
-function initBuffer(scopebuffer_in, scopebuffermax_in)
-  local()
-  global()
-  instance(scopeptr, scopebuffermax, scopebuffer)
-  (
-    scopebuffer     = scopebuffer_in;
-    scopebuffermax  = scopebuffermax_in;
-    
-    scopeptr < scopebuffer ? (
-      scopeptr = scopebuffer 
-    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
-  );
-  
-function resetBuffer()
-  local()
-  global()
-  instance(scopebuffermax, scopebuffer)
-  (
-    memset(scopebuffer, 0, scopebuffermax - scopebuffer + 1);
-  );
-  
-function draw_buffer(x, y, w, h, mul, fill)
-  instance(scopeptr, scopebuffer, scopebuffermax)
-  globals(gfx_x, gfx_y)
-  local(len, scopeptr2, lx, ly, xx, dx, lptr, yy, lastx, lasty, isc, yref)
-  (
-    xx = x;
-    len = scopebuffermax-scopebuffer;
-    dx = floor(len/w);
-    scopeptr2 = scopeptr;
-    
-    lptr = floor((scopeptr2)/dx)*dx;
-    gfx_x = xx;
-    gfx_y = y+h;
-    isc = h;
-    yref = y+h;
-    ly = y+h;
-    loop((scopebuffermax-scopeptr2)/dx - 1,
-      yy = yref - h*min(1,lptr[]);
-      
-      lptr += dx;
-      
-      fill ? (
-        gfx_triangle( xx-1, y+h,
-                      xx-1, ly,
-                      xx, y+h,
-                      xx, yy);
-      ) : (
-        gfx_lineto(xx, yy);
-      );
-      
-      ly = yy;
-      xx += 1;
-    );
-    
-    lptr = floor((scopebuffer)/dx)*dx;
-    loop((scopeptr2 - scopebuffer)/dx - 1,
-      lptr += dx;
-      yy = yref - h*min(1,lptr[]);
-      
-      fill ? (
-        gfx_triangle( xx-1, y+h,
-                      xx-1, ly,
-                      xx, y+h,
-                      xx, yy);
-      ) : (
-        gfx_lineto(xx, yy);
-      );
-      
-      ly = yy;
-      xx += 1;
-    );
-  );  
-  
-function setOffset(current_dtime, hq_active)
-  local(offset)
-  global()
-  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac, hd,
-           a0, a1, a2, a3, a4, t, tm1, tm2, tm3, tm4, tm5, tm1tm2, tm3tm4)
-  (
-    readptr   = scopeptr;
-    
-    hd = current_dtime * .5;
-    offset = current_dtime - floor(current_dtime) + floor(hd)*2;
-    
-    frac      = hd - floor(hd);
-    
-    hq_active ? (
-      readptr  -= floor(offset) + 2;
-      frac += 2;
-      
-      /* Lagrangian interpolation */
-      t = frac;
-      tm1 = t-1.0;
-      tm2 = t-2.0;
-      tm3 = t-3.0;
-      tm4 = t-4.0;
-      
-      tm1tm2 = tm1*tm2;
-      tm3tm4 = tm3*tm4;
-      a0 = tm1tm2 * tm3tm4 * 0.04166666666666666666666666666667; // 1/24
-      a1 = - t * tm2 * tm3tm4 * 0.16666666666666666666666666666667; //1/6
-      a2 = t * tm1 * tm3tm4 * 0.25;
-      tm1tm2 = t*tm1tm2;
-      a3 = - tm1tm2 * tm4 * 0.16666666666666666666666666666667;
-      a4 = tm1tm2 * tm3 * 0.04166666666666666666666666666667; // 1/24
-    ) : (
-      readptr -= floor(offset);
-    );
-    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer);
-  );
-   
-function readBuffer()
-  local(c1, c2)
-  global()
-  instance(readptr, scopebuffermax, scopebuffer, frac)
-  (
-    c1 = readptr[];
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-    
-    c2 = readptr[];
-    readptr -= 1;
-    
-    c2 * (1.0-frac) + c1 * frac
-  );
-  
-function readBuffer2()
-  local(c1l, c2l, c1r, c2r)
-  global()
-  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR)
-  (
-    c1l = readptr[];
-    c1r = readptr[1];
-    readptr += 2;
-    
-    readptr > scopebuffermax ? readptr = scopebuffer;
-
-    c2l = readptr[];
-    c2r = readptr[1];
-
-    outL = c2l * (1.0-frac) + c1l * frac;
-    outR = c2r * (1.0-frac) + c1r * frac;
-  );
-  
-function readBuffer2_HQ()
-  local(t, t2)
-  global()
-  instance(readptr, scopebuffermax, scopebuffer, frac, outL, outR,
-           a0, a1, a2, a3, a4,
-           d0l, d1l, d2l, d3l, d4l,
-           d0r, d1r, d2r, d3r, d4r,     
-           )
-  (
-    d4l = readptr[];
-    d4r = readptr[1];
-    
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-    
-    d3l = readptr[];
-    d3r = readptr[1];
-    
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-    
-    d2l = readptr[];
-    d2r = readptr[1];
-    
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-    
-    d1l = readptr[];
-    d1r = readptr[1];
-    
-    readptr += 2;
-    readptr > scopebuffermax ? readptr = scopebuffer;
-        
-    d0l = readptr[];
-    d0r = readptr[1];
-    
-    readptr -= 6;
-    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+2); // GO HERE
-     
-    outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
-    outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
-  );
-  
-function updateBuffer2(ll, rr)
-  local()
-  global()
-  instance(scopeptr, scopebuffermax, scopebuffer)
-  (
-    scopeptr[] = ll;
-    scopeptr[1] = rr;
-    scopeptr += 2;
-    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
-  );
-  
   function tanh(x)
   local()
   global()
@@ -1022,7 +825,8 @@ function yToVol(y)
   local(newdtime, current_dtime, dTimeOffset)
   global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha, pitchMod)
   instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, ctime, timeOffset, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
-           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign, pitch, pitchTracking)
+           lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign, pitch, pitchTracking,
+           isReverb, xSmoothed, lastfb)
   (
     y > 1 ? y = 1;
     x > 1 ? x = 1;
@@ -1040,12 +844,21 @@ function yToVol(y)
         diff = 1;
       ) : diff = olddtime - newdtime;
     
-      ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || lflutter || (HQ != hq_active) ) ? (
-        hq_active = HQ;
-        current_dtime = newdtime;
-        flutter ? current_dtime += this.flutter();
-        buffer.setOffset(current_dtime + dTimeOffset, HQ );
-        lflutter = flutter;
+      isReverb ? (
+        xSmoothed == 0 ? xSmoothed = x;
+        xSmoothed = update_alpha * x + inv_update_alpha * xSmoothed;
+        (abs(xSmoothed - x) > .00001) || (abs(fb - lastfb) > .00001) ? (
+          this.allpassverbInit(xSmoothed, fb, .5);
+          lastfb = fb;
+        );
+      ) : (
+        ( abs( diff ) > .0000001 || ( invollast == 99999 ) || flutter || lflutter || (HQ != hq_active) ) ? (
+          hq_active = HQ;
+          current_dtime = newdtime;
+          flutter ? current_dtime += this.flutter();
+          buffer.setOffset(current_dtime + dTimeOffset, HQ );
+          lflutter = flutter;
+        );
       );
       olddtime = newdtime;
       
@@ -1366,7 +1179,7 @@ function process(l_in, r_in)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-           shaper, shaped_r, hq_active, lpfActive, pitch, shifter, allpass)
+           shaper, shaped_r, hq_active, lpfActive, pitch, shifter, allpass, isReverb)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
@@ -1386,11 +1199,14 @@ function process(l_in, r_in)
         buffer.readptr > buffer.scopebuffermax ? buffer.readptr = buffer.scopebuffer;
         l = granulator.L;
         r = granulator.R;
-      ) : (
+      ) : ( isReverb == 0 ) ? (
         hq_active ? buffer.readBuffer2_HQ() : buffer.readBuffer2();
         
         l = buffer.outL;
         r = buffer.outR;
+      ) : (
+        l = lIn;
+        r = rIn;
       );
       
       (pitch == 1) ? (
@@ -1413,28 +1229,33 @@ function process(l_in, r_in)
       );
   
       // Entering the delay here
-      pingpong ? (
-        buffer.updateBuffer2(fbcoeff*r + lIn*lPanTerm, fbcoeff*l + rIn*rPanTerm);
-        
-        allpass ? (
-          l = activevol*(l - fbcoeff*(fbcoeff*l + lIn))*play;
-          r = activevol*(r - fbcoeff*(fbcoeff*r + rIn))*play;
-        ) : (
-          l = activevol*l*play;
-          r = activevol*r*play;
-        );
+      isReverb ? (
+        this.evaluateAllpassVerb(l, r);
+        l = activevol*play*this.verbLeft;
+        r = activevol*play*this.verbRight;
       ) : (
-        buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
-        
-        allpass ? (
-          l = activevol*(l - fbcoeff*(fbcoeff*l + lIn))*lPanTerm*play;
-          r = activevol*(r - fbcoeff*(fbcoeff*r + rIn))*rPanTerm*play;
+        pingpong ? (
+          buffer.updateBuffer2(fbcoeff*r + lIn*lPanTerm, fbcoeff*l + rIn*rPanTerm);
+          
+          allpass ? (
+            l = activevol*(l - fbcoeff*(fbcoeff*l + lIn))*play;
+            r = activevol*(r - fbcoeff*(fbcoeff*r + rIn))*play;
+          ) : (
+            l = activevol*l*play;
+            r = activevol*r*play;
+          );
         ) : (
-          l = activevol*l*lPanTerm*play;
-          r = activevol*r*rPanTerm*play;        
+          buffer.updateBuffer2(fbcoeff*l + lIn, fbcoeff*r + rIn);
+          
+          allpass ? (
+            l = activevol*(l - fbcoeff*(fbcoeff*l + lIn))*lPanTerm*play;
+            r = activevol*(r - fbcoeff*(fbcoeff*r + rIn))*rPanTerm*play;
+          ) : (
+            l = activevol*l*lPanTerm*play;
+            r = activevol*r*rPanTerm*play;        
+          );
         );
       );
-
 
       grain == 2 ? (
         granulator.granulator_update((grainLength/1000)*srate, grainJitter, grainOverlap, grainSpeed, grainSpeedSpread, grainPanSpread, grainReverse, grainSizeVar, buffer.readptr, buffer.scopebuffer, buffer.scopebuffermax, buffer.scopeptr);
@@ -1521,7 +1342,7 @@ function initNode(_memloc, _dtime, _y, idx, off, pitchbuffer_location, fftmem1, 
   local(transition_region, shifterBufferSize)
   instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR, lpl, lpr, hpl, hpr,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, flutterLpf,
-           octaver, octaver, lfoTime, shifter)
+           octaver, octaver, lfoTime, shifter, lastfb, xSmoothed)
   global(bufsize, srate)
   (
     me = idx;
@@ -1530,6 +1351,9 @@ function initNode(_memloc, _dtime, _y, idx, off, pitchbuffer_location, fftmem1, 
     buffer.resetBuffer();
     lastL = 0;
     lastR = 0;
+    
+    lastfb = -1;
+    xSmoothed = 0;
     
     transition_region = 1024;
     shifterBufferSize = 4 * transition_region;
@@ -1589,7 +1413,7 @@ function serializeNode()
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-            ice, ice_panned, shift_pitch, pitch, pitchTracking, allpass )
+            ice, ice_panned, shift_pitch, pitch, pitchTracking, allpass, isReverb )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1652,10 +1476,11 @@ function serializeNode()
     file_var( 0, pitch );
     file_var( 0, pitchTracking );
     file_var( 0, allpass );
+    file_var( 0, isReverb );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 57);
-    file_mem(0, 0, 57); /* Reduce this by one when you want to add features */
+    memset(0, 0, 56);
+    file_mem(0, 0, 56); /* Reduce this by one when you want to add features */
     
     /* <0 if writing */
     ( file_avail(0) >= 0 ) ? (
@@ -1784,7 +1609,7 @@ function drawConnections(xmin, ymin, w, h)
 function draw(xmin, ymin, w, h, verb)
   local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp, xc, yc)
   global(gfx_a, gfx_x, gfx_y, render_time, scaling)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass, isReverb)
   (
     scalefactor = 1+scaling;
     silent = max(0,1-play);
@@ -1798,6 +1623,20 @@ function draw(xmin, ymin, w, h, verb)
     yl = floor(ymin + y*h);
     
     outer = 8+4.15*ceil(log(.2)/log(radius)) * scalefactor;    
+    
+    isReverb ? (
+      gfx_set(1,1,1,.6);
+      rectS = 1.95*outer;
+      gfx_line(xl-rectS, yl+.707*rectS-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
+      gfx_line(xl, yl-rectS-.1*rectS, xl-rectS, yl+.707*rectS-.1*rectS);
+      gfx_line(xl, yl-rectS-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
+      
+      gfx_set(1,1,1,.2);
+      gfx_line(xl-rectS, yl+.707*rectS-.1*rectS, xl, yl-.1*rectS);
+      gfx_line(xl, yl-rectS-.1*rectS, xl, yl-.1*rectS);
+      gfx_line(xl, yl-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
+    );
+        
     
     rectify ? (
       rectS = outer-3;
@@ -2297,47 +2136,70 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
     );
   );
 
-// MEMORY LAYOUT
-bufSize = 65536*8;
-minvol = 0.05;
-maxvol = 1;
-
-dTap1  = 1*bufSize;
-dTap2  = 2*bufSize;
-dTap3  = 3*bufSize;
-dTap4  = 4*bufSize;
-dTap5  = 5*bufSize;
-dTap6  = 6*bufSize;
-dTap7  = 7*bufSize;
-dTap8  = 8*bufSize;
-dTap9  = 9*bufSize;
-dTap10 = 10*bufSize;
-
-pitchBlockSize = 4096; /* We have 64 blocks of this */
-freemem = 11 * bufSize;
-freemem = (fftmem1 = freemem) + pitchBlockSize;
-freemem = (fftmem2 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation1 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation2 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation3 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation4 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation5 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation6 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation7 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation8 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation9 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation10 = freemem) + pitchBlockSize;
-freemem = (pitchBufferLocation11 = freemem) + pitchBlockSize;
-freemem = (midimem = freemem) + 4*pitchBlockSize;
-freemem = (globalPitchBuffer = freemem) + pitchBlockSize;
-midi.initializeMIDI(midimem, 0, 1);
-
-transition_region = 1024;
-shifterBufferSize = 4 * transition_region;
-shifter.pitchShifter(1, globalPitchBuffer, shifterBufferSize, fftmem1, fftmem2, transition_region, 1);
-
 function Init()
   (
+    /* Nuke it all */
+    memset(0,0,12000000);
+
+    // MEMORY LAYOUT
+    bufSize = 65536*8;
+    minvol = 0.05;
+    maxvol = 1;
+    
+    dTap1  = 1*bufSize;
+    dTap2  = 2*bufSize;
+    dTap3  = 3*bufSize;
+    dTap4  = 4*bufSize;
+    dTap5  = 5*bufSize;
+    dTap6  = 6*bufSize;
+    dTap7  = 7*bufSize;
+    dTap8  = 8*bufSize;
+    dTap9  = 9*bufSize;
+    dTap10 = 10*bufSize;
+    
+    freemem = node11.initFFTNode(11*bufSize);
+    freemem = node1.initializeAllpassBuffers(freemem);
+    freemem = node2.initializeAllpassBuffers(freemem);
+    freemem = node3.initializeAllpassBuffers(freemem);
+    freemem = node4.initializeAllpassBuffers(freemem);
+    freemem = node5.initializeAllpassBuffers(freemem);
+    freemem = node6.initializeAllpassBuffers(freemem);
+    freemem = node7.initializeAllpassBuffers(freemem);
+    freemem = node8.initializeAllpassBuffers(freemem);
+    freemem = node9.initializeAllpassBuffers(freemem);
+    freemem = node10.initializeAllpassBuffers(freemem);
+ 
+    pitchBlockSize = 2*4096; /* We have 64 blocks of this */
+    freemem = (fftmem1 = freemem) + pitchBlockSize;
+    freemem = (fftmem2 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation1 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation2 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation3 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation4 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation5 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation6 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation7 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation8 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation9 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation10 = freemem) + pitchBlockSize;
+    freemem = (pitchBufferLocation11 = freemem) + pitchBlockSize;
+    freemem = (midimem = freemem) + 4*pitchBlockSize;
+    freemem = (globalPitchBuffer = freemem) + pitchBlockSize;
+    midi.initializeMIDI(midimem, 0, 1);
+ 
+    transition_region = 1024;
+    shifterBufferSize = 4 * transition_region;
+    shifter.pitchShifter(1, globalPitchBuffer, shifterBufferSize, fftmem1, fftmem2, transition_region, 1);
+ 
+    BUF_SIZE = 64000;
+    freemem = (height = freemem) + BUF_SIZE;
+    freemem = (velocity_x = freemem) + BUF_SIZE;
+    freemem = (velocity_y = freemem) + BUF_SIZE;
+    freemem = (height_gradient_x = freemem) + BUF_SIZE;
+    freemem = (height_gradient_y = freemem) + BUF_SIZE;
+    freemem = (velocity_prediction_x = freemem) + BUF_SIZE;
+    freemem = (velocity_prediction_y = freemem) + BUF_SIZE;
+    
     /* Initialize or reset the nodes */
     node1.initNode(dTap1,   xToTime(0.5),  0.1, 1,  0, pitchBufferLocation1, fftmem1, fftmem2);
     node2.initNode(dTap2,   xToTime(0.1),  1.0, 2,  0, pitchBufferLocation2, fftmem1, fftmem2);
@@ -2349,17 +2211,7 @@ function Init()
     node8.initNode(dTap8,   xToTime(0.7),  1.0, 8,  1, pitchBufferLocation8, fftmem1, fftmem2);
     node9.initNode(dTap9,   xToTime(0.8),  1.0, 9,  1, pitchBufferLocation9, fftmem1, fftmem2);
     node10.initNode(dTap10, xToTime(0.9),  1.0, 10, 1, pitchBufferLocation10, fftmem1, fftmem2);
-    node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1, pitchBufferLocation11, fftmem1, fftmem2);
-    freemem = node11.initFFTNode(13*bufSize);
- 
-    BUF_SIZE = 64000;
-    freemem = (height = freemem) + BUF_SIZE;
-    freemem = (velocity_x = freemem) + BUF_SIZE;
-    freemem = (velocity_y = freemem) + BUF_SIZE;
-    freemem = (height_gradient_x = freemem) + BUF_SIZE;
-    freemem = (height_gradient_y = freemem) + BUF_SIZE;
-    freemem = (velocity_prediction_x = freemem) + BUF_SIZE;
-    freemem = (velocity_prediction_y = freemem) + BUF_SIZE;
+    node11.initNode(dTap10, xToTime(0.9),   .5, 11, 1, pitchBufferLocation11, fftmem1, fftmem2);    
     
     updateGlobalFeedback();
     startFade.fadeIn(50);
@@ -3401,7 +3253,7 @@ global(BAND_FONT, edge_r, edge_g, edge_b, edge_a)
 
 function processVerbCtrls(cX, cY)
   instance(gain, vol, y, fb, pan, lpf, hpf, shine, ice, ice_panned, pitch, shift_pitch,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob, pitchToggle, pitchKnob, pitchToggle2,
+  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, shineKnob, pitchToggle, pitchKnob,
   resonanceKnob, lpfResonance, iceKnob, icePanToggle)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, knobSpacing, panelY, panelHeight, panelPad, buttonSize,
@@ -3439,12 +3291,6 @@ function processVerbCtrls(cX, cY)
     pitchKnob.value = shift_pitch*0.5 + 0.5;
     tmp > 0 && pitch == 0 ? ( pitch = 1; );
     tmp == 0 && pitch > 0 ? ( pitch = 0; );
-    
-    pitchToggle2.active = pitch > 0;
-    pitchToggle2.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitch > 1, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Place pitch shifter after feedback.\n");
-    pitch > 0 ? (
-      pitch = pitchToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? 2 : 1;
-    );
     
     pitchKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
     pitchKnob.label = gain_string;
@@ -3582,10 +3428,118 @@ local(c, st, N)
   );
 );
 
+function reverbCtrls(cX, cY)
+  instance(flutterKnob,
+           allpass, allpassToggle,
+           feedbackKnob, timeKnob, x, dtime, fb, flutter, 
+           reverbToggle, isReverb)
+  local(gain_string)
+  global(widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
+         mouse_x, mouse_y, mouse_cap,
+         scaling, knobSize, buttonSize, knobSpacing, panelY, panelPad, panelHeight)
+  (
+    gain_string = 101;
+    
+    drawPanel("REVERB", cX - 1.75*knobSpacing, panelY - panelPad, 7*knobSpacing, panelHeight);
+    
+    timeKnob.active = 1;
+    timeKnob.value = x;
+    timeKnob.label = 0;
+    timeKnob.drawKnob(cX, cY, knobSize, "Size", "Tweak reverb size.", 0);
+    timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
+      x = clamp(timeKnob.value,0,1);
+      dtime = xToTime(x);
+    );
+    
+    reverbToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, isReverb, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch tracking\nScale delay by incoming midi note. Enabling this allows you to generate\nresonances that track notes being played. Note that this only works well for\nshort delays. Reference point is at A-4 (meaning input note A4 incurs no\nchange in the delay time.\n"); 
+    isReverb = reverbToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    cX += 3.5*knobSpacing;
+    feedbackKnob.active = 1;
+    feedbackKnob.value = fb;
+    feedbackKnob.label = sprintf(gain_string, "%.1f dB", 20*log10(.95*exp(-4.0*(1.0-fb))));
+    feedbackKnob.drawKnob(cX, cY, knobSize, "Decay", "Feedback amount\n\nControls how quickly the reverb decays.", 0);
+    feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
+    
+    /*cX += 3.5*knobSpacing;
+    flutterKnob.active = 1;
+    flutterKnob.value = flutter;
+    flutterKnob.drawKnob(cX, cY, knobSize, "Flutter", "Flutter.\n\nControls random variability in delay time.", 0);
+    flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? flutter = flutterKnob.value;*/
+    
+    cX += 5*knobSpacing;
+  );
+
+function delayCtrls(cX, cY)
+  instance(feedbackSignToggle, pitchKnob, flutterKnob,
+           pitchTracking, pitchTrackingToggle, allpass, allpassToggle,
+           feedbackKnob, timeKnob, x, dtime, fb, flutter, feedbackSign, 
+           reverbToggle, isReverb)
+  local(gain_string)
+  global(widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
+         mouse_x, mouse_y, mouse_cap,
+         scaling, knobSize, buttonSize, knobSpacing, panelY, panelPad, panelHeight)
+  (
+    gain_string = 101;
+    
+    drawPanel("DELAY", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
+    timeKnob.active = 1;
+    timeKnob.value = x;
+    
+    pitchTracking ? (
+      timeKnob.label = sprintf(gain_string, "%s", toNote(.5/dtime));
+    ) : (
+      dtime < 499 ? (
+        timeKnob.label = sprintf(gain_string, "%d ms", dtime * 500);
+      ) : (
+        timeKnob.label = sprintf(gain_string, "%d s", dtime);      
+      );
+    );
+    
+    timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time\n\nControls the distance between each delay.", 0);
+    timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
+      x = clamp(timeKnob.value,0,1);
+      dtime = xToTime(x);
+      
+      mouse_cap & 2 > 0 ? (
+        pitchTracking ? (
+          dtime = 1.0/roundToNote(1.0/dtime);
+        );
+      );
+    );
+
+    reverbToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, isReverb, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch tracking\nScale delay by incoming midi note. Enabling this allows you to generate\nresonances that track notes being played. Note that this only works well for\nshort delays. Reference point is at A-4 (meaning input note A4 incurs no\nchange in the delay time.\n"); 
+    isReverb = reverbToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    pitchTrackingToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitchTracking, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch tracking\nScale delay by incoming midi note. Enabling this allows you to generate\nresonances that track notes being played. Note that this only works well for\nshort delays. Reference point is at A-4 (meaning input note A4 incurs no\nchange in the delay time.\n");
+    pitchTracking = pitchTrackingToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    cX += 3.5*knobSpacing;
+    feedbackKnob.active = 1;
+    feedbackKnob.value = fb;
+    feedbackKnob.label = sprintf(gain_string, "%.1f dB", 20*log10(.95*exp(-4.0*(1.0-fb))));
+    feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount\n\nControls how quickly the delay decays.", 0);
+    feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
+    
+    feedbackSignToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, feedbackSign, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Feedback sign\n\nSwitch signal polarity when feeding back.");
+    feedbackSign = feedbackSignToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    allpassToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, allpass, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Allpass toggle\nToggle whether this should be a comb feedback or allpass.");
+    allpass = allpassToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    cX += 3.5*knobSpacing;
+    flutterKnob.active = 1;
+    flutterKnob.value = flutter;
+    flutterKnob.drawKnob(cX, cY, knobSize, "Flutter", "Flutter.\n\nControls random variability in delay time.", 0);
+    flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? flutter = flutterKnob.value;    
+    
+    cX += 5*knobSpacing;
+  );
+
 function processRegularCtrls(cX, cY)
-  instance(gain, vol, y, fb, pan, lpf, hpf, x, dtime, pingpong, midside, flutter, feedbackSign, shift_pitch, pitch,
-  inputGainKnob, outputGainKnob, feedbackKnob, panningKnob, lpfKnob, hpfKnob, timeKnob, pingpongToggle, midSideToggle, flutterKnob,
-  lpfResonance, resonanceKnob, feedbackSignToggle, pitchKnob, pitchToggle, pitchToggle2, pitchTracking, pitchTrackingToggle, allpass, allpassToggle)
+  instance(gain, vol, y, pan, lpf, hpf, x, dtime, pingpong, midside, shift_pitch, pitch,
+  inputGainKnob, outputGainKnob, panningKnob, lpfKnob, hpfKnob, pingpongToggle, midSideToggle,
+  pitchToggle, pitchToggle2, pitchKnob, isReverb, lpfResonance, resonanceKnob)
   local(gain_string, tmp)
   global(mouse_x, mouse_y, mouse_cap, scaling, knobSize, buttonSize, knobSpacing,
          widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
@@ -3644,7 +3598,7 @@ function processRegularCtrls(cX, cY)
     
     pitchKnob.active = pitch;
     pitchKnob.value = shift_pitch*0.5 + 0.5;
-    feedbackKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
+    pitchKnob.label = sprintf(gain_string, "%.2f st", 12*shift_pitch);
     pitchKnob.label = gain_string;
     pitchKnob.drawKnob(cX, cY, knobSize, "Pitch", "Pitch shift.", 0);
     pitchKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
@@ -3656,54 +3610,11 @@ function processRegularCtrls(cX, cY)
     
     cX += 5 * knobSpacing;
     
-    drawPanel("DELAY", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
-    timeKnob.active = 1;
-    timeKnob.value = x;
-    
-    pitchTracking ? (
-      timeKnob.label = sprintf(gain_string, "%s", toNote(.5/dtime));
+    isReverb ? (
+      cX = this.reverbCtrls(cX, cY);
     ) : (
-      dtime < 499 ? (
-        timeKnob.label = sprintf(gain_string, "%d ms", dtime * 500);
-      ) : (
-        timeKnob.label = sprintf(gain_string, "%d s", dtime);      
-      );
+      cX = this.delayCtrls(cX, cY);
     );
-    
-    timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time\n\nControls the distance between each delay.", 0);
-    timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
-      x = clamp(timeKnob.value,0,1);
-      dtime = xToTime(x);
-      
-      mouse_cap & 2 > 0 ? (
-        pitchTracking ? (
-          dtime = 1.0/roundToNote(1.0/dtime);
-        );
-      );
-    );
-    
-    pitchTrackingToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, pitchTracking, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch tracking\nScale delay by incoming midi note. Enabling this allows you to generate\nresonances that track notes being played. Note that this only works well for\nshort delays. Reference point is at A-4 (meaning input note A4 incurs no\nchange in the delay time.\n"); pitchTracking = pitchTrackingToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-    
-    cX += 3.5*knobSpacing;
-    feedbackKnob.active = 1;
-    feedbackKnob.value = fb;
-    feedbackKnob.label = sprintf(gain_string, "%.1f dB", 20*log10(.95*exp(-4.0*(1.0-fb))));
-    feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback amount\n\nControls how quickly the delay decays.", 0);
-    feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? fb = feedbackKnob.value;
-    
-    feedbackSignToggle.drawToggle(cX-1.5*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, feedbackSign, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Feedback sign\n\nSwitch signal polarity when feeding back.");
-    feedbackSign = feedbackSignToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-    
-    allpassToggle.drawToggle(cX+1.25*knobSpacing, cy-1.5*knobSpacing, buttonSize, buttonSize, allpass, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Allpass toggle\nToggle whether this should be a comb feedback or allpass.");
-    allpass = allpassToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-    
-    cX += 3.5*knobSpacing;
-    flutterKnob.active = 1;
-    flutterKnob.value = flutter;
-    flutterKnob.drawKnob(cX, cY, knobSize, "Flutter", "Flutter.\n\nControls random variability in delay time.", 0);
-    flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? flutter = flutterKnob.value;    
-    
-    cX += 5*knobSpacing;
     
     drawPanel("FILTERS", cX - 1.75*knobSpacing, panelY - panelPad, 10.5*knobSpacing, panelHeight);
     hpfKnob.active = 1;
