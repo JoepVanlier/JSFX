@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.61
+version: 0.62
 author: Joep Vanlier
-changelog: Add optional node conversion to reverb
+changelog: Add indicator for pitch shift. Tweak octaver to flipflop in a more smooth fashion. Tweak allpass reverb. Fix issue with pitch mod being active without any midi note received.
 license: MIT
 provides:
   Reflectosaurus_Dependencies/*
@@ -548,7 +548,7 @@ function init_linearSVF_direct(freq, res)
   local(g)
   instance(ic1eq, ic2eq, k, a1, a2, a3)
   (
-    g = tan($pi * freq);
+    g = tan(.5 * $pi * freq);
     k = 2 - 2*res;
     
     a1 = 1/(1+g*(g+k));
@@ -651,17 +651,16 @@ function octaver_reset()
   );   
     
 function octaver_eval(sample)
-  local(os)
-  global(srate, israte)
-  instance(lpsample, flipflopState, h1, cnt, bal1, f_est, sidx)
+  local(out)
+  global()
+  instance(lpsample, flipflopState, pflipflopState, h1, cnt, bal1, f_est, sidx)
   (
-    os = 1;
     sidx += 1;
     lpsample = this.svf3.eval_linearSVF_LP( this.svf4.eval_linearSVF_HP( sample ) );
-    (lpsample > 0 && h1 < 0 && sidx > 100) ? (
+    (lpsample > 0 && h1 < 0 && sidx > 25) ? (
       cnt += 1;
       flipflopState = -flipflopState;
-      f_est = .7 * f_est + .3 * ( os / sidx );
+      f_est = .7 * f_est + .3 * ( 1.0 / sidx );
       sidx = 0;
     );
     
@@ -671,13 +670,16 @@ function octaver_eval(sample)
     );
     
     h1 = lpsample;
-    (1-bal1) * ( this.svf.eval_linearSVF_LP( sample*flipflopState ) );
+    out = (1-bal1) * sample*pflipflopState;
+    pflipflopState = .98*pflipflopstate + .02*flipflopState;
+    
+    out
   );
 
 function octaver_init(filterfreq)
   local(f_est)
   global()
-  instance(flipflopState, bal1)
+  instance(bal1)
   (
     bal1 = filterFreq;
     
@@ -835,7 +837,7 @@ function yToVol(y)
     
     ( !mute || solo ) ? (
       ctime = dtime;
-      pitchTracking ? ctime *= pitchMod;
+      pitchTracking && pitchmod ? ctime *= pitchMod;
       newdtime = update_alpha * (srate * ctime + timeOffset) + inv_update_alpha * olddtime;
       
       (lfo > 0) ? ( lfoTime += lfoAdvanceStep;
@@ -1607,9 +1609,9 @@ function drawConnections(xmin, ymin, w, h)
   );
 
 function draw(xmin, ymin, w, h, verb)
-  local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp, xc, yc)
+  local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp, xc, yc, xll, yll)
   global(gfx_a, gfx_x, gfx_y, render_time, scaling)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass, isReverb)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass, isReverb, pitch)
   (
     scalefactor = 1+scaling;
     silent = max(0,1-play);
@@ -1800,6 +1802,23 @@ function draw(xmin, ymin, w, h, verb)
       gfx_line(xc, yc-4, xc+4, yc, 1);
       gfx_line(xc, yc-3, xc+4, yc+1, 1);
       gfx_line(xc, yc-5, xc+4, yc-1, 1);
+    );
+    
+    
+    pitch ? (
+      xll = xc = xl - r - 6;
+      yc = yl + r;
+      yl = yll = 0;
+      tmp = sin(4*render_time);
+      tmp = .6 * (1 + tmp*tmp*tmp*tmp);
+      loop(10,
+        xc += 1;
+        yl += tmp;
+        gfx_line(xll, yc + 4*sin(yll), xc, yc + 4*sin(yl));
+        gfx_line(xll, yc + 4*sin(yll)+1, xc, yc + 4*sin(yl)+1);
+        xll = xc;
+        yll = yl;
+      );
     );
     
     gfx_set(1, 1, 1, .03);
@@ -3486,13 +3505,15 @@ function delayCtrls(cX, cY)
     timeKnob.active = 1;
     timeKnob.value = x;
     
+    // dtime is given in buffer samples / srate. Since we are dealing with stereo content and an
+    // interleaved buffer, dtime is only half of the true delay.
     pitchTracking ? (
       timeKnob.label = sprintf(gain_string, "%s", toNote(.5/dtime));
     ) : (
       dtime < 499 ? (
         timeKnob.label = sprintf(gain_string, "%d ms", dtime * 500);
       ) : (
-        timeKnob.label = sprintf(gain_string, "%d s", dtime);      
+        timeKnob.label = sprintf(gain_string, "%d s", dtime * .5);      
       );
     );
     
