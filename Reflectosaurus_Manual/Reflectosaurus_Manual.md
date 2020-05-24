@@ -26,7 +26,7 @@ The node area has two axes: the horizontal or **time axis** which indicates the 
 <center><img src="delayNodeDiagram.png"></center>
 <i>Figure 4: Feedback node signal chain. The dotted boxes are optional locations for those signal processors respectively. The dotted allpass line is only active in allpass mode.</i>
 
-Let's start by considering the most common node first: The feedback node (depicted in Figure 1a and 3). Each node is depicted by a little circle, the size of which indicates how large its delay feedback is, or, in the case of a reverb, its decay time. The size of a node can be altered by clicking it with the right mouse button and dragging.
+Let's start by considering the most common node first: The feedback node (depicted in Figure 1a and 5). Each node is depicted by a little circle, the size of which indicates how large its delay feedback is, or, in the case of a reverb, its decay time. The size of a node can be altered by clicking it with the right mouse button and dragging.
 
 <center><img src="FeedbackNode.png"></center>
 <i>Figure 5: Node layout. Most of the settings of a node are directly controllable with the mouse or keyboard. You can modify feedback level (RMB + drag), modify input level (mousewheel), change lowpass frequency (shift + drag), highpass frequency (Ctrl + shift + drag) and adjust panning (Alt + drag). You can also Mute (M), Solo (S), toggle ping-pong delay (P), feedback inversion (I) and toggle non-linearity (R).</i>
@@ -40,17 +40,17 @@ Feedback nodes can be set to various operation modes. These can be toggled using
 
 **Negative polarity**: This mode can be toggled in the control area or by entering I. When this mode is activate the node uses negative feedback instead of positive feedback.
 
-**Allpass mode**: Not to be confused with the allpass reverb node, an allpass feedback delay uses an allpass structure rather than a normal feedback delay structure. The allpass structure includes a feedforward chain (see Figure X).
+**Allpass mode**: Not to be confused with the allpass reverb node, an allpass feedback delay uses an allpass structure rather than a normal feedback delay structure. The allpass structure includes a feedforward chain (see Figure 4).
 
 ### A little more on feedback types
-Feedbacks are an efficient way of spreading out sound over time, by modifying a single pulse, into a sequence of pulses. To understand this, consider what happens if a spike enters the three feedback structures we've seen so far (see Figure X). What we see for all three is that they spread the audio over time. A single pulse, is turned into a pulse with multiple echos (optionally changing sign/polarity along the way).
+Feedbacks are an efficient way of spreading out sound over time, by modifying a single pulse, into a sequence of pulses. To understand this, consider what happens if a spike enters the three feedback structures we've seen so far (see Figure 7). What we see for all three is that they spread the audio over time. A single pulse, is turned into a pulse with multiple echos (optionally changing sign/polarity along the way).
 
 <center><img src="impulses.png"></center>
 <i>Figure 7: Result of the three feedback structures to a single sample audio 'impulse'. </i>
 
 If the delay time is short, such a feedback is often interpreted as the sound being more diffuse in nature. As such, feedback structures are likely candidates for reverberation algorithms.
 
-Let's consider the frequency domain for a moment. If we look at the response of such feedback loops to white noise with a flat spectrum, we start seeing different responses for each of these delay set ups. When feedback delay times get short and feedback gains high, distinct comb filtering effects start to appear (see Figure 5). For positive feedback, these appear at multiples of the inverse of the delay time (i.e. for 10 milliseconds of delay, emphasis occurs at 100 Hz, 200 Hz, etc). For negative feedback, the pattern changes, and the initial emphasis occurs at half the fundamental and then at 3x, 5x, 7x this frequency, producing odd harmonics. As such, negative feedback in this setup leads to odd harmonics being emphasized.
+Let's consider the frequency domain for a moment. If we look at the response of such feedback loops to white noise with a flat spectrum, we start seeing different responses for each of these delay set ups. When feedback delay times get short and feedback gains high, distinct comb filtering effects start to appear (see Figure 8). For positive feedback, these appear at multiples of the inverse of the delay time (i.e. for 10 milliseconds of delay, emphasis occurs at 100 Hz, 200 Hz, etc). For negative feedback, the pattern changes, and the initial emphasis occurs at half the fundamental and then at 3x, 5x, 7x this frequency, producing odd harmonics. As such, negative feedback in this setup leads to odd harmonics being emphasized.
 
 <center><img src="feedbackCombs.png"></center>
 <i>Figure 8: Frequency spectrum for short feedback times. </i>
@@ -68,7 +68,7 @@ Any feedback node can be converted to a reverb node by clicking the little LED o
 <center><img src="allpassNodeDiagram.png"></center>
 <i>Figure 9: Allpass node signal chain. The dotted boxes are optional locations for those signal processors respectively.</i>
 
-Allpass reverb nodes have just two reverb settings, size and decay as indicated in Figure 4. Internally, the reverb node contains 10 allpass filters linked together in an overarching feedback loop.
+Allpass reverb nodes have just two reverb settings, size and decay as indicated in Figure 10. Internally, the reverb node contains 10 allpass filters linked together in an overarching feedback loop.
 
 <center><img src="verbModule.png"></center>
 <i>Figure 10: Allpass reverb module options with its basic parameters size and decay. Some plugins refer to size as diffusion.</i>
@@ -104,7 +104,7 @@ The magnitude of a send can be changed by clicking on the little arrow with the 
 
 Sends are resolved with a one sample latency in order to not have to solve implicit equations. In practice, this does not matter much, since for most nodes, the sends go straight into the delay buffer of the receiving node, adding even more delay. The only difference is the allpass node (*not* the allpass reverb node); as these contain a feedforward straight to the audio output. As such, send constructions involving allpass nodes are the most prone to blowups.
 
-One thing to notice from Figure 5 (the comb filter graph) is that despite the feedback gain being clamped to 1 (0 dB), the gain for individual frequencies can be higher than one (> 0 dB). This means that nodes with high feedback are not necessarily stable when linked into larger structures with other nodes. This is something to keep in mind when using sends. Feedback loops with sends are not necessarily unconditionally stable and can blow up.
+One thing to notice from Figure 8 is that despite the feedback gain being clamped to 1 (0 dB), the gain for individual frequencies can be higher than one (> 0 dB). This means that nodes with high feedback are not necessarily stable when linked into larger structures with other nodes. This is something to keep in mind when using sends. Feedback loops with sends are not necessarily unconditionally stable and can blow up.
 
 *Note: With feedback comes great responsibility as circular feedbacks with the correct phase shifts can potentially cause blowups.*
 
@@ -160,7 +160,7 @@ Sometimes, the effects of waveshaping can rob a sound of its warmth. In order to
 <i>Figure 18: Shelf filters used for the warmth control.</i>
 
 ## 5. Ducking
-While delays can really fill out empty places in a mix, they can also crowd and intefere with your melodies. To avoid this, it is often a good idea to apply sidechain compression to the delay channel. To facilitate this, Reflectosaurus includes a sidechain compressor on the global strip by default. It can be activated by clicking the little LED on the top left of the unit (see Figure X). The sidechain compressor reduces the volume of the delays whenever audio is coming in.
+While delays can really fill out empty places in a mix, they can also crowd and intefere with your melodies. To avoid this, it is often a good idea to apply sidechain compression to the delay channel. To facilitate this, Reflectosaurus includes a sidechain compressor on the global strip by default. It can be activated by clicking the little LED on the top left of the unit (see Figure 19). The sidechain compressor reduces the volume of the delays whenever audio is coming in.
 
 <center><img src="Ducking.png"></center>
 <i>Figure 19: A small sidechain compressor included in Reflectosaurus.</i>
@@ -173,7 +173,7 @@ The plugin supports pitch shifting of both nodes as well as the global output. W
 
 Pitch shifting makes use of a relatively simple algorithm named Waveform Similarity and Overlap Add (WSOLA). It works by generating small windows of audio which can be played back at a higher or lower speed (thereby adjusting the pitch).
 
-The problem with this approach is that in the regions where the individual windows are being crossfaded, phase cancellation can occur. This is illustrated in Figure 5. This is undesireable since it generates a ring-modulation-like sound which can easily be audible. The WSOLA algorithm tries to mitigate this by computing the autocorrelation function between consecutive grains and using this to calculate a buffer offset needed to maximize the overlap of the waveforms in the crossfade region.
+The problem with this approach is that in the regions where the individual windows are being crossfaded, phase cancellation can occur. This is illustrated in Figure 20. This is undesireable since it generates a ring-modulation-like sound which can easily be audible. The WSOLA algorithm tries to mitigate this by computing the autocorrelation function between consecutive grains and using this to calculate a buffer offset needed to maximize the overlap of the waveforms in the crossfade region.
 
 While this algorithm provides a reasonably usable real-time pitch shifter, the algorithm is not well suited to pitching down drums, as the overlap searching can lead to audible stuttering effects. It can also have problems with wide stereo content, as finding an overlap which works for both channels at the same time can be problematic.
 
