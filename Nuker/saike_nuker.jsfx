@@ -1,0 +1,262 @@
+desc:Saike Nuker (EARLY ALPHA - DO NOT USE)
+tags: Distortion tool
+version: 0.01
+author: Joep Vanlier
+changelog: first commit
+license: MIT
+provides:
+  Nuker_Dependencies/*
+
+slider1:0<-36,36,1>ceiling (dB)
+slider2:0<-36,36,1>postgain (dB)
+slider3:even=0.7<0,1,.0001>Even
+slider4:odd=0.7<0,1,.0001>Odd
+slider10:octaver_amnt=0<0,1,.0001>Octaver
+slider20:ap1_delay=0<0.001,.02,.000001>dimension expander
+slider30:warmth=0<-12, 12, .000001>warmth (dB)
+slider40:dip=0<-36,0,1>Dip (dB)
+slider41:attack=0<0,1,.0001>Attack
+slider42:release=0<0,1,.00001>Release
+slider50:cab=0<0,14,1>Eq Curve
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import Nuker_SVFs.jsfx-inc
+import Nuker_interpolators.jsfx-inc
+import Nuker_buffers.jsfx-inc
+import Nuker_warmth.jsfx-inc
+import Nuker_sph.jsfx-inc
+import Nuker_compressor.jsfx-inc
+import Nuker_cabs.jsfx-inc
+
+@init
+correlation_tracker = 0;
+
+function octaver_reset()
+  local()
+  global()
+  instance(flipflopState)
+  (
+    flipflopState = 1;
+    this.svf3.reset_linearSVF();
+    this.svf4.reset_linearSVF();
+  );
+    
+function octaver_eval(sample)
+  local(out)
+  global()
+  instance(lpsample, flipflopState, pflipflopState, h1, bal1, f_est, sidx, skipFlip)
+  (
+    sidx += 1;
+    lpsample = this.svf3.eval_linearSVF_LP( this.svf4.eval_linearSVF_HP( sample ) );
+    (lpsample > 0 && h1 < 0 && sidx > 25) ? (
+      skipFlip ? (
+        skipFlip = 0;
+        sidx = 0;
+      ) : (
+        flipflopState = -flipflopState;
+        f_est = .7 * f_est + .3 * ( 1.0 / sidx );
+        sidx = 0;
+      );
+    );
+    
+    h1 = lpsample;
+    out = (1-bal1) * sample*pflipflopState;
+    pflipflopState = .98*pflipflopState + .02*flipflopState;
+    
+    bal1 * sample + out
+  );
+
+function octaver_init(filterfreq)
+  local()
+  global()
+  instance(bal1)
+  (
+    bal1 = filterFreq;
+    this.svf3.init_linearSVF( .0005, 0 );
+    this.svf4.init_linearSVF( .01, 0 );
+  );
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  2/(1+exp(-2*x)) - 1
+);
+
+function tanh_cheapo(x)
+local()
+global()
+instance()
+(
+  x = .5*x;
+  ( x > 1 ) ? ( x = 1 ) : ( x < -1 ) ? ( x = -1 ) : x = sign(x)*(2*abs(x)-x*x);
+);
+
+function processChannel(x)
+local(t1, x_corrected)
+global(even, odd)
+instance(current_gain)
+(
+    current_gain = max(.9999*current_gain, abs(x));
+
+    t1 = tanh(x);
+    x_corrected = x*(tanh(current_gain))/current_gain;
+    t1 = x_corrected + odd*(t1-x_corrected) + even*(t1 * t1);
+      
+    t1
+);
+
+// Outputs on instance variable yL, yR
+function allpass(left, right)
+  local(xhatL, xhatR)
+  instance(a, outL, outR, yL, yR)
+  global()
+  (
+    this.readBuffer2();
+    
+    xhatL = left + a * outL;
+    xhatR = right + a * outR;
+    
+    this.updateBuffer2(xhatL, xhatR);
+    
+    yL = outL - a * xhatL;
+    yR = outR - a * xhatR;
+  );
+
+ceiling.interpolator_init(1);
+postgain.interpolator_init(2);
+inertia = 1000.0 / 60.0;
+ceiling.initialize_smoother(inertia);
+postgain.initialize_smoother(inertia);
+
+ap1_interp.interpolator_init(20);
+ap1_interp.initialize_smoother(inertia);
+
+dc0.init_HP6(7/srate);
+dc1.init_HP6(7/srate);
+
+l_oct.octaver_reset();
+r_oct.octaver_reset();
+
+freemem = 0;
+ap1.initBuffer(freemem, freemem+srate - 16);
+freemem += srate;
+ap1.a = .35;
+
+ap2.initBuffer(freemem, freemem+srate - 16);
+freemem += srate;
+ap2.a = .45;
+
+particleMemory = freemem;
+freemem += 32768*4;
+gridMemory = freemem;
+freemem += 32768*4;
+nParticles = 2000;
+
+@slider
+initWarmthFilters(warmth);
+
+ratio = 20;
+comp.setCompressorOptions(dip, ratio, attack, release, 0, 1, 220, 15, 400);
+
+@block
+ceiling.interpolator_block();
+postgain.interpolator_block();
+ap1_interp.interpolator_block();
+
+l_oct.octaver_init(octaver_amnt);
+r_oct.octaver_init(octaver_amnt);
+
+@sample
+currentSample += 1;
+l = spl0;
+r = spl1;
+
+warmth ? (
+  l = lInvTilt.evalTilt(l);
+  r = rInvTilt.evalTilt(r);
+);
+
+interp = ap1_interp.interpolate();
+
+currentSample % 4 == 0 ? (
+  ap1.setOffset(2.0 * interp * srate);
+  ap2.setOffset(interp * srate);
+  
+  log10d20_conversion = .11512925464970228420089957273422;
+  postamp     = exp(log10d20_conversion * postgain.interpolate());
+  ceilingdB   = ceiling.interpolate();
+  ceiling     = exp(-log10d20_conversion * ceilingdB);
+  invceiling  = 1.0 / ceiling;
+);
+
+comp.thresh = ceilingdB + dip;
+current_invceiling = min(invceiling, comp.compressor(l, r));
+current_ceiling  = 1.0 / current_invceiling;
+
+l = l_oct.octaver_eval(l);
+r = r_oct.octaver_eval(r);
+
+// Try and keep left and right in phase if possible by skipping octaver flips
+// when the correlation drops.
+correlation_tracker = correlation_tracker * .9999 + sign(l) * sign(r) * .0001;
+correlation_tracker < -0.5 ? (
+  correlation_tracker = 0;
+  l_oct.skipFlip = 1;
+);
+
+l = processChannel(current_ceiling*l)*current_invceiling;
+r = processChannel(current_ceiling*r)*current_invceiling;
+
+// Phase shift
+ap1.allpass(l, r);
+
+l = ap1.yL;
+r = ap1.yR;
+
+l = tanh(current_ceiling*l);
+r = tanh(current_ceiling*r);
+
+// Phase shift
+ap2.allpass(l, r);
+
+l = ap2.yL;
+r = ap2.yR;
+
+l = processChannel(l)*current_invceiling;
+r = processChannel(r)*current_invceiling;
+
+warmth ? (
+  l = lTilt.evalTilt(l);
+  r = rTilt.evalTilt(r);
+);
+
+cab > 0 ? (
+  cab.update_cabs(cab, l, r);
+  l = cab.outL;
+  r = cab.outR;
+);
+
+spl0 = dc0.eval_HP6(l) * postamp;
+spl1 = dc1.eval_HP6(r) * postamp;
+
+@gfx
+gfx_set(0, .0, .0, 1.0);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+particleSim.initializeSim(particleMemory, gridMemory, nParticles, 65, 2250);
+
+loop(5,
+  particleSim.assignToGrid();
+  particleSim.updateDensity();
+  particleSim.updateForces();
+  particleSim.leapFrog(.001, 180000);
+);
+
+particleSim.renderSim();
+

@@ -1,0 +1,288 @@
+@init
+function initializeSim(particleMemory, gridMemory, particleCount, mass, viscosity)
+local(ptr)
+global(gfx_w, gfx_h)
+instance(pMem, grMem, simInit, x, y, w, h, nx, ny, radius, rsq, nParticles, maxPerBox,
+         muellerPressureConst, muellerGradient, restDensityTimes2, gasConstant, viscosityConstant)
+(
+  !simInit ? (
+    x = 0;
+    y = 0;
+    w = gfx_w;
+    h = gfx_h;
+    radius = 7;
+    maxPerBox = 20;
+    nx = ceil(w / radius);
+    ny = ceil(h / radius);
+  
+    simInit = 1;
+    pMem = particleMemory;
+    grMem = gridMemory;
+    nParticles = particleCount;
+    rsq = radius * radius;
+    
+    muellerPressureConst = 315.0 / (65.0 * $pi * pow(radius, 9.0)) * mass; /* muellerPressureConst */
+    restDensityTimes2 = 1000.0;
+    gasConstant = 2000.0;
+    muellerGradient = -45.0 / ($pi * pow(radius, 6.0)) * mass;
+    viscosityConstant = - muellerGradient * viscosity;
+    
+    ptr = pMem;
+    loop(nParticles,
+      ptr[] = 0;      // Vx (0)
+      (ptr+=1)[] = 0; // Vy (1)
+      (ptr+=1)[] = 0; // Ax (2)
+      (ptr+=1)[] = 0; // Ay (3)
+      (ptr+=1)[] = w * rand(); // Xx (4)
+      (ptr+=1)[] = h * rand(); // Xy (5)
+      (ptr+=1)[] = 1; // Density (6)
+      (ptr+=1)[] = 1; // Free (7)
+      (ptr+=1)[] = 1; // Ax_last (8)
+      (ptr+=1)[] = 1; // Ay_last (9)
+      ptr += 1;
+    );
+  );
+);
+
+function renderSim()
+local(ptr)
+global()
+instance(nParticles, pMem, radius)
+(
+  gfx_set(1, 1, 1, .3);
+  ptr = pMem + 4;
+  loop(nParticles,
+    gfx_set(ptr[2]*.75, 2*ptr[2], 1-ptr[2], 1);
+    gfx_circle(ptr[], ptr[1], .27*radius, 1);
+    /*gfx_circle(ptr[]-.0005*ptr[-4], ptr[1]-.0005*ptr[-3], .25*radius, 1);
+    gfx_circle(ptr[]-.001*ptr[-4], ptr[1]-.001*ptr[-3], .15*radius, 1);*/
+    ptr += 10;
+  );
+);
+
+function assignToGrid()
+local(ptr, gridPos)
+global()
+instance(nParticles, pMem, grMem, radius, count,
+         x, y, w, h, nx, ny, maxPerBox)
+(
+  ptr = pMem + 4;
+  
+  memset(grMem, 0, nx*ny*maxPerBox);
+  loop(nParticles,
+    // Find grid location
+    gridPos = grMem + (floor(ptr[]/radius) + floor(ptr[1]/radius)*nx) * maxPerBox;
+
+    // First position contains the number of particles in this box.
+    // We use that to advance the pointer to get to where we want to store the particle index.
+    count = gridPos[];
+    count < (maxPerBox-1) ? ( // TODO: Doublecheck
+      gridPos[] += 1;
+      gridPos += count + 1;
+    
+    // Store the particle memory location
+      gridPos[] = ptr - 4;
+    );
+    
+    ptr += 10;
+  );
+);
+
+function updateDensity()
+local(ptr1, ptr2, x_me, y_me, dist_x, dist_y, sqDist, density, potential,
+      gx, gy, gxs, boxCount, gridPos)
+global(qq)
+instance(nParticles, pMem, rsq, muellerPressureConst, gasConstant, 
+         grMem, nx, ny, maxPerBox, radius)
+(
+  ptr1 = pMem + 4;
+  loop(nParticles,
+    x_me = ptr1[];
+    y_me = ptr1[1];
+    density = 0;
+  
+    // Determine grid location
+    gx = floor(x_me/radius) - 1;
+    gx < 0 ? gx = 0;
+    gxs = gx;
+    gy = floor(y_me/radius) - 1;
+    gy < 0 ? gy = 0;
+    loop(3,
+      gx = gxs;
+      loop(3,
+        gridPos = grMem + (gx + gy*nx) * maxPerBox;
+        
+        boxCount = gridPos[];
+        qq = max(qq, boxCount);
+        loop(boxCount,
+          /* Actual particle code */
+          gridPos += 1;
+          ptr2 = gridPos[] + 4;
+          dist_x = ptr2[] - x_me;
+          dist_y = ptr2[1] - y_me;
+          sqDist = dist_x * dist_x + dist_y * dist_y;
+          sqDist < rsq ? (
+            potential = (rsq - sqDist);
+            density += muellerPressureConst * potential * potential * potential;
+          );
+        );
+        
+        gx += 1;
+      );
+      gy += 1;
+    );
+    
+    // Store the density
+    ptr1[2] = density;
+    
+    ptr1 += 10;
+  );
+);
+
+function evaluatePotential(x_me, y_me)
+local(term)
+global()
+instance(x, y, w, h, fx, fy)
+(
+  term = .8*h-.3*h*abs(sin(.01*time_precise() + x_me*.01));
+  y_me > term ? fy -= 100*(y_me-term)*(y_me-term);
+);
+
+function updateForces()
+local(ptr1, ptr2, x_me, y_me, dist_x, dist_y, dist, density_me, density_other, pressureSum,
+      term, rdr, vx_other, vy_other, vx_me, vy_me,
+      gx, gy, gxs, boxCount, gridPos)
+instance(nParticles, pMem, radius, muellerGradient, restDensityTimes2, 
+         gasConstant, viscosityConstant,
+         restDensityTimes2,
+         x, y, w, h, fx, fy,
+         grMem, nx, ny, maxPerBox, radius)
+global()
+(
+  ptr1 = pMem;
+  loop(nParticles,
+    vx_me = ptr1[];
+    vy_me = ptr1[1];
+    x_me = ptr1[4];
+    y_me = ptr1[5];
+    density_me = ptr1[6];
+    
+    fx = 0;
+    fy = 0;
+  
+    // Determine grid location
+    gx = floor(x_me/radius) - 1;
+    gx < 0 ? gx = 0;
+    gxs = gx;
+    gy = floor(y_me/radius) - 1;
+    gy < 0 ? gy = 0;
+    loop(3,
+      gx = gxs;
+      loop(3,
+        gridPos = grMem + (gx + gy*nx) * maxPerBox;
+        
+        boxCount = gridPos[];
+        loop(boxCount,
+          /* Actual particle code */
+          gridPos += 1;
+          ptr2 = gridPos[];
+          
+          dist_x = ptr2[4] - x_me;
+          dist_y = ptr2[5] - y_me;
+          dist = sqrt(dist_x * dist_x + dist_y * dist_y);
+          
+          // Only treat particles within the cutoff radius
+          dist < radius ? ( 
+            // Normalize the distance
+            dist_x /= dist;
+            dist_y /= dist;
+            
+            vx_other = ptr2[];
+            vy_other = ptr2[1];
+            density_other = ptr2[6];
+            
+            rdr = radius - dist;
+            
+            // The pressure is given by gasConstant * (density - restDensity)
+            // Therefore, pressure gradient is given by pi + pj = gasConstant * (density_i + density_j - 2*restDensity)
+            pressureSum = gasConstant * (density_me + density_other - restDensityTimes2);
+            
+            term = pressureSum / (2.0 * density_other) * muellerGradient * rdr * rdr;
+            fx += - dist_x * term; // Pressure contribution
+            fy += - dist_y * term; // Pressure contribution
+          
+            //potential = (rsq - dist);
+            term = viscosityConstant / density_other * rdr;
+            fx += term * (vx_other - vx_me); // Viscosity contribution
+            fy += term * (vy_other - vy_me); // Viscosity contribution
+          );
+        );
+        
+        gx += 1;
+      );
+      gy += 1;
+    );
+    
+    this.evaluatePotential(x_me, y_me);
+    
+    // Backup the old forces
+    ptr1[8] = ptr1[2];
+    ptr1[9] = ptr1[3];
+    
+    // Store the new forces
+    ptr1[2] = fx;
+    ptr1[3] = fy;
+    
+    ptr1 += 10;
+  );
+);
+
+function leapFrog(dt, G)
+local(eps, ptr, nx, ny, vx, vy, ax, ay, hdt, hdtsq, lb, rb, ub, bb)
+instance(nParticles, pMem, x, y, w, h)
+global()
+(
+  eps = 1;
+  hdt = .5 * dt;
+  hdtsq = hdt * dt;
+  
+  lb = x + eps;
+  rb = x + w - eps;
+  ub = y + eps;
+  bb = y + h - eps;
+  
+  // Only treat particles within the cutoff radius
+  ptr = pMem;
+  loop(nParticles,
+    vx = ptr[];
+    vy = ptr[1];
+    ax = ptr[8];
+    ay = ptr[9];
+     
+    // Update x position
+    nx = ptr[4] += vx * dt + ax * hdtsq;
+    ny = ptr[5] += vy * dt + ay * hdtsq;
+    
+    ptr[] += (ax + ptr[2]) * hdt;
+    ptr[1] += (ay + ptr[3] + G) * hdt;
+    
+    nx < lb ? (
+      ptr[4] = lb;
+      ptr[] *= -.1;
+    );
+    nx > rb ? (
+      ptr[4] = rb;
+      ptr[] *= -.1;
+    );
+    ny < ub ? (
+      ptr[5] = ub;
+      ptr[1] *= -.1;
+    );
+    ny > bb ? (
+      ptr[5] = bb;
+      ptr[1] *= -.1;
+    );
+    
+    ptr += 10;
+  );
+);
