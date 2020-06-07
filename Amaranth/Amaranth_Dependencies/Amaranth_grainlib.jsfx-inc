@@ -81,15 +81,17 @@ function evaluateFade()
       1
     )
   );
-  
+
 function grainRead()
-  local(out)
-  instance(ptr, frac,
+  local(out, frac,
+        id0, id1, id2, id3,
+        ism1, is0, is1, is2)
+  instance(ptr, 
            nTransition, N2, N3, idx,
            y0, y1, y2, b1, lOut, rOut, outL, outR,
            loc, hloc, ptrMin, ptrMax, 
            advance, hadvance, lmul, rmul)
-  global()
+  global(oversamplingMode)
   (
     ( idx < N3 ) ? (
       ptr = 2*loc - floor(2*loc) + floor(loc)*2;
@@ -117,12 +119,38 @@ function grainRead()
         out = .5*(y0+1);
       );
       
-      // Simple linear interpolation to keep CPU cost in check
-      // Big step up from sample & hold, but not nearly as expensive as AA filters.
       outL = out * lmul;
       outR = out * rmul;
-      lOut = outL * (ptr[] * (1-frac) + ptr[2]*frac);
-      rOut = outR * (ptr[1] * (1-frac) + ptr[3]*frac);
+      
+      oversamplingMode == 0 ? (
+        // Simple linear interpolation to keep CPU cost in check
+        // Big step up from sample & hold, but not nearly as expensive as AA filters.
+        lOut = outL * (ptr[] * (1-frac) + ptr[2]*frac);
+        rOut = outR * (ptr[1] * (1-frac) + ptr[3]*frac);
+      ) : (
+        /* Higher order Hermite interpolation */
+        ism1 = ptr[-4];
+        is0 = ptr[-2];
+        is1 = ptr[];
+        is2 = ptr[2];
+        
+        id0 = is0;
+        id1 = 0.5*(is1 - ism1);
+        id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+        id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+        lOut = outL * (((id3*frac+id2)*frac+id1)*frac+id0);
+        
+        ism1 = ptr[-3];
+        is0 = ptr[-1];
+        is1 = ptr[1];
+        is2 = ptr[3];
+        
+        id0 = is0;
+        id1 = 0.5*(is1 - ism1);
+        id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+        id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+        rOut = outL * (((id3*frac+id2)*frac+id1)*frac+id0);
+      );
       
       idx += 1;
       loc += advance;

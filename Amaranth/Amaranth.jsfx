@@ -1,8 +1,8 @@
 desc:Amaranth (ALPHA - DO NOT USE, SLIDER MAPPING WILL CHANGE!)
 tags: amaranth granular synth graintable grains
-version: 0.08
+version: 0.11
 author: Joep Vanlier
-changelog: Added pre and post filter gain modulators. Added a bunch of new filters.
+changelog: Added higher quality interpolation mode (Hermite). Update MS-20 filters to latest version. Updating pre and post-gain slider to logarithmic scaling. Added position markers (place / remove with outer).
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -31,13 +31,14 @@ slider22:F2_freq=0<0,1,.0000000000000001>-F2 Freq
 slider23:F2_res=0<0,1,.0000000000000001>-F2 Resonance
 slider62:storeSample=0<0,1,0>-Store sample in preset
 slider63:updateBuffer=1<0,1,1>-Update Buffer
-slider61:preGain=1<0,4,.00001>-preGain
-slider64:postGain=1<0,4,.00001>-postGain
+slider61:preGain=0<-32,32,.00001>-preGain
+slider64:postGain=0<-32,32,.00001>-postGain
 
 import Amaranth_widgets.jsfx-inc
 import Amaranth_envelopes.jsfx-inc
 import Amaranth_grainlib.jsfx-inc
 import Amaranth_filters.jsfx-inc
+import Amaranth_mouse.jsfx-inc
 
 // Filters
 // 0 - OFF
@@ -179,16 +180,23 @@ function initRect(_x, _y, _w, _h)
     x = _x; y = _y; w = _w; h = _h;
   );
   
-function vertBar(width, _xpos, mx, my, mcap)
-  instance(x, y, w, h, xpos, cap, lmx, lmy, lastleft, left)
+function mouseInRect()
+  local()
+  global(mouse.x, mouse.y)
+  instance(x, y, w, h)
+  (
+    (mouse.x > x) && (mouse.x < (x + w)) && (mouse.y > y) && (mouse.y < (y + h))
+  );
+  
+function vertBar(width, _xpos)
+  instance(x, y, w, h, xpos, cap)
   local(xScreen, change, over)
-  global(gfx_w, gfx_a)
+  global(gfx_w, gfx_a, mouse, mouse.x, mouse.y, mouse.left, mouse.lleft, mouse.dx)
   (
     xpos = _xpos;
-    left = mcap & 1;
     xScreen = x + xpos*w - .5*width;    
     
-    over = ( mx > xScreen ) && ( mx < ( xScreen + width ) ) && ( my > y ) && ( my < (y + h) );
+    over = (mouse.x > xScreen) && (mouse.x < (xScreen + width)) && (mouse.y > y) && (mouse.y < (y + h));
     
     gfx_rect(xScreen+2, y, width-4, h);
     
@@ -200,24 +208,81 @@ function vertBar(width, _xpos, mx, my, mcap)
     );
     
     change = 0;
-    ( left == 1 ) ? (
+    ( mouse.left == 1 ) ? (
       ( cap == 1 ) ? (
-        xpos += (mx - lmx) / w;
+        xpos += mouse.dx / w;
         xpos = max(min(xpos, 1), 0);
         change = 1;
-      ) : ( lastleft == 0 ) ? (
+      ) : ( mouse.lleft == 0 ) ? (
         over ? (
           cap = 1;
         );
       );
     ) : ( cap = 0; );
-  
-    lmx = mx;
-    lmy = my;
-    lastleft = left;
     
-    change
+    change || over
   );
+  
+function deleteMarker(idx)
+local()
+instance(memory)
+global(MAX_MARKERS)
+  (
+    memcpy(memory + 2*idx + 1, memory + 2*(idx+1) + 1, MAX_MARKERS - 2*(idx + 1) - 1 );
+    memory[] -= 1;
+  );  
+
+function addMarker(idx)
+local()
+instance(x, y, w, h, memory)
+global(mouse.x)
+  (
+    memory[] += 1;
+    memory[2*idx + 1] = (mouse.x - x) / w;
+    memory[2*idx + 2] = 0;
+  );
+ 
+// Really hacky way to use an existing UI element for multiple markers.
+function handleMarker(idx, selected_marker)
+local(xScreen, width, xc, lastcap)
+instance(x, y, w, h, width, memory)
+global(poo, gfx_x, gfx_y, LINE_FONT,
+       positionMarkerR, positionMarkerG, positionMarkerB,
+       left, lastleft)
+(
+  xc = memory[2*idx + 1];
+  lastcap = memory[2*idx + 2];
+
+  width = 6;
+  gfx_setfont(LINE_FONT);
+  gfx_set(positionMarkerR, positionMarkerG, positionMarkerB, 1);
+  xScreen = x + xc*w - .5*width;
+  gfx_x = xScreen + 2;
+  gfx_y = y + 2;
+  
+  gfx_printf(" %d", idx);
+  ((selected_marker == -1) || (selected_marker == idx)) ? (
+    this.cap = lastcap;
+    this.vertBar(width, xc) ? (
+      selected_marker = idx;
+      memory[2*idx + 1] = this.xpos;
+      poo = selected_marker;
+    );
+    memory[2*idx + 2] = this.cap;
+  ) : (
+    gfx_rect(xScreen+2, y, width-4, h);
+  );
+  
+  selected_marker
+);
+
+function positionMarkerX(x, y, w, h)
+local()
+instance()
+global()
+(
+  gfx_line(x, y, x, y);
+);
 
 function initBuffer(scopebuffer_in, scopebuffermax_in)
   local()
@@ -267,7 +332,7 @@ function updateBuffer(L, R)
     scopeptr += 1;
     scopeptr > scopebuffermax ? scopeptr = scopebuffer;
   );
-  
+ 
 function serializeBuffer(reading)
   local(bufSize)
   global()
@@ -407,6 +472,9 @@ function drawBuffer(x, y, w, h, fill)
   vowel_U   = 1120;
   vowel_EE  = 1144;
   vowel_src = 1168;
+  
+  marker_memory = 1200;
+  MAX_MARKERS = 21;
 
   bootvowel();
   
@@ -478,6 +546,9 @@ function drawBuffer(x, y, w, h, fill)
   file_var(0, postGainModulatorAmount);
   file_var(0, preGainModulator);
   file_var(0, preGainModulatorAmount);
+  file_var(0, oversamplingMode);
+
+  file_mem(0, marker_memory, MAX_MARKERS);
 
 @slider
 
@@ -606,6 +677,10 @@ function drawBuffer(x, y, w, h, fill)
   cPreGain    = preGain;
   cPostGain   = postGain;  
   
+  GAIN_MAX = 32;
+  GAIN_MIN = -32;
+  GAIN_RANGE = GAIN_MAX - GAIN_MIN;
+  
   /* Process modulators */
   ( positionModulator ) ? ( cPosition   = min( 1, max( 0, cPosition + positionModulatorAmount * chooseEnv(positionModulator) ) ) );
   ( sizeModulator )     ? ( cGrainSize  = min( GRAINMAX, max( GRAINMIN, cGrainSize + GRAINRANGE * sizeModulatorAmount * chooseEnv(sizeModulator) ) ) );
@@ -614,8 +689,11 @@ function drawBuffer(x, y, w, h, fill)
   ( F1ResModulator )    ? ( cReso1      = min( 1, max( 0, cReso1 + F1ResModulatorAmount * chooseEnv(F1ResModulator) ) ) );
   ( F2CutoffModulator ) ? ( cCutoff2    = min( 1, max( 0, cCutoff2 + F2CutoffModulatorAmount * chooseEnv(F2CutoffModulator) ) ) );
   ( F2ResModulator )    ? ( cReso2      = min( 1, max( 0, cReso2 + F2ResModulatorAmount * chooseEnv(F2ResModulator) ) ) );
-  ( preGainModulator )  ? ( cPreGain    = min( 4, max( 0, cPreGain + 4 * preGainModulatorAmount * chooseEnv(preGainModulator) ) ) );  
-  ( postGainModulator ) ? ( cPostGain   = min( 4, max( 0, cPostGain + 4 * postGainModulatorAmount * chooseEnv(postGainModulator) ) ) );  
+  ( preGainModulator )  ? ( cPreGain    = min( GAIN_MAX, max( GAIN_MIN, cPreGain + GAIN_RANGE * preGainModulatorAmount * chooseEnv(preGainModulator) ) ) );  
+  ( postGainModulator ) ? ( cPostGain   = min( GAIN_MAX, max( GAIN_MIN, cPostGain + GAIN_RANGE * postGainModulatorAmount * chooseEnv(postGainModulator) ) ) );  
+  
+  cPreGain = exp(.11512925464970228420089957273422*cPreGain); //log(10)/20
+  cPostGain = exp(.11512925464970228420089957273422*cPostGain); //log(10)/20
   
   /* Actual grain parameters */
   curPos  = 1-cPosition;
@@ -673,9 +751,11 @@ function drawBuffer(x, y, w, h, fill)
   spl1 = ( outR + grainsFeedback.R ) * cPostGain;
 
 @gfx
+  mouse.updateMouseState();
   graphicsIntensity = abs(sin(time_precise())); 
   
   /* Visual settings */
+  SLIDER_FONT = 4;
   ENVELOPE_FONT = 6;
   BUTTON_FONT = 7;
   KNOB_FONT = 5;
@@ -683,15 +763,27 @@ function drawBuffer(x, y, w, h, fill)
   KNOB_FONT2 = 5;
   HINT_FONT = 14;
   COMBO_SMALL = 13;
+  LINE_FONT = 15;
   gfx_setfont(ENVELOPE_FONT, "Arial", 10);
   gfx_setfont(BUTTON_FONT, "Arial", 10);
   gfx_setfont(KNOB_FONT, "Arial", 10);
   gfx_setfont(HINT_FONT, "Arial", 14);
   gfx_setfont(KNOB_FONT2, "Arial", 12);
   gfx_setfont(COMBO_SMALL, "Arial", 10);
+  gfx_setfont(LINE_FONT, "Tahoma", 14);
+  gfx_setfont(SLIDER_FONT, "Arial", 14);
   baseR = .3;
   baseG = .6;
   baseB = 1;
+  positionMarkerR = baseR;
+  positionMarkerG = baseG + 0.2;
+  positionMarkerB = baseB;
+  loopR = baseR + .4;
+  loopG = baseG + 1;
+  loopB = baseB;
+  playR = .4;
+  playG = .3;
+  playB = .8;
   selectionbutton_color_r = baseR;
   selectionbutton_color_g = baseG;
   selectionbutton_color_b = baseB;
@@ -779,29 +871,57 @@ function drawBuffer(x, y, w, h, fill)
   grains.grainDrawHeads(audioX, audioY, audioW, audioH, outBuffer.scopeptr);  
 
   /* Start / Stop loop indicators and controls */
+  selected_marker = -1;
   startBar.initRect(audioX, audioY, audioW, audioH);
   endBar.initRect(audioX, audioY, audioW, audioH);
-  gfx_set(baseR+1, baseG+1, baseB,.8);
-  startBar.vertBar(6, LoopStart, mouse_x, mouse_y, mouse_cap) ? ( 
+  gfx_set(loopR, loopG, loopB);
+  startBar.vertBar(6, LoopStart) ? ( 
     LoopStart = startBar.xpos;
     (LoopStart > LoopEnd) ? ( LoopEnd = LoopStart; );
+    selected_marker = -2;
   );
-  gfx_set(baseR+1, baseG+1, baseB,.8);
-  endBar.vertBar(6, LoopEnd, mouse_x, mouse_y, mouse_cap) ? (
+  gfx_set(baseR+.4, baseG+1, baseB,.8);
+  endBar.vertBar(6, LoopEnd) ? (
     LoopEnd = endBar.xpos;
     (LoopEnd < LoopStart) ? ( LoopStart = LoopEnd; );
-  );  
+    selected_marker = -2;    
+  );
   
   posBar.initRect(audioX, audioY, audioW, audioH);
-  LEnd = 1-LoopEnd;
-  LStart = 1-LoopStart;
+  LEnd = 1 - LoopEnd;
+  LStart = 1 - LoopStart;
   
-  gfx_set(.8, 0, .8,.8);
-  posBar.vertBar(6, (1-Position)*(LStart-LEnd) + LoopStart, mouse_x, mouse_y, mouse_cap) ? (
-    Position = 1 - (posBar.xpos - LoopStart) /(LStart-LEnd);
+  gfx_set(playR, playG, playB, 1.0);
+  posBar.vertBar(6, (1-Position)*(LStart-LEnd) + LoopStart) ? (
+    Position = 1 - (posBar.xpos - LoopStart) / (loopEnd - loopStart);
     Position > 1 ? Position = 1;
     Position < 0 ? Position = 0;
+    selected_marker = -2;
   );
+  
+  // Position markers
+  marker.initRect(audioX, audioY, audioW, audioH);
+  marker.memory = marker_memory;
+  
+  n_marker = marker_memory[]; idx = 0;
+  loop(n_marker,
+    selected_marker = marker.handleMarker(idx, selected_marker);
+    idx += 1;
+  );
+  
+  // Add / delete markers
+  marker.mouseInRect() ? (
+    mouse.rightClick ? (
+      selected_marker == -1 ? (
+        n_marker < (MAX_MARKERS - 1) ? (
+          marker.addMarker(idx);
+        );
+      ) : ( selected_marker > -1 ) ? (
+        marker.deleteMarker(selected_marker);
+      );
+    );
+  );
+  
   
   gfx_set(1,1,0,1);
   ( feedbackLevel > 0 ) && ( updateBuffer == 0 ) ? (
@@ -840,12 +960,45 @@ function drawBuffer(x, y, w, h, fill)
   storeToggle.label = "Store sample in preset";  
   storeSample = storeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
+  hqToggle.drawToggle(audioX+knobSize, audioY+3*knobSize, buttonSize, buttonSize, oversamplingMode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Read/Write sample in preset. Note: this increases load/save time\nand size of a preset considerably)..");
+  hqToggle.label = "HQ";  
+  oversamplingMode = hqToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
   bw = 16.5 * (1+scaling);
   bh = 12 * (1+scaling);
   crop.selectionButton(audioX+audioW-2.5*bw, audioY+.5*bh, 2*bw, bh, "CROP", selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Crop to loop");
   crop.selectionButton_draw();
   crop.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
 
+  // Draw lines on the envelopes
+  gfx_set(playR, playG, playB, 1.0);
+  positionModulator == 1 ? envWindow1.drawHorizontalLine(0, "") :
+  positionModulator == 2 ? envWindow2.drawHorizontalLine(0, "");
+  
+  gfx_set(positionMarkerR, positionMarkerG, positionMarkerB, 1.0);
+  n_marker = marker_memory[]; idx = 0;
+  position_tt = marker_memory[1];
+  loop(n_marker,
+    // Relative to loop
+    yloc = 1.0 - (marker_memory[1 + 2*idx] - LoopStart) /(LoopEnd - LoopStart);
+    envDist = positionModulatorAmount;
+    
+    positionModulatorAmount < 0 ? (
+      envDist = max(0.0 - position, positionModulatorAmount);
+    ) : (
+      envDist = min(1.0 - position, positionModulatorAmount);
+    );
+    yloc = (yloc - position) / envDist;//(1 - position);
+    
+    yloc < 1 && yloc > 0 ? (
+      sprintf(15, "%d", idx);
+      positionModulator == 1 ? envWindow1.drawHorizontalLine(yloc, 15) : 
+      positionModulator == 2 ? envWindow2.drawHorizontalLine(yloc, 15);
+    );
+    
+    idx += 1;
+  );
+  
   function memCpySlow( target, src, cnt )
   local(srcPtr, targetPtr)
   instance()
@@ -1017,11 +1170,11 @@ function drawBuffer(x, y, w, h, fill)
   /* Knob which controls the gain */
   xPos = col1;
   pregainKnob.active = 1;
-  pregainKnob.value  = preGain*.25;
+  pregainKnob.value  = (preGain - GAIN_MIN)/GAIN_RANGE;
   pregainKnob.value2 = preGainModulatorAmount;
   pregainKnob.noSegments = 1;
   pregainKnob.drawKnob(xPos, yPos, knobSize, "Pre-Gain", "Modify pre-gain.");
-  pregainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .25) ? slider_automate( preGain = pregainKnob.value*4 );
+  pregainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? slider_automate( preGain = GAIN_RANGE * pregainKnob.value + GAIN_MIN );
   
   /* Combobox to select envelope for gain modulator */
   preGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
@@ -1039,11 +1192,11 @@ function drawBuffer(x, y, w, h, fill)
   minl = -6;
   maxl = 0;
   postGainKnob.active = 1;
-  postGainKnob.value  = postGain*.25;
+  postGainKnob.value  = (postGain - GAIN_MIN)/GAIN_RANGE;
   postGainKnob.value2 = postGainModulatorAmount;
   postGainKnob.noSegments = 1;
   postGainKnob.drawKnob(xPos, yPos, knobSize, "Post-Gain", "Modify output gain.");
-  postGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? slider_automate( postGain = 4*postGainKnob.value );  
+  postGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? slider_automate( postGain = GAIN_RANGE * postGainKnob.value + GAIN_MIN );  
   
   /* Combobox to select envelope for gain modulator */
   postGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, "Select modulator." );
@@ -1114,7 +1267,7 @@ function drawBuffer(x, y, w, h, fill)
   
   /* Knob which controls the minimum shift for the octaver */
   xPos = col1;
-  octaverToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, Octaver, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable pitch following.\n\nEnabling this makes the pitch follow the last played MIDI note.");
+  octaverToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, Octaver, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable octaving.\n\nEnabling this makes the pitch randomize over octaves.");
   Octaver = octaverToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   octaveMinKnob.active = 1;
@@ -1284,8 +1437,3 @@ function drawBuffer(x, y, w, h, fill)
   gfx_getdropfile(-1);*/
   
   hinter.drawHint_draw();
-  
-  gfx_x = 0;
-  gfx_set(1,0,0,1);
-  gfx_y = gfx_h-10;
-  gfx_printf( "DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! DO NOT USE !!! ALPHA !!! SLIDERS WILL CHANGE !!! " );
