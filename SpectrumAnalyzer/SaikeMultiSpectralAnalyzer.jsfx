@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer
 tags: analysis FFT meter spectrum
-version: 4.01
+version: 4.02
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Bugfix dB display on mouse-click.
+changelog: Don't set color to 0 on init. Force update on init. Fix width of wrapping buttons.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -183,8 +183,8 @@ gfx_a         = 1;
 gfx_rectto(0.5*fftsize, 0.5*fftsize);
 gfx_dest      = -1;
 
-bgcolor         = 0;
 drawHz          = 0;
+update = 1;
 
 function init_memory_mapping()
 local(rpos, curshift, rpos, hsize, fftw, ibuf, csh)
@@ -383,6 +383,7 @@ latencyCompensation ? (
 
 @gfx 900 600
 initCh();
+
 gfx_ext_retina>1 ? gfx_setfont(1,"Arial",max(12,12*gfx_ext_retina),'b') : gfx_setfont(0);
 
 function proceed(val, h)
@@ -394,47 +395,67 @@ function proceed(val, h)
   gfx_y;
 );
 
-/* Button that wraps when there is insufficient space*/
-function draw_button_safe(yp, str, wcomp) 
-  instance(w,h,x,y) 
-  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y,gfx_a,bgcolor,slider8) 
-  local(xp)
+function str_add_measure(str)
+instance(w, h, bw, bh)
+global(reset_measurements)
+local(tw, th)
 (
-  gfx_measurestr(str, w, h);
-  xp = gfx_x - (w+3);
-  yp = proceed(wcomp+w+8, h+9);
-  xp = gfx_x - (w+3);
-  x=xp;
-  y=yp;
+  reset_measurements ? ( w = 0; h = 0; );
+  
+  gfx_measurestr(str, tw, th);
+  tw += 3;
+  tw > bw ? bw = tw;
+  th > bh ? bh = th;
+  w = bw + 3;
+  h = bh + 9;
+);
+
+function draw_button_core(x, y, bw, bh)
+local(xp)
+globals(bgcolor, gfx_a, gfx_x, gfx_y)
+instance()
+(
   gfx_set(bgcolor,bgcolor,bgcolor-.15*bgcolor);
-  w+=3;
-  h+=9;
-  gfx_rect(x,y,w,h);
+  gfx_rect(x, y, bw, bh);
 
   ( bgcolor == 1 ) ? (
     gfx_set(1-.4, 1-.6, 1-.8);
   ) : (
     gfx_set(0 * bgColor + 0.9 * ( 1 - bgColor ), 1 * bgColor + 0.9 * ( 1 - bgColor ),  1 * bgColor + 0.6 * ( 1 - bgColor ));  
   );
-  gfx_line(x,y,x+w,y);
-  gfx_line(x+w,y,x+w,y+h);
-  gfx_line(x,y+h,x+w,y+h);
-  gfx_line(x,y,x,y+h);
+  gfx_line(x, y,x + bw, y);
+  gfx_line(x + bw,y, x + bw,y + bh);
+  gfx_line(x, y + bh,x + bw,y + bh);
+  gfx_line(x, y, x, y + bh);
   
   gfx_a = .333333*gfx_a;
-  gfx_line(x-1,y+1,x+w+1,y+1);
-  gfx_line(x+w+1,y,x+w+1,y+h+1);
-  gfx_line(x,y+h+1,x+w,y+h+1);
-  gfx_line(x-1,y,x-1,y+h+1);
+  gfx_line(x-1,y+1,x+bw+1,y+1);
+  gfx_line(x+bw+1,y,x+bw+1,y+bh+1);
+  gfx_line(x,y+bh+1,x+bw,y+bh+1);
+  gfx_line(x-1,y,x-1,y+bh+1);
   gfx_a = 3*gfx_a;
+);
+
+/* Button that wraps when there is insufficient space*/
+function draw_button_wrap(yp, str, wcomp) 
+  instance(w, h, x, y, bw, bh)
+  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y,gfx_a,bgcolor,slider8) 
+  local(xp, wtxt, htxt)
+(
+
+  gfx_measurestr(str, wtxt, htxt);
+  xp = gfx_x - (w+3);
+  yp = proceed(wcomp+w+8, h);
+  xp = gfx_x - (w+3);
+  x=xp;
+  y=yp;
   
-  h+=1;
-  w+=1;
-  gfx_x=xp+2; gfx_y=yp+5;
+  draw_button_core(x, y, w+2, h);
+  gfx_x=floor(xp+2-.5*(wtxt-w)); gfx_y=yp+5;
   gfx_drawstr(str);
   gfx_x = xp - 8;
   
-  y+h
+  y + h + 1
 );
 
 function draw_button(xp, yp, str) 
@@ -448,32 +469,13 @@ function draw_button(xp, yp, str)
   gfx_set(bgcolor,bgcolor,bgcolor-.15*bgcolor);
   w+=3;
   h+=9;
-  gfx_rect(x,y,w,h);
-
-  ( bgcolor == 1 ) ? (
-    gfx_set(1-.4, 1-.6, 1-.8);
-  ) : (
-    gfx_set(0 * bgColor + 0.9 * ( 1 - bgColor ), 1 * bgColor + 0.9 * ( 1 - bgColor ),  1 * bgColor + 0.6 * ( 1 - bgColor ));  
-  );
-  gfx_line(x,y,x+w,y);
-  gfx_line(x+w,y,x+w,y+h);
-  gfx_line(x,y+h,x+w,y+h);
-  gfx_line(x,y,x,y+h);
   
-  gfx_a = .333333*gfx_a;
-  gfx_line(x-1,y+1,x+w+1,y+1);
-  gfx_line(x+w+1,y,x+w+1,y+h+1);
-  gfx_line(x,y+h+1,x+w,y+h+1);
-  gfx_line(x-1,y,x-1,y+h+1);
-  gfx_a = 3*gfx_a;
-  
-  h+=1;
-  w+=1;
+  draw_button_core(x, y, w, h);
   gfx_x=xp+2; gfx_y=yp+5;
   gfx_drawstr(str);
   gfx_x = xp;
   
-  y+h
+  y + h + 1
 );
 
 function draw_button_fixedWidth(xp, yp, iw, str) 
@@ -484,94 +486,15 @@ function draw_button_fixedWidth(xp, yp, iw, str)
   w = iw;
   gfx_measurestr(str, fw, h);
   xp -= w;
-  x=xp;
-  y=yp;
-  gfx_set(bgcolor,bgcolor,bgcolor-.15*bgcolor);
+  x = xp;
+  y = yp;
   h+=9;
-  gfx_rect(x,y,w,h);
-
-  ( bgcolor == 1 ) ? (
-    gfx_set(1-.4, 1-.6, 1-.8);
-  ) : (
-    gfx_set(0 * bgColor + 0.9 * ( 1 - bgColor ), 1 * bgColor + 0.9 * ( 1 - bgColor ),  1 * bgColor + 0.6 * ( 1 - bgColor ));  
-  );
-  gfx_line(x,y,x+w,y);
-  gfx_line(x+w,y,x+w,y+h);
-  gfx_line(x,y+h,x+w,y+h);
-  gfx_line(x,y,x,y+h);
-  
-  gfx_a = .333333*gfx_a;
-  gfx_line(x-1,y+1,x+w+1,y+1);
-  gfx_line(x+w+1,y,x+w+1,y+h+1);
-  gfx_line(x,y+h+1,x+w,y+h+1);
-  gfx_line(x-1,y,x-1,y+h+1);
-  gfx_a = 3*gfx_a;
+  draw_button_core(x, y, w, h);
   
   h+=1;
   w+=1;
   gfx_x=x+.5*(w-fw); gfx_y=yp+5;
   gfx_drawstr(str);
-  gfx_x = xp;
-  
-  y+h
-);
-
-function draw_button2(xp, yp, str, active, selected, solo, somethingsolo, coloridx)
-  instance(w,h,x,y,fade,cc) 
-  globals(gfx_r,gfx_g,gfx_b,gfx_x,gfx_y,gfx_a,slider8,bgcolor)
-(
-  gfx_measurestr(str, w, h);
-  xp -= w+6;
-  x=xp;
-  y=yp;
-  gfx_set(bgcolor,bgcolor,bgcolor-.15*bgcolor);
-  w+=10;
-  h+=10;
-  gfx_rect(x,y,w,h);
-  ( solo == 0 || somethingsolo > -1 ) ? active = active - 0;
-
-  cc = (10000 + 100*floor(slider8));
-  cc += 3 * coloridx; 
-  ( coloridx > -1 ) ? (
-    gfx_set(cc[0], cc[1], cc[2]);
-    gfx_a = 0.8;
-    gfx_rect(x, y+h,w,3);
-    gfx_a = .4;
-    gfx_rect(x, y, w, h);
-    gfx_a = 0.9;
-    gfx_rect(x-1, y+h+2,w+3,3);
-    gfx_a = 1;
-  );
-  
-  fade = .7+1 * active;  
-  ( bgcolor == 1 ) ? (
-    gfx_set(1-.4*fade+.8*solo, 1-.6*fade+.5*selected, 1-.8*fade);
-  ) : (
-    gfx_set(.4*fade+.8*solo, .6*fade+.5*selected, .8*fade);
-  );
-  gfx_line(x,y,x+w,y);
-  gfx_line(x+w,y,x+w,y+h);
-  gfx_line(x,y+h,x+w,y+h);
-  gfx_line(x,y,x,y+h);
-  selected == 1 ? (
-    gfx_line(x+1,y,x+1,y+h);
-    gfx_line(x,y+h-1,x+w,y+h-1);
-    gfx_line(x,y+1,x+w,y+1);
-    gfx_line(x+w-1,y,x+w-1,y+h);
-  );
-  
-  gfx_a = .333333*gfx_a;
-  gfx_line(x-1,y+1,x+w+1,y+1);
-  gfx_line(x+w+1,y,x+w+1,y+h+1);
-  gfx_line(x,y+h+1,x+w,y+h+1);
-  gfx_line(x-1,y,x-1,y+h+1);
-  gfx_a = 3*gfx_a;
-  
-  h+=1;
-  w+=1;
-  gfx_x=xp+5; gfx_y=yp+6;
-  gfx_drawstr(str);
-  gfx_x = xp;
   
   y+h
 );
@@ -1578,7 +1501,6 @@ instance()
               phase_button.hit_button(mouse_x,mouse_y,-1) ? ( slider3=!slider3; slider_automate(slider3); old_w = 0; );
               theme_button.hit_button(mouse_x,mouse_y,-1) ? ( slider43=!slider43; slider_automate(slider43); old_w = 0; );
               grid_button.hit_button(mouse_x,mouse_y,-1) ? ( slider39=!slider39; slider_automate(slider39); old_w = 0; );
-              background_button.hit_button(mouse_x,mouse_y,30);
               gridAlpha_button.hit_button(mouse_x,mouse_y,31);
             );
           );
@@ -1600,6 +1522,7 @@ instance()
                  slider42 == 0 ? colormap.hit_button(mouse_x,mouse_y,7);              
                  slider42 == 0 ? smoothing_button.hit_button(mouse_x,mouse_y,6);
                  slider42 == 0 ? alphalevel.hit_button(mouse_x,mouse_y,28);
+                 slider42 == 0 ? background_button.hit_button(mouse_x,mouse_y,30);                 
                  slider42 == 0 ? sonoScale.hit_button(mouse_x,mouse_y,10) ? :
                  slider42 == 0 ? smoothing_type.hit_button(mouse_x,mouse_y,45);
                 
@@ -1775,31 +1698,46 @@ function DrawButtons()
     
     gfx_y = 8;
     slider42 == 0 ? (
-      fft_button.draw_button_safe(gfx_y, sprintf(#,"FFT: %d",16<<slider1), storeBX);
-      window_button.draw_button_safe(gfx_y, 
+      fft_button.str_add_measure("FFT 32768");
+      fft_button.draw_button_wrap(gfx_y, sprintf(#,"FFT: %d",16<<slider1), storeBX);
+      window_button.str_add_measure("Blackman-Harris");
+      window_button.draw_button_wrap(gfx_y, 
                         (slider4|0)==1 ? "Hamming" :  
                         (slider4|0)==2 ? "Blackman-Harris" :
                         (slider4|0)==3 ? "Blackman" : 
                         (slider4|0)==4 ? "Rectangular":
                           "Flat-top", storeBX);
     
-      floor_button.draw_button_safe(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), storeBX);
-      slope_button.draw_button_safe(gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38), storeBX);
-      smoothing_button.draw_button_safe(gfx_y,sprintf(#,"Smoothing: %.1f",smoothing), storeBX);
-      smoothing_type.draw_button_safe(gfx_y, 
+      floor_button.str_add_measure("Floor: 888.8 dB");
+      floor_button.draw_button_wrap(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), storeBX);
+      slope_button.str_add_measure("Slope: 8.8 dB/oct");
+      slope_button.draw_button_wrap(gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38), storeBX);
+      smoothing_button.str_add_measure("Smoothing: 888.8");
+      smoothing_button.draw_button_wrap(gfx_y,sprintf(#,"Smoothing: %.1f",smoothing), storeBX);
+      smoothing_type.str_add_measure("Average");
+      smoothing_type.str_add_measure("Maximum");
+      smoothing_type.str_add_measure("LOESS");
+      smoothing_type.str_add_measure("Adaptive");
+      smoothing_type.draw_button_wrap(gfx_y, 
                         (slider45|0)==0 ? "Average" :  
                         (slider45|0)==1 ? "Maximum" :
                         (slider45|0)==2 ? "LOESS" : 
                         (slider45|0)==3 ? "Adaptive" :
                           "Fast", storeBX);
+                          
+      integrate_button.str_add_measure("Maxtime: 888ms");
+      integrate_button.str_add_measure("Integrate: 8888ms");
       maxIntegrate ? ( 
-        integrate_button.draw_button_safe(gfx_y, sprintf(#,"Maxtime: %dms",slider5|0), storeBX);
+        integrate_button.draw_button_wrap(gfx_y, sprintf(#,"Maxtime: %dms",slider5|0), storeBX);
       ) : (
-        integrate_button.draw_button_safe(gfx_y, sprintf(#,"Integrate: %dms",slider5|0), storeBX);      
+        integrate_button.draw_button_wrap(gfx_y, sprintf(#,"Integrate: %dms",slider5|0), storeBX);      
       );
       
-      integration_type_button.draw_button_safe(gfx_y, maxIntegrate ? "Max" : "Int", storeBX);
-      show_side_button.draw_button_safe(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
+      integration_type_button.str_add_measure("Max");
+      integration_type_button.str_add_measure("Int");
+      integration_type_button.draw_button_wrap(gfx_y, maxIntegrate ? "Max" : "Int", storeBX);
+      show_side_button.str_add_measure("Mid/Side");
+      show_side_button.draw_button_wrap(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
     );
           
   gfx_measurestr("^^:: THEMES ::^^", themeW, themeH);
@@ -1949,7 +1887,7 @@ function DrawButtons()
       slider39 == 1 ? ( postOptions = gridAlpha_button.draw_button_fixedWidth(gfx_w-10, postOptions+buttonPad, hideTxtW, sprintf(#,"^ Alpha: %.1f ^" ,slider40)) );
       
       postSono = sonogram_button.draw_button_fixedWidth(gfx_w-10, postOptions + 4*buttonPad, hideTxtW, slider29==1?">>   Hide   >>" : slider29==0?"<    Time    >" : "<  Sonogram  |");
-      slider29 == 0 ? ( sonoLog.draw_button2_fixedWidth(gfx_w-10, postSono+buttonPad, sonoTxtW, "Log(Sonogram)", slider33, 0, 0, 0, -1) );
+      slider29 == 0 ? ( sonoLog.draw_button2_fixedWidth(gfx_w-10, postSono+buttonPad, hideTxtW, "Log(Sonogram)", slider33, 0, 0, 0, -1) );
     );
     
   slider29 == 2 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
