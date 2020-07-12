@@ -24,6 +24,29 @@ Features:
 - Diffusion: Spectral blur.
 - Ice: Chops small bandwidth bits from the energy at random, and copies them to a higher frequency (at 1x or 2x the frequency), thereby giving narrowband high frequency sounds (sounding very cold).
 
+# FM Filter
+![FMFilter](https://imgur.com/iFOhQAd.png)
+
+FM modulated filter. Good for making monophonic bass sounds chunkier. 
+
+It has two main modes:
+
+1. MIDI
+In this mode it is mostly meant as a filter to put behind a bass synth. If you do, make sure you also send the MIDI signals to this filter as it has the ability to follow notes (adjusting the cutoff for each note) and it performs FM modulation based on the incoming pitch of the MIDI note. Basically, what it does is alternate the cutoff at audio rates (if FM level is bigger than 0). Also, the envelope is triggered by MIDI.
+
+2. Audio
+In this mode it's more for wreaking havoc. It can either modulate the cutoff frequency with its own signal (the self modes) or it can take a modulation signal from input 3/4 (either working in stereo 3/4 or mono 3+4).
+
+Here's a small demo of the MIDI mode. First few seconds are dry, then wet. It can sound a bit talky:
+https://soundcloud.com/saike/fm-filter-test/s-0uQ3xx0Xuln
+
+Features:
+- 2 linear, 4 non-linear filters.
+- All filters are mode morph-able (morph between LP, BP, HP, BR, LP).
+- Basic decay envelope.
+- Audio rate cutoff modulation.
+- Basic LFO modulation.
+
 # SatanVerb
 ![SatanUI](https://i.imgur.com/JLXFrOH.png)
 
