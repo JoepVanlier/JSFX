@@ -1,8 +1,8 @@
 desc:Saike FM Filter
 tags: audio-rate filters
-version: 0.11
+version: 0.14
 author: Joep Vanlier
-changelog: Improve 303 gain and resonance scaling to be more in line with other filters.
+changelog: Add distortion module.
 license: MIT
 provides:
   FMFilter_Dependencies/*
@@ -15,6 +15,7 @@ Loop Implementation Method". IEEE Trans. Audio,Speech, and Lang. Process., vol. 
 
 import Saike_FMF_midilib.jsfx-inc
 import Saike_FMF_widgets.jsfx-inc
+import Saike_FMF_distortion.jsfx-inc
 
 in_pin:left input
 in_pin:right input
@@ -54,6 +55,9 @@ slider28:fm_cutoff=1<0,1,.0001>-FM Cutoff
 
 slider29:env_amnt=0<-1,1,.0001>-Envelope Amount
 slider30:env_decay=0<0,1,.0001>-Decay [ms]
+
+slider31:current_ceiling=0<0,48,1>-Distortion level [dB]
+slider32:warmth=0<-12,12,1>-Warmth
 
 slider60:oversampling=1<1,8,1>-Oversampling
 
@@ -690,6 +694,9 @@ function eval_linearSVF_BR(v0)
     morph_phase_interpolator.interpolator_init(19);
     cutoff_phase_interpolator.interpolator_init(22);
     
+    current_ceiling_interpolator.interpolator_init(31);
+    warmth_interpolator.interpolator_init(32);
+     
     (last_inertia != inertia) ? (
       last_inertia = inertia;
       inertia_cutoff = 1000.0/inertia;
@@ -700,11 +707,17 @@ function eval_linearSVF_BR(v0)
       gain_interpolator.initialize_smoother(inertia_cutoff);
       morph_phase_interpolator.initialize_smoother(inertia_cutoff);
       cutoff_phase_interpolator.initialize_smoother(inertia_cutoff);
+      current_ceiling_interpolator.initialize_smoother(inertia_cutoff);
+      warmth_interpolator.initialize_smoother(inertia_cutoff);
       cutoff_interpolator.s = slider(13);
       reso_interpolator.s = slider(14);
       morph_interpolator.s = slider(15);
+      drive_interpolator.s = slider(1);
+      gain_interpolator.s = slider(2);
       morph_phase_interpolator.s = slider(19);
       cutoff_phase_interpolator.s = slider(22);
+      current_ceiling_interpolator.s = slider(31);
+      warmth_interpolator.s = slider(32);
       change += 1;
     );
   );
@@ -1187,6 +1200,8 @@ israte = 2.0*$pi/srate;
 @serialize
 file_var(0, m_lfo_sync);
 file_var(0, c_lfo_sync);
+file_var(0, shaper);
+file_var(0, higain);
 
 @block
     updateTempo();
@@ -1200,6 +1215,8 @@ file_var(0, c_lfo_sync);
     gain_interpolator.interpolator_block();
     morph_phase_interpolator.interpolator_block();
     cutoff_phase_interpolator.interpolator_block();
+    current_ceiling_interpolator.interpolator_block();
+    warmth_interpolator.interpolator_block();
     
    // Update the oversampling filters when needed.
    ( oversampling != lastOversample ) ? 
@@ -1277,7 +1294,37 @@ file_var(0, c_lfo_sync);
       // LP is last and first
       s = LP.eval_linearSVF_LP(s)
     );
-  );  
+  );
+  
+  function processSample()
+  (
+    filter_type == 0 ? (
+      ssl = L.processSample_lin(ssl, filter_choiceL) * i_morphL + L.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
+      ssr = R.processSample_lin(ssr, filter_choiceR) * i_morphR + R.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
+    ) : ( filter_type == 1 ) ? (
+      ssl = L.processSample_ms20(ssl, filter_choiceL) * i_morphL + L.processSample_ms20(ssl, filter_choiceL + 1) * frac_morphL;
+      ssr = R.processSample_ms20(ssr, filter_choiceR) * i_morphR + R.processSample_ms20(ssr, filter_choiceR + 1) * frac_morphR;
+    ) : ( filter_type == 2 ) ? (
+      ssl = L.processSample_lin(ssl, filter_choiceL) * i_morphL + L.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
+      ssr = R.processSample_lin(ssr, filter_choiceR) * i_morphR + R.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
+      ssl = L2.processSample_lin(ssl, filter_choiceL) * i_morphL + L2.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
+      ssr = R2.processSample_lin(ssr, filter_choiceR) * i_morphR + R2.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
+    ) : ( filter_type == 3 ) ? (
+      ssl = L.moog.mix_moog(ssl, filter_choiceL, frac_morphL);
+      ssr = R.moog.mix_moog(ssr, filter_choiceR, frac_morphR);
+    ) : ( filter_type == 4 ) ? (
+      ssl = L.moog2.mix_moog2(ssl, filter_choiceL, frac_morphL);
+      ssr = R.moog2.mix_moog2(ssr, filter_choiceR, frac_morphR);
+    ) : ( filter_type == 5 ) ? (
+      ssl = L.b303.eval_303(ssl, filter_choiceL, frac_morphL);
+      ssr = R.b303.eval_303(ssr, filter_choiceR, frac_morphR);
+    );
+    
+    ssl *= inv_preamp;
+    ssr *= inv_preamp;
+    
+    shaper ? processShaper();
+  );
 
   log10d20_conversion  = .11512925464970228420089957273422;
    
@@ -1424,6 +1471,10 @@ file_var(0, c_lfo_sync);
   frac_morphR = sliderMorphR*4 - filter_choiceR;
   i_morphR = 1.0 - frac_morphR;
   
+  shaper ? (
+    sat_slider_update(current_ceiling_interpolator.interpolate(), warmth_interpolator.interpolate(), oversampling);
+  );
+  
   ( oversampling > 1 ) ? (
     sincFilterL.advanceSinc(spl0);
     sincFilterR.advanceSinc(spl1);
@@ -1432,27 +1483,7 @@ file_var(0, c_lfo_sync);
       ssl = sincFilterL.getSubSample();
       ssr = sincFilterR.getSubSample();
       
-      filter_type == 0 ? (
-        ssl = L.processSample_lin(ssl, filter_choiceL) * i_morphL + L.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
-        ssr = R.processSample_lin(ssr, filter_choiceR) * i_morphR + R.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
-      ) : ( filter_type == 1 ) ? (
-        ssl = L.processSample_ms20(ssl, filter_choiceL) * i_morphL + L.processSample_ms20(ssl, filter_choiceL + 1) * frac_morphL;
-        ssr = R.processSample_ms20(ssr, filter_choiceR) * i_morphR + R.processSample_ms20(ssr, filter_choiceR + 1) * frac_morphR;
-      ) : ( filter_type == 2 ) ? (
-        ssl = L.processSample_lin(ssl, filter_choiceL) * i_morphL + L.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
-        ssr = R.processSample_lin(ssr, filter_choiceR) * i_morphR + R.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
-        ssl = L2.processSample_lin(ssl, filter_choiceL) * i_morphL + L2.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
-        ssr = R2.processSample_lin(ssr, filter_choiceR) * i_morphR + R2.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
-      ) : ( filter_type == 3 ) ? (
-        ssl = L.moog.mix_moog(ssl, filter_choiceL, frac_morphL);
-        ssr = R.moog.mix_moog(ssr, filter_choiceR, frac_morphR);
-      ) : ( filter_type == 4 ) ? (
-        ssl = L.moog2.mix_moog2(ssl, filter_choiceL, frac_morphL);
-        ssr = R.moog2.mix_moog2(ssr, filter_choiceR, frac_morphR);
-      ) : ( filter_type == 5 ) ? (
-        ssl = L.b303.eval_303(ssl, filter_choiceL, frac_morphL);
-        ssr = R.b303.eval_303(ssr, filter_choiceR, frac_morphR);
-      );
+      processSample();
       
       sincDownL.advanceHist(ssl);
       sincDownR.advanceHist(ssr);
@@ -1461,31 +1492,19 @@ file_var(0, c_lfo_sync);
     spl0 = sincDownL.sincDownSample();
     spl1 = sincDownR.sincDownSample();
   ) : (
-    filter_type == 0 ? (
-      spl0 = L.processSample_lin(spl0, filter_choiceL) * i_morphL + L.processSample_lin(spl0, filter_choiceL + 1) * frac_morphL;
-      spl1 = R.processSample_lin(spl1, filter_choiceR) * i_morphR + R.processSample_lin(spl1, filter_choiceR + 1) * frac_morphR;
-    ) : ( filter_type == 1 ) ? (
-      spl0 = L.processSample_ms20(spl0, filter_choiceL) * i_morphL + L.processSample_ms20(spl0, filter_choiceL + 1) * frac_morphL;
-      spl1 = R.processSample_ms20(spl1, filter_choiceR) * i_morphR + R.processSample_ms20(spl1, filter_choiceR + 1) * frac_morphR;
-    ) : ( filter_type == 2 ) ? (
-      spl0 = L.processSample_lin(spl0, filter_choiceL) * i_morphL + L.processSample_lin(spl0, filter_choiceL + 1) * frac_morphL;
-      spl1 = R.processSample_lin(spl1, filter_choiceR) * i_morphR + R.processSample_lin(spl1, filter_choiceR + 1) * frac_morphR;
-      spl0 = L2.processSample_lin(spl0, filter_choiceL) * i_morphL + L2.processSample_lin(spl0, filter_choiceL + 1) * frac_morphL;
-      spl1 = R2.processSample_lin(spl1, filter_choiceR) * i_morphR + R2.processSample_lin(spl1, filter_choiceR + 1) * frac_morphR;
-    ) : ( filter_type == 3 ) ? (
-      spl0 = L.moog.mix_moog(spl0, filter_choiceL, frac_morphL);
-      spl1 = R.moog.mix_moog(spl1, filter_choiceR, frac_morphR);
-    ) : ( filter_type == 4 ) ? (
-      spl0 = L.moog2.mix_moog2(spl0, filter_choiceL, frac_morphL);
-      spl1 = R.moog2.mix_moog2(spl1, filter_choiceR, frac_morphR);
-    ) : ( filter_type == 5 ) ? (
-      spl0 = L.b303.eval_303(spl0, filter_choiceL, frac_morphL);
-      spl1 = R.b303.eval_303(spl1, filter_choiceR, frac_morphR);
-    );
+    ssl = spl0;
+    ssr = spl1;
+    
+    processSample();
+    
+    spl0 = ssl;
+    spl1 = ssr;
   );
   
-  spl0 *= inv_preamp;
-  spl1 *= inv_preamp;
+  shaper ? (  
+    spl0 = dc0.eval_HP6(spl0);
+    spl1 = dc1.eval_HP6(spl1);
+  );
   
   autokill ? (
     spl0 *= term;
@@ -1718,9 +1737,37 @@ fmPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
   slider_automate(fm_spread);
 );
 
-cX += 2.5 * knobSize;
 
-cX += 1.5 * knobSize;
+showOptions = 1;
+showOptions ? (
+  cX += 3.75 * knobSize;
+  drawPanel("OPTIONS", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
+  oversamplingKnob.active = 1;
+  oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
+    oversamplingKnob.value = (oversampling - 1) / 7;
+  );
+  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "", 1.0);
+  oversamplingKnob.label = sprintf(7, "x%d", oversampling);
+  oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
+    newOversampling = floor(oversamplingKnob.value * 7 + 1);
+    floor(newOversampling) != overSampling ? (
+      oversampling = newOversampling;
+      slider_automate(oversampling);
+      updateSlider();
+    );
+  );
+  
+  cX += 2.5 * knobSize;
+  inertiaKnob.active = 1;
+  inertiaKnob.value = inertia / 200;
+  inertiaKnob.label = sprintf(8, "%d ms", inertia);
+  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "", 1.0);
+  inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
+    inertia = inertiaKnob.value * 200;
+    slider_automate(inertia);
+  );
+);
+
 
 
 cX = xOrigin;
@@ -1831,32 +1878,36 @@ morphLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
 );
 
 cX += 3.5 * knobSize;
-drawPanel("OPTIONS", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
-oversamplingKnob.active = 1;
-oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
-  oversamplingKnob.value = (oversampling - 1) / 7;
-);
-oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "", 1.0);
-oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
-  newOversampling = floor(oversamplingKnob.value * 7 + 1);
-  floor(newOversampling) != overSampling ? (
-    oversampling = newOversampling;
-    slider_automate(oversampling);
-    updateSlider();
-  );
+
+drawPanel("DISTORTION", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
+
+shaperToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, shaper, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Modulate gain by pitch.\nGives a more analog feel.");
+shaper = shaperToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+higainToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, higain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "High gain mode.");
+higain = higainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+distKnob.active = shaper;
+distKnob.value = current_ceiling / 48;
+distKnob.label = sprintf(1, "%.1f dB", current_ceiling);
+distKnob.drawKnob(cX, cY, knobSize, "Distortion", "Distortion level\n\nDistortion applied post-filter.", 0);
+distKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
+  current_ceiling = distKnob.value * 48;
+  slider_automate(current_ceiling);
 );
 
 cX += 2.5 * knobSize;
 
-inertiaKnob.active = 1;
-inertiaKnob.value = inertia / 200;
-inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "", 1.0);
-inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
-  inertia = inertiaKnob.value * 200;
-  slider_automate(inertia);
+warmthKnob.active = shaper;
+warmthKnob.value = (warmth + 12) / 24;
+warmthKnob.drawKnob(cX, cY, knobSize, "Warmth", "Distortion warmth.\n\nApplies pre- and post-emphasis filters.", .5);
+warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  warmth = warmthKnob.value * 24 - 12;
+  slider_automate(warmth);
 );
 
 
+//warmth
 
 
 

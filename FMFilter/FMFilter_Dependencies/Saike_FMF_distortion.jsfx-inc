@@ -1,0 +1,181 @@
+@init
+
+  function tanh(x)
+  local()
+  global()
+  instance()
+  (
+    2/(1+exp(-2*x)) - 1
+  );
+
+  /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
+  function init_HP6(freq)
+    global(srate)
+    local(res)
+    instance(g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      g = tan( $pi * freq );
+      
+      k1  = 1.93185165257814; // sqrt(2+sqrt(3))
+      a1_1 = 1/(1+g*(g+k1));
+      
+      k2 = 1.41421356474619; // sqrt(2)
+      a1_2 = 1/(1+g*(g+k2));
+      
+      k3 = 0.517638090205042; // sqrt(2-sqrt(3))
+      a1_3 = 1/(1+g*(g+k3));
+      
+      a2_1 = g*a1_1;
+      a2_2 = g*a1_2;
+      a2_3 = g*a1_3;
+    );
+
+  function eval_HP6(v0)
+    global()
+    local(v1, v2, hp)
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq,
+             g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      v1 = a1_1 * ic1eq + a2_1*(v0-ic2eq);
+      v2 = ic2eq + g*v1;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;
+      hp    = v0 - k1*v1 - v2;
+      
+      v1 = a1_2 * ic3eq + a2_2*(hp-ic4eq);
+      v2 = ic4eq + g*v1;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      hp    = hp - k2*v1 - v2;
+      
+      v1 = a1_3 * ic5eq + a2_3*(hp-ic6eq);
+      v2 = ic6eq + g*v1;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;
+      
+      hp    = hp - k3*v1 - v2;
+    );   
+
+  function init_tilt(freq, res, A)
+    global(srate)
+    local(g, k)
+    instance(ic1eq, ic2eq, A, a1, a2, a3, m0, m1, m2)
+    (
+      g = tan(.5 * $pi * freq) / sqrt(A);
+      k = 2 - 2*res;
+      
+      a1 = 1/(1+g*(g+k));
+      a2 = g*a1;
+      a3 = g*a2;
+      
+      m0 = 1;
+      m1 = k*(A-1);
+      m2 = (A*A - 1);
+    );
+
+  function eval_tilt(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3*v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;    
+      
+      (v0 + m1 * v1 + m2 * v2)
+    ); 
+
+function sat_slider_update(current_ceiling, warmth, oversampling)
+(
+  log10d20_conversion = .11512925464970228420089957273422;
+  ceiling     = exp(log10d20_conversion * current_ceiling);
+  inv_ceiling = 1.0 / ceiling;
+  omega_tilt = 3200.0 / (srate * oversampling);
+  
+  higain ? (
+    higain_factor = 1.0/(2.5*tanh(.5*ceiling)*(1+.007*ceiling));
+  ) : (
+    lowgain_factor = inv_ceiling*(1+.02*ceiling);
+  );
+  
+  (warmth != last_warmth) || (omega_tilt != last_omega_tilt) ? (
+    last_warmth = warmth;
+    last_omega_tilt = omega_tilt;
+    tilt_gain = 10^(warmth / 20);
+    inverse_tilt_gain = 1.0 / tilt_gain;
+    l_tilt.init_tilt(omega_tilt, 0, tilt_gain);
+    r_tilt.init_tilt(omega_tilt, 0, tilt_gain);
+    l_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
+    r_itilt.init_tilt(omega_tilt, 0, inverse_tilt_gain);
+  );
+);
+
+function processChannelSaturator(x)
+local(cterm, indep,
+      p0, p1, p2, p3, p4, p5, p6, p7)
+global()
+(
+    p0 = -0.43497619473852767;
+    p1 = -0.5460978062661744;
+    p2 = -0.9288977638330088;
+    p3 = -1.8931725230583496;
+    p4 = -1.901829522587536;
+    p5 = -0.7951494375999134;
+    p6 = -0.35701520925330404;
+    
+    indep = p2 + p3*x + p6*x*x;
+    cterm = indep < 0 ? 1 : cterm > $pi ? -1 : cos(indep);
+    p4 * tanh(p0 + p1*x) + p5 * cterm
+);
+
+function heavyDistortion(x)
+local(dt, dl)
+global(oversampling, srate)
+instance(lastin, lastx, intx)
+(
+  /* Power */
+  dt = 44100/overSampling/srate;
+  
+  // Find zero crossings
+  /* dl contains spikes corresponding to direction changes */
+  x = tanh(8*(x-.005));
+  dl = ((x - lastin))*oversampling;
+  lastin = x;
+
+  // Determine the slow and the fast response
+  lastx = lastx + .1*(dl-lastx)/overSampling;
+  intx = intx + .01625*dt*(.25*x-intx)*(1+5.5*abs(intx));
+        
+  2*lastx+intx
+);
+
+function processShaper()
+(
+  ssl = ceiling*ssl;
+  ssr = ceiling*ssr;
+  
+  // De-emphasize before for warmth
+  warmth != 0 ? (
+    ssl=l_itilt.eval_tilt(ssl)*tilt_gain;
+    ssr=r_itilt.eval_tilt(ssr)*tilt_gain;
+  );
+  
+  higain ? (
+    ssl = higainl.heavyDistortion(ssl)*higain_factor;
+    ssr = higainr.heavyDistortion(ssr)*higain_factor;
+  ) : (
+    ssl = processChannelSaturator(ssl)*lowgain_factor;
+    ssr = processChannelSaturator(ssr)*lowgain_factor;
+  );
+  
+  // Re-emphasize before for warmth
+  warmth != 0 ? (
+    ssl=l_tilt.eval_tilt(ssl)*inverse_tilt_gain;
+    ssr=r_tilt.eval_tilt(ssr)*inverse_tilt_gain;
+  );
+);
+
+dc0.init_HP6(7/srate);
+dc1.init_HP6(7/srate);
