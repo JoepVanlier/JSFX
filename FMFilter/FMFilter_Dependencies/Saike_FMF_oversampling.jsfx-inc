@@ -1,0 +1,204 @@
+@init
+  // UP / DOWNSAMPLING
+  // Generate windowed sinc filter at memory location FIR
+  // Inputs are:
+  //    fir   - Memory location to store windowed sinc
+  //    nt    - Number of taps
+  //    bw    - Fractional bandwidth
+  //     g    - Gain
+  function sinc(fir, nt, bw, g)
+    local(a, ys, yg, yw, i, pibw2, pifc2, pidnt2, hnt)
+    global()
+    (
+      pibw2   = 2.0*$pi*bw;
+      pidnt2  = 2.0*$pi/nt;
+      hnt     = 0.5*nt;
+      i       = 1;
+          
+      loop(nt-1,
+        // Sinc width
+        a  = (i - hnt) * pibw2;
+          
+        // Sinc
+        ys = (a != 0) ? sin(a)/a : 1.0;
+   
+        // Window gain
+        yg = g * (4.0 * bw);
+          
+        // Hamming window (could be replaced with Kaiser in the future)
+        yw = 0.54 - 0.46 * cos(i * pidnt2);
+           
+        // Calc FIR coeffs
+        fir[i-1] = yw * yg * ys;
+        
+        i += 1;
+      );
+    );
+  
+  // Generate sinc filters for a specific upsampling ratio
+  //
+  // Upsampling leads to a sample followed by N-1 zeroes. Hence 
+  // to compute each subsample, we only need 1/Nth of the taps.
+  // This is why we set up a specific filter for each subsample.
+  // i.e. for N=4, you get something like f1*Zn + f5*Zn-1 + ...
+  //
+  // Inputs:
+  //    N_in            - oversampling factor
+  //    tapsPerFilter   - Taps per subfilter (should be 8 in this implementation)
+  //    targetmem       - Location to store the coefficients
+  //    tmp             - Working memory
+  function updateSincFilter(N_in, tapsPerFilter, targetmem, tmp)
+    local(nHist, iFilt, nTaps)
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N, delta)
+    global()
+    (
+      N       = N_in;
+      nHist   = tapsPerFilter;
+      loc     = 0;
+      coeffs  = targetmem;
+      nTaps   = N*nHist;
+      
+      // Memory being set is conservatively large.
+      memset(coeffs,0,10000);
+      memset(tmp,0,10000);
+      
+      sinc(tmp, nTaps, .5/N, .5*N);
+      
+      // Divide sinc over the different filters
+      iFilt = 0; // Filter idx for which subsample this filter is
+      delta = 0; // Sample idx
+      loop(nTaps,
+        coeffs[delta + iFilt*100] = tmp[];
+        iFilt += 1;
+        iFilt == N ? ( iFilt = 0; delta += 1 );
+        tmp += 1;
+      );
+    );
+  
+  // Generate downsample filter
+  // Here, the full N*nHist tap filter has to be evaluated for every sample, 
+  // but only every Nth sample has to be evaluated.
+  function updateSincDownsampleFilter(N_in, nTaps_in, histmem, coeffmem)
+    global()
+    instance(hist, hend, hptr, coeffs, loc, N, delta, nTaps)
+    local()
+    (
+      N       = N_in;
+      hist    = histmem;
+      coeffs  = coeffmem;
+      nTaps   = nTaps_in;
+      hptr    = hist;
+      hend    = hist + nTaps;
+      
+      memset(coeffs,0,10000);
+      sinc(coeffs, nTaps, .5/N, .5);
+    );
+    
+  function advanceHist(sample)
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, nTaps)
+    (
+      hptr += 1;
+      ( hptr == hend ) ? hptr = hist;
+      hptr[] = sample;
+    );
+  
+  function sincDownSample()
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, hm1, hptr2, out, cfptr)
+    (
+      hm1   = hist-1;
+      hptr2 = hptr;
+      cfptr = coeffs;
+      out   = 0;
+      
+      loop(nTaps,
+        out = out + hptr2[] * cfptr[];
+        
+        cfptr += 1;
+        hptr2 -= 1;
+        ( hptr2 == hm1 ) ? hptr2 = hend-1;
+      );
+      
+      out
+    );
+  
+  function resetSincDown()
+    global()
+    instance(hist, hptr, hend, coeffs, loc, N, delta, nTaps)
+    local(nHist, hm1, hptr2)
+    (
+      hm1   = hist-1;
+      hptr2 = hptr;
+      
+      loop(nTaps,
+        hptr2[] = 0;
+        
+        hptr2 -= 1;
+        ( hptr2 == hm1 ) ? hptr2 = hend-1;
+      );
+    );
+  
+  // Maintain input sample history. Hardcoded for speed.
+  // Note h7 is omitted because for integer upsampling it is always zero!
+  function advanceSinc(sample)
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt)
+    (
+      h6 = h5;
+      h5 = h4;
+      h4 = h3;
+      h3 = h2;
+      h2 = h1;
+      h1 = h0;
+      h0 = sample;
+      loc = 0;
+    );
+  
+  function resetSincUp()
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt)
+    (
+      h0 = h1 = h2 = h3 = h4 = h5 = h6 = 0;
+    );
+  
+  // Note h7 is omitted because for integer upsampling it is always zero!
+  function getSubSample()
+    instance(h0, h1, h2, h3, h4, h5, h6, coeffs, loc, N)
+    global()
+    local(filt, out)
+    (
+      filt = coeffs + loc;
+      out =  filt[] * h0 + filt[1] * h1 + filt[2] * h2 + filt[3] * h3 + filt[4] * h4 + filt[5] * h5 + filt[6] * h6;
+  
+      loc += 100;
+      out
+    );
+
+  function inputFilter(sample)
+    instance(len, d1, d2, d3, d4, o1, o2, o3, o4, a1, a2, b0, b1, b2)
+    local (out)
+    global ()
+    (
+      out  = sample*b0 + d1*b1 + d2*b2 - d3*a1 - d4*a2;
+      d2   = d1;
+      d1   = sample;
+      d4   = d3;
+      d3   = out;
+    );
+  
+  function outputFilter(sample)
+    instance(len, d1, d2, d3, d4, o1, o2, o3, o4, a1, a2, b0, b1, b2)
+    local (out)
+    global ()
+    (
+      out = sample*b0 + o1*b1 + o2*b2 - o3*a1 - o4*a2;
+      o2  = o1;
+      o1  = sample;
+      o4  = o3;
+      o3  = out;
+    );
