@@ -1,11 +1,12 @@
-desc:Yutani Mono Bass Synth [Saike]
+desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Added MIDI velocity based modulation.
+changelog: Exposed PWM parameters
 license: MIT
 provides:
   Yutani_Dependencies/*
+  bass_presets.rpl
 
 Attribution: Moog filter implementation was based on the paper:
 S. D'Angelo and V. Vaelimaeki, "Generalized Moog Ladder Filter: Part II - Explicit Non linear Model through a Novel Delay-Free
@@ -77,9 +78,9 @@ slider47:dummy=0<0,1,1>-Dummy
 
 slider48:current_ceiling=0<0,48,1>-Distortion level [dB]
 slider49:warmth=0<-12,12,1>-Warmth
-slider50:dummy<0, 1, .000001>-Dummy
-slider51:dummy<0, 1, .000001>-Dummy
-slider52:dummy<0, 1, .000001>-Dummy
+slider50:pwm_phase=0<0, 1, .000001>-PWM phase
+slider51:pwm_depth=0.4<0, 1, .000001>-PWM depth
+slider52:pwm_rate=0.85<0, 1, .000001>-PWM rate
 slider53:fb=0<0, 1, .000001>-Feedback
 
 slider60:global_offset=0<-10,10,.00000001>-global offset blep
@@ -240,6 +241,9 @@ file_var(0, boost_vel);
 file_var(0, osc1_semi_vel);
 file_var(0, osc2_semi_vel);
 
+file_var(0, pwm_phase_vel);
+file_var(0, pwm_depth_vel);
+file_var(0, pwm_rate_vel);
 
 loop(199,
   file_var(0, 0);
@@ -330,14 +334,30 @@ midi.processMIDISample() ? (
     cutoff_env.reset_envelope(cutoff_reset);
     !cutoff_reset ? cutoff_env.k_rise = .25*cutoff_env.k_rise;
  
-    pwm_position = 0;
+     pwm_master_active = slider(OSC1_SELECT) == 4;
+     pwm_dt = cl01(pwm_rate + pwm_rate_vel) * 10.0/srate; //.0002;
+     pwm_position = cl01(pwm_phase + pwm_phase_vel) * 2.0 * $pi;
+     current_pwm_active = (slider(OSC1_SELECT) == 4) || (slider(OSC2_SELECT) == 4);
+     current_pwm_depth = 0.5 * cl01(pwm_depth + pwm_depth_vel);
+    
     k_glide = 1;
   ) : ( midi.notesOn > 1 ) ? (
     k_glide = calc_k(glide_time);
   );
 );
 
-pwm_position += .01;
+current_pwm_active ? (
+  pwm_position += pwm_dt;
+  pwm_switch = .5 + current_pwm_depth * sin(pwm_position);
+  
+  pwm_master_active ? (
+    oscs.osc2.t_current > 0 ? oscs.osc2.t_current = pwm_switch;
+    oscs2.osc2.t_current > 0 ? oscs2.osc2.t_current = pwm_switch;
+    oscs3.osc2.t_current > 0 ? oscs3.osc2.t_current = pwm_switch;
+    oscs4.osc2.t_current > 0 ? oscs4.osc2.t_current = pwm_switch;
+  );
+);
+
 amp_envelope = amp_env.update_envelope(midi.notesOn > 0);
 pitch_envelope = pitch_env.update_envelope(midi.notesOn > 0);
 cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
@@ -501,7 +521,7 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   );
   
 
-@gfx 1048 280
+@gfx 1454 505
 
 render_time += .025;
 gfx_set(21/255, 20/255, 21/255, 1.0);
@@ -579,7 +599,7 @@ gfx_setfont(TOGGLE_FONT, "Arial", 13 * (1+scaling));
 cX = xOrigin;
 cY = yOrigin;
 
-drawPanel("OSCILLATOR 1", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10.25*knobSpacing, panelHeight);
+drawPanel("OSCILLATOR 1", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
@@ -613,10 +633,36 @@ activeModifier == 0 ? (
   semiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( osc1_semi = semiTonesKnob.value * 72 - 36; slider_automate(osc1_semi); );
 ) : semiTonesKnob.knob_modifier_processMouse(0, osc1_semi_vel / 72) ? ( osc1_semi_vel = semiTonesKnob.value * 72; );
 
-cX += 2.5 * knobSize;
+cX += 3.75 * knobSize;
 
-cX += 1.5 * knobSize;
+drawPanel("PWM", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 1.9*knobSpacing, panelHeight);
+cX -= .75*knobSize;
+gfx_setfont(KNOB_FONT);
 
+pwm_active = (slider(OSC1_SELECT) == 4) || (slider(OSC2_SELECT) == 4);
+pwmPhaseKnob.knob_set(sprintf(1, "P"), pwm_active, pwm_phase );
+pwmPhaseKnob.drawKnob(cX, cY-.85*knobSize, floor(.36*knobSize), "", "PWM Phase.", 1.0);
+pwmPhaseKnob.knob_draw_modifier(pwm_phase_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  pwmPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( pwm_phase = cl01(pwmPhaseKnob.value); slider_automate(pwm_phase););
+) : pwmPhaseKnob.knob_modifier_processMouse(0, pwm_phase_vel) ? ( pwm_phase_vel = pwmPhaseKnob.value; );
+
+pwmDepthKnob.knob_set(sprintf(1, "D"), pwm_active, pwm_depth);
+pwmDepthKnob.drawKnob(cX, cY, floor(.36*knobSize), "", "PWM Depth.", 1.0);
+pwmDepthKnob.knob_draw_modifier(pwm_depth_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  pwmDepthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .4) ? ( pwm_depth = cl01(pwmDepthKnob.value); slider_automate(pwm_depth); );
+) : pwmDepthKnob.knob_modifier_processMouse(0, pwm_depth_vel) ? ( pwm_depth_vel = pwmDepthKnob.value; );
+
+pwmRateKnob.knob_set(sprintf(1, "R"), pwm_active, pwm_rate);
+pwmRateKnob.drawKnob(cX, cY+.85*knobSize, floor(.36*knobSize), "", "PWM Rate.", 1.0);
+pwmRateKnob.knob_draw_modifier(pwm_rate_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  pwmRateKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .85) ? ( pwm_rate = cl01(pwmRateKnob.value); slider_automate(pwm_rate); );
+) : pwmRateKnob.knob_modifier_processMouse(0, pwm_rate_vel) ? ( pwm_rate_vel = pwmRateKnob.value; );
+
+
+cX += 3.25 * knobSize;
 drawPanel("OSCILLATOR 2", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 11.5*knobSpacing, panelHeight);
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
@@ -815,7 +861,7 @@ glideKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
 cX = xOrigin;
 cY = cY + 4 * knobSize;
 
-drawPanel("DRIVE", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10.25*knobSpacing, panelHeight);
+drawPanel("DRIVE", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
@@ -1234,3 +1280,7 @@ warning > 0 ? (
 lcap = mouse_cap;
 
 hinter.drawHint_draw();
+
+gfx_x = 100;
+gfx_y = 432;
+gfx_printf("ALPHA / WORK IN PROGRESS! If you make a sound you really like, make sure you freeze it as the synth is still subject to change!");
