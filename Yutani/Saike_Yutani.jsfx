@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.04
+version: 0.05
 author: Joep Vanlier
-changelog: Bugfix FM self modes
+changelog: Bugfix Feedback Module. Change range drive module. Normalize bonus osc amplitudes. Make default osc settings less hot.
 license: MIT
 provides:
   Yutani_Dependencies/*
@@ -19,12 +19,12 @@ in_pin:right input
 out_pin:left output
 out_pin:right output
 
-slider1:osc1_db=-6<-48, 0, .000001>-Oscillator 1 Gain
+slider1:osc1_db=-9<-48, 0, .000001>-Oscillator 1 Gain
 slider2:osc1_semi=0<-36, 36, .000001>-Oscillator 1 Semitone
 slider3:free_osc=0<0, 1, 1>-Reset Osc on note
 slider4:osc1_shape=0<0,2,1{Saw,Square,Triangle,Fin}>-Oscillator 1 Shape
 
-slider5:osc2_db=-6<-48, 0, .000001>-Oscillator 2 Gain
+slider5:osc2_db=-9<-48, 0, .000001>-Oscillator 2 Gain
 slider6:osc2_semi=12<-36, 36, .000001>-Oscillator 2 Semitone
 slider7:hardsync=1<0,1,1{Off,On}>-Hard Sync
 slider8:osc2_shape=0<0,2,1{Saw,Square,Triangle,Fin}>-Oscillator 2 Shape
@@ -50,7 +50,7 @@ slider23:amp4=0<0, 1,.00001>-Voice 4 [%]
 slider24:detune4=0<-1, 1, .00001>-Detune [semitones]
 
 slider25:filter_type=1<0,5,1{Linear,MS-20,Linear x2,Moog,Ladder,303}>-Filter type
-slider26:drive=0<-6,48,1>-Filter Drive (dB)
+slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:boost=0<-6,48,1>-Post Boost (dB)
 slider28:cutoff=.6<0,1,.0001>-Cutoff
 slider29:resonance=0.7<0,1,.0001>-Resonance
@@ -288,12 +288,14 @@ shaper ? (
 );
 
 lf_update_step += 1;
-lf_update_step % 8 == 0 ? (
+lf_update_step % 8 == 0 ? (  
   o1db = clamp(osc1_db + osc1_db_velmod, -48, 0);
   o2db = clamp(osc2_db + osc2_db_velmod, -48, 0);
   osc1_vol = o1db > -47.8 ? exp(0.11512925464970229 * o1db) : 0;
   osc2_vol = o2db > -47.8 ? exp(0.11512925464970229 * o2db) : 0;
   lf_update_step = 0;
+  
+  amp_correction = 1.0 / (1.0 + amp2 + amp3 + amp4);
 );
 
 midi.processMIDISample() ? (
@@ -382,6 +384,7 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     y += oscs3.update_oscs(preamp_gain)*amp3;
     y += oscs4.update_oscs(preamp_gain)*amp4;
   );
+  y *= amp_correction;
   
   blep_type ? (
     // Delay y by the linear phase delay
@@ -462,14 +465,38 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   inv_preamp  = exp(-log10d20_conversion*current_drive);
   final_boost = exp(log10d20_conversion*current_boost);
   
-  0 ? (
-    y = dc0.eval_HP6(y);
-    y = dc1.eval_HP6(y);
-  );
+
+  //y = dc0.eval_HP6(y);
+  //y = dc1.eval_HP6(y);
+  
   yr = yl = y *= preamp;
   
-  yl += .95 * fb * last_yl;
-  yr += .95 * fb * last_yr;
+  fb ? (
+    !(filter_type == 0 || filter_type == 2) ? (
+      filter_type == 5 ? (
+        fb_factor = .99 * fb * (1-cutoff);
+        yl += fb_factor * last_yl;
+        yr += fb_factor * last_yr;
+        gc = 1/(1+2*fb_factor);
+        yl *= gc;
+        yr *= gc; 
+      ) : filter_type == 1 ? (
+        yl += .99 * fb * last_yl;
+        yr += .99 * fb * last_yr;
+        gc = 1/(1+1.5*fb);
+        yl *= gc;
+        yr *= gc;      
+      ) : (
+        yl -= .99 * fb * last_yl;
+        yr -= .99 * fb * last_yr;
+        gc = 1/(1+1.25*fb);
+        yl *= gc;
+        yr *= gc;
+      );
+    );
+  );
+  
+  hotness_rmsq = .9999 * hotness_rms + .0001 * yl * yl;
   
   // Oversampled processing
   ( oversampling > 1 ) ? (
@@ -504,8 +531,8 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     spl1 = ssr;
   );
   
-  last_yl = yl;
-  last_yr = yr;
+  last_yl = spl0;
+  last_yr = spl1;
   
   spl0 *= final_boost;
   spl1 *= final_boost;
@@ -622,7 +649,7 @@ osc1AmpKnob.knob_set(sprintf(1, "%.1f dB", osc1_db), 1, (osc1_db + 48)/48);
 osc1AmpKnob.drawKnob(cX, cY, knobSize, "Amplitude", "Oscillator 1 gain.", 1.0);
 osc1AmpKnob.knob_draw_modifier(osc1_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 0 ? (
-  osc1AmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 42/48) ? ( osc1_db = osc1AmpKnob.value * 48 - 48; slider_automate(osc1_db); );
+  osc1AmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/48) ? ( osc1_db = osc1AmpKnob.value * 48 - 48; slider_automate(osc1_db); );
 ) : osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_vel / 48) ? ( osc1_db_vel = osc1AmpKnob.value * 48; );
 
 cX += 2.5 * knobSize;
@@ -686,7 +713,7 @@ osc2AmpKnob.knob_set(sprintf(1, "%.1f dB", osc2_db), 1, (osc2_db + 48)/48);
 osc2AmpKnob.drawKnob(cX, cY, knobSize, "Amplitude", "Oscillator 2 gain.", 1.0);
 osc2AmpKnob.knob_draw_modifier(osc2_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 0 ? (
-  osc2AmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 42/48) ? ( osc2_db = osc2AmpKnob.value * 48 - 48; slider_automate(osc2_db); );
+  osc2AmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/48) ? ( osc2_db = osc2AmpKnob.value * 48 - 48; slider_automate(osc2_db); );
 ) : osc2AmpKnob.knob_modifier_processMouse(0, osc2_db_vel / 48) ? ( osc2_db_vel = osc2AmpKnob.value * 48; );
 
 cX += 2.5 * knobSize;
@@ -860,6 +887,10 @@ glideKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
 
 cX = xOrigin;
 cY = cY + 4 * knobSize;
+
+hotness_meter = tanh(54*sqrt(hotness_rmsq));
+gfx_set(hotness_meter+.1, .1, .1, hotness_meter);
+gfx_rect(cX - 2.5*knobSpacing+1, cY - .28*panelHeight, 9, 9);
 
 drawPanel("DRIVE", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
 cX += knobSize;
@@ -1048,7 +1079,7 @@ cY = cY + 4 * knobSize;
 drawPanel("FILTER ENV  ", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 14.75*knobSpacing, panelHeight);
 
 gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
-gfx_rect(cX - 2.5*knobSpacing, cY - .4*panelHeight, 9, 9);
+gfx_rect(cX - 2.5*knobSpacing + 1, cY - .4*panelHeight, 9, 9);
 
 envAmountKnob.knob_set(sprintf(4, "   %d %%%%", 100*env_amnt), 1 , env_amnt * .5 + .5);
 envAmountKnob.drawKnob(cX, cY, knobSize, "- Amount +", "Envelope Amount", 1.0);
@@ -1191,7 +1222,7 @@ cX += 1.25 * knobSize;
 
 drawPanel("FEEDBACK", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 4.15*knobSpacing, panelHeight);
 
-feedbackKnob.active = 1;
+feedbackKnob.active = !(filter_type == 0 || filter_type == 2);
 feedbackKnob.value = fb;
 //feedbackKnob.label = sprintf(1, "%.1f dB", current_ceiling);
 feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Are you crazy?", 0);
