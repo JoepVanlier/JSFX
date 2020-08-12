@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.06
+version: 0.07
 author: Joep Vanlier
-changelog: Reduce volume.
+changelog: Add velocity reset. Balance fin and triangle a bit more. Fixed note clicking issue with hardsync in freeroam mode.
 license: MIT
 provides:
   Yutani_Dependencies/*
@@ -57,10 +57,10 @@ slider29:resonance=0.7<0,1,.0001>-Resonance
 slider30:morph=0<0,1,.0001>-Morph
 
 slider31:m_lfo_amnt=0<0,1,.00001>-Morph LFO amount
-slider32:m_lfo_speed=0<0,20,.001>-Morph LFO speed [Hz]
+slider32:m_lfo_speed=0<0,20,.001>-Morph LFO speed [-]
 slider33:m_lfo_phase=0<0,30,.001>-Morph LFO phase [radian]
 slider34:c_lfo_amnt=0<0,1,.00001>-Cutoff LFO amount
-slider35:c_lfo_speed=0<0,20,.001>-Cutoff LFO speed [Hz]
+slider35:c_lfo_speed=0<0,20,.001>-Cutoff LFO speed [-]
 slider36:c_lfo_phase=0<0,36,.001>-Cutoff LFO phase [radian]
 
 slider37:fm_mode=0<0,5,1{MIDI sin,MIDI square,Self,Self Abs,Audio Stereo 3/4,Audio Mono 3/4}>-FM mode
@@ -245,6 +245,9 @@ file_var(0, pwm_phase_vel);
 file_var(0, pwm_depth_vel);
 file_var(0, pwm_rate_vel);
 
+file_var(0, c_lfo_reset);
+file_var(0, m_lfo_reset);
+
 loop(199,
   file_var(0, 0);
 );
@@ -281,6 +284,9 @@ warmth_interpolator.interpolator_block();
   sincDownR.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist2, sinc_flt4);  
 );
 
+osc1_correction = (osc1_shape == 2) || (osc1_shape == 3) ? 1.25 : 1;
+osc2_correction = (osc2_shape == 2) || (osc2_shape == 3) ? 1.25 : 1;
+
 @sample
 shaper ? (
   cur_ceiling = clamp(current_ceiling_interpolator.interpolate() + current_ceiling_vel, 0, 48);
@@ -291,9 +297,11 @@ lf_update_step += 1;
 lf_update_step % 8 == 0 ? (
   o1db = clamp(osc1_db + osc1_db_velmod, -48, 0);
   o2db = clamp(osc2_db + osc2_db_velmod, -48, 0);
-  osc1_vol = o1db > -47.8 ? exp(0.11512925464970229 * o1db) : 0;
-  osc2_vol = o2db > -47.8 ? exp(0.11512925464970229 * o2db) : 0;
+  osc1_vol = o1db > -47.8 ? exp(0.11512925464970229 * o1db) * osc1_correction: 0;
+  osc2_vol = o2db > -47.8 ? exp(0.11512925464970229 * o2db) * osc2_correction: 0;
   lf_update_step = 0;
+  current_c_lfo_speed = 10^(c_lfo_speed/15) - 1;
+  current_m_lfo_speed = 10^(m_lfo_speed/15) - 1;
   
   amp_correction = .25 / (1.0 + amp2 + amp3 + amp4);
 );
@@ -327,6 +335,9 @@ midi.processMIDISample() ? (
     
     drive_velmod = drive_vel * midi.lastVel;
     boost_velmod = boost_vel * midi.lastVel;
+  
+    c_lfo_reset ? c_lfo_time = 0;
+    m_lfo_reset ? m_lfo_time = 0;
   
     amp_env.calc_times(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
     amp_env.reset_envelope(reset && amp_before_filter);
@@ -433,7 +444,7 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     c_lfo_sync ? (
       c_lfo_time += israte * cutoff_LFO.cRate;
     ) : (
-      c_lfo_time += israte * c_lfo_speed;    
+      c_lfo_time += israte * current_c_lfo_speed;    
     );
     sliderCutoffL = sliderCutoffL + c_lfo_amnt * sin(c_lfo_time + cutoff_phase);
     sliderCutoffR = sliderCutoffR + c_lfo_amnt * sin(c_lfo_time);
@@ -443,7 +454,7 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     m_lfo_sync ? (
       m_lfo_time += israte * morph_LFO.cRate;
     ) : (
-      m_lfo_time += israte * m_lfo_speed;    
+      m_lfo_time += israte * current_m_lfo_speed;    
     );
     sliderMorphL = sliderMorphL + m_lfo_amnt * sin(m_lfo_time + morph_phase);
     sliderMorphR = sliderMorphR + m_lfo_amnt * sin(m_lfo_time);
@@ -1039,8 +1050,6 @@ activeModifier == 0 ? (
 ) : fmPhaseKnob.knob_modifier_processMouse(0, fm_spread_vel) ? ( fm_spread_vel = fmPhaseKnob.value; );
 
 
-
-
 showOptions = 1;
 showOptions ? (
   cX += 3.75 * knobSize;
@@ -1095,7 +1104,6 @@ activeModifier == 0 ? ( envAttackKnob.knob_processMouse(mouse_x, mouse_y, mouse_
 ) : envAttackKnob.knob_modifier_processMouse(0, cutoff_atk_vel) ? ( cutoff_atk_vel = envAttackKnob.value; );
 
 cutoffResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, cutoff_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on note.\n\nTurning this off changes the mode to a mode where\nthe amplitude no longer goes to 90%% in the set time.\n\nThis means that consecutive hits get increasingly higher\ncutoff values. The 303 is one of the classic synths that\nhad this characteristic.");
-
 cutoff_reset = cutoffResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 cX += knobSize*2.5;
@@ -1116,6 +1124,9 @@ activeModifier == 0 ? ( envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse
 cX += 3.675 * knobSize;
 drawPanel("CUTOFF LFO", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 11.125*knobSpacing, panelHeight);
 
+cutoffLfoResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+c_lfo_reset = cutoffLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
 cutoffLFOAmountKnob.active = 1;
 cutoffLFOAmountKnob.value = c_lfo_amnt;
 cutoffLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount", 1.0);
@@ -1134,7 +1145,7 @@ cutoffLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.
 c_lfo_sync ? (
   cutoffLFOSpeedKnob.label = cutoff_LFO.tempoLabel;
 ) : (
-  cutoffLFOSpeedKnob.label = sprintf(3, "%d Hz", c_lfo_speed);
+  cutoffLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(c_lfo_speed/15) - 1);
 );
 cutoffLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
   c_lfo_speed = cutoffLFOSpeedKnob.value * 20;
@@ -1163,6 +1174,9 @@ morphLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
   slider_automate(m_lfo_amnt);
 );
 
+morphLfoResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+m_lfo_reset = morphLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
 cX += 2.5 * knobSize;
 morphSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Modulate gain by pitch.");
 m_lfo_sync = morphSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
@@ -1173,7 +1187,7 @@ morphLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0
 m_lfo_sync ? (
   morphLFOSpeedKnob.label = morph_LFO.tempoLabel;
 ) : (
-  morphLFOSpeedKnob.label = sprintf(5, "%d Hz", m_lfo_speed);
+  morphLFOSpeedKnob.label = sprintf(5, "%d Hz", 10^(m_lfo_speed/15) - 1);
 );
 morphLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
   m_lfo_speed = morphLFOSpeedKnob.value * 20;
