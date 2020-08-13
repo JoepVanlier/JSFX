@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.08
+version: 0.09
 author: Joep Vanlier
-changelog: Fix dependency issue.
+changelog: Added declicking to oscillator reset. Add semitone snap (LMB + RMB + Drag). Add old broken feedback mode as a "feature". Allow vel modulation on feedback. Fixed suddenly quiet PWM bug.
 license: MIT
 provides:
   Yutani_Dependencies/*
@@ -83,8 +83,6 @@ slider51:pwm_depth=0.4<0, 1, .000001>-PWM depth
 slider52:pwm_rate=0.85<0, 1, .000001>-PWM rate
 slider53:fb=0<0, 1, .000001>-Feedback
 
-slider60:global_offset=0<-10,10,.00000001>-global offset blep
-slider61:blep_type=0<0,1,1{MinPhase,Linear (broken)}>-Blep type
 slider62:fix_dc=0<0,1,1>Fix DC
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:oversampling=1<1,8,1>-Oversampling
@@ -105,6 +103,8 @@ import Saike_Yutani_widgets.jsfx-inc
 import Saike_Yutani_sample_delay_buffer.jsfx-inc
 
 @init
+OSC1_SELECT = 4;
+OSC2_SELECT = 8;
 freemem = 0;
 
 freemem = (midimem = freemem) + 32768;
@@ -248,6 +248,9 @@ file_var(0, pwm_rate_vel);
 file_var(0, c_lfo_reset);
 file_var(0, m_lfo_reset);
 
+file_var(0, fb_mode);
+file_var(0, fb_vel);
+
 loop(199,
   file_var(0, 0);
 );
@@ -338,6 +341,8 @@ midi.processMIDISample() ? (
   
     c_lfo_reset ? c_lfo_time = 0;
     m_lfo_reset ? m_lfo_time = 0;
+    
+    current_fb = .99 * cl01(fb + fb_vel * midi.lastVel);
   
     amp_env.calc_times(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
     amp_env.reset_envelope(reset && amp_before_filter);
@@ -482,28 +487,38 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   
   yr = yl = y *= preamp;
   
-  fb ? (
-    !(filter_type == 0 || filter_type == 2) ? (
-      filter_type == 5 ? (
-        fb_factor = .99 * fb * (1-cutoff);
-        yl += fb_factor * last_yl;
-        yr += fb_factor * last_yr;
-        gc = 1/(1+2*fb_factor);
-        yl *= gc;
-        yr *= gc; 
-      ) : filter_type == 1 ? (
-        yl += .99 * fb * last_yl;
-        yr += .99 * fb * last_yr;
-        gc = 1/(1+1.5*fb);
-        yl *= gc;
-        yr *= gc;      
-      ) : (
-        yl -= .99 * fb * last_yl;
-        yr -= .99 * fb * last_yr;
-        gc = 1/(1+1.25*fb);
-        yl *= gc;
-        yr *= gc;
+  fb_mode == 0 ? (
+    fb ? (
+      !(filter_type == 0 || filter_type == 2) ? (
+        filter_type == 5 ? (
+          fb_factor = current_fb * (1-cutoff);
+          yl += fb_factor * last_yl;
+          yr += fb_factor * last_yr;
+          gc = 1/(1+2*fb_factor);
+          yl *= gc;
+          yr *= gc; 
+        ) : filter_type == 1 ? (
+          yl += current_fb * last_yl;
+          yr += current_fb * last_yr;
+          gc = 1/(1+1.5*current_fb);
+          yl *= gc;
+          yr *= gc;      
+        ) : (
+          yl -= current_fb * last_yl;
+          yr -= current_fb * last_yr;
+          gc = 1/(1+1.25*current_fb);
+          yl *= gc;
+          yr *= gc;
+        );
       );
+    );
+  ) : (
+    !(filter_type == 0 || filter_type == 2) ? (
+      yl += current_fb * lyl;
+      yr += current_fb * lyr;
+  
+      lyl = yl;
+      lyr = yr;
     );
   );
   
@@ -558,6 +573,11 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     spl1 = dc3.eval_HP6(spl1);
   );
   
+  fb_mode ? (
+    spl0 = spl0 / (1+exp(fb));
+    spl1 = spl1 / (1+exp(fb));
+  );
+  
 
 @gfx 1454 505
 
@@ -570,6 +590,7 @@ ys = 10;
 
 knobSize = 35*(1+scaling);
 knobSpacing = .7 * knobSize;
+panelSpacing = knobSize;
 
 buttonSize = floor(.3 * knobSpacing);
 widget_r = 35/255;
@@ -637,13 +658,12 @@ gfx_setfont(TOGGLE_FONT, "Arial", 13 * (1+scaling));
 cX = xOrigin;
 cY = yOrigin;
 
-drawPanel("OSCILLATOR 1", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
+nextPanel = drawPanel("OSCILLATOR 1", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
 ww = 1.3*knobSize;
 hh = .35 * knobSize;
-OSC1_SELECT = 4;
 drawSelectionButton("Saw", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, OSC1_SELECT);
 drawSelectionButton("Square", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, OSC1_SELECT);
 drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, OSC1_SELECT);
@@ -665,16 +685,20 @@ activeModifier == 0 ? (
 
 cX += 2.5 * knobSize;
 semiTonesKnob.knob_set(sprintf(1, "%.2f ", osc1_semi), 1, (osc1_semi + 36)/72);
-semiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 1 tuning", 1.0);
+semiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 1 tuning.\n\nHold CTRL + SHIFT to rotate slower.\nHold outer mouse to round off to nearest\nsemitone.", 1.0);
 semiTonesKnob.knob_draw_modifier(osc1_semi_vel / 72, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 0 ? (
-  semiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( osc1_semi = semiTonesKnob.value * 72 - 36; slider_automate(osc1_semi); );
+  semiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( 
+  osc1_semi = semiTonesKnob.value * 72 - 36;
+  mouse_cap == 3 ? osc1_semi = floor(osc1_semi + .5);
+  slider_automate(osc1_semi);
+);
 ) : semiTonesKnob.knob_modifier_processMouse(0, osc1_semi_vel / 72) ? ( osc1_semi_vel = semiTonesKnob.value * 72; );
 
-cX += 3.75 * knobSize;
+cX = nextPanel + panelSpacing;
 
-drawPanel("PWM", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 1.9*knobSpacing, panelHeight);
-cX -= .75*knobSize;
+nextPanel = drawPanel("PWM", cX, cY - .53*panelHeight + .2*knobSize, 1.9*knobSpacing, panelHeight);
+cX += .6*knobSize;
 gfx_setfont(KNOB_FONT);
 
 pwm_active = (slider(OSC1_SELECT) == 4) || (slider(OSC2_SELECT) == 4);
@@ -700,14 +724,14 @@ activeModifier == 0 ? (
 ) : pwmRateKnob.knob_modifier_processMouse(0, pwm_rate_vel) ? ( pwm_rate_vel = pwmRateKnob.value; );
 
 
-cX += 3.25 * knobSize;
-drawPanel("OSCILLATOR 2", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 11.5*knobSpacing, panelHeight);
-cX += knobSize;
+cX = nextPanel + panelSpacing;
+
+nextPanel = drawPanel("OSCILLATOR 2", cX, cY - .53*panelHeight + .2*knobSize, 11.5*knobSpacing, panelHeight);
+cX += 2.4 * knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
 ww = 1.3*knobSize;
 hh = .35 * knobSize;
-OSC2_SELECT = 8;
 drawSelectionButton("Saw", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, OSC2_SELECT);
 drawSelectionButton("Square", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, OSC2_SELECT);
 drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, OSC2_SELECT);
@@ -729,10 +753,14 @@ activeModifier == 0 ? (
 
 cX += 2.5 * knobSize;
 semiTonesKnob2.knob_set(sprintf(1, "%.2f ", osc2_semi), 1, (osc2_semi + 36)/72);
-semiTonesKnob2.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 2 tuning", 1.0);
+semiTonesKnob2.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 2 tuning.\n\nHold CTRL + SHIFT to rotate slower.\nHold outer mouse to round off to nearest\nsemitone.", 1.0);
 semiTonesKnob2.knob_draw_modifier(osc2_semi_vel / 72, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 0 ? (
-  semiTonesKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 48/72) ? ( osc2_semi = semiTonesKnob2.value * 72 - 36; slider_automate(osc2_semi); );
+  semiTonesKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 48/72) ? (
+    osc2_semi = semiTonesKnob2.value * 72 - 36;
+    mouse_cap == 3 ? osc2_semi = floor(osc2_semi + .5);
+    slider_automate(osc2_semi);
+  );
 ) : semiTonesKnob2.knob_modifier_processMouse(0, osc2_semi_vel / 72) ? ( osc2_semi_vel = semiTonesKnob2.value * 72; );
 
 
@@ -745,7 +773,7 @@ activeModifier == 0 ? (
   pitchEnvelopeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( pitch_env = pitchEnvelopeKnob.value * 24 - 12; slider_automate(pitch_env););
 ) : pitchEnvelopeKnob.knob_modifier_processMouse(0, pitch_amnt_vel / 24) ? ( pitch_amnt_vel = pitchEnvelopeKnob.value * 24; );
 
-pitchAttackKnob.knob_set(sprintf(1, "A"), 1, pitch_atk);
+pitchAttackKnob.knob_set(sprintf(1, " A"), 1, pitch_atk);
 pitchAttackKnob.drawKnob(cX, cY, floor(.36*knobSize), "", "Pitch Attack.", 1.0);
 pitchAttackKnob.knob_draw_modifier(pitch_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 0 ? (
@@ -759,10 +787,11 @@ activeModifier == 0 ? (
   pitchDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( pitch_decay = pitchDecayKnob.value; slider_automate(pitch_decay); );
 ) : pitchDecayKnob.knob_modifier_processMouse(0, pitch_decay_vel) ? ( pitch_decay_vel = pitchDecayKnob.value; );
 
-cX += 3.25 * knobSize;
+cX = nextPanel + panelSpacing;
 
-drawPanel("AMP ENV", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 14.75*knobSpacing, panelHeight);
+nextPanel = drawPanel("AMP ENV", cX, cY - .53*panelHeight + .2*knobSize, 14.75*knobSpacing, panelHeight);
 
+cX += 2 * knobSpacing;
 gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
 gfx_rect(cX - 2.5*knobSpacing, cY - .4*panelHeight, 9, 9);
 
@@ -791,8 +820,6 @@ activeModifier == 0 ? (
 
 
 cX += knobSize*2.5;
-//holdToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, amp_hold, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Hold while MIDI note is down.");
-//amp_hold = holdToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 ampDecayKnob.knob_set(amp_decay > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_decay))), 1, amp_decay);
 ampDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
@@ -810,11 +837,11 @@ activeModifier == 0 ? (
   ampSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_sustain = ampSustainKnob.value; slider_automate(amp_sustain); );
 ) : ampSustainKnob.knob_modifier_processMouse(0, amp_sustain_vel) ? ( amp_sustain_vel = ampSustainKnob.value; );
 
-cX += 3.75 * knobSize;
+cX = nextPanel + panelSpacing;
 
+nextPanel = drawPanel("BONUS OSC", cX, cY - .53*panelHeight + .2*knobSize, 6.825*knobSpacing, panelHeight);
 
-drawPanel("BONUS OSC", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 6.825*knobSpacing, panelHeight);
-
+cX += 2.07 * knobSpacing;
 xosc2_percent.active = 1;
 xosc2_percent.value = amp2;
 xosc2_percent.label = sprintf(35, "   %d %%%%", 100*amp2);
@@ -880,22 +907,6 @@ amp4 > 0.001 ? new_multi = 4;
 multi = new_multi;
 
 
-cX += 1.5 * knobSize;
-
-cX += 1.5 * knobSize;
-
-drawPanel("GLIDE", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 4.275*knobSpacing, panelHeight);
-
-glideKnob.active = 1;
-glideKnob.value = glide_time;
-glideKnob.drawKnob(cX, cY, knobSize, "Glide", "Glide", 1.0);
-glideKnob.label = sprintf(30, "%.1f ms", (3 * 10^(2*glide_time)));
-glideKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  glide_time = glideKnob.value;
-  slider_automate(glide_time);
-);
-
-
 cX = xOrigin;
 cY = cY + 4 * knobSize;
 
@@ -903,7 +914,7 @@ hotness_meter = tanh(54*sqrt(hotness_rmsq));
 gfx_set(hotness_meter+.1, .1, .1, hotness_meter);
 gfx_rect(cX - 2.5*knobSpacing+1, cY - .28*panelHeight, 9, 9);
 
-drawPanel("DRIVE", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
+nextPanel = drawPanel("DRIVE", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 10*knobSpacing, panelHeight);
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
@@ -942,11 +953,10 @@ activeModifier == 0 ? (
 ) : postBoost.knob_modifier_processMouse(0, boost_vel / 54) ? ( boost_vel = postBoost.value * 54; );
 
 
-cX += 2.5 * knobSize;
-cX += 1.5 * knobSize;
+cX = nextPanel + panelSpacing;
 
-
-drawPanel("FILTER", cX - 2.25*knobSpacing, cY - .53*panelHeight + .2*knobSize, 15*knobSpacing, panelHeight);
+nextPanel = drawPanel("FILTER", cX, cY - .53*panelHeight + .2*knobSize, 15*knobSpacing, panelHeight);
+cX += 2.25 * knobSpacing;
 morphKnob.knob_set("", 1, morph);
 morphKnob.drawKnob(cX, cY, knobSize, "Morph", "Filter Morph", 1.0);
 morphKnob.knob_draw_modifier(morph_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
@@ -989,12 +999,11 @@ keyFollowKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
   key_follow = keyFollowKnob.value;
   slider_automate(key_follow);
 );
-cX += 3.675 * knobSize;
 
+cX = nextPanel + panelSpacing;
 
-
-drawPanel("FM", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 13.5*knobSpacing, panelHeight);
-cX += knobSize;
+nextPanel = drawPanel("FM", cX, cY - .53*panelHeight + .2*knobSize, 13.5*knobSpacing, panelHeight);
+cX += 2.375*knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
 ww = 1.3*knobSize;
@@ -1050,42 +1059,52 @@ activeModifier == 0 ? (
 ) : fmPhaseKnob.knob_modifier_processMouse(0, fm_spread_vel) ? ( fm_spread_vel = fmPhaseKnob.value; );
 
 
-showOptions = 1;
-showOptions ? (
-  cX += 3.75 * knobSize;
-  drawPanel("OPTIONS", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
-  oversamplingKnob.active = 1;
-  oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
-    oversamplingKnob.value = (oversampling - 1) / 7;
-  );
-  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "", 1.0);
-  oversamplingKnob.label = sprintf(7, "x%d", oversampling);
-  oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
-    newOversampling = floor(oversamplingKnob.value * 7 + 1);
-    floor(newOversampling) != overSampling ? (
-      oversampling = newOversampling;
-      slider_automate(oversampling);
-      updateSlider();
-    );
-  );
-  
-  cX += 2.5 * knobSize;
-  inertiaKnob.active = 1;
-  inertiaKnob.value = inertia / 200;
-  inertiaKnob.label = sprintf(8, "%d ms", inertia);
-  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "", 1.0);
-  inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
-    inertia = inertiaKnob.value * 200;
-    slider_automate(inertia);
-  );
+cX = nextPanel + panelSpacing;
+
+nextPanel = drawPanel("DISTORTION", cX, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
+cX += 2.05 * knobSpacing;
+shaperToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, shaper, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Modulate gain by pitch.\nGives a more analog feel.");
+shaper = shaperToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+higainToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, higain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "High gain mode.");
+higain = higainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+distKnob.knob_set(sprintf(1, "%.1f dB", current_ceiling), shaper, current_ceiling / 48);
+distKnob.drawKnob(cX, cY, knobSize, "Distortion", "Distortion level\n\nDistortion applied post-filter.", 0);
+distKnob.knob_draw_modifier(current_ceiling_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  distKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( current_ceiling = distKnob.value * 48; slider_automate(current_ceiling); );
+) : distKnob.knob_modifier_processMouse(0, current_ceiling_vel / 48) ? ( current_ceiling_vel = distKnob.value * 48; );
+
+cX += 2.5 * knobSize;
+
+warmthKnob.active = shaper;
+warmthKnob.value = (warmth + 12) / 24;
+warmthKnob.drawKnob(cX, cY, knobSize, "Warmth", "Distortion warmth.\n\nApplies pre- and post-emphasis filters.", .5);
+warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  warmth = warmthKnob.value * 24 - 12;
+  slider_automate(warmth);
 );
 
+cX = nextPanel + panelSpacing;
 
+nextPanel = drawPanel("FEEDBACK", cX, cY - .53*panelHeight + .2*knobSize, 4.15*knobSpacing, panelHeight);
+
+cX += 1.4 * knobSize;
+feedbackTwoToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, fb_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Direct feedback mode. Directly routes oscillator output to drive. Can be used to massively distort the input.");
+fb_mode = feedbackTwoToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+feedbackKnob.active = !(filter_type == 0 || filter_type == 2);
+feedbackKnob.value = fb;
+feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Are you crazy?", 0);
+feedbackKnob.knob_draw_modifier(fb_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? ( feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fb = feedbackKnob.value; slider_automate(fb); );
+) : feedbackKnob.knob_modifier_processMouse(0, fb_vel) ? ( fb_vel = feedbackKnob.value; );
 
 cX = xOrigin;
 cY = cY + 4 * knobSize;
 
-drawPanel("FILTER ENV  ", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 14.75*knobSpacing, panelHeight);
+nextPanel = drawPanel("FILTER ENV  ", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 14.75*knobSpacing, panelHeight);
 
 gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
 gfx_rect(cX - 2.5*knobSpacing + 1, cY - .4*panelHeight, 9, 9);
@@ -1121,8 +1140,11 @@ envSustainKnob.knob_draw_modifier(cutoff_sustain_vel, bipolar, mod1_color_r, mod
 activeModifier == 0 ? ( envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
 ) : envSustainKnob.knob_modifier_processMouse(0, cutoff_sustain_vel) ? ( cutoff_sustain_vel = envSustainKnob.value; );
 
-cX += 3.675 * knobSize;
-drawPanel("CUTOFF LFO", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 11.125*knobSpacing, panelHeight);
+cX = nextPanel + panelSpacing;
+
+nextPanel = drawPanel("CUTOFF LFO", cX, cY - .53*panelHeight + .2*knobSize, 11.125*knobSpacing, panelHeight);
+
+cX += 2 * knobSpacing;
 
 cutoffLfoResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
 c_lfo_reset = cutoffLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
@@ -1164,8 +1186,10 @@ cutoffLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
 
 
 
-cX += 3.675 * knobSize;
-drawPanel("MORPH LFO", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 11.125*knobSpacing, panelHeight);
+cX = nextPanel + panelSpacing;
+
+nextPanel = drawPanel("MORPH LFO", cX, cY - .53*panelHeight + .2*knobSize, 11.125*knobSpacing, panelHeight);
+cX += 2 * knobSpacing;
 morphLFOAmountKnob.active = 1;
 morphLFOAmountKnob.value = m_lfo_amnt;
 morphLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount", 1.0);
@@ -1205,47 +1229,55 @@ morphLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
   slider_automate(m_lfo_phase);
 );
 
-cX += 3.5 * knobSize;
+cX = nextPanel + panelSpacing;
 
-drawPanel("DISTORTION", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
-shaperToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, shaper, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Modulate gain by pitch.\nGives a more analog feel.");
-shaper = shaperToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+nextPanel = drawPanel("GLIDE", cX, cY - .53*panelHeight + .2*knobSize, 4.125*knobSpacing, panelHeight);
 
-higainToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, higain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "High gain mode.");
-higain = higainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-distKnob.knob_set(sprintf(1, "%.1f dB", current_ceiling), shaper, current_ceiling / 48);
-distKnob.drawKnob(cX, cY, knobSize, "Distortion", "Distortion level\n\nDistortion applied post-filter.", 0);
-distKnob.knob_draw_modifier(current_ceiling_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 0 ? (
-  distKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( current_ceiling = distKnob.value * 48; slider_automate(current_ceiling); );
-) : distKnob.knob_modifier_processMouse(0, current_ceiling_vel / 48) ? ( current_ceiling_vel = distKnob.value * 48; );
-
-cX += 2.5 * knobSize;
-
-warmthKnob.active = shaper;
-warmthKnob.value = (warmth + 12) / 24;
-warmthKnob.drawKnob(cX, cY, knobSize, "Warmth", "Distortion warmth.\n\nApplies pre- and post-emphasis filters.", .5);
-warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  warmth = warmthKnob.value * 24 - 12;
-  slider_automate(warmth);
+cX += 2 * knobSpacing;
+glideKnob.active = 1;
+glideKnob.value = glide_time;
+glideKnob.drawKnob(cX, cY, knobSize, "Glide", "Glide", 1.0);
+glideKnob.label = sprintf(30, "%.1f ms", (3 * 10^(2*glide_time)));
+glideKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  glide_time = glideKnob.value;
+  slider_automate(glide_time);
 );
 
-cX += 2.5 * knobSize;
-cX += 1.25 * knobSize;
-
-drawPanel("FEEDBACK", cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 4.15*knobSpacing, panelHeight);
-
-feedbackKnob.active = !(filter_type == 0 || filter_type == 2);
-feedbackKnob.value = fb;
-//feedbackKnob.label = sprintf(1, "%.1f dB", current_ceiling);
-feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Are you crazy?", 0);
-feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
-  fb = feedbackKnob.value;
-  slider_automate(fb);
+showOptions = 1;
+showOptions ? (
+  cX = nextPanel + panelSpacing;
+  
+  nextPanel = drawPanel("OPTIONS", cX, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight);
+  cX += 2*knobSpacing;
+  oversamplingKnob.active = 1;
+  oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
+    oversamplingKnob.value = (oversampling - 1) / 7;
+  );
+  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "", 1.0);
+  oversamplingKnob.label = sprintf(7, "x%d", oversampling);
+  oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
+    newOversampling = floor(oversamplingKnob.value * 7 + 1);
+    floor(newOversampling) != overSampling ? (
+      oversampling = newOversampling;
+      slider_automate(oversampling);
+      updateSlider();
+    );
+  );
+  
+  cX += 2.5 * knobSize;
+  inertiaKnob.active = 1;
+  inertiaKnob.value = inertia / 200;
+  inertiaKnob.label = sprintf(8, "%d ms", inertia);
+  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "", 1.0);
+  inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
+    inertia = inertiaKnob.value * 200;
+    slider_automate(inertia);
+  );
 );
 
-cX += 2.5 * knobSize;
+cX += 4 * knobSize;
+
+
 
 cX = xOrigin;
 cY += 2.2 * knobSize;
