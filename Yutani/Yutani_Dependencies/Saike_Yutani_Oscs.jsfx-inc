@@ -1212,12 +1212,12 @@ local(f)
   );
 
   t <= 0.25 ? (
-    (4.0 * t - 1.0) * amp;
+    (4.0 * t - 1.0) + 0.04687518749999994
   ) : ( t <= .5 ) ? (
-    (2.5 * t - .625) * amp;
+    (2.5 * t - .625) + 0.04687518749999994
   ) : (
-    (3.0 - 4.0 * t) * amp;
-  );
+    (3.0 - 4.0 * t) + 0.04687518749999994
+  )
 );
 
 function saw(adv, dt, amp)
@@ -1234,7 +1234,7 @@ local()
     blepBuffer.addBL((t - adv + dt) / dt + .0000000001, -2.0 * amp);
   );
 
-  (2.0 * t - 1.0) * amp;
+  (2.0 * t - 1.0);
 );
 
 function tri(adv, dt, amp)
@@ -1256,9 +1256,9 @@ local(f)
   );
 
   t <= 0.5 ? (
-    (4.0 * t - 1.0) * amp;
+    (4.0 * t - 1.0);
   ) : (
-    (3.0 - 4.0 * t) * amp;
+    (3.0 - 4.0 * t);
   );
 );
 
@@ -1278,7 +1278,7 @@ local()
     blepBuffer.addBL((t - adv + dt + .0000000001) / dt, -2.0 * amp);
   );
   
-  y = (2.0 * (t > 0.5) - 1.0) * amp;
+  y = (2.0 * (t > 0.5) - 1.0);
 );
 
 function pwm(adv, dt, amp)
@@ -1297,7 +1297,7 @@ local()
     blepBuffer.addBL((t - adv + dt + .0000000001) / dt, -2.0 * amp);
   );
   
-  y = (2.0 * (t > pwm_switch) - 1.0) * amp;
+  y = (2.0 * (t > pwm_switch) - 1.0);
 );
 
 function hardsync(master_t, master_dt, slave_dt, osc2_amp)
@@ -1350,11 +1350,11 @@ global(blepBuffer.addBL, blampBuffer.addBL)
 );
 
 function evaluate_osc(adv, dt, amp)
-instance(type, ly, y_declick)
+instance(type)
 global()
 local()
 (
-  ly = type == 0 ? (
+  type == 0 ? (
     this.saw(adv, dt, amp)
   ) : ( type == 1 ) ? (
     this.square(adv, dt, amp)
@@ -1365,23 +1365,10 @@ local()
   ) : ( type == 4 ) ? (
     this.pwm(adv, dt, amp)
   );
-  
-  ly += y_declick;
-  y_declick *= .99;
-  ly
-);
-
-function reset_osc()
-local()
-global()
-instance(t, y_declick, ly)
-(
-  t = 0.5;
-  y_declick = ly;
 );
 
 function oscs_midinote(pitch1, pitch2, osc1_shape, osc2_shape)
-instance(target_dt1, target_dt2, dt1, dt2, osc1, osc2, last_type, y_declick)
+instance(target_dt1, target_dt2, dt1, dt2, osc1, osc2, last_type, y_declick, ly, declick)
 local(scaling)
 global(srate, free_osc)
 (
@@ -1398,8 +1385,10 @@ global(srate, free_osc)
   osc2.type = osc2_shape;
   
   !free_osc ? (
-    osc1.reset_osc();
-    osc2.reset_osc();
+    osc1.t = 0.5;
+    osc2.t = 0.5;
+    y_declick = ly;
+    declick = 1;
   );
   
   (osc1.type != last_type || !free_osc) ? (
@@ -1423,9 +1412,10 @@ global(oscstst)
 // Pulls in k_glide, hard_sync, amp_envelope, pitch_envelope and pitch_env from global namespace
 function update_oscs(amp_envelope)
 instance(dt1, dt2, target_dt1, target_dt2,
-         osc1, osc2, osc1_vol, osc2_vol, osc2.hardsync)
-global(k_glide, hardsync, pitch_envelope, current_pitch_env)
-local(osc1_amp, osc2_amp, osc2_dt, y)
+         osc1, osc2, osc1_vol, osc2_vol, osc2.hardsync, fm_level,
+         ly, y_declick, declick)
+global(k_glide, hardsync, pitch_envelope, current_pitch_env, cdt)
+local(osc1_amp, osc2_amp, osc1_dt, osc2_dt, y)
 (
   dt1 += k_glide * (target_dt1 - dt1);
   dt2 += k_glide * (target_dt2 - dt2); 
@@ -1440,9 +1430,17 @@ local(osc1_amp, osc2_amp, osc2_dt, y)
     osc2_dt = dt2 * (1+abs(current_pitch_env)*(1.0-pitch_envelope));
   );
   
-  y = osc1.evaluate_osc(dt1, dt1, osc1_amp);
+  osc1_dt = dt1;
+  y = osc1.evaluate_osc(osc1_dt, osc1_dt, osc1_amp);
+  cdt = osc2_dt * (1.0 + fm_level*y);
+  y *= osc1_amp;
   hardsync ? osc2.hardsync(osc1.t, dt1, osc2_dt, osc2_amp);
-  y += osc2.evaluate_osc(osc2_dt, osc2_dt, osc2_amp)
+  y += osc2.evaluate_osc(cdt, cdt, osc2_amp) * osc2_amp;
+  
+  ly = y;
+  y = y * (1-declick) + declick*y_declick;
+  declick *= .98;
+  y
 );
 
 
