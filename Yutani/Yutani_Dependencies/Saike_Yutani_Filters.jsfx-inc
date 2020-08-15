@@ -9,7 +9,7 @@ current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/2205
 
 function check_safety()
 (
-  (filter_type == 1) && (oversampling == 1) ? (
+  ((filter_type == 1) || (filter_type==6)) && (oversampling == 1) ? (
     cutoff > safety_limit_ms20 ? (
       slider_automate(cutoff = safety_limit_ms20);
       warning = 75;
@@ -422,6 +422,15 @@ function eval_linearSVF_BR(v0)
     (f2 * frac + f1 * (1.0-frac))*VT2i
   );  
   
+  function f_g_asym(s)
+  local()
+  global()
+  instance()
+  (
+    s > 0 ? max(-1,min(1,s))
+    : max(-1,min(1,s*.25))
+  );
+  
   function f_g(s)
   local()
   global()
@@ -429,6 +438,15 @@ function eval_linearSVF_BR(v0)
   (
     max(-1,min(1,s))
   );
+  
+  function f_dg_asym(s)
+  local()
+  global()
+  instance()
+  (
+    s > 0 ? 1 - 1 * (abs(s)>1)
+    : .25 - .25 * (abs(s)>4)
+  );  
   
   function f_dg(s)
   local()
@@ -640,6 +658,201 @@ function eval_linearSVF_BR(v0)
         y2 + x
       );
       
+  function eval_MS20_nonlin_tanh_asym(x)
+    global(epsilon, maxiter)
+    local(iter, res, gd2k, ky2, gky2, dgky2,
+          f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+    instance(i, y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gd2k = f_g_asym(d2*k);
+      sig1 = -d1 + x - gd2k;
+      sig1 < 0 ? sig1 *= .6;
+      tanhterm1 = tanh(sig1);
+      tanhterm2 = tanh(d1 - d2 + gd2k);
+      
+      iter = 0;
+      while(
+        iter += 1;
+        ky2 = k*y2;
+        gky2 = f_g_asym(ky2);
+        dgky2 = f_dg_asym(ky2);
+      
+        sig1 = x - y1 - gky2;
+        sig1 < 0 ? sig1 *= .6;
+        thsig1 = tanh(sig1);
+        thsig1sq = thsig1 * thsig1;
+        sig1 < 0 ? thsig1sq *= .6;
+        
+        sig2 = y1 - y2 + gky2;
+        thsig2 = tanh(sig2);
+        thsig2sq = thsig2 * thsig2;
+        hhthsig1sqm1 = hh*(thsig1sq - 1);
+        hhthsig2sqm1 = hh*(thsig2sq - 1);
+      
+        f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+        f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+        res = abs(f1) + abs(f2);
+        
+        a = -hhthsig1sqm1 + 1;
+        b = -k*hhthsig1sqm1*dgky2;
+        c = hhthsig2sqm1;
+        d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+        
+        norm = 1 / ( a*d - b*c );
+        y1 = y1 - ( d*f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter);
+      );
+      
+      d1 = y1;
+      d2 = y2;
+    ); 
+
+
+  function eval_MS20_nonlinBP_tanh_asym(x)
+    global(epsilon, maxiter)
+    local(iter, res, gd2k, ky2, gky2, dgky2,
+          f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+    instance(i, y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gd2k = f_g_asym(d2*k);
+      tanhterm1 = tanh(-d1 - x - gd2k);
+      tanhterm2 = tanh(d1 - d2 + x + gd2k);
+      
+      iter = 0;
+      while(
+        iter += 1;
+        ky2 = k*y2;
+        gky2 = f_g_asym(ky2);
+        dgky2 = f_dg_asym(ky2);
+      
+        sig1 = -x - y1 - gky2;
+        thsig1 = tanh(sig1);
+        thsig1sq = thsig1 * thsig1;
+      
+        sig2 = x + y1 - y2 + gky2;
+        thsig2 = tanh(sig2);
+        thsig2sq = thsig2 * thsig2;
+      
+        hhthsig1sqm1 = hh*(thsig1sq - 1);
+        hhthsig2sqm1 = hh*(thsig2sq - 1);
+      
+        f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+        f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+        res = abs(f1) + abs(f2);
+        
+        a = 1 - hhthsig1sqm1;
+        b = -k*hhthsig1sqm1*dgky2;
+        c = hhthsig2sqm1;
+        d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+      
+        norm = 1 / ( a*d - b*c );
+        y1 = y1 - ( d*f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter);
+      );
+      
+      d1 = y1;
+      d2 = y2;
+    );
+    
+  function eval_MS20_nonlinBR_tanh_asym(x)
+    global(epsilon, maxiter)
+    local(iter, res, gd2k, ky2, gky2, dgky2,
+          f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+    instance(i, y1, y2, d1, d2, h, hh, k, obs)
+    (
+      gd2k = f_g_asym(d2*k);
+      tanhterm1 = tanh(-d1 - x - gd2k);
+      tanhterm2 = tanh(d1 - d2 + x + gd2k);
+      
+      iter = 0;
+      while(
+        iter += 1;
+        ky2 = k*y2;
+        gky2 = f_g_asym(ky2);
+        dgky2 = f_dg_asym(ky2);
+      
+        sig1 = -x - y1 - gky2;
+        thsig1 = tanh(sig1);
+        thsig1sq = thsig1 * thsig1;
+      
+        sig2 = x + y1 - y2 + gky2;
+        thsig2 = tanh(sig2);
+        thsig2sq = thsig2 * thsig2;
+      
+        hhthsig1sqm1 = hh*(thsig1sq - 1);
+        hhthsig2sqm1 = hh*(thsig2sq - 1);
+      
+        f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+        f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+        res = abs(f1) + abs(f2);
+        
+        a = 1 - hhthsig1sqm1;
+        b = -k*hhthsig1sqm1*dgky2;
+        c = hhthsig2sqm1;
+        d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+      
+        norm = 1 / ( a*d - b*c );
+        y1 = y1 - ( d*f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter);
+      );
+      
+      d1 = y1;
+      d2 = y2;
+      x - y2;
+    );     
+    
+    function eval_MS20_nonlinHP_tanh_asym(x)
+      global(epsilon, maxiter)
+      local(iter, res, gkd2px, kxpy2, gkxpy2, dgky2px,
+            f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+      instance(i, y1, y2, d1, d2, h, hh, k, obs)
+      (
+        gkd2px = f_g_asym(k*(d2 + x));
+        tanhterm1 = tanh(-d1 - gkd2px);
+        tanhterm2 = tanh(d1 - d2 - x + gkd2px);
+        
+        iter = 0;
+        while(
+          iter += 1;
+          kxpy2 = k*(x + y2);
+          gkxpy2 = f_g_asym(kxpy2);
+          dgky2px = f_dg_asym(kxpy2);
+        
+          sig1 = -y1 - gkxpy2;
+          thsig1 = tanh(sig1);
+          thsig2sq = thsig2 * thsig2;
+        
+          sig2 = -x + y1 - y2 + gkxpy2;
+          thsig2 = tanh(sig2);
+          thsig2sq = thsig2 * thsig2;
+        
+          hhthsig1sqm1 = (thsig1sq - 1);
+          hhthsig2sqm1 = (thsig2sq - 1);
+        
+          f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+          f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+          res = abs(f1) + abs(f2);
+          
+          a = -hhthsig1sqm1 + 1;
+          b = -k*hhthsig1sqm1*dgky2px;
+          c = hhthsig2sqm1;
+          d = (k*dgky2px - 1)*hhthsig2sqm1 + 1;
+          
+          norm = 1 / ( a*d - b*c );
+          y1 = y1 - ( d*f1 - b*f2 ) * norm;
+          y2 = y2 - ( a*f2 - c*f1 ) * norm;
+        (res > epsilon) && (iter < maxiter);
+        );
+          
+        d1 = y1;
+        d2 = y2;
+        
+        y2 + x
+      );      
+      
  function processSample_ms20(s, choice)
  local()
  instance(BP, HP, BR, LP)
@@ -656,6 +869,23 @@ function eval_linearSVF_BR(v0)
       s = LP.eval_MS20_nonlin_tanh(s)
     );
   );
+  
+ function processSample_ms20_asym(s, choice)
+ local()
+ instance(BP, HP, BR, LP)
+ global()
+  (
+    (choice == 1) ? (
+      s = BP.eval_MS20_nonlinBP_tanh_asym(s)  
+    ) : (choice == 2) ? (
+      s = HP.eval_MS20_nonlinHP_tanh_asym(s)
+    ) : (choice == 3) ? (
+      s = BR.eval_MS20_nonlinBR_tanh_asym(s)
+    ) : (
+      // LP is last and first
+      s = LP.eval_MS20_nonlin_tanh_asym(s)
+    );
+  );  
   
  function processSample_lin(s, choice)
  local()
@@ -747,6 +977,21 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog)
   ) : ( filter_type == 5 ) ? (
     L.b303.init_303(sliderCutoffL, sliderReso);
     R.b303.init_303(sliderCutoffR, sliderReso);    
+  ) : ( filter_type == 6 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_ms20 ? safety_limit_ms20 : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_ms20 ? safety_limit_ms20 : sliderCutoffR;
+    );
+  
+    L.LP.init_MS20(sliderCutoffL, sliderReso);
+    L.HP.hh = L.BR.hh = L.BP.hh = L.LP.hh;
+    L.HP.h = L.BR.h = L.BP.h = L.LP.h;
+    L.HP.k = L.BR.k = L.BP.k = L.LP.k;
+    
+    R.LP.init_MS20(sliderCutoffR, sliderReso);
+    R.HP.hh = R.BR.hh = R.BP.hh = R.LP.hh;
+    R.HP.h = R.BR.h = R.BP.h = R.LP.h;
+    R.HP.k = R.BR.k = R.BP.k = R.LP.k;
   );
   
   filter_choiceL = floor(sliderMorphL*4);
@@ -787,6 +1032,9 @@ global(ssl, ssr)
   ) : ( filter_type == 5 ) ? (
     ssl = L.b303.eval_303(ssl, filter_choiceL, frac_morphL);
     ssr = R.b303.eval_303(ssr, filter_choiceR, frac_morphR);
+  ) : ( filter_type == 6 ) ? (
+    ssl = L.processSample_ms20_asym(ssl, filter_choiceL) * i_morphL + L.processSample_ms20_asym(ssl, filter_choiceL + 1) * frac_morphL;
+    ssr = R.processSample_ms20_asym(ssr, filter_choiceR) * i_morphR + R.processSample_ms20_asym(ssr, filter_choiceR + 1) * frac_morphR;
   );
 );
 
