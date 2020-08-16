@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.74
+version: 0.75
 author: Joep Vanlier
-changelog: Expose feedbacks.
+changelog: Bugfix to work around weird project initialization behaviour.
 license: MIT
 provides:
   Reflectosaurus_Dependencies/*
@@ -1551,12 +1551,6 @@ function serializeNode()
     /* Memory to expand into when features are added */
     memset(0, 0, 56);
     file_mem(0, 0, 56); /* Reduce this by one when you want to add features */
-    
-    /* <0 if writing */
-    ( file_avail(0) >= 0 ) ? (
-      this.updateToSlider();
-      quickSwitch = 1;
-    );
   );
   
 connectorSize = 16;
@@ -2359,6 +2353,7 @@ dc0.init_HP6(19/srate);
 dc1.init_HP6(19/srate);
 
 @serialize
+allow_updates = 0;
 file_var(0, maxTime);
 file_var(0, minTime);
 
@@ -2375,24 +2370,10 @@ node10.serializeNode();
 node11.serializeNode();
 
 file_var(0, HQ);
-ctempo = tempo;
-file_var(0, ctempo);
+file_var(0, current_tempo);
+
 csync = SyncMode;
-file_var(0, csync);
-
-// Would've been nicer to do this at the node level, but too late now.
-( file_avail(0) >= 0 ) ? (
-  (csync > 0) ? (
-    (tempo / ctempo != 1) ? (
-      (ctempo > 0) && (tempo > 0) ? (
-        rescaleToTempo(ctempo / tempo);
-        updateToSliderAll()
-      );
-    );
-  );
-  updateToSliderAll();
-);
-
+file_var(0, SyncMode);
 file_var(0, dc_correction);
 file_var(0, globalFeedbackAttn);
 file_var(0, sendSaturation);
@@ -2409,21 +2390,29 @@ file_var(0, pitch);
 // Some extra padding to make sure that future variables start at zero.
 memset(0,0,100);
 file_mem(0,0,100);
+
+( file_avail(0) >= 0 ) ? (
+  schedule_rescale = 1;
+);
+allow_updates = 1;
 @slider
 
 @block
 midi.processMIDIBlock();
 
-(tempo != current_tempo) ? (  
-  SyncMode > 0 ? (
-    (current_tempo > 0) && (tempo > 0) ? (   
-      rescaleToTempo(current_tempo / tempo);
-      updateToSliderAll();
+allow_updates == 2 ? (
+  (tempo != current_tempo) ? (  
+    SyncMode > 0 ? (
+      (current_tempo > 0) && (tempo > 0) ? (
+        rescaleToTempo(current_tempo / tempo);
+        updateToSliderAll();
+      );
     );
+    
+    current_tempo = tempo;
   );
-  
-  current_tempo = tempo;
 );
+allow_updates ? allow_updates += 1;
 
 pitch && compensate_pdc ? (
   pdc_bot_ch=0;
@@ -2497,6 +2486,23 @@ updateGlobalFeedback();
 israte = 1.0 / srate;
 
 @sample
+schedule_rescale ? (
+  allow_updates == 2 ? (
+    // Would've been nicer to do this at the node level, but too late now.
+    (current_tempo > 0) && (tempo > 0) ? (
+      (SyncMode > 0) ? (
+        rescaleToTempo(current_tempo / tempo);
+        current_tempo = tempo;
+        updateToSliderAll()
+      );
+      schedule_rescale = 0;
+    );
+    
+    quickSwitch = 1;
+    updateToSliderAll();
+  );
+);
+
 midi.processMIDISample() ? (
   pitchMod = 2^(-(midi.lastNote - 69)/12);
   quickSwitch = 1;
