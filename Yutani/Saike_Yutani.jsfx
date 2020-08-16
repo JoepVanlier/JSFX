@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.16
+version: 0.17
 author: Joep Vanlier
-changelog: Hotfix blep
+changelog: Faux analog controls. Added noise osc.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -266,6 +266,15 @@ file_var(0, m_lfo_speed_vel);
 file_var(0, fm_level_vel);
 file_var(0, c_lfo_enabled);
 file_var(0, m_lfo_enabled);
+file_var(0, randomness_level);
+
+file_var(0, noise_db);
+file_var(0, noise_decay);
+file_var(0, noise_cutoff);
+
+file_var(0, noise_db_vel);
+file_var(0, noise_decay_vel);
+file_var(0, noise_cutoff_vel);
 
 loop(199,
   file_var(0, 0);
@@ -307,6 +316,7 @@ osc1_correction = (osc1_shape == 2) || (osc1_shape == 3) ? 1.25 : 1;
 osc2_correction = (osc2_shape == 2) || (osc2_shape == 3) ? 1.25 : 1;
 
 @sample
+
 shaper ? (
   cur_ceiling = clamp(current_ceiling_interpolator.interpolate() + current_ceiling_vel, 0, 48);
   sat_slider_update(cur_ceiling, warmth_interpolator.interpolate(), oversampling);
@@ -323,6 +333,10 @@ lf_update_step % 8 == 0 ? (
   current_m_lfo_speed = 10^((m_lfo_speed + m_lfo_speed_velmod)/15) - 1;
   
   amp_correction = .25 / (1.0 + amp2 + amp3 + amp4);
+  
+  ss += 1;
+  faux_analog = (.01*sin(.00008*ss) + .2*(rand()-0.5)) * randomness_level;
+  faux_analog2 = (.01*cos(.00006431*ss) + .2*(rand()-0.5)) * randomness_level;
 );
 
 midi.processMIDISample() ? (
@@ -355,6 +369,8 @@ midi.processMIDISample() ? (
     drive_velmod = drive_vel * midi.lastVel;
     boost_velmod = boost_vel * midi.lastVel;
 
+    tn = 0;
+
     c_lfo_reset ? c_lfo_time = c_lfo_center_phase;
     m_lfo_reset ? m_lfo_time = m_lfo_center_phase;
     
@@ -366,6 +382,10 @@ midi.processMIDISample() ? (
     fm_level_velmod = fm_level_vel * midi.lastVel;
     
     current_fb = .99 * cl01(fb + fb_vel * midi.lastVel);
+  
+    current_noise_db = noise_db + noise_db_vel * midi.lastVel - 48;
+    noise_vol = current_noise_db > -47.8 ? exp(0.11512925464970229 * current_noise_db) : 0;
+    noise.noise_osc(noise_vol, 1-noise_cutoff + noise_cutoff_vel * midi.lastVel, noise_decay + noise_decay_vel * midi.lastVel);
   
     amp_env.calc_times(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
     amp_env.reset_envelope(reset && amp_before_filter);
@@ -445,10 +465,10 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   y = y + amp_accent*y*abs(y)*amp_envelope;
   y += blepLevel + blampLevel;
   y *= amp_correction;
-  
+  y += noise.update_noise();
 
 // Filter modulation section
-  sliderCutoffL = sliderCutoffR = cutoff_interpolator.interpolate() + cutoff_velmod;
+  sliderCutoffL = sliderCutoffR = cutoff_interpolator.interpolate() + cutoff_velmod + .1*faux_analog;
   sliderReso = clamp(reso_interpolator.interpolate() + reso_velmod, 0, 1);
   sliderMorphL = sliderMorphR = morph_interpolator.interpolate() + morph_velmod;
   morph_phase = morph_phase_interpolator.interpolate();
@@ -514,10 +534,6 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   preamp      = exp(log10d20_conversion*current_drive);
   inv_preamp  = exp(-log10d20_conversion*current_drive);
   final_boost = exp(log10d20_conversion*current_boost);
-  
-
-  //y = dc0.eval_HP6(y);
-  //y = dc1.eval_HP6(y);
   
   yr = yl = y *= preamp;
   
@@ -614,10 +630,23 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   
 
 @gfx 1454 505
-
 render_time += .025;
 gfx_set(21/255, 20/255, 21/255, 1.0);
 gfx_rect(0, 0, gfx_w, gfx_h);
+
+t_anim += .005;
+t_desync = 0.5*$pi;
+t_ref = 0;
+loop(50,
+  tp = t_anim + t_ref;
+  xx = .5*gfx_h+gfx_w*sin(tp);
+  yy = .35*gfx_h+gfx_h*cos(tp);
+  xx2 = .25*gfx_h+gfx_w*sin(tp + t_desync);
+  yy2 = .25*gfx_h+gfx_h*cos(tp + t_desync);
+  gfx_set(.5, 1, .5, .04+.1*abs(sin(render_time)));
+  gfx_line(xx2, yy2, xx, yy, 3);
+  t_ref += .01 + .1 * abs(sin(.065272*render_time));
+);
 
 xs = 10;
 ys = 10;
@@ -732,7 +761,7 @@ activeModifier == 0 ? (
 cX = nextPanel + panelSpacing;
 
 pwm_active = (slider(OSC1_SELECT) == 4) || (slider(OSC2_SELECT) == 4);
-nextPanel = drawPanel("PWM", cX, cY - .53*panelHeight + .2*knobSize, 1.9*knobSpacing, panelHeight, pwm_active);
+nextPanel = drawPanel("PWM", cX, cY - .53*panelHeight + .2*knobSize, 1.8*knobSpacing, panelHeight, pwm_active);
 cX += .6*knobSize;
 gfx_setfont(KNOB_FONT);
 
@@ -829,6 +858,34 @@ pitchDecayKnob.knob_draw_modifier(pitch_decay_vel, bipolar, mod1_color_r, mod1_c
 activeModifier == 0 ? (
   pitchDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( pitch_decay = pitchDecayKnob.value; slider_automate(pitch_decay); );
 ) : pitchDecayKnob.knob_modifier_processMouse(0, pitch_decay_vel) ? ( pitch_decay_vel = pitchDecayKnob.value; );
+
+cX = nextPanel + panelSpacing;
+
+
+nextPanel = drawPanel("NOISE", cX, cY - .53*panelHeight + .2*knobSize, 1.8*knobSpacing, panelHeight, pwm_active);
+cX += .6*knobSize;
+gfx_setfont(KNOB_FONT);
+
+noiseAmpKnob.knob_set(sprintf(1, "V"), 1, noise_db/48);
+noiseAmpKnob.drawKnob(cX, cY-.85*knobSize, floor(.36*knobSize), "", "Noise level.", 1.0);
+noiseAmpKnob.knob_draw_modifier(noise_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  noiseAmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( noise_db = noiseAmpKnob.value * 48; );
+) : noiseAmpKnob.knob_modifier_processMouse(0, noise_db_vel / 48) ? ( noise_db_vel = noiseAmpKnob.value * 48; );
+
+noiseCutoffKnob.knob_set(sprintf(1, "C"), 1, 1-noise_cutoff);
+noiseCutoffKnob.drawKnob(cX, cY, floor(.36*knobSize), "", "Noise Cutoff Frequency.", 1.0);
+noiseCutoffKnob.knob_draw_modifier(noise_cutoff_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  noiseCutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .4) ? ( noise_cutoff = cl01(1-noiseCutoffKnob.value); );
+) : noiseCutoffKnob.knob_modifier_processMouse(0, noise_cutoff_vel) ? ( noise_cutoff_vel = noiseCutoffKnob.value; );
+
+noiseDecayKnob.knob_set(sprintf(1, "D"), 1, noise_decay);
+noiseDecayKnob.drawKnob(cX, cY+.85*knobSize, floor(.36*knobSize), "", "Noise Decay.", 1.0);
+noiseDecayKnob.knob_draw_modifier(noise_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 0 ? (
+  noiseDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .85) ? ( noise_decay = cl01(noiseDecayKnob.value); );
+) : noiseDecayKnob.knob_modifier_processMouse(0, noise_decay_vel) ? ( noise_decay_vel = noiseDecayKnob.value; );
 
 cX = nextPanel + panelSpacing;
 
@@ -1347,7 +1404,7 @@ showOptions = 1;
 showOptions ? (
   cX = nextPanel + panelSpacing;
   
-  nextPanel = drawPanel("OPTIONS", cX, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight, 1);
+  nextPanel = drawPanel("OPTIONS", cX, cY - .53*panelHeight + .2*knobSize, 11.25*knobSpacing, panelHeight, 1);
   cX += 2*knobSpacing;
   oversamplingKnob.active = 1;
   oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
@@ -1362,6 +1419,13 @@ showOptions ? (
       slider_automate(oversampling);
       updateSlider();
     );
+  );
+  
+  cX += 2.5 * knobSize;
+  fauxAnalogKnob.knob_set("", 1, randomness_level);
+  fauxAnalogKnob.drawKnob(cX, cY, knobSize, "Analog", "A combination of very subtle detune of all oscillators\nand slight noise on the cutoff dial.", 1.0);
+  fauxAnalogKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    randomness_level = fauxAnalogKnob.value;
   );
   
   cX += 2.5 * knobSize;
