@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.20
+version: 0.22
 author: Joep Vanlier
-changelog: Add pitch bend (+- 2 semitones). Fix stuttering issue hardsync when analog mode is engaged. Add vibrato. Add mod wheel modulators.
+changelog: Add spatializer.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -104,6 +104,7 @@ import Saike_Yutani_oversampling.jsfx-inc
 import Saike_Yutani_widgets.jsfx-inc
 import Saike_Yutani_sample_delay_buffer.jsfx-inc
 import Saike_Yutani_LFOs.jsfx-inc
+import Saike_Yutani_Delays.jsfx-inc
 
 @init
 two_pi = 2 * $pi;
@@ -141,6 +142,14 @@ freemem = (sinc_flt3 = freemem) + 10000;
 freemem = (sinc_flt4 = freemem) + 10000;
 freemem = (sinc_tmp = freemem) + 10000;
 
+freemem = (l_buffer = freemem) + 2001;
+freemem = (r_buffer = freemem) + 2001;
+
+// Chorus materials
+l_delay.initBuffer(l_buffer, l_buffer + 2000);
+r_delay.initBuffer(r_buffer, r_buffer + 2000);
+l_delay_filt.init_linearSVF_absolute(340, 0);
+r_delay_filt.init_linearSVF_absolute(340, 0);
 
 function initialize_interpolators()
 (
@@ -296,6 +305,8 @@ file_var(0, m_lfo_amnt_mod);
 file_var(0, c_lfo_speed_mod);
 file_var(0, m_lfo_speed_mod);
 
+file_var(0, chorus_enabled);
+
 loop(199,
   file_var(0, 0);
 );
@@ -343,8 +354,8 @@ shaper ? (
 );
 
 lf_update_step += 1;
-lf_update_step % 8 == 0 ? (
-  mod_level = midi.lastWheel;
+lf_update_step % 8 == 0 ? ( 
+  mod_level = midi.smoothWheel;
   
   cutoff_mw = cutoff_mod * mod_level;
   reso_mw = reso_mod * mod_level;
@@ -685,6 +696,22 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     spl0 = spl0 / (1+exp(fb));
     spl1 = spl1 / (1+exp(fb));
   );
+  
+  chorus_enabled ? (
+    // Subtle bass preserving chorus
+    l_delay.writeBuffer(l_delay_filt.eval_linearSVF_HP(spl0));
+    r_delay.writeBuffer(r_delay_filt.eval_linearSVF_HP(spl1));
+    
+    csample += 1;
+    
+    chorus_tri = naiveTri(csample * israte * .25);
+    l_offset = (0.0075 + 0.002 * chorus_tri) * srate;
+    r_offset = (0.0075 - 0.002 * chorus_tri) * srate;
+    
+    spl0 = spl0 - .5 * r_delay.readBuffer(r_offset);
+    spl1 = spl1 - .5 * l_delay.readBuffer(l_offset);
+  );
+  
   
 
 @gfx 1454 505
@@ -1505,13 +1532,16 @@ showOptions ? (
       updateSlider();
     );
   );
-  
+ 
   cX += 2.5 * knobSize;
   fauxAnalogKnob.knob_set("", 1, randomness_level);
   fauxAnalogKnob.drawKnob(cX, cY, knobSize, "Analog", "A combination of very subtle detune of all oscillators\nand slight noise on the cutoff dial.", 1.0);
   fauxAnalogKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
     randomness_level = fauxAnalogKnob.value;
   );
+  
+  chorusToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, chorus_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Bass preserving spatializer (pairs well with delay!)");
+  chorus_enabled = chorusToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   cX += 2.5 * knobSize;
   inertiaKnob.active = 1;
