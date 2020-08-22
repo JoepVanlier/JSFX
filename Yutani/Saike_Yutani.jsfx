@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.22
+version: 0.23
 author: Joep Vanlier
-changelog: Add spatializer.
+changelog: Add option to prefer musically synced timings. Fix LFO tempo-sync (was incorrect). Fix ms values on decay parameters (they were ten-fold bigger).
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -306,6 +306,7 @@ file_var(0, c_lfo_speed_mod);
 file_var(0, m_lfo_speed_mod);
 
 file_var(0, chorus_enabled);
+file_var(0, tempo_sync_envelopes);
 
 loop(199,
   file_var(0, 0);
@@ -433,14 +434,21 @@ midi.processMIDISample() ? (
     noise_vol = current_noise_db > -47.8 ? exp(0.11512925464970229 * current_noise_db) : 0;
     noise.noise_osc(noise_vol, 1-noise_cutoff + noise_cutoff_vel * midi.lastVel, noise_decay + noise_decay_vel * midi.lastVel);
   
-    amp_env.calc_times(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
+    tempo_sync_envelopes ? (
+      amp_env.calc_times_sync(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
+      pitch_env.calc_times_sync(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
+      cutoff_env.calc_times_sync(cl01(cutoff_atk + cutoff_atk_vel), cl01(cutoff_decay + cutoff_decay_vel), cl01(cutoff_sustain + cutoff_sustain_vel));
+    ) : (
+      amp_env.calc_times(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
+      pitch_env.calc_times(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
+      cutoff_env.calc_times(cl01(cutoff_atk + cutoff_atk_vel), cl01(cutoff_decay + cutoff_decay_vel), cl01(cutoff_sustain + cutoff_sustain_vel));
+    );
+
     amp_env.reset_envelope(reset && amp_before_filter);
-    pitch_env.calc_times(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
     pitch_env.reset_envelope();
-    cutoff_env.calc_times(cl01(cutoff_atk + cutoff_atk_vel), cl01(cutoff_decay + cutoff_decay_vel), cl01(cutoff_sustain + cutoff_sustain_vel));
     cutoff_env.reset_envelope(cutoff_reset);
     !cutoff_reset ? cutoff_env.k_rise = .25*cutoff_env.k_rise;
- 
+
      pwm_master_active = slider(OSC1_SELECT) == 4;
      pwm_dt = cl01(pwm_rate + pwm_rate_vel) * 10.0/srate; //.0002;
      pwm_position = cl01(pwm_phase + pwm_phase_vel) * 2.0 * $pi;
@@ -449,7 +457,11 @@ midi.processMIDISample() ? (
     
     k_glide = 1;
   ) : ( midi.notesOn > 1 ) ? (
-    k_glide = calc_k(glide_time);
+    tempo_sync_envelopes ? (
+      k_glide = calc_k_tsync(glide_time);
+    ) : (
+      k_glide = calc_k(glide_time);
+    );
   );
 );
 
@@ -987,7 +999,8 @@ cX += knobSize*2.5;
 resetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on note.");
 reset = resetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
-ampAttackKnob.knob_set(amp_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_atk))), 1, amp_atk);
+tempo_sync_envelopes ? ( ampAttackKnob.knob_set(getFastEnvelopeLabel(amp_atk), 1, amp_atk);
+) : ampAttackKnob.knob_set(amp_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_atk))), 1, amp_atk);
 ampAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
 ampAttackKnob.knob_draw_modifier(amp_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( ampAttackKnob.knob_modifier_processMouse(0, amp_atk_vel) ? ( amp_atk_vel = ampAttackKnob.value; );
@@ -996,7 +1009,8 @@ activeModifier == 1 ? ( ampAttackKnob.knob_modifier_processMouse(0, amp_atk_vel)
 
 cX += knobSize*2.5;
 
-ampDecayKnob.knob_set(amp_decay > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_decay))), 1, amp_decay);
+tempo_sync_envelopes ? ( ampDecayKnob.knob_set(getFastEnvelopeLabel(amp_decay), 1, amp_decay);
+) : ampDecayKnob.knob_set(amp_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*amp_decay))), 1, amp_decay);
 ampDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
 ampDecayKnob.knob_draw_modifier(amp_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( ampDecayKnob.knob_modifier_processMouse(0, amp_decay_vel) ? ( amp_decay_vel = ampDecayKnob.value; );
@@ -1300,8 +1314,10 @@ envAmountKnob.knob_draw_modifier(env_amnt_vel * .5, bipolar, mod1_color_r, mod1_
 activeModifier == 1 ? ( envAmountKnob.knob_modifier_processMouse(0, env_amnt_vel * .5) ? ( env_amnt_vel = envAmountKnob.value * 2; );
 ) : envAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( env_amnt = envAmountKnob.value * 2 - 1; slider_automate(env_amnt); );
 
+
 cX += knobSize*2.5;
-envAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), 1, cutoff_atk);
+tempo_sync_envelopes ? ( envAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), 1, cutoff_atk);
+) : envAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), 1, cutoff_atk);
 envAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
 envAttackKnob.knob_draw_modifier(cutoff_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( envAttackKnob.knob_modifier_processMouse(0, cutoff_atk_vel) ? ( cutoff_atk_vel = envAttackKnob.value; );
@@ -1311,7 +1327,8 @@ cutoffResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSiz
 cutoff_reset = cutoffResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 cX += knobSize*2.5;
-envDecayKnob.knob_set(env_decay > .5 ? sprintf(19, "%d ms", (3 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (3 * 10^(2*cutoff_decay))), 1, cutoff_decay );
+tempo_sync_envelopes ? ( envDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), 1, cutoff_decay);
+) : envDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), 1, cutoff_decay );
 envDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
 envDecayKnob.knob_draw_modifier(cutoff_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( envDecayKnob.knob_modifier_processMouse(0, cutoff_decay_vel) ? ( cutoff_decay_vel = envDecayKnob.value; );
@@ -1485,10 +1502,9 @@ cX = nextPanel + panelSpacing;
 nextPanel = drawPanel("PITCH MOD", cX, cY - .53*panelHeight + .2*knobSize, 6.125*knobSpacing, panelHeight, 1);
 
 cX += 2 * knobSpacing;
-glideKnob.active = 1;
-glideKnob.value = glide_time;
+tempo_sync_envelopes ? ( glideKnob.knob_set(getFastEnvelopeLabel(glide_time), 1, glide_time);
+) : glideKnob.knob_set(sprintf(30, "%.1f ms", (3 * 10^(2*glide_time))), 1, glide_time);
 glideKnob.drawKnob(cX, cY, knobSize, "Glide", "Glide", 1.0);
-glideKnob.label = sprintf(30, "%.1f ms", (3 * 10^(2*glide_time)));
 glideKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
   glide_time = glideKnob.value;
   slider_automate(glide_time);
@@ -1518,6 +1534,27 @@ showOptions ? (
   
   nextPanel = drawPanel("OPTIONS", cX, cY - .53*panelHeight + .2*knobSize, 11.25*knobSpacing, panelHeight, 1);
   cX += 2*knobSpacing;
+  
+  tempoSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, tempo_sync_envelopes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use tempo synced envelopes.");
+  tempo_sync_envelopes_tmp = tempoSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  tempo_sync_envelopes != tempo_sync_envelopes_tmp ? (
+    tempo_sync_envelopes = tempo_sync_envelopes_tmp;
+    tempo_sync_envelopes ? (
+      amp_atk = to_synced(amp_atk, 1.0);
+      amp_decay = to_synced(amp_decay, 0.1);
+      cutoff_atk = to_synced(cutoff_atk, 1.0);
+      cutoff_decay = to_synced(cutoff_decay, 0.1);
+      glide_time = to_synced(glide_time, 1.0);
+    ) : (
+      amp_atk = to_non_synced(amp_atk, 1.0);
+      amp_decay = to_non_synced(amp_decay, 0.1);
+      cutoff_atk = to_non_synced(cutoff_atk, 1.0);
+      cutoff_decay = to_non_synced(cutoff_decay, 0.1);
+      glide_time = to_non_synced(glide_time, 1.0);
+    );
+  );
+  
+  
   oversamplingKnob.active = 1;
   oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
     oversamplingKnob.value = (oversampling - 1) / 7;
