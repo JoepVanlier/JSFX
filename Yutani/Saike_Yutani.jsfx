@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.23
+version: 0.24
 author: Joep Vanlier
-changelog: Add option to prefer musically synced timings. Fix LFO tempo-sync (was incorrect). Fix ms values on decay parameters (they were ten-fold bigger).
+changelog: Improve anti-aliasing for Fin and Tri.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -432,8 +432,9 @@ midi.processMIDISample() ? (
   
     current_noise_db = noise_db + noise_db_vel * midi.lastVel - 48;
     noise_vol = current_noise_db > -47.8 ? exp(0.11512925464970229 * current_noise_db) : 0;
-    noise.noise_osc(noise_vol, 1-noise_cutoff + noise_cutoff_vel * midi.lastVel, noise_decay + noise_decay_vel * midi.lastVel);
+    noise.noise_osc(noise_vol, 1-noise_cutoff + noise_cutoff_vel * midi.lastVel);
   
+    noise.noise_osc_decay(noise_decay + noise_decay_vel * midi.lastVel);
     tempo_sync_envelopes ? (
       amp_env.calc_times_sync(cl01(amp_atk + amp_atk_vel), cl01(amp_decay + amp_decay_vel), cl01(amp_sustain + amp_sustain_vel));
       pitch_env.calc_times_sync(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
@@ -477,9 +478,10 @@ current_pwm_active ? (
   );
 );
 
-amp_envelope = amp_env.update_envelope(midi.notesOn > 0);
-pitch_envelope = pitch_env.update_envelope(midi.notesOn > 0);
-cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
+m_notes_on = midi.notesOn > 0;
+amp_envelope = amp_env.update_envelope(m_notes_on);
+pitch_envelope = pitch_env.update_envelope(m_notes_on);
+cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
 
 // Oscillator section
   // Pulls in k_glide, hard_sync, amp_envelope, pitch_envelope and pitch_env from global namespace
@@ -490,23 +492,20 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   oscs3.fm_level = current_fm;
   oscs4.fm_level = current_fm;
    
-  oscs.update_oscs_vol(osc1_vol, osc2_vol);
-  oscs2.update_oscs_vol(osc1_vol, osc2_vol);
-  oscs3.update_oscs_vol(osc1_vol, osc2_vol);
-  oscs4.update_oscs_vol(osc1_vol, osc2_vol);
-  
   y = 0;
   preamp_gain = amp_before_filter ? amp_envelope : 1;
-  y += oscs.update_oscs(preamp_gain);
+  o1_vol = osc1_vol * preamp_gain;
+  o2_vol = osc2_vol * preamp_gain;
+  y += oscs.update_oscs(o1_vol, o2_vol);
   multi == 2 ? (
-    y += oscs2.update_oscs(preamp_gain)*amp2;
+    y += oscs2.update_oscs(o1_vol, o2_vol)*amp2;
   ) : ( multi == 3 ) ? (
-    y += oscs2.update_oscs(preamp_gain)*amp2;
-    y += oscs3.update_oscs(preamp_gain)*amp3;
+    y += oscs2.update_oscs(o1_vol, o2_vol)*amp2;
+    y += oscs3.update_oscs(o1_vol, o2_vol)*amp3;
   ) : ( multi == 4 ) ? (
-    y += oscs2.update_oscs(preamp_gain)*amp2;
-    y += oscs3.update_oscs(preamp_gain)*amp3;
-    y += oscs4.update_oscs(preamp_gain)*amp4;
+    y += oscs2.update_oscs(o1_vol, o2_vol)*amp2;
+    y += oscs3.update_oscs(o1_vol, o2_vol)*amp3;
+    y += oscs4.update_oscs(o1_vol, o2_vol)*amp4;
   );
   
   blep_type ? (
@@ -524,7 +523,6 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
   y += blepLevel + blampLevel;
   y *= amp_correction;
   y += noise.update_noise();
-
 
 // Filter modulation section
   sliderCutoffL = sliderCutoffR = cutoff_interpolator.interpolate() + cutoff_velmod + cutoff_mw + .1*faux_analog;
@@ -554,7 +552,7 @@ cutoff_envelope = cutoff_env.update_envelope(midi.notesOn > 0);
     (2.0 * (t > 0.5) - 1.0)
   );
 
-  /* FM modulation of the filter */
+  // FM modulation of the filter
   current_fm_amnt != 0 ? (
     updateFMFilter();
     FM_t += (2^floor(fm_factor))*440*israte*pitch;
