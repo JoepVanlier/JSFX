@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.28
+version: 0.29
 author: Joep Vanlier
-changelog: Place modulator inside (experimental).
+changelog: Allow +12 dB more gain for the sub oscillator. Make semitone movement for the semitone dials the default. Improve glide behaviour. Allow locking second osc pitch.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -85,7 +85,7 @@ slider53:fb=0<0, 1, .000001>-Feedback
 slider54:vibrato_amount=0<0,1,.0000001>-Vibrato Amount
 slider55:vibrato_frequency=0<0,10,.00001>-Vibrato frequency
 
-slider56:subosc_db=-9<-48, 0, .000001>-Sub oscillator Gain
+slider56:subosc_db=-9<-48, 12, .000001>-Sub oscillator Gain
 slider57:subosc_semi=-12<-36, 12, .000001>-Sub oscillator Semi
 
 slider62:fix_dc=0<0,1,1>Fix DC
@@ -117,7 +117,8 @@ SUBOSC_SELECT = 47;
 freemem = 0;
 
 freemem = (midimem = freemem) + 32768;
-midi.initializeMIDI(midimem, 1, 1);
+freemem = (note_history = freemem) + 32768;
+midi.initializeMIDI(midimem, note_history, 1, 1);
 midi.notesOn = 0;
 
 // Memory layout
@@ -319,6 +320,8 @@ file_var(0, subosc_enabled);
 file_var(0, subosc_pre);
 file_var(0, bonus_enabled);
 
+file_var(0, osc2_pitch_lock);
+
 loop(199,
   file_var(0, 0);
 );
@@ -403,15 +406,15 @@ lf_update_step % 8 == 0 ? (
   pitch_bend = 2^(bend * 0.08333333333333333333333333333333);
 );
 
-midi.processMIDISample() ? (
+(mmsg = midi.processMIDISample()) ? (
   midiChange = 1;
   
   FM_t = 0;
   pitch = 2^((midi.lastNote - 69)/12);
   keyfollow_mod = log(pitch) / log(20/22050);
- 
+  
   note_1 = midi.lastNote - 69 + (osc1_semi + osc1_semi_vel * midi.lastVel);
-  note_2 = midi.lastNote - 69 + (osc2_semi + osc2_semi_vel * midi.lastVel);
+  note_2 = (midi.lastNote - 69) * (1-osc2_pitch_lock) + (osc2_semi + osc2_semi_vel * midi.lastVel);
   sub_note = midi.lastNote - 69 + (subosc_semi + subosc_semi_vel * midi.lastVel);
   oscs.oscs_midinote(note_1, note_2, osc1_shape, osc2_shape);
   oscs2.oscs_midinote(note_1+detune2, note_2+detune2, osc1_shape, osc2_shape);
@@ -420,7 +423,7 @@ midi.processMIDISample() ? (
 
   subosc.subosc_midinote(sub_note);
  
-  midi.notesOn == 1  ? (
+  midi.notesOn == 1 && mmsg == 1 ? (
     cutoff_velmod = cutoff_vel * midi.lastVel;
     reso_velmod = reso_vel * midi.lastVel;
     morph_velmod = morph_vel * midi.lastVel;
@@ -478,7 +481,7 @@ midi.processMIDISample() ? (
      current_pwm_depth = 0.5 * cl01(pwm_depth + pwm_depth_vel);
     
     k_glide = 1;
-  ) : ( midi.notesOn > 1 ) ? (
+  ) : ( midi.notesOn > 0 ) ? (
     tempo_sync_envelopes ? (
       k_glide = calc_k_tsync(glide_time);
     ) : (
@@ -881,10 +884,15 @@ activeModifier == 2 ? ( osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_mod / 
 
 cX += 2.5 * knobSize;
 semiTonesKnob.knob_set(sprintf(1, "%.2f ", osc1_semi), 1, (osc1_semi + 36)/72);
-semiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 1 tuning.\n\nHold CTRL + SHIFT to rotate slower.\nHold outer mouse to round off to nearest\nsemitone.", 1.0);
+semiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 1 tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
 semiTonesKnob.knob_draw_modifier(osc1_semi_vel / 72, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( semiTonesKnob.knob_modifier_processMouse(0, osc1_semi_vel / 72) ? ( osc1_semi_vel = semiTonesKnob.value * 72; );
-) : ( semiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( osc1_semi = semiTonesKnob.value * 72 - 36; mouse_cap == 3 ? osc1_semi = floor(osc1_semi + .5); slider_automate(osc1_semi); ); );
+) : ( 
+  semiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    osc1_semi = semiTonesKnob.value * 72 - 36;
+    mouse_cap < 4 ? osc1_semi = floor(osc1_semi + .5); slider_automate(osc1_semi);
+  );
+);
 
 cX = nextPanel + panelSpacing;
 
@@ -950,11 +958,17 @@ activeModifier == 2 ? ( osc1FMKnob.knob_modifier_processMouse(0, fm_level_mod) ?
 ) : osc1FMKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( fm_level = osc1FMKnob.value; slider_automate(fm_level); );
 
 cX += 2.5 * knobSize;
+lockOsc2.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, osc2_pitch_lock, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Lock oscillator (no more pitch tracking).\n");
+osc2_pitch_lock = lockOsc2.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
 semiTonesKnob2.knob_set(sprintf(1, "%.2f ", osc2_semi), 1, (osc2_semi + 48)/96);
-semiTonesKnob2.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 2 tuning.\n\nHold CTRL + SHIFT to rotate slower.\nHold outer mouse to round off to nearest\nsemitone.", 1.0);
+semiTonesKnob2.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 2 tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
 semiTonesKnob2.knob_draw_modifier(osc2_semi_vel / 72, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( semiTonesKnob2.knob_modifier_processMouse(0, osc2_semi_vel / 96) ? ( osc2_semi_vel = semiTonesKnob2.value * 96; );
-) : semiTonesKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, (48+12)/96) ? ( osc2_semi = semiTonesKnob2.value * 96 - 48; mouse_cap == 3 ? osc2_semi = floor(osc2_semi + .5); slider_automate(osc2_semi); );
+) : semiTonesKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, (48+12)/96) ? ( 
+  osc2_semi = semiTonesKnob2.value * 96 - 48;
+  mouse_cap < 4 ? osc2_semi = floor(osc2_semi + .5); slider_automate(osc2_semi); 
+);
 
 
 cX += 1.65 * knobSize;
@@ -1017,29 +1031,35 @@ drawSelectionButton("Sine", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, SUBOSC_
 drawSelectionButton("Odd", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, SUBOSC_SELECT);
 drawSelectionButton("Even", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, SUBOSC_SELECT);
 drawSelectionButton("Tri", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, SUBOSC_SELECT);
+drawSelectionButton("Mud", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, SUBOSC_SELECT);
 
 cX += .65*knobSize;
 
 enableSubOsc.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, subosc_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable sub oscillator.\n");
 subosc_enabled = enableSubOsc.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
-subOscAmpKnob.knob_set(sprintf(1, "%.1f dB", subosc_db), subosc_enabled, (subosc_db + 48)/48);
+subOscAmpKnob.knob_set(sprintf(1, "%.1f dB", subosc_db), subosc_enabled, (subosc_db + 48)/60);
 subOscAmpKnob.drawKnob(cX, cY, knobSize, "Amplitude", "Sub oscillator gain.", 1.0);
 subOscAmpKnob.knob_draw_modifier(subosc_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 subOscAmpKnob.knob_draw_modifier(subosc_db_mod / 48, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_mod / 48) ? ( subosc_db_mod = subOscAmpKnob.value * 48; );
-) : activeModifier == 1 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_vel / 48) ? ( subosc_db_vel = subOscAmpKnob.value * 48; );
-) : subOscAmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/48) ? ( subosc_db = subOscAmpKnob.value * 48 - 48; slider_automate(subosc_db); );
+activeModifier == 2 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_mod / 60) ? ( subosc_db_mod = subOscAmpKnob.value * 60; );
+) : activeModifier == 1 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_vel / 60) ? ( subosc_db_vel = subOscAmpKnob.value * 60; );
+) : subOscAmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/60) ? ( subosc_db = subOscAmpKnob.value * 60 - 48; slider_automate(subosc_db); );
 
 cX += 2.5 * knobSize;
 subOscLocationToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, subosc_pre, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Mix sub in before filter.\n\nWhen enabled, the sub oscillator is mixed in before the filter\nmeaning the filter and distortion will exerts their effects on it.");
 subosc_pre = subOscLocationToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 subOscSemiTonesKnob.knob_set(sprintf(1, "%.2f ", subosc_semi), subosc_enabled, (subosc_semi + 36)/48);
-subOscSemiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Sub tuning.\n\nHold CTRL + SHIFT to rotate slower.\nHold outer mouse to round off to nearest\nsemitone.", 1.0);
+subOscSemiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Sub tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
 subOscSemiTonesKnob.knob_draw_modifier(subosc_semi_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( subOscSemiTonesKnob.knob_modifier_processMouse(0, subosc_semi_vel / 48) ? ( subosc_semi_vel = subOscSemiTonesKnob.value * 48; );
-) : ( subOscSemiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 24/48) ? ( subosc_semi = subOscSemiTonesKnob.value * 48 - 36; mouse_cap == 3 ? subosc_semi = floor(subosc_semi + .5); slider_automate(subosc_semi); ); );
+) : ( 
+  subOscSemiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 24/48) ? (
+    subosc_semi = subOscSemiTonesKnob.value * 48 - 36;
+    mouse_cap < 4 ? subosc_semi = floor(subosc_semi + .5); slider_automate(subosc_semi); 
+    );
+);
 
 
 cX = nextPanel + panelSpacing;
@@ -1706,6 +1726,10 @@ hinter.drawHint_draw();
 gfx_x = cX;
 gfx_y = cY + .3 * knobSize;
 gfx_printf("ALPHA / WORK IN PROGRESS! If you make a sound you really like, make sure you freeze it as the synth is still subject to change!");
-
+gfx_printf(" %d", midi.activeNoteMem[0]);
+gfx_printf(" %d", midi.activeNoteMem[1]);
+gfx_printf(" %d", midi.activeNoteMem[2]);
+gfx_printf(" %d", midi.activeNoteMem[3]);
+gfx_printf(" %d", midi.activeNoteMem[4]);
 last_mouse_x = mouse_x;
 last_mouse_y = mouse_y;
