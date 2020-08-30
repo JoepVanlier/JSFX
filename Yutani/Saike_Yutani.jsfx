@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.33
+version: 0.34
 author: Joep Vanlier
-changelog: Make style=1 the default.
+changelog: Move tuning update to semi-frequent loop. Add free LFO.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -88,6 +88,9 @@ slider55:vibrato_frequency=0<0,10,.00001>-Vibrato frequency
 slider56:subosc_db=-9<-48, 12, .000001>-Sub oscillator Gain
 slider57:subosc_semi=-12<-36, 12, .000001>-Sub oscillator Semi
 slider58:noise_type=0<0,4,1>-Noise type
+
+slider59:f_lfo_amnt=0<0,1,.00001>-Free LFO amount
+slider60:f_lfo_speed=0<0,20,.001>-Free LFO speed [-]
 
 slider62:fix_dc=0<0,1,1>Fix DC
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
@@ -217,8 +220,9 @@ function updateSlider()
 
 function updateTempo()
 (
-  cutoff_LFO.envelopeTempo((c_lfo_speed+c_lfo_speed_velmod)/20);
-  morph_LFO.envelopeTempo((m_lfo_speed+m_lfo_speed_velmod)/20);
+  cutoff_LFO.envelopeTempo((c_lfo_speed+c_lfo_speed_velmod + c_lfo_speed_mod * mod_level + c_lfo_speed_flfo * free_lfo)/20);
+  morph_LFO.envelopeTempo((m_lfo_speed+m_lfo_speed_velmod + m_lfo_speed_mod * mod_level)/20);
+  free_LFO.envelopeTempo((f_lfo_speed+f_lfo_speed_velmod + f_lfo_speed_mod * mod_level)/20);
 );
 
 last_fm_cutoff = -1;
@@ -327,16 +331,38 @@ file_var(0, osc2_pitch_lock);
 file_var(0, noise_follow);
 file_var(0, noise_pitch_track);
 
+file_var(0, f_lfo_type);
+file_var(0, f_lfo_sync);
+file_var(0, f_lfo_reset);
+file_var(0, f_lfo_enabled);
+file_var(0, f_lfo_amnt_mod);
+file_var(0, f_lfo_amnt_vel);
+file_var(0, f_lfo_speed_mod);
+file_var(0, f_lfo_speed_vel);
+file_var(0, f_lfo_center_phase);
+
+file_var(0, cutoff_flfo);
+file_var(0, reso_flfo);
+file_var(0, fm_amnt_flfo);
+file_var(0, fm_level_flfo);
+file_var(0, osc1_db_flfo);
+file_var(0, osc2_db_flfo);
+file_var(0, subosc_db_flfo);
+file_var(0, osc1_tune_flfo);
+file_var(0, osc2_tune_flfo);
+file_var(0, sosc_tune_flfo);
+file_var(0, c_lfo_amnt_flfo);
+file_var(0, c_lfo_speed_flfo);
+
+
 loop(199,
   file_var(0, 0);
 );
 
 @slider
 updateSlider();
-updateTempo();
 
 @block
-updateTempo();
 israte = 1.0 / srate;
 israte_radian = 2.0*$pi*israte;
 vib_factor = 16 * $pi * israte;
@@ -376,29 +402,45 @@ shaper ? (
   sat_slider_update(cur_ceiling, warmth_interpolator.interpolate(), oversampling);
 );
 
+function update_osc_pitch(note_change)
+(
+  note_1_pitch = note_1 + osc1_semi + osc1_tune_flfo * free_lfo;
+  note_2_pitch = note_2 + osc2_semi + osc2_tune_flfo * free_lfo;
+  sub_pitch = sub_note + subosc_semi + sosc_tune_flfo * free_lfo;
+  oscs.oscs_update_settings(note_1_pitch, note_2_pitch, osc1_shape, osc2_shape, note_change);
+  oscs2.oscs_update_settings(note_1_pitch + detune2, note_2_pitch+detune2, osc1_shape, osc2_shape, note_change);
+  oscs3.oscs_update_settings(note_1_pitch + detune3, note_2_pitch+detune3, osc1_shape, osc2_shape, note_change);
+  oscs4.oscs_update_settings(note_1_pitch + detune4, note_2_pitch+detune4, osc1_shape, osc2_shape, note_change);
+  subosc.subosc_update_settings(sub_pitch, note_change);
+);
+
 lf_update_step += 1;
 lf_update_step % 8 == 0 ? ( 
+  updateTempo();
+  
   mod_level = midi.smoothWheel;
   
-  cutoff_mw = cutoff_mod * mod_level;
-  reso_mw = reso_mod * mod_level;
-  fm_amnt_mw = fm_amnt_mod * mod_level;
-  fm_level_mw = fm_level_mod * mod_level;
+  cutoff_mw = cutoff_mod * mod_level + cutoff_flfo * free_lfo;
+  reso_mw = reso_mod * mod_level + reso_flfo * free_lfo;
+  fm_amnt_mw = fm_amnt_mod * mod_level + fm_amnt_flfo * free_lfo;
+  fm_level_mw = fm_level_mod * mod_level + fm_level_flfo * free_lfo;
   current_fm_amnt = fm_amnt + fm_amnt_vel * midi.lastVel + fm_amnt_mw;
-  c_lfo_amnt_mw = c_lfo_amnt_mod * mod_level;
+  c_lfo_amnt_mw = c_lfo_amnt_mod * mod_level + c_lfo_amnt_flfo * free_lfo;
   m_lfo_amnt_mw = m_lfo_amnt_mod * mod_level;
+  f_lfo_amnt_mw = f_lfo_amnt_mod * mod_level;
   
-  o1db = clamp(osc1_db + osc1_db_velmod + osc1_db_mod * mod_level, -48, 0);
-  o2db = clamp(osc2_db + osc2_db_velmod + osc2_db_mod * mod_level, -48, 0);
-  sodb = clamp(subosc_db + subosc_db_velmod + subosc_db_mod * mod_level, -48, 0);
+  o1db = clamp(osc1_db + osc1_db_velmod + osc1_db_mod * mod_level + osc1_db_flfo * free_lfo, -48, 0);
+  o2db = clamp(osc2_db + osc2_db_velmod + osc2_db_mod * mod_level + osc2_db_flfo * free_lfo, -48, 0);
+  sodb = clamp(subosc_db + subosc_db_velmod + subosc_db_mod * mod_level + subosc_db_flfo * free_lfo, -48, 0);
   
   osc1_vol = o1db > -47.8 ? exp(0.11512925464970229 * o1db) * osc1_correction: 0;
   osc2_vol = o2db > -47.8 ? exp(0.11512925464970229 * o2db) * osc2_correction: 0;
   subosc_vol = sodb > -47.8 ? exp(0.11512925464970229 * sodb);
   lf_update_step = 0;
   
-  current_c_lfo_speed = 10^((c_lfo_speed + c_lfo_speed_velmod + c_lfo_speed_mod * mod_level)/15) - 1;
+  current_c_lfo_speed = 10^((c_lfo_speed + c_lfo_speed_velmod + c_lfo_speed_mod * mod_level + c_lfo_speed_flfo * free_lfo)/15) - 1;
   current_m_lfo_speed = 10^((m_lfo_speed + m_lfo_speed_velmod + m_lfo_speed_mod * mod_level)/15) - 1;
+  current_f_lfo_speed = 10^((f_lfo_speed + f_lfo_speed_velmod + f_lfo_speed_mod * mod_level)/15) - 1;
   amp_correction = .25 / (1.0 + (amp2 + amp3 + amp4)*bonus_enabled);
   
   ss += 1;
@@ -409,6 +451,8 @@ lf_update_step % 8 == 0 ? (
   current_vib_frequency = clamp(vibrato_frequency + vibrato_frequency_vel * midi.lastVel + vibrato_frequency_mod * mod_level, 0, 10);
   bend = 2 * midi.pitchBend + current_vib_amount * sin(current_vib_frequency * ss * vib_factor);
   pitch_bend = 2^(bend * 0.08333333333333333333333333333333);
+  
+  update_osc_pitch(0);
 );
 
 (mmsg = midi.processMIDISample()) ? (
@@ -419,15 +463,12 @@ lf_update_step % 8 == 0 ? (
   keyfollow_mod = log(pitch) / log(20/22050);
   noise_follow_mod = keyfollow_mod * noise_follow;
   
-  note_1 = midi.lastNote - 69 + (osc1_semi + osc1_semi_vel * midi.lastVel);
-  note_2 = (midi.lastNote - 69) * (1-osc2_pitch_lock) + (osc2_semi + osc2_semi_vel * midi.lastVel);
-  sub_note = midi.lastNote - 69 + (subosc_semi + subosc_semi_vel * midi.lastVel);
-  oscs.oscs_midinote(note_1, note_2, osc1_shape, osc2_shape);
-  oscs2.oscs_midinote(note_1+detune2, note_2+detune2, osc1_shape, osc2_shape);
-  oscs3.oscs_midinote(note_1+detune3, note_2+detune3, osc1_shape, osc2_shape);
-  oscs4.oscs_midinote(note_1+detune4, note_2+detune4, osc1_shape, osc2_shape);
-
-  subosc.subosc_midinote(sub_note);
+  current_note_played =  midi.lastNote - 69;
+  note_1 = current_note_played + osc1_semi_vel * midi.lastVel;
+  note_2 = current_note_played * (1-osc2_pitch_lock) + osc2_semi_vel * midi.lastVel;
+  sub_note = current_note_played + subosc_semi_vel * midi.lastVel;
+  
+  update_osc_pitch(1);
  
   midi.notesOn == 1 && mmsg == 1 ? (
     cutoff_velmod = cutoff_vel * midi.lastVel;
@@ -450,11 +491,14 @@ lf_update_step % 8 == 0 ? (
 
     c_lfo_reset ? c_lfo_time = c_lfo_center_phase;
     m_lfo_reset ? m_lfo_time = m_lfo_center_phase;
+    f_lfo_reset ? f_lfo_time = f_lfo_center_phase;
     
     c_lfo_amnt_velmod = c_lfo_amnt_vel * midi.lastVel;
     m_lfo_amnt_velmod = m_lfo_amnt_vel * midi.lastVel;
+    f_lfo_amnt_velmod = f_lfo_amnt_vel * midi.lastVel;
     c_lfo_speed_velmod = c_lfo_speed_vel * midi.lastVel;
     m_lfo_speed_velmod = m_lfo_speed_vel * midi.lastVel;
+    f_lfo_speed_velmod = f_lfo_speed_vel * midi.lastVel;
     
     fm_level_velmod = fm_level_vel * midi.lastVel;
     
@@ -636,6 +680,16 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
     c_lfo_type == 17 && morph_phase == 0 ? (
       sliderMorphL = sliderMorphR;
     );
+  );
+  
+  f_lfo_enabled > 0 ? (
+    f_lfo_sync ? (
+      f_lfo_time += israte * free_LFO.cRate;
+    ) : (
+      f_lfo_time += israte * current_f_lfo_speed;    
+    );
+    cur_lfo = f_lfo_amnt + f_lfo_amnt_velmod + f_lfo_amnt_mw;
+    free_lfo = cur_lfo * f_lfo.lfo_modulator(f_lfo_type, f_lfo_time + f_lfo_phase);
   );
   
   sliderMorphL = clamp(sliderMorphL, 0, 1);
@@ -843,6 +897,7 @@ style == 0 ? (
   s_FX = sprintf(75, "FX");
   s_OPTS = sprintf(76, "OPTIONS");
   s_PWM = sprintf(77, "PWM");
+  s_FLFO = sprintf(78, "FREE LFO");
 ) : ( style == 1 ) ? (
   xOrigin = 60*(1+scaling);
   yOrigin = 82*(1+scaling);
@@ -866,6 +921,7 @@ style == 0 ? (
   s_FX = sprintf(75, "Effects");
   s_OPTS = sprintf(76, "Options");
   s_PWM = sprintf(77, "PWM");
+  s_FLFO = sprintf(78, "Free LFO");
 ) : ( style == 2 ) ? (
   xOrigin = 60*(1+scaling);
   yOrigin = 82*(1+scaling);
@@ -889,6 +945,7 @@ style == 0 ? (
   s_FX = sprintf(75, "EFFECTS");
   s_OPTS = sprintf(76, "OPTIONS");
   s_PWM = sprintf(77, "PWM");
+  s_FLFO = sprintf(78, "FREE LFO");
 );
 
 style == 0 ? (
@@ -922,6 +979,10 @@ mod2_color_r = .2;
 mod2_color_g = .5;
 mod2_color_b = 1;
 mod2_color_a = 1;
+mod3_color_r = .1;
+mod3_color_g = .6;
+mod3_color_b = 1;
+mod3_color_a = 1;
 
 fontscaling = scaling < -.15 ? scaling : 0;
 
@@ -969,15 +1030,19 @@ osc1AmpKnob.knob_set(sprintf(1, "%.1f dB", osc1_db), 1, (osc1_db + 48)/48);
 osc1AmpKnob.drawKnob(cX, cY, knobSize, "Amplitude", "Oscillator 1 gain.", 1.0);
 osc1AmpKnob.knob_draw_modifier(osc1_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 osc1AmpKnob.knob_draw_modifier(osc1_db_mod / 48, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_mod / 48) ? ( osc1_db_mod = osc1AmpKnob.value * 48; );
+osc1AmpKnob.knob_draw_modifier(osc1_db_flfo / 48, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_flfo / 48) ? ( osc1_db_flfo = osc1AmpKnob.value * 48; );
+) : activeModifier == 2 ? ( osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_mod / 48) ? ( osc1_db_mod = osc1AmpKnob.value * 48; );
 ) : activeModifier == 1 ? ( osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_vel / 48) ? ( osc1_db_vel = osc1AmpKnob.value * 48; );
 ) : osc1AmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/48) ? ( osc1_db = osc1AmpKnob.value * 48 - 48; slider_automate(osc1_db); );
 
 cX += 2.5 * knobSize;
 semiTonesKnob.knob_set(sprintf(1, "%.2f ", osc1_semi), 1, (osc1_semi + 36)/72);
 semiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 1 tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
+semiTonesKnob.knob_draw_modifier(osc1_tune_flfo / 72, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod1_color_a, 3);
 semiTonesKnob.knob_draw_modifier(osc1_semi_vel / 72, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( semiTonesKnob.knob_modifier_processMouse(0, osc1_semi_vel / 72) ? ( osc1_semi_vel = semiTonesKnob.value * 72; );
+activeModifier == 3 ? ( semiTonesKnob.knob_modifier_processMouse(0, osc1_tune_flfo / 72) ? ( osc1_tune_flfo = semiTonesKnob.value * 72; );
+) : activeModifier == 1 ? ( semiTonesKnob.knob_modifier_processMouse(0, osc1_semi_vel / 72) ? ( osc1_semi_vel = semiTonesKnob.value * 72; );
 ) : ( 
   semiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
     osc1_semi = semiTonesKnob.value * 72 - 36;
@@ -1034,7 +1099,9 @@ osc2AmpKnob.knob_set(sprintf(1, "%.1f dB", osc2_db), 1, (osc2_db + 48)/48);
 osc2AmpKnob.drawKnob(cX, cY, knobSize, "Amplitude", "Oscillator 2 gain.", 1.0);
 osc2AmpKnob.knob_draw_modifier(osc2_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 osc2AmpKnob.knob_draw_modifier(osc2_db_mod / 48, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( osc2AmpKnob.knob_modifier_processMouse(0, osc2_db_mod / 48) ? ( osc2_db_mod = osc2AmpKnob.value * 48; );
+osc2AmpKnob.knob_draw_modifier(osc2_db_flfo / 48, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( osc2AmpKnob.knob_modifier_processMouse(0, osc2_db_flfo / 48) ? ( osc2_db_flfo = osc2AmpKnob.value * 48; );
+) : activeModifier == 2 ? ( osc2AmpKnob.knob_modifier_processMouse(0, osc2_db_mod / 48) ? ( osc2_db_mod = osc2AmpKnob.value * 48; );
 ) : activeModifier == 1 ? ( osc2AmpKnob.knob_modifier_processMouse(0, osc2_db_vel / 48) ? ( osc2_db_vel = osc2AmpKnob.value * 48; );
 ) : osc2AmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/48) ? ( osc2_db = osc2AmpKnob.value * 48 - 48; slider_automate(osc2_db); );
 
@@ -1044,7 +1111,9 @@ osc1FMKnob.knob_set("", 1, fm_level);
 osc1FMKnob.drawKnob(cX, cY, knobSize, "FM Level", "FM level\n\nDetermines how strongly oscillator one affects the\nfrequency of oscillator two.\n\nPlays nice with all waveforms except PWM!", 1.0);
 osc1FMKnob.knob_draw_modifier(fm_level_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 osc1FMKnob.knob_draw_modifier(fm_level_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( osc1FMKnob.knob_modifier_processMouse(0, fm_level_mod) ? ( fm_level_mod = osc1FMKnob.value; );
+osc1FMKnob.knob_draw_modifier(fm_level_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( osc1FMKnob.knob_modifier_processMouse(0, fm_level_flfo) ? ( fm_level_flfo = osc1FMKnob.value; );
+) : activeModifier == 2 ? ( osc1FMKnob.knob_modifier_processMouse(0, fm_level_mod) ? ( fm_level_mod = osc1FMKnob.value; );
 ) : activeModifier == 1 ? ( osc1FMKnob.knob_modifier_processMouse(0, fm_level_vel) ? ( fm_level_vel = osc1FMKnob.value; );
 ) : osc1FMKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? ( fm_level = osc1FMKnob.value; slider_automate(fm_level); );
 
@@ -1055,7 +1124,9 @@ osc2_pitch_lock = lockOsc2.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 semiTonesKnob2.knob_set(sprintf(1, "%.2f ", osc2_semi), 1, (osc2_semi + 48)/96);
 semiTonesKnob2.drawKnob(cX, cY, knobSize, "Tuning", "Oscillator 2 tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
 semiTonesKnob2.knob_draw_modifier(osc2_semi_vel / 72, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( semiTonesKnob2.knob_modifier_processMouse(0, osc2_semi_vel / 96) ? ( osc2_semi_vel = semiTonesKnob2.value * 96; );
+semiTonesKnob2.knob_draw_modifier(osc2_tune_flfo / 72, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( semiTonesKnob2.knob_modifier_processMouse(0, osc2_tune_flfo / 96) ? ( osc2_tune_flfo = semiTonesKnob2.value * 96; );
+) : activeModifier == 1 ? ( semiTonesKnob2.knob_modifier_processMouse(0, osc2_semi_vel / 96) ? ( osc2_semi_vel = semiTonesKnob2.value * 96; );
 ) : semiTonesKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, (48+12)/96) ? ( 
   osc2_semi = semiTonesKnob2.value * 96 - 48;
   mouse_cap < 4 ? osc2_semi = floor(osc2_semi + .5); slider_automate(osc2_semi); 
@@ -1107,7 +1178,9 @@ subOscAmpKnob.knob_set(sprintf(1, "%.1f dB", subosc_db), subosc_enabled, (subosc
 subOscAmpKnob.drawKnob(cX, cY, knobSize, "Amplitude", "Sub oscillator gain.", 1.0);
 subOscAmpKnob.knob_draw_modifier(subosc_db_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 subOscAmpKnob.knob_draw_modifier(subosc_db_mod / 48, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_mod / 60) ? ( subosc_db_mod = subOscAmpKnob.value * 60; );
+subOscAmpKnob.knob_draw_modifier(subosc_db_flfo / 48, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_flfo / 60) ? ( subosc_db_flfo = subOscAmpKnob.value * 60; );
+) : activeModifier == 2 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_mod / 60) ? ( subosc_db_mod = subOscAmpKnob.value * 60; );
 ) : activeModifier == 1 ? ( subOscAmpKnob.knob_modifier_processMouse(0, subosc_db_vel / 60) ? ( subosc_db_vel = subOscAmpKnob.value * 60; );
 ) : subOscAmpKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 39/60) ? ( subosc_db = subOscAmpKnob.value * 60 - 48; slider_automate(subosc_db); );
 
@@ -1118,7 +1191,9 @@ subosc_pre = subOscLocationToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap
 subOscSemiTonesKnob.knob_set(sprintf(1, "%.2f ", subosc_semi), subosc_enabled, (subosc_semi + 36)/48);
 subOscSemiTonesKnob.drawKnob(cX, cY, knobSize, "Tuning", "Sub tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
 subOscSemiTonesKnob.knob_draw_modifier(subosc_semi_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( subOscSemiTonesKnob.knob_modifier_processMouse(0, subosc_semi_vel / 48) ? ( subosc_semi_vel = subOscSemiTonesKnob.value * 48; );
+subOscSemiTonesKnob.knob_draw_modifier(sosc_tune_flfo / 48, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( subOscSemiTonesKnob.knob_modifier_processMouse(0, sosc_tune_flfo / 48) ? ( sosc_tune_flfo = subOscSemiTonesKnob.value * 48; );
+) : activeModifier == 1 ? ( subOscSemiTonesKnob.knob_modifier_processMouse(0, subosc_semi_vel / 48) ? ( subosc_semi_vel = subOscSemiTonesKnob.value * 48; );
 ) : ( 
   subOscSemiTonesKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 24/48) ? (
     subosc_semi = subOscSemiTonesKnob.value * 48 - 36;
@@ -1231,7 +1306,9 @@ cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.
 cutoffKnob.drawKnob(cX, cY, knobSize, "Cutoff", "Filter Cutoff", 1.0);
 cutoffKnob.knob_draw_modifier(cutoff_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 cutoffKnob.knob_draw_modifier(cutoff_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_mod) ? ( cutoff_mod = cutoffKnob.value; );
+cutoffKnob.knob_draw_modifier(cutoff_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_flfo) ? ( cutoff_flfo = cutoffKnob.value; );
+) : activeModifier == 2 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_mod) ? ( cutoff_mod = cutoffKnob.value; );
 ) : activeModifier == 1 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_vel) ? ( cutoff_vel = cutoffKnob.value; );
 ) : cutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff = cutoffKnob.value; slider_automate(cutoff); check_safety(); );
  
@@ -1241,7 +1318,9 @@ resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), 1, resonance);
 resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Filter Resonance", 1.0);
 resonanceKnob.knob_draw_modifier(reso_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 resonanceKnob.knob_draw_modifier(reso_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_mod) ? ( reso_mod = resonanceKnob.value; );
+resonanceKnob.knob_draw_modifier(reso_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_flfo) ? ( reso_flfo = resonanceKnob.value; );
+) : activeModifier == 2 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_mod) ? ( reso_mod = resonanceKnob.value; );
 ) : activeModifier == 1 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_vel) ? ( reso_vel = resonanceKnob.value; );
 ) : resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
  
@@ -1294,7 +1373,9 @@ fmlevelKnob.knob_set("", 1, fm_amnt);
 fmLevelKnob.drawKnob(cX, cY, knobSize, "FM Level", "FM Level\nLevel of FM modulation", 1.0);
 fmLevelKnob.knob_draw_modifier(fm_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 fmLevelKnob.knob_draw_modifier(fm_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_mod) ? ( fm_amnt_mod = fmLevelKnob.value; );
+fmLevelKnob.knob_draw_modifier(fm_amnt_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_flfo) ? ( fm_amnt_flfo = fmLevelKnob.value; );
+) : activeModifier == 2 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_mod) ? ( fm_amnt_mod = fmLevelKnob.value; );
 ) : activeModifier == 1 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_vel) ? ( fm_amnt_vel = fmLevelKnob.value; );
 ) : fmLevelKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fm_amnt = fmLevelKnob.value; slider_automate(fm_amnt); );
  
@@ -1514,7 +1595,9 @@ cutoffLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount.\n\n
 draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), c_lfo_type, c_lfo_center_phase, c_lfo_time);
 cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_mod) ? ( c_lfo_amnt_mod = cutoffLFOAmountKnob.value; );
+cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_flfo) ? ( c_lfo_amnt_flfo = cutoffLFOAmountKnob.value; );
+) : activeModifier == 2 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_mod) ? ( c_lfo_amnt_mod = cutoffLFOAmountKnob.value; );
 ) : activeModifier == 1 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_vel) ? ( c_lfo_amnt_vel = cutoffLFOAmountKnob.value; );
 ) : (
   mouse_cap == 2 && lcap == 0 ? (
@@ -1536,7 +1619,7 @@ activeModifier == 2 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_
   );
 );
 
-cutoffLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+cutoffLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LFO.");
 c_lfo_enabled = cutoffLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 cutoffLfoResetToggle.inactive = !c_lfo_enabled;
@@ -1557,8 +1640,10 @@ c_lfo_sync ? (
   cutoffLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(c_lfo_speed/15) - 1);
 );
 cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod1_color_a, 2);
-activeModifier == 2 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_mod / 20) ? ( c_lfo_speed_mod = cutoffLFOSpeedKnob.value * 20; );
+cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_flfo / 20, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+activeModifier == 3 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_flfo / 20) ? ( c_lfo_speed_flfo = cutoffLFOSpeedKnob.value * 20; );
+) : activeModifier == 2 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_mod / 20) ? ( c_lfo_speed_mod = cutoffLFOSpeedKnob.value * 20; );
 ) : activeModifier == 1 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_vel / 20) ? ( c_lfo_speed_vel = cutoffLFOSpeedKnob.value * 20; );
 ) : (
   cutoffLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
@@ -1617,7 +1702,7 @@ activeModifier == 2 ? ( morphLFOAmountKnob.knob_modifier_processMouse(0, m_lfo_a
   );
 );
 
-morphLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+morphLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LFO.");
 m_lfo_enabled = morphLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 morphLfoResetToggle.inactive = !m_lfo_enabled;
@@ -1673,7 +1758,84 @@ morphLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
 cX = xOrigin - 2*knobSpacing;
 cY = cY + 4 * knobSize;
 
-//cX = nextPanel + panelSpacing;
+nextPanel = drawPanel(s_FLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, c_lfo_enabled);
+
+cX += 2 * knobSpacing;
+
+freeLFOAmountKnob.active = f_lfo_enabled;
+freeLFOAmountKnob.value = f_lfo_amnt;
+freeLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
+draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), f_lfo_type, f_lfo_center_phase, f_lfo_time);
+freeLFOAmountKnob.knob_draw_modifier(f_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+freeLFOAmountKnob.knob_draw_modifier(f_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+activeModifier == 2 ? ( freeLFOAmountKnob.knob_modifier_processMouse(0, f_lfo_amnt_mod) ? ( f_lfo_amnt_mod = freeLFOAmountKnob.value; );
+) : activeModifier == 1 ? ( freeLFOAmountKnob.knob_modifier_processMouse(0, f_lfo_amnt_vel) ? ( f_lfo_amnt_vel = freeLFOAmountKnob.value; );
+) : (
+  mouse_cap == 2 && lcap == 0 ? (
+    freeLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+      f_lfo_type += 1;
+      f_lfo_type > max_lfo_types ? f_lfo_type = 0;
+    );
+  ) : ( mouse_cap == 3 && lcap == 2 ) ? (
+    freeLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+      f_lfo_type -= 1;
+      f_lfo_type < 0 ? f_lfo_type = max_lfo_types - 1;
+      freeLFOAmountKnob.lastLeftClick = -10000; /* Prevent double click from triggering from this */
+    );
+  ) : (
+    freeLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+      f_lfo_amnt = freeLFOAmountKnob.value;
+      slider_automate(f_lfo_amnt);
+    );
+  );
+);
+
+freeLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+f_lfo_enabled = freeLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+freeLfoResetToggle.inactive = !f_lfo_enabled;
+freeLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+f_lfo_reset = freeLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+cX += 2.5 * knobSize;
+freeSyncToggle.inactive = !f_lfo_enabled;
+freeSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
+f_lfo_sync = freeSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+freeLFOSpeedKnob.active = f_lfo_enabled;
+freeLFOSpeedKnob.value = f_lfo_speed / 20;
+f_lfo_sync ? (
+  freeLFOSpeedKnob.label = free_LFO.tempoLabel;
+) : (
+  freeLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(f_lfo_speed/15) - 1);
+);
+freeLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
+freeLFOSpeedKnob.knob_draw_modifier(f_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+freeLFOSpeedKnob.knob_draw_modifier(f_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod1_color_a, 2);
+activeModifier == 2 ? ( freeLFOSpeedKnob.knob_modifier_processMouse(0, f_lfo_speed_mod / 20) ? ( f_lfo_speed_mod = freeLFOSpeedKnob.value * 20; );
+) : activeModifier == 1 ? ( freeLFOSpeedKnob.knob_modifier_processMouse(0, f_lfo_speed_vel / 20) ? ( f_lfo_speed_vel = freeLFOSpeedKnob.value * 20; );
+) : (
+  freeLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+    f_lfo_speed = freeLFOSpeedKnob.value * 20;
+    updateTempo();
+    slider_automate(f_lfo_speed);
+  );
+);
+
+cX += 1.85 * knobSize;
+
+freeLFOPhaseKnob.active = f_lfo_enabled;
+freeLFOPhaseKnob.value = (f_lfo_center_phase + 1) * .5;
+freeLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
+freeLFOPhaseKnob.label = "Φ";
+freeLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  f_lfo_center_phase = 2 * freeLFOPhaseKnob.value - 1;
+  slider_automate(f_lfo_center_phase);
+);
+
+handleModifier("LINK", cX - .5 * knobSize, cY + .65 * knobSize, knobSize, knobSize, 3);
+
+cX = nextPanel + panelSpacing;
 nextPanel = drawPanel(s_PITCHOD, cX, cY - .53*panelHeight + .2*knobSize, 6.125*knobSpacing, panelHeight, 1);
 
 cX += 2 * knobSpacing;
