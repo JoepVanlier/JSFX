@@ -1,8 +1,8 @@
 desc:Saike / Nostalgizer / Lo-Fi (BETA)
 tags: detune / envelope muffler / chorus
-version: 0.07
+version: 0.08
 author: Joep Vanlier
-changelog: Add L/R link. Show hints.
+changelog: Add volume control. Add advanced / simple mode.
 provides:
   nostalgizer_dependencies/* 
 license: MIT
@@ -13,13 +13,15 @@ slider3:rate=591.6<75,1000,.1>-slowness [ms]
 slider4:depth=179.9<0,350,.0001>-depth
 slider5:flutter_level=0.0<0,.05,0.00001>-flutter
 slider6:flutter_rate=1.0<0,50,.01>-flutter rate
-slider7:enable_hp=1<0,1,1>-Enable high pass
+slider7:enable_hp=0<0,1,1>-Enable high pass
 slider8:linked=1<0,1,1>-L/R LPG Linked
 
 slider11:saturation=0.1003<0,1,.00001>-dynamic saturation (0=off)
 slider12:asymmetry=0.663367<0,1,.00001>-saturation asymmetry
 slider14:dim_expand=0<0,1,.00001>-dimension expander (0=off)
 slider15:feedback=0<0,.5,.00001>-feedback
+slider16:input_boost=0<0,18,.1>-Input boost
+slider17:drywet=1<0,1,1>-Dry/Wet ratio
 
 slider20:resonance=0<0,.99,.01>-resonance
 
@@ -29,6 +31,8 @@ slider32:attack=9.22<5,80,.001>-Attack [ms]
 slider33:decay=110.666667<5,500,.001>-Decay [ms]
 
 slider34:lp_minimum=0.15<0,1,.00011>-lpg minimum
+
+slider60:show_advanced=0<0,1,1>-Show advanced
 
 options:no_meter
 in_pin:left input
@@ -40,15 +44,15 @@ import nostalgizer_dependencies/saike_nostalgizer_widgets.jsfx-inc
 
 @init
 city_w = 0;
-update_rate = 1;
+update_rate = 8;
 
 function update_rates()
 (
   tau_atk = attack / 1000;
   
-  k_gain = - update_rate * log(.1) / 2 / srate;
-  k_atk = 1000 * update_rate / attack / srate;
-  k_decay = 1000 * update_rate / decay / srate;
+  k_gain = - log(.1) / 2 / srate;
+  k_atk = 1000 / attack / srate;
+  k_decay = 1000 / decay / srate;
 );
 
 gate_left = 0;
@@ -272,6 +276,26 @@ function readBuffer(offset)
     id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
     ((id3*frac+id2)*frac+id1)*frac+id0;
   );
+  
+function setOffset(offset)
+local()
+instance(read_ptr, write_ptr, buffer_max, buffer)
+global()
+(
+  read_ptr = write_ptr - offset;
+  read_ptr < buffer ? read_ptr += (buffer_max - buffer + 1)
+);
+
+function readBufferCheap(offset)
+local(s)
+instance(read_ptr, write_ptr, buffer_max, buffer)
+global()
+(
+  s = read_ptr[];
+  read_ptr += 1;
+  read_ptr > buffer_max ? read_ptr = buffer;
+  s
+);
 
 function init_linearSVF(freq, res)
   global()
@@ -388,6 +412,8 @@ function eval_linearSVF_HP(v0)
 
 freemem = (l_buffer = freemem) + 2001;
 freemem = (r_buffer = freemem) + 2001;
+freemem = (dry_l_buffer = freemem) + 2001;
+freemem = (dry_r_buffer = freemem) + 2001;
 freemem = (l_pitch_buffer = freemem) + 32768;
 freemem = (r_pitch_buffer = freemem) + 32768;
 freemem = (draw_buffer = freemem) + 500000;
@@ -397,6 +423,8 @@ freemem = (rain = freemem) + 500000;
 // Chorus materials
 l_delay.initBuffer(l_buffer, l_buffer + 2000);
 r_delay.initBuffer(r_buffer, r_buffer + 2000);
+dry_l_delay.initBuffer(dry_l_buffer, dry_l_buffer + 2000);
+dry_r_delay.initBuffer(dry_r_buffer, dry_r_buffer + 2000);
 l_delay_filt.init_linearSVF_absolute(340, 0);
 r_delay_filt.init_linearSVF_absolute(340, 0);
 
@@ -412,11 +440,14 @@ r_gate_hp.init_linearSVF_absolute(2*74, 0);
 lpf_thresh = (exp(5*lpf_level) - exp(0)) / (exp(5) - exp(0));
 
 @block
-setpoint = 402;
+setpoint = 402 + (saturation > 0);
 (pdc_delay != setpoint) ? (
+  dry_l_delay.setOffset(setpoint);
+  dry_r_delay.setOffset(setpoint);
+
   pdc_top_ch = 2;
   pdc_bot_ch = 0;
-  pdc_delay = setpoint + 1; // 1 for the anti-aliasing in the saturator
+  pdc_delay = setpoint; // 1 for the anti-aliasing in the saturator
 );
 
 noise_rate = - log(.1) / (.001 * rate) / srate;
@@ -433,67 +464,76 @@ global()
   0.185304 * (1.0 - exp(- t*t)) - 0.00307613
 );
 
+
+c_input_boost = 0.99 * c_input_boost + 0.01 * input_boost;
+preamp = exp(.11512925464970228420089957273422 * c_input_boost);
+spl0 *= preamp;
+spl1 *= preamp; 
+
 // Overall gain estimator
 vol_est_l = max((1-k_gain) * vol_est_l, abs(spl0));
 vol_est_r = max((1-k_gain) * vol_est_r, abs(spl1));
 
 csample += 1;
 
-(csample % update_rate) == 0 ? (
-  operating_mode == 0 ? (
-    left_change = (abs(spl0) / vol_est_l) < lpf_thresh ? k_atk * (1.0 - gate_left) : - k_decay * gate_left;
-    gate_left += left_change;
+( operating_mode == 2 ) ? (
+  l_cur = abs(spl0);
+  r_cur = abs(spl1);
   
-    right_change = (abs(spl1) / vol_est_r) < lpf_thresh ? k_atk * (1.0 - gate_right) : - k_decay * gate_right;
-    gate_right += right_change;
-    
-    linked ? (
-      gate_left = gate_right = 0.5 * (gate_left + gate_right);
-    );
-    
-    l_gate_filt.init_linearSVF(gate_left, resonance);
-    r_gate_filt.init_linearSVF(gate_right, resonance);
-  ) : ( operating_mode == 1 ) ? (
-    mx_l = max(.99*mx_l, abs(spl0));
-    mx_r = max(.99*mx_r, abs(spl1));
+  state_l += state_l < l_cur ? k_atk * (l_cur - state_l) : k_decay * (l_cur - state_l);
+  state_r += state_r < r_cur ? k_atk * (r_cur - state_r) : k_decay * (r_cur - state_r);
   
-    l_cur = abs(mx_l) / vol_est_l;
-    r_cur = abs(mx_r) / vol_est_r;
-    
-    state_l += state_l < l_cur ? k_atk * (l_cur - state_l) : k_decay * (l_cur - state_l);
-    state_r += state_r < r_cur ? k_atk * (r_cur - state_r) : k_decay * (r_cur - state_r);
-    
-    range = 1.0 - lp_minimum;
-    
-    gate_left = min(lp_minimum + range * lpf_thresh + (1.0 - lpf_thresh) * (lp_minimum + state_l), 1.0);
-    gate_right = min(lp_minimum + range * lpf_thresh + (1.0 - lpf_thresh) * (lp_minimum + state_r), 1.0);
-    
-    linked ? (
-      gate_left = gate_right = 0.5 * (gate_left + gate_right);
-    );
-    
-    l_gate_filt.init_linearSVF(gate_left, resonance);
-    r_gate_filt.init_linearSVF(gate_right, resonance);
-  ) : ( operating_mode == 2 ) ? (
-    l_cur = abs(spl0);
-    r_cur = abs(spl1);
-    
-    state_l += state_l < l_cur ? k_atk * (l_cur - state_l) : k_decay * (l_cur - state_l);
-    state_r += state_r < r_cur ? k_atk * (r_cur - state_r) : k_decay * (r_cur - state_r);
-    
+  (csample % update_rate == 0) ? (
     gate_left = min(sat_func(lpf_level, state_l), 1.0);
     gate_right = min(sat_func(lpf_level, state_r), 1.0);
     
     linked ? (
       gate_left = gate_right = 0.5 * (gate_left + gate_right);
     );
-    
+  
     l_gate_filt.init_linearSVF_absolute(max(50, 44100 * gate_left), resonance);
     r_gate_filt.init_linearSVF_absolute(max(50, 44100 * gate_right), resonance);
   );
+) : (operating_mode == 0) ? (
+  left_change = (abs(spl0) / vol_est_l) < lpf_thresh ? k_atk * (1.0 - gate_left) : - k_decay * gate_left;
+  gate_left += left_change;
+
+  right_change = (abs(spl1) / vol_est_r) < lpf_thresh ? k_atk * (1.0 - gate_right) : - k_decay * gate_right;
+  gate_right += right_change;
   
-  buf2.writeBuffer((1.0 - .5*(gate_left+gate_right)));
+  (csample % update_rate == 0) ? (  
+    linked ? (
+      gate_left = gate_right = 0.5 * (gate_left + gate_right);
+    );
+      
+    l_gate_filt.init_linearSVF(gate_left, resonance);
+    r_gate_filt.init_linearSVF(gate_right, resonance);
+  );
+) : ( operating_mode == 1 ) ? (
+  mx_l = max(.99*mx_l, abs(spl0));
+  mx_r = max(.99*mx_r, abs(spl1));
+  
+  l_cur = abs(mx_l) / vol_est_l;
+  r_cur = abs(mx_r) / vol_est_r;
+    
+  state_l += state_l < l_cur ? k_atk * (l_cur - state_l) : k_decay * (l_cur - state_l);
+  state_r += state_r < r_cur ? k_atk * (r_cur - state_r) : k_decay * (r_cur - state_r);
+    
+  (csample % update_rate == 0) ? (
+    range = 1.0 - lp_minimum;
+    gate_left = min(lp_minimum + range * lpf_thresh + (1.0 - lpf_thresh) * (lp_minimum + state_l), 1.0);
+    gate_right = min(lp_minimum + range * lpf_thresh + (1.0 - lpf_thresh) * (lp_minimum + state_r), 1.0);
+      
+    linked ? (
+      gate_left = gate_right = 0.5 * (gate_left + gate_right);
+    );
+      
+    l_gate_filt.init_linearSVF(gate_left, resonance);
+    r_gate_filt.init_linearSVF(gate_right, resonance);
+  );
 );
+  
+buf2.writeBuffer((1.0 - .5*(gate_left+gate_right)));
 
 
 alpha_compander = 0.001;
@@ -540,6 +580,9 @@ instance()
 
 l = spl0;
 r = spl1;
+
+dry_l_delay.writeBuffer(l);
+dry_r_delay.writeBuffer(r);
 
 // Preserve original bass
 dim_expand ? (
@@ -604,8 +647,8 @@ saturation > 0 ? (
   //l = tanh((l + asymmetry * drift) * iv)/iv;
   //r = tanh((r + asymmetry * drift) * iv)/iv;
 
-  l = l_sat.antialiased_tanh_linear((l + asymmetry * drift) * iv)/iv;
-  r = r_sat.antialiased_tanh_linear((r + asymmetry * drift) * iv)/iv;
+  l = l_sat.antialiased_tanh_rect((l + asymmetry * drift) * iv)/iv;
+  r = r_sat.antialiased_tanh_rect((r + asymmetry * drift) * iv)/iv;
   
 );
 
@@ -618,8 +661,9 @@ asymmetry ? (
   r -= dc_r;
 );
 
-spl0 = l;
-spl1 = r;
+
+spl0 = l * drywet + dry_l_delay.readBufferCheap() * (1-drywet);
+spl1 = r * drywet + dry_r_delay.readBufferCheap() * (1-drywet);
 
 @gfx 1050 450
 knob_font_color_r = 0.9;
@@ -890,9 +934,9 @@ loop(200,
 );
 
 
-knobSize = 35;
-nButtons = 8;
-stepSize = gfx_w / (nButtons*5);
+knobSize = 32 + 15 * (1 - show_advanced);
+nButtons = 6 + 9 * show_advanced;
+stepSize = gfx_w / (nButtons*3 + 1);
 //cX = 0.5 * (gfx_w - 3 * nButtons * stepSize);
 cX = 0;
 cY = gfx_h - 70;
@@ -911,10 +955,20 @@ interp = lerpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 gfx_x = 0;
 gfx_y = 0;
-gfx_printf(" v0.07. Warning: this is an alpha version. Plugin may still be subject to change.");
+gfx_printf(" v0.08. Warning: this is an alpha version. Plugin may still be subject to change.");
+
 
 
 cX += 2 * stepSize;
+
+inputKnob.knob_set(sprintf(1, "%.2f dB", input_boost), 1, input_boost / 18);
+inputKnob.drawKnob(cX, cY, knobSize, "Input boost", "Input boost.", 0);
+inputKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( 
+  input_boost = inputKnob.value * 18;
+  slider_automate(input_boost); 
+);
+
+cX += 3 * stepSize;
 
 lpfKnob.knob_set(sprintf(1, "%.2f", lpf_level), 1, lpf_level);
 lpfKnob.drawKnob(cX, cY, knobSize, "Lowpass gate", "Lowpass gate level.", 0);
@@ -926,37 +980,40 @@ lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.701) ? (
 linkToggle.drawToggle(cX - .95 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, linked, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Link L/R for the LPG.");
 linked = linkToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
-lerpToggle.drawToggle(cX + .9 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, enable_hp, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this toggle switches\nto linear interpolation.");
-enable_hp = lerpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+hpToggle.drawToggle(cX + .9 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, enable_hp, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this toggle runs the signal\nthrough a highpass filter.");
+enable_hp = hpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 cX += 3 * stepSize;
 
-resoKnob.knob_set(sprintf(1, "%.2f", resonance / .99), 1, resonance / .99);
-resoKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.", 0);
-resoKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.701) ? ( 
-  resonance = resoKnob.value * .99;
-  slider_automate(resonance); 
+show_advanced ? (
+
+  resoKnob.knob_set(sprintf(1, "%.2f", resonance / .99), 1, resonance / .99);
+  resoKnob.drawKnob(cX, cY, knobSize, "Resonance", "Resonance.", 0);
+  resoKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.701) ? ( 
+    resonance = resoKnob.value * .99;
+    slider_automate(resonance); 
+  );
+  
+  cX += 3 * stepSize;
+
+  atkKnob.knob_set(sprintf(1, "%d ms", attack), 1, (attack - 5) / 75);
+  atkKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack of the filter.", 0);
+  atkKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (9.22 - 5) / 75) ? ( 
+    attack = atkKnob.value * 75 + 5;
+    slider_automate(attack); 
+  );
+  
+  cX += 3 * stepSize;
+  
+  decayKnob.knob_set(sprintf(1, "%d ms", decay), 1, (decay - 5) / 495);
+  decayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay of the filter.", 0);
+  decayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (110.666 - 5) / 495) ? ( 
+    decay = decayKnob.value * 495 + 5;
+    slider_automate(decay); 
+  );
+
+  cX += 3 * stepSize;
 );
-
-cX += 3 * stepSize;
-
-atkKnob.knob_set(sprintf(1, "%d ms", attack), 1, (attack - 5) / 75);
-atkKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack of the filter.", 0);
-atkKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (9.22 - 5) / 75) ? ( 
-  attack = atkKnob.value * 75 + 5;
-  slider_automate(attack); 
-);
-
-cX += 3 * stepSize;
-
-decayKnob.knob_set(sprintf(1, "%d ms", decay), 1, (decay - 5) / 495);
-decayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay of the filter.", 0);
-decayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (110.666 - 5) / 495) ? ( 
-  decay = decayKnob.value * 495 + 5;
-  slider_automate(decay); 
-);
-
-cX += 3 * stepSize;
 
 rateKnob.knob_set(sprintf(1, "%d ms", rate), 1, (rate - 75) / (1000 - 75));
 rateKnob.drawKnob(cX, cY, knobSize, "Slowness", "Modulation smoothness.", 0);
@@ -976,32 +1033,35 @@ depthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 179.9 / 350) ? (
 
 cX += 3 * stepSize;
 
-saturationKnob.knob_set(sprintf(1, "%.2f", saturation), 1, saturation);
-saturationKnob.drawKnob(cX, cY, knobSize, "Saturation", "Saturation level.", 0);
-saturationKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .1003) ? ( 
-  saturation = saturationKnob.value;
-  slider_automate(saturation); 
+show_advanced ? (
+
+  saturationKnob.knob_set(sprintf(1, "%.2f", saturation), 1, saturation);
+  saturationKnob.drawKnob(cX, cY, knobSize, "Saturation", "Saturation level.", 0);
+  saturationKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .1003) ? ( 
+    saturation = saturationKnob.value;
+    slider_automate(saturation); 
+  );
+  
+  cX += 3 * stepSize;
+  
+  asymKnob.knob_set(sprintf(1, "%.2f", asymmetry), 1, asymmetry);
+  asymKnob.drawKnob(cX, cY, knobSize, "Asymmetry", "Adds a bias prior to the saturator.", 0);
+  asymKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.663367) ? ( 
+    asymmetry = asymKnob.value;
+    slider_automate(asymmetry); 
+  );
+  
+  cX += 3 * stepSize;
+
+  noiseKnob.knob_set(sprintf(1, "%.2f", noise_level), 1, noise_level / 0.05);
+  noiseKnob.drawKnob(cX, cY, knobSize, "Noise", "Noise level.", 0);
+  noiseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.0057 / 0.05) ? ( 
+    noise_level = noiseKnob.value * 0.05;
+    slider_automate(noise_level); 
+  );
+
+  cX += 3 * stepSize;
 );
-
-cX += 3 * stepSize;
-
-asymKnob.knob_set(sprintf(1, "%.2f", asymmetry), 1, asymmetry);
-asymKnob.drawKnob(cX, cY, knobSize, "Asymmetry", "Adds a bias prior to the saturator.", 0);
-asymKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.663367) ? ( 
-  asymmetry = asymKnob.value;
-  slider_automate(asymmetry); 
-);
-
-cX += 3 * stepSize;
-
-noiseKnob.knob_set(sprintf(1, "%.2f", noise_level), 1, noise_level / 0.05);
-noiseKnob.drawKnob(cX, cY, knobSize, "Noise", "Noise level.", 0);
-noiseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.0057 / 0.05) ? ( 
-  noise_level = noiseKnob.value * 0.05;
-  slider_automate(noise_level); 
-);
-
-cX += 3 * stepSize;
 
 dimKnob.knob_set(sprintf(1, "%.2f", dim_expand), 1, dim_expand);
 dimKnob.drawKnob(cX, cY, knobSize, "Space", "Delay line dimension expansion.", 0);
@@ -1012,29 +1072,44 @@ dimKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
 
 cX += 3 * stepSize;
 
-fbKnob.knob_set(sprintf(1, "%.2f", feedback / .5), 1, feedback / .5);
-fbKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback.", 0);
-fbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( 
-  feedback = fbKnob.value * .5;
-  slider_automate(feedback);
+show_advanced ? (
+  fbKnob.knob_set(sprintf(1, "%.2f", feedback / .5), 1, feedback / .5);
+  fbKnob.drawKnob(cX, cY, knobSize, "Feedback", "Feedback.", 0);
+  fbKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( 
+    feedback = fbKnob.value * .5;
+    slider_automate(feedback);
+  );
+  
+  cX += 3 * stepSize;
+
+  flutterKnob.knob_set(sprintf(1, "%.2f", flutter_level / 0.05), 1, flutter_level / 0.05);
+  flutterKnob.drawKnob(cX, cY, knobSize, "Flutter Level", "Flutter Level.", 0);
+  flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( 
+    flutter_level = flutterKnob.value * 0.05;
+    slider_automate(flutter_level); 
+  );
+  
+  cX += 3 * stepSize;
+  
+  flutterRateKnob.knob_set(sprintf(1, "%d Hz", flutter_rate), 1, flutter_rate / 50);
+  flutterRateKnob.drawKnob(cX, cY, knobSize, "Flutter Rate", "Flutter Rate.", 0);
+  flutterRateKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.33) ? ( 
+    flutter_rate = flutterRateKnob.value * 50;
+    slider_automate(flutter_rate);
+  );
+  
+  cX += 3 * stepSize;
+);
+  
+drywetKnob.knob_set(sprintf(1, "%d", drywet * 100), 1, drywet);
+drywetKnob.drawKnob(cX, cY, knobSize, "Dry/Wet", "Dry/Wet ratio.", 0);
+drywetKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? ( 
+  drywet = drywetKnob.value;
+  slider_automate(drywet);
 );
 
-cX += 3 * stepSize;
-
-flutterKnob.knob_set(sprintf(1, "%.2f", flutter_level / 0.05), 1, flutter_level / 0.05);
-flutterKnob.drawKnob(cX, cY, knobSize, "Flutter Level", "Flutter Level.", 0);
-flutterKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( 
-  flutter_level = flutterKnob.value * 0.05;
-  slider_automate(flutter_level); 
-);
-
-cX += 3 * stepSize;
-
-flutterRateKnob.knob_set(sprintf(1, "%d Hz", flutter_rate), 1, flutter_rate / 50);
-flutterRateKnob.drawKnob(cX, cY, knobSize, "Flutter Rate", "Flutter Rate.", 0);
-flutterRateKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.33) ? ( 
-  flutter_rate = flutterRateKnob.value * 50;
-  slider_automate(flutter_rate);
-);
+advancedToggle.label = sprintf(33, " Advanced");
+advancedToggle.drawToggle(gfx_w - 70, gfx_h - 15, .15*knobSize, .15*knobSize, show_advanced, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this enables the LED\nfilter on the Amiga (lowpass\nfilter on the output)");
+show_advanced = advancedToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 hinter.drawHint_draw();
