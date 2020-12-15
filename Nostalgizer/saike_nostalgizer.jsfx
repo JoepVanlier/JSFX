@@ -1,8 +1,8 @@
 desc:Saike / Nostalgizer / Lo-Fi (BETA)
 tags: detune / envelope muffler / chorus
-version: 0.10
+version: 0.11
 author: Joep Vanlier
-changelog: Minor bugfix scope.
+changelog: Added stereo mode for modulator.
 provides:
   nostalgizer_dependencies/* 
 license: MIT
@@ -17,6 +17,7 @@ slider5:flutter_level=0.0<0,.05,0.00001>-flutter
 slider6:flutter_rate=1.0<0,50,.01>-flutter rate
 slider7:enable_hp=0<0,1,1>-Enable high pass
 slider8:linked=1<0,1,1>-L/R LPG Linked
+slider9:mod_linked=1<0,1,1>-L/R Mod Linked
 
 slider11:saturation=0.1003<0,1,.00001>-dynamic saturation (0=off)
 slider12:asymmetry=0.663367<0,1,.00001>-saturation asymmetry
@@ -420,6 +421,7 @@ freemem = (l_pitch_buffer = freemem) + 32768;
 freemem = (r_pitch_buffer = freemem) + 32768;
 freemem = (draw_buffer = freemem) + 500000;
 freemem = (draw_buffer2 = freemem) + 500000;
+freemem = (draw_buffer3 = freemem) + 500000;
 freemem = (rain = freemem) + 500000;
 
 // Chorus materials
@@ -434,6 +436,7 @@ l_pitch.initBuffer(l_pitch_buffer, l_pitch_buffer + 32766);
 r_pitch.initBuffer(r_pitch_buffer, r_pitch_buffer + 32766);
 buf.initBuffer(draw_buffer, draw_buffer + 500000);
 buf2.initBuffer(draw_buffer2, draw_buffer2 + 500000);
+buf3.initBuffer(draw_buffer3, draw_buffer3 + 500000);
 
 l_gate_hp.init_linearSVF_absolute(2*74, 0);
 r_gate_hp.init_linearSVF_absolute(2*74, 0);
@@ -607,7 +610,14 @@ flutter_level > 0 ? (
   flutter = flutter_level * sin(flutter_speed * csample);
 );
 
+buf.writeBuffer(0);
 buf.writeBuffer(n);
+
+!mod_linked ? (
+  n2 = alpha * n2 + (1.0-alpha) * noise2.noise_gen(noise_rate);
+  buf3.writeBuffer(0);
+  buf3.writeBuffer(n2);
+) : n2 = n;
 
 noise_level > 0 ? (
   l = l_compander.compander_compress(l);
@@ -622,12 +632,11 @@ l_pitch.writeBuffer(l + feedback * fb_r);
 r_pitch.writeBuffer(r + feedback * fb_l);
 
 l = l_pitch.readBuffer(400 + depth * (n + flutter));
-r = r_pitch.readBuffer(400 + depth * (n - flutter));
+r = r_pitch.readBuffer(400 + depth * (n2 - flutter));
 
 noise_level > 0 ? (
   l = l_compander.compander_expand(l);
   r = r_compander.compander_expand(r);
-1
 );
 
 fb_l = l;
@@ -876,6 +885,7 @@ gfx_mode = 0;
 gfx_set(1, 1, 1, 1.0);
 gfx_blit(1, 1, 0);
 
+gfx_set(.3, .3, 1, .4);
 gfx_x = 0;
 gfx_y = .5 * gfx_y_remaining + .4 * gfx_y_remaining * buf.readBuffer(c);
 gfx_y_remaining = gfx_h - 80 - knobSize;
@@ -886,6 +896,22 @@ loop(gfx_w,
   gfx_lineto(x, .5 * gfx_y_remaining + .4 * gfx_y_remaining * next_pt);
   c += dc;
   x += 1;
+);
+
+!mod_linked ? (
+  x = c = 0;
+  gfx_x = 0;
+  gfx_y = .5 * gfx_y_remaining + .4 * gfx_y_remaining * buf3.readBuffer(c);
+  gfx_y_remaining = gfx_h - 80 - knobSize;
+  
+  dc = 500000 / gfx_w;
+  gfx_set(.6, 0, .9, .4);
+  loop(gfx_w,
+    next_pt = buf3.readBuffer(c + 1);
+    gfx_lineto(x, .5 * gfx_y_remaining + .4 * gfx_y_remaining * next_pt);
+    c += dc;
+    x += 1;
+  );
 );
 
 gfx_x = 0;
@@ -957,7 +983,7 @@ interp = lerpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 gfx_x = 0;
 gfx_y = 0;
-gfx_printf(" v0.10. Warning: this is an alpha version. Plugin may still be subject to change.");
+gfx_printf(" v0.11. Warning: this is an alpha version. Plugin may still be subject to change.");
 
 
 
@@ -1016,6 +1042,9 @@ show_advanced ? (
 
   cX += 3 * stepSize;
 );
+
+modLinkToggle.drawToggle(cX - .95 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, mod_linked, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Link L/R for the modulation.");
+mod_linked = modLinkToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 rateKnob.knob_set(sprintf(1, "%d ms", rate), 1, (rate - 75) / (1000 - 75));
 rateKnob.drawKnob(cX, cY, knobSize, "Slowness", "Modulation smoothness.", 0);
