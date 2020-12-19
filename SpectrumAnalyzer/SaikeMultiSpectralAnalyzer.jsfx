@@ -1,8 +1,8 @@
-desc:Saike Spectral Analyzer
+desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 4.05
+version: 5.0.0
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Fix y-split reset.
+changelog: Add delta mode (experimental). Refactored some stuff. Added diff mode. Add ceil.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -61,13 +61,24 @@ slider42:0<0,1,1{disabled,enabled}>-show options
 slider43:0<0,1,1{disabled,enabled}>-show theme
 slider44:0<0,1,1{disabled,enabled}>-freeze spectrum
 slider45:4<0,4,1{Average,Maximum,Loess,Adaptive,Fast}>-Smoothing method
+
+slider46:Dummy=0<0,1,1>-Dummy
+slider47:Dummy=0<0,1,1>-Dummy
+slider48:Dummy=0<0,1,1>-Dummy
+slider49:Dummy=0<0,1,1>-Dummy
+
 slider50:0<0,1,0>-Initialized
 slider51:LatencyCompensation=0<0,1,0>-Latency Compensation
+slider52:Dummy=0<0,1,1>-Dummy
 slider53:showA=0<0,1,1>-Show A
 slider54:showB=0<0,1,1>-Show B
 slider55:maxIntegrate=0<0,1,0>-Integration mode
 slider56:showSide=0<0,1,0>-Show side channel
 slider57:noRenderBuffer=0<0,1,1>-Offscreen buffer
+slider58:dummy=0<0,1,1>-Dummy
+slider59:dummy=0<0,1,1>-Dummy
+slider60:displayMode=0<0,1,1>-Display mode
+slider61:scale_offset_db_user=0<-48,48,1>-Scale offset
 //in_pin:left input 
 //in_pin:right input
 options:no_meter
@@ -80,7 +91,7 @@ viridis   = 4000;
 inferno   = 6000;
 plasma    = 8000;
 !sono_frac ? sono_frac = .35;
- 
+
 freeze = 0;
 
 function setChannelNames()
@@ -288,6 +299,11 @@ slider2 != lfloor ? old_w=0;
 updateChannelSliders();
 
 @block
+displayMode != lastDisplayMode ? (
+  lastDisplayMode = displayMode;
+  init_memory_mapping();
+);
+
 slider2 != lfloor ? (
   lfloor = slider2;
   minvol=2*exp(log(10)/20*slider2);
@@ -853,7 +869,6 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
       tl = 0; val = 0;
       loop(.5*fmax,
         tx = log(1.0+i*xscale)*wsc;
-        //val = val + sonogramBuffer[];
         val = max(val, sonogramBuffer[]);
         
         (tx - tl) > 0.999999 ?
@@ -901,8 +916,8 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
 
 function drawGrid()
 local(intensity, textintensity,
-      gv, cnt, y, gfx_texth, bottom_line, f, lx, ltxt, tx, dotext)
-global(bgColor, wsc, sc, rescaleY,
+      gv, cnt, y, gfx_texth, bottom_line, f, lx, ltxt, tx, dotext, scale_offset)
+global(bgColor, wsc, logf_to_pixels, scale_offset_db,
        gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, gfx_w, gfx_h,
        slider39, slider40, srate,
        spectrum_yoffset, spectrum_yoffsetbottom, spectrum_xpad,
@@ -910,17 +925,19 @@ global(bgColor, wsc, sc, rescaleY,
 (
   intensity = 0 * bgColor + 1 * ( 1 - bgColor );
   textintensity = 0.1 * bgColor + 1.0 * ( 1 - bgColor ); 
-    
+  
   // draw horz grid
   gfx_r=gfx_g=gfx_b=intensity;
   gv=1;
   cnt=100;
-  gfx_y=10;
-
-  rescaleY = (1-(spectrum_yoffset+spectrum_yoffsetbottom)/gfx_h);
-  y=20-log(gv)*sc*rescaleY + spectrum_yoffset;  
+  gfx_y = spectrum_yoffset;
+  
+  scale_offset = 10^(scale_offset_db/20);
+  gv /= scale_offset;
+  
+  y=spectrum_yoffset-log(gv*scale_offset)*logf_to_pixels;
   while(
-    y> gfx_y ? (
+    y > 0 ? (
       gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
       gfx_line(0,y,gfx_w-spectrum_xpad,y,0);
       bottom_line = gfx_y;
@@ -934,7 +951,7 @@ global(bgColor, wsc, sc, rescaleY,
     );
     gv*=0.5;
   
-    y=20-log(gv)*sc*rescaleY + spectrum_yoffset;
+    y=spectrum_yoffset-log(gv*scale_offset)*logf_to_pixels;
     y<(gfx_h-spectrum_yoffsetbottom) && cnt-=1 > 0;
   );
   
@@ -950,7 +967,8 @@ global(bgColor, wsc, sc, rescaleY,
     gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
     dotext = tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
        (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000) || (tx-ltxt)>.1*gfx_w;
-    tx > lx ? ( lx=tx+4; gfx_line(tx,20-log(1)*sc+spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
+    tx > lx ? ( lx=tx+4; gfx_line(tx,spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
+    // NOTE: Note that the line above didn't have a rescale Y
     gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
     dotext ? (
       ltxt = tx;
@@ -965,20 +983,74 @@ global(bgColor, wsc, sc, rescaleY,
   );
 );
 
-function drawFFT(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
+function drawFFT(bufout, fftsize, xscale, kernelSize, rr, gg, bb, fill, draw, offset)
+local(i, curh, ixsc,
+      prec, tx, ty, tx0, lx0, lx, ly, 
+      fill_slast, fill_slmin, ly2, ty2)
+global(gfx_w, gfx_h, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a,
+       slider37, displayMode,
+       spectrum_yoffsetbottom, spectrum_yoffset,
+       spectrum_xoffsetbottom, spectrum_xoffset
+       wsc, spectrum_xmax, scale_offset_db,
+       spectral_offset_pixels, zeroline)
+instance()
+(
+  i = 0;
+  fill_slmin=gfx_h;
+  fill_slast=0;
+  curh = gfx_h-spectrum_yoffsetbottom;
+  
+  ixsc = 0;
+  prec = fftsize*spectrum_xoffset*xscale;
+  zeroline = spectrum_yoffset-spectral_offset_pixels;
+  loop(fftsize*0.5-kernelSize,
+    tx = log(1.0+ixsc-prec)*wsc;
+    ty = bufout[];
+    ty = min(ty, gfx_h - spectrum_yoffsetbottom);
+  
+    ( i && ( tx < spectrum_xmax ) ) ?
+    ( 
+      gfx_r=rr;
+      gfx_g=gg;
+      gfx_b=bb;
+        
+      fill ? (
+        gfx_a=slider37;
+        tx0=tx|0;
+        lx0=lx|0;
+        tx0>lx0? (
+          displayMode == 1 ? (
+            gfx_triangle(lx0,max(zeroline,ly),lx0,ly,tx0-1,ty,tx0-1,max(zeroline,ty));
+            gfx_triangle(lx0,min(zeroline,ly),lx0,ly,tx0-1,ty,tx0-1,min(zeroline,ty));
+          ) : (
+            ly < curh || ty < curh ? gfx_triangle(lx0,max(curh,ly),lx0,ly,tx0-1,ty,tx0-1,max(curh,ty));
+          );
+        ) : (
+          tx0 > fill_slast ? (
+           fill_slast < curh ? gfx_line(fill_slast,curh,fill_slast,fill_slmin);
+           fill_slmin=curh;
+         ) : (
+           fill_slmin=min(fill_slmin,ty);
+          );
+        );
+        fill_slast=tx0;        
+      );  
+      gfx_a=1;
+      gfx_x=lx; gfx_y=ly; draw == 1 ? gfx_lineto(tx,ty,1) ;
+   );
+   
+   lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
+  )
+);
+
+function prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
 local(bufout, fout, scfac, jk, tmp, curSize, kern, tsc, i, curh
       sumWtY, iSize, xij, SumWtS,
       d, w, yAdaptive, res, 
       M_est, S_est,
-      alpha, Sq_est, 
-      rescaleY, ixsc, 
-      prec, tx, ty, tx0, lx0, lx, ly, 
-      fill_slast, fill_slmin, ly2, ty2)
+      alpha, Sq_est)
 global(smoothing, filtout2,
-       gfx_w, gfx_h, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a,
-       spectrum_yoffsetbottom, spectrum_yoffset
-       spectrum_xoffsetbottom, spectrum_xoffset,
-       wsc, spectrum_xmax, slider37)
+       spectrum_xmax, slider37)
 instance()
 (
   ( smoothing > 0 ) ? (
@@ -1144,58 +1216,16 @@ instance()
     );
   ) : bufout = filtout;
   
-  draw ? (
-    i = 0;
-    curh = gfx_h-spectrum_yoffsetbottom;
-    rescaleY = (1.0-(spectrum_yoffset+spectrum_yoffsetbottom)/gfx_h);
-    ixsc = 0;
-    prec = fftsize*spectrum_xoffset*xscale;
-    loop(fftsize*0.5-kernelSize,
-      tx = log(1.0+ixsc-prec)*wsc;
-      ty = bufout[]*rescaleY + spectrum_yoffset;
-      ty = min( ty, gfx_h - spectrum_yoffsetbottom );
+  draw ? drawFFT(bufout, fftsize, xscale, kernelSize, rr, gg, bb, fill, draw, 0);
   
-      ( i && ( tx < spectrum_xmax ) ) ?
-      ( 
-        gfx_r=rr;
-        gfx_g=gg;
-        gfx_b=bb;
-        
-        fill/*fill?*/ ? (
-          gfx_a=slider37;
-          tx0=tx|0;
-          lx0=lx|0;
-          tx0>lx0? (
-            ly < curh || ty < curh ? gfx_triangle(lx0,max(curh,ly),lx0,ly,tx0-1,ty,tx0-1,max(curh,ty));
-          ) : (
-            tx0 > fill_slast ? (
-             fill_slast < curh ? gfx_line(fill_slast,curh,fill_slast,fill_slmin);
-             fill_slmin=curh;
-           ) : (
-             fill_slmin=min(fill_slmin,ty);
-            );
-          );
-          fill_slast=tx0;        
-        );  
-        gfx_a=1;
-        gfx_x=lx; gfx_y=ly; draw==1?gfx_lineto(tx,ty,1) ;
-      );
-  
-      lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
-    )
-  )
+  bufout
 );
 
-function processFFT(rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw)
-local(buf1, buf2, buf3, bufout, ascale, i, lx, rescaleY, ang, ty, ty2, tx, ly2,
-      fill_slmin, fill_slast, yOut, slope, prec, last)
-global(histsize, fftsize, window, filtout, 
-       max_fft_size,
-       spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, sc,
-       gfx_x, gfx_y, gfx_h, 
-       slider3, slider38, maxIntegrate, slider45, smoothing,
-       integrate_en, integrate_sc,
-       kernelSize, xscale)
+
+function windowAndTransform(rpos, fftsize, bufStart, histSize, window, fftwspace, histEnd)
+local(buf1, buf2, buf3)
+local()
+global()
 instance()
 (
   buf1=rpos-fftsize;
@@ -1205,7 +1235,7 @@ instance()
   loop(fftsize*.5 + 1,
     buf3[] = buf1[]*buf2[];
     buf3+=1;
-
+  
     buf2+=1;
     (buf1+=1) >= histEnd ? buf1 -= histsize;
   );
@@ -1215,10 +1245,27 @@ instance()
     buf3+=1;
     (buf1+=1) >= histEnd ? buf1 -= histsize;
   );
-
+  
   fft_real(fftwspace,fftsize);
   fft_permute(fftwspace,fftsize/2);
   fftwspace[1]=0;
+  
+  fftwspace
+);
+
+function processFFT(rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw)
+local(buf1, buf2, buf3, bufout, ascale, i, lx, ang, ty, ty2, tx, ly2,
+      yOut, slope, prec, last)
+global(histsize, fftsize, window, filtout,
+       max_fft_size,
+       spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, logf_to_pixels, spectral_offset_pixels,
+       gfx_x, gfx_y, gfx_h, 
+       slider3, slider38, maxIntegrate, slider45, smoothing,
+       integrate_en, integrate_sc,
+       kernelSize, xscale)
+instance()
+(
+  fftwspace = windowAndTransform(rpos, fftsize, bufStart, histSize, window, fftwspace, histEnd);
 
   ascale=gfx_h/$pi*0.25;
   xscale=800.0/(fftsize-4.0);
@@ -1228,9 +1275,8 @@ instance()
   i=0;
   lx=0;
   
-  // Draw phase
+  // Draw phase (angle)
   draw ? (
-    rescaleY = (1-(spectrum_yoffset+bottom_pad)/gfx_h);
     slider3 ? loop(fftsize*0.5,
       ang=-atan2(buf3[1],buf3[]);
       buf3+=2;
@@ -1240,7 +1286,7 @@ instance()
         buf2+=1;
       );
       
-      ty2=(ang*ascale + gfx_h*0.5)*rescaleY + spectrum_yoffset;
+      ty2=(ang*ascale + gfx_h*0.5) + spectrum_yoffset;
       tx = log(1.0+i*xscale)*wsc;
   
       i && ( tx < spectrum_xmax ) ? 
@@ -1255,8 +1301,6 @@ instance()
   
   lx=0;
   i=0;
-  fill_slmin=gfx_h;
-  fill_slast=0;
 
   // Process FFT
   kernelSize  = smoothing > 0 ? floor( smoothing/5 + 1 ) : 0;
@@ -1286,8 +1330,8 @@ instance()
       );
       buf2+=1;
     );
-      
-    bufout[] = ty*-0.5*sc + 20;
+    
+    bufout[] = ty * -0.5 * logf_to_pixels + spectrum_yoffset - spectral_offset_pixels;
     bufout += 1;
     i += 1;
   );
@@ -1300,9 +1344,91 @@ instance()
     bufout[] = last;
   );
   
-  drawFFT(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
+  prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
 );
+
+function processFFTDifference(rpos, fftwspace, intbuf, bufStart, histEnd, 
+                              rpos2, fftwspace2, intbuf2, bufStart2, histEnd2, 
+                              rr, gg, bb, fill, draw)
+local(buf1, buf2, buf3, bufout, ascale, i, lx, ang, ty, ty2, tx, ly2,
+      yOut, slope, prec, last, y1, y2)
+global(histsize, fftsize, window, filtout, 
+       max_fft_size,
+       spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, logf_to_pixels, spectral_offset_pixels,
+       gfx_x, gfx_y, gfx_h, 
+       slider3, slider38, maxIntegrate, slider45, smoothing,
+       integrate_en, integrate_sc,
+       kernelSize, xscale)
+instance()
+(
+  fftwspace = windowAndTransform(rpos, fftsize, bufStart, histSize, window, fftwspace, histEnd);
+  fftwspace2 = windowAndTransform(rpos2, fftsize, bufStart2, histSize, window, fftwspace2, histEnd2);
+
+  ascale=gfx_h/$pi*0.25;
+  xscale=800.0/(fftsize-4.0);
+ 
+  buf3=fftwspace;
+  buf2=intbuf+max_fft_size*0.5;
+  i=0;
+  lx=0;
+
+  // Process FFT
+  kernelSize  = smoothing > 0 ? floor( smoothing/5 + 1 ) : 0;
+  bufout = filtout + kernelSize;
   
+  // Integrate the FFT over time to smooth it.
+  // Note that yOut and buf3 both point to the FFTW space. yOut is written after buf3 is read so 
+  // they don't conflict.
+  buf3 = fftwspace;
+  buf1 = fftwspace2;
+  yOut = fftwspace;
+  buf2 = intbuf;
+  i    = 0;
+  slope = .5*log(2)*slider38;
+  prec = (10^(-500/20*2));
+  loop(fftsize*0.5,
+    y1 = sqr(buf3[0])+sqr(buf3[1]);
+    y2 = sqr(buf1[0])+sqr(buf1[1]);
+    y1 < .000001 ? y1 = 0;
+    y2 < .000001 ? y2 = 0;
+    y1 == y2 ? (
+      yOut[] = 1.0;    
+    ) : (
+      yOut[] = y1 / y2;
+    );
+    ty = log(max(yOut[],prec));
+    ty = ty + slope*log(1.0+i*xscale);
+    yOut += 1;
+    buf3 += 2;
+    buf1 += 2;
+  
+    integrate_en ? (
+      maxIntegrate ? (
+        ty = buf2[] = max(ty, buf2[] - integrate_sc);
+      ) : (
+        ty = buf2[] += integrate_sc * (ty - buf2[]);
+      );
+      buf2+=1;
+    );
+      
+    bufout[] = ty*-0.5*logf_to_pixels + spectrum_yoffset - spectral_offset_pixels;
+    bufout += 1;
+    i += 1;
+  );
+    
+  // Copy the last few to the front
+  bufout = filtout + kernelSize;
+  last = bufout[];
+  loop(kernelSize,
+    bufout -= 1;
+    bufout[] = last;
+  );
+  
+  prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
+);
+
+
+
 // Scrollwheel
 (abs(mouse_wheel) > 0) ?
 (
@@ -1391,11 +1517,15 @@ instance()
    !(last_mouse_cap & 1) ? (
       // Reset to defaults
        (cap_mode == 1||cap_mode == 4||cap_mode == 5||cap_mode == 6||cap_mode == 8||cap_mode == 9||cap_mode == 10||cap_mode ==30||cap_mode ==31
-       ||cap_mode ==32 ||cap_mode ==40 ||cap_mode ==42||cap_mode ==44|| (cap_mode > 10 && cap_mode < 27)||cap_mode==28) && !cap_drag && cap_timer < 12 ?(
+       ||cap_mode ==32 ||cap_mode ==40 ||cap_mode ==42||cap_mode == 44||cap_mode == 49|| (cap_mode > 10 && cap_mode < 27)||cap_mode==28) && !cap_drag && cap_timer < 12 ?(
          cap_mode == 1 ? (
             slider2 = -90;
             slider_automate(slider2);
           ) : (
+          cap_mode == 49 ? (
+             scale_offset_db_user = 0;
+             slider_automate(scale_offset_db_user);
+           ) : (
             cap_mode == 4 ? (
               slider5 = 0;
               slider_automate(slider5);
@@ -1490,6 +1620,7 @@ instance()
             );
           );
         );
+        );
          cap_mode=0;
          old_w=0;
        ) : (
@@ -1514,12 +1645,14 @@ instance()
          checkChannelButtons() ? : 
                  slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateSliders = 1; old_w = 0) :
                  slider42 == 0 ? floor_button.hit_button(mouse_x,mouse_y,1);
+                 slider42 == 0 ? ceil_button.hit_button(mouse_x,mouse_y, 49);
                  slider42 == 0 ? slope_button.hit_button(mouse_x,mouse_y,29);
                  slider42 == 0 ? window_button.hit_button(mouse_x,mouse_y,2);
                  slider42 == 0 ? fft_button.hit_button(mouse_x,mouse_y,3);
                  slider42 == 0 ? integrate_button.hit_button(mouse_x,mouse_y,4); 
                  slider42 == 0 ? integration_type_button.hit_button(mouse_x, mouse_y, 46);
                  slider42 == 0 ? show_side_button.hit_button(mouse_x, mouse_y, 47);
+                 slider42 == 0 ? diff_mode_button.hit_button(mouse_x, mouse_y, 48);
                  slider42 == 0 ? scaling.hit_button(mouse_x,mouse_y,5);
                  slider42 == 0 ? colormap.hit_button(mouse_x,mouse_y,7);              
                  slider42 == 0 ? smoothing_button.hit_button(mouse_x,mouse_y,6);
@@ -1548,6 +1681,11 @@ instance()
       old_w=0;
       slider_automate(slider2);
     ) :
+    cap_mode == 49 && cap_last_y != mouse_y ? (
+      scale_offset_db_user = drag_slider_precise(scale_offset_db_user, -48, 48, 0.1);
+      old_w=0;
+      slider_automate(scale_offset_db_user);
+    ) :
     cap_mode == 2 && cap_last_y != mouse_y ? (
       slider4 = drag_slider(slider4, 0.0, 3.0, .03);
       old_w=0;
@@ -1562,6 +1700,11 @@ instance()
       showSide = drag_slider(showSide, 0.0, 1.0, .03);
       old_w=0;
       slider_automate(showSide);
+    ) :
+    cap_mode == 48 && cap_last_y != mouse_y ? (
+      displayMode = drag_slider(displayMode, 0.0, 1.0, .03);
+      old_w=0;
+      slider_automate(displayMode);    
     ) :
       cap_mode == 3 && cap_last_y != mouse_y ? (
       slider1 = drag_slider(slider1, 0.0, 11.0, .03);
@@ -1670,6 +1813,11 @@ instance()
       old_w=0;
       slider_automate(showSide);
     );
+    cap_mode == 48 ? (
+      displayMode = cycle_slider(displayMode, 0.0, 1.0, 1.0);
+      old_w=0;
+      slider_automate(displayMode);
+    );
   );
 );
 
@@ -1712,10 +1860,12 @@ function DrawButtons()
     
       floor_button.str_add_measure("Floor: 888.8 dB");
       floor_button.draw_button_wrap(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), storeBX);
+      ceil_button.str_add_measure("Ceil: 88.8 dB");
+      ceil_button.draw_button_wrap(gfx_y, sprintf(#,"Ceil: %.1fdB", -scale_offset_db_user + .00000000001), storeBX);
       slope_button.str_add_measure("Slope: 8.8 dB/oct");
       slope_button.draw_button_wrap(gfx_y, sprintf(#,"Slope: %.1fdB/oct", slider38), storeBX);
-      smoothing_button.str_add_measure("Smoothing: 888.8");
-      smoothing_button.draw_button_wrap(gfx_y,sprintf(#,"Smoothing: %.1f",smoothing), storeBX);
+      smoothing_button.str_add_measure("Smooth: 888.8");
+      smoothing_button.draw_button_wrap(gfx_y,sprintf(#,"Smooth: %.1f",smoothing), storeBX);
       smoothing_type.str_add_measure("Average");
       smoothing_type.str_add_measure("Maximum");
       smoothing_type.str_add_measure("LOESS");
@@ -1740,6 +1890,8 @@ function DrawButtons()
       integration_type_button.draw_button_wrap(gfx_y, maxIntegrate ? "Max" : "Int", storeBX);
       show_side_button.str_add_measure("Mid/Side");
       show_side_button.draw_button_wrap(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
+      diff_mode_button.str_add_measure("Diff Mode");
+      diff_mode_button.draw_button_wrap(gfx_y, displayMode ? "Diff Mode" : "Normal", storeBX);      
     );
           
   gfx_measurestr("^^:: THEMES ::^^", themeW, themeH);
@@ -1893,16 +2045,15 @@ function DrawButtons()
     );
     
   slider29 == 2 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
-        
+
   // SET THE OFFSETS HERE
+  spectrum_yoffset = 25;
   ( slider42 == 0 ) ? (
-    spectrum_yoffset = 5;
     spectrum_xpad = 150;
     sono_yoffset_bottom = 35;
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;
     spectrum_xmax = gfx_w - spectrum_xpad;
   ) : (
-    spectrum_yoffset = 5;
     spectrum_xpad = 0;
     sono_yoffset_bottom = 35;
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;
@@ -1910,7 +2061,6 @@ function DrawButtons()
   );
   
   ( slider41 == 0 ) ? (
-    spectrum_yoffset = 5;
     sono_yoffset_bottom = 30;
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;    
   ) : (
@@ -1922,6 +2072,147 @@ function DrawButtons()
   bgcolor = slider10;
 
 );
+
+function sub(mem1, mem2, size)
+local()
+global()
+instance()
+(
+  loop(size,
+    mem1[] -= mem2[];
+    mem1 += 1;
+    mem2 += 1;
+  );
+);
+
+function drawDifferenceSpectra(rpos, fftw, ibuf, shft, hsiz)
+global(maxchannels, activechannels, isActive,
+       showSide,
+       fftsize
+       filtout,
+       xscale, kernelSize,
+       slider8, ss)
+local(j,
+      first, second,
+      from, to,
+      rr, gg, bb,
+      ccolor, cref)
+(
+  first = -1;
+  second = -1;
+  isActive = activechannels;
+  from = 0;
+  to = 0;
+  j = 0;
+  
+  loop(maxchannels,
+    (isActive[j] == 1) ? (
+      (first == -1) ? (
+        first = j;
+      ) : ( second == -1 ) ? (
+        second = j;
+      );
+    );
+    j += 1;    
+  );
+  
+  cref = (10000 + 100*floor(slider8));
+  ccolor   = cref;
+  
+  (first > -1) && (second > -1) ? (
+    processFFTDifference(rpos[first], fftw[first], ibuf[first], shft[first], hsiz[first],
+                         rpos[second], fftw[second], ibuf[second], shft[second], hsiz[second],
+                         ccolor[0], ccolor[1], ccolor[2], 1, 1);
+  );
+);
+
+function drawSpectra(rpos, fftw, ibuf, shft, hsiz)
+global(slider8, slider36, slider45,
+       maxchannels, showSide, activechannels, showSum, copyTo, bgcolor,
+       sumposr, fftwr, ibufr, sumshr, sumhsr,
+       sumposl, fftwl, ibufl, sumshl, sumhsl
+       fftw, ibuf, shft, hsiz, rpos,
+       memA, memA2, memB, memB2,
+       filtout,
+       showA, showB,
+       M_BLOCK_SIZE,
+       kernelSize, fftsize, xscale,
+       sModeA, kernelSizeA, fftSizeA, xScaleA,
+       sModeB, kernelSizeB, fftSizeB, xScaleB)
+local(jl, incr, cref, ccolor, jl, isActive, halfShade, shade)
+instance()
+(
+  incr  = 3;
+  cref = (10000 + 100*floor(slider8));
+  
+  ccolor   = cref;
+  jl       = 1;
+  isActive = activechannels;
+  loop(maxchannels,
+    (isActive[] == 1) ? (
+      ( slider36 < 0 || ( slider36 == (jl-1) ) ) ? (
+        showSide ? processFFT((rpos+maxchannels)[], (fftw+maxchannels)[], (ibuf+maxchannels)[], (shft+maxchannels)[], (hsiz+maxchannels)[], ccolor[0], ccolor[1], ccolor[2], 1, 2);
+        processFFT(rpos[], fftw[], ibuf[], shft[], hsiz[], ccolor[0], ccolor[1], ccolor[2], 1, 1);
+      );
+    );
+    
+    rpos     += 1;
+    fftw     += 1;
+    ibuf     += 1;
+    shft     += 1;
+    hsiz     += 1;
+    
+    jl       += 1;
+    ccolor   += incr;
+    isActive += 1; 
+  );
+
+  showSum || copyTo ? (
+    halfshade = 0.3 * bgcolor + 0.7 * ( 1-bgcolor );
+    shade = 1-bgcolor;
+    processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);
+    
+    (copyTo == 1) ? memcpy(memA2, filtout, 65536);
+    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
+    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
+    
+    processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 1);
+    
+    copyTo == 1 ? (
+      memcpy(memA, filtout, M_BLOCK_SIZE);
+      copyTo = 0;
+      sModeA = floor(slider45);
+      kernelSizeA = kernelSize;
+      fftSizeA = fftsize;
+      xscaleA = xscale;
+    );
+    
+    copyTo == 2 ? (
+      memcpy(memB, filtout, M_BLOCK_SIZE);
+      copyTo = 0;
+      sModeB = floor(slider45);
+      kernelSizeB = kernelSize;
+      fftSizeB = fftsize;
+      xscaleB = xscale;
+    );
+  );
+  
+  showA ? (
+    memcpy(filtout, memA, M_BLOCK_SIZE);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    memcpy(filtout, memA2, M_BLOCK_SIZE);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+  );
+  
+  showB ? (
+    memcpy(filtout, memB, M_BLOCK_SIZE);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    memcpy(filtout, memB2, M_BLOCK_SIZE);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+  );
+);
+
+
 cap_mode && cap_timer < 12 ? cap_timer += 1;
 last_mouse_cap = mouse_cap;
 
@@ -1951,7 +2242,11 @@ mouse_cap > 0 ? (
   gfx_r=gfx_g=gfx_b=bgcolor -0; gfx_a=1.0;
   gfx_x=gfx_y=0;
   gfx_rectto(gfx_w,gfx_h);
-  sc=(gfx_h-20)*20/(-slider2 * log(10));
+  logdb_to_pixels=(gfx_h - spectrum_yoffset - spectrum_yoffsetbottom)/(-slider2);
+  logf_to_pixels=logdb_to_pixels*20/log(10);
+  scale_offset_db = scale_offset_db_user;
+  displayMode == 1 ? scale_offset_db += 0.5 * slider2;
+  spectral_offset_pixels = scale_offset_db * logdb_to_pixels;
   
   latencyLength = fftSize;
   ( latencyCompensation == 0 ) ? latencyLength = 0;
@@ -2003,80 +2298,8 @@ mouse_cap > 0 ? (
     integrate_sc=1;
   );
 
-  rpos = recpositions;
-  fftw = fftworkspaces;
-  ibuf = integrate_bufs;
-  shft = shifts;
-  hsiz = histsizes;
-  
-  incr  = 3;
-  cref = (10000 + 100*floor(slider8));
-  
-  ccolor  = cref;
-  jl      = 1;
-  blah    = activechannels;
-  loop(maxchannels,
-    (blah[] == 1) ? (
-      ( slider36 < 0 || ( slider36 == (jl-1) ) ) ? (
-        showSide ? processFFT((rpos+maxchannels)[], (fftw+maxchannels)[], (ibuf+maxchannels)[], (shft+maxchannels)[], (hsiz+maxchannels)[], ccolor[0], ccolor[1], ccolor[2], 1, 2);
-        processFFT(rpos[], fftw[], ibuf[], shft[], hsiz[], ccolor[0], ccolor[1], ccolor[2], 1, 1);
-      );
-    );
-    jl      += 1;
-    rpos    += 1;
-    fftw    += 1;
-    ibuf    += 1;
-    shft    += 1;
-    hsiz    += 1;
-    ccolor  += incr;
-    blah    += 1; 
-  );
-
-  showSum || copyTo ? (
-    halfshade = 0.3 * bgcolor + 0.7 * ( 1-bgcolor );
-    shade = 1-bgcolor;
-    processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);
-    
-    (copyTo == 1) ? memcpy(memA2, filtout, 65536);
-    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
-    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
-    
-    processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 1);
-    
-    copyTo == 1 ? (
-      memcpy(memA, filtout, M_BLOCK_SIZE);
-      copyTo = 0;
-      sModeA = floor(slider45);
-      kernelSizeA = kernelSize;
-      fftSizeA = fftsize;
-      xscaleA = xscale;
-    );
-    
-    copyTo == 2 ? (
-      memcpy(memB, filtout, M_BLOCK_SIZE);
-      copyTo = 0;
-      sModeB = floor(slider45);
-      kernelSizeB = kernelSize;
-      fftSizeB = fftsize;
-      xscaleB = xscale;
-    );
-  );
-  
-  //drawFFT(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
-  
-  showA ? (
-    memcpy(filtout, memA, M_BLOCK_SIZE);
-    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
-    memcpy(filtout, memA2, M_BLOCK_SIZE);
-    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
-  );
-  
-  showB ? (
-    memcpy(filtout, memB, M_BLOCK_SIZE);
-    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
-    memcpy(filtout, memB2, M_BLOCK_SIZE);
-    drawFFT(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
-  );
+  displayMode == 0 ? drawSpectra(recpositions, fftworkspaces, integrate_bufs, shifts, histsizes)
+  : displayMode == 1 ? drawDifferenceSpectra(recpositions, fftworkspaces, integrate_bufs, shifts, histsizes);
   
   ( zoomMode == 1 ) ? (
     gfx_r = gfx_g = gfx_b = gfx_a = 1.0;
@@ -2180,7 +2403,7 @@ mouse_cap > 0 ? (
     gfx_y = mouse_y;
     
     f = (1/800) * ( exp(mouse_x/wsc)-1 ) * srate + spectrum_xoffset * srate;
-    y = -20 * ( (mouse_y-20-spectrum_yoffset) / (sc*rescaleY) ) / log(10);   
+    y = -20 * ( (mouse_y - spectrum_yoffset + spectral_offset_pixels) / logf_to_pixels ) / log(10);   
     
     gfx_printf("%dHz %gdB", f, y); 
   );
