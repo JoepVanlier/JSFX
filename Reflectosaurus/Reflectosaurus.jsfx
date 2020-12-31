@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.80
+version: 0.81
 author: Joep Vanlier
-changelog: Fix plugin not responding to automation.
+changelog: Mute plugin when it's not actually producing or taking audio anymore (to save CPU).
 license: MIT
 provides:  
   Reflectosaurus_Dependencies/*
@@ -100,7 +100,7 @@ slider58:dummy=0<0,1,1>-Dummy
 slider59:dummy=0<0,1,1>-Dummy
 slider60:dummy=0<0,1,1>-Dummy
 slider61:dummy=0<0,1,1>-Dummy
-slider62:dummy=0<0,1,1>-Dummy
+slider62:force_enabled=0<0,1,1>-Force Enabled (overrides automute)
 
 slider63:Inertia=50<0,500,.001>-Inertia
 slider64:WetGain=0<-32,32,.001>-Gain
@@ -2520,58 +2520,66 @@ samples % UPDATE_INTERVAL == 0 ? (
   node11.updateNode();
 );
 
-fade = startFade.evaluateFade();
-l = spl0 * fade;
-r = spl1 * fade;
+silent_thresh = 0.000001;
+inGainEstimate = max(.99999 * inGainEstimate, max(spl0, spl1));
 
-// This thing hates DC, so let's make sure it doesn't get in.
-dc_correction ? (
-  l = dc0.eval_HP6(l);
-  r = dc1.eval_HP6(r);
+// Don't incur the CPU hit if we're not playing, geez.
+(inGainEstimate + outGainEstimate + force_enabled) > silent_thresh ? (
+  fade = startFade.evaluateFade();
+  l = spl0 * fade;
+  r = spl1 * fade;
+  
+  // This thing hates DC, so let's make sure it doesn't get in.
+  dc_correction ? (
+    l = dc0.eval_HP6(l);
+    r = dc1.eval_HP6(r);
+  );
+  
+  node1.process(l, r);
+  node2.process(l, r);
+  node3.process(l, r);
+  node4.process(l, r);
+  node5.process(l, r);
+  node6.process(l, r);
+  node7.process(l, r);
+  node8.process(l, r);
+  node9.process(l, r);
+  node10.process(l, r);
+  node11.processVerbNode(l, r);
+  
+  lp_cutoff = lp_interpolator.interpolate();
+  hp_cutoff = hp_interpolator.interpolate();
+  lp_res = lpres_interpolator.interpolate();
+  (abs(lp_cutoff - llpf) > .00000001) || (abs(lp_res - lres) > .00000001) ? ( lpl.init_linearSVF(lp_cutoff, .99*LPRES); lpr.init_linearSVF(lp_cutoff, .99*LPRES); llpf = lp_cutoff; lres = lp_res; );
+  (abs(hp_cutoff - lhpf) > .00000001) ? ( hpl.init_linearSVF(hp_cutoff, 0); hpr.init_linearSVF(hp_cutoff, 0); lhpf = hp_cutoff; );
+  lp_cutoff < .99999 || lpres > 0 ? (
+    lOut = lpl.eval_linearSVF_LP(lOut);
+    rOut = lpr.eval_linearSVF_LP(rOut);
+  );
+  hp_cutoff > .00001 ? (
+    lOut = hpl.eval_linearSVF_HP(lOut);
+    rOut = hpr.eval_linearSVF_HP(rOut);
+  );
+  
+  // Update the compressor and duck the delay signal if active
+  duckingActive ? (
+    duckerGain = ducker.compressor(l, r);
+    lOut *= duckerGain;
+    rOut *= duckerGain;
+  );
+  
+  pitch ? (
+    shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
+    shifter.pitchShifterUpdate(lOut, rOut);
+    lOut = shifter.outL;
+    rOut = shifter.outR;
+  );
+  
+  spl0 = l * (1-drywet) + lOut * drywet * gainFactor;
+  spl1 = r * (1-drywet) + rOut * drywet * gainFactor;
 );
 
-node1.process(l, r);
-node2.process(l, r);
-node3.process(l, r);
-node4.process(l, r);
-node5.process(l, r);
-node6.process(l, r);
-node7.process(l, r);
-node8.process(l, r);
-node9.process(l, r);
-node10.process(l, r);
-node11.processVerbNode(l, r);
-
-lp_cutoff = lp_interpolator.interpolate();
-hp_cutoff = hp_interpolator.interpolate();
-lp_res = lpres_interpolator.interpolate();
-(abs(lp_cutoff - llpf) > .00000001) || (abs(lp_res - lres) > .00000001) ? ( lpl.init_linearSVF(lp_cutoff, .99*LPRES); lpr.init_linearSVF(lp_cutoff, .99*LPRES); llpf = lp_cutoff; lres = lp_res; );
-(abs(hp_cutoff - lhpf) > .00000001) ? ( hpl.init_linearSVF(hp_cutoff, 0); hpr.init_linearSVF(hp_cutoff, 0); lhpf = hp_cutoff; );
-lp_cutoff < .99999 || lpres > 0 ? (
-  lOut = lpl.eval_linearSVF_LP(lOut);
-  rOut = lpr.eval_linearSVF_LP(rOut);
-);
-hp_cutoff > .00001 ? (
-  lOut = hpl.eval_linearSVF_HP(lOut);
-  rOut = hpr.eval_linearSVF_HP(rOut);
-);
-
-// Update the compressor and duck the delay signal if active
-duckingActive ? (
-  duckerGain = ducker.compressor(l, r);
-  lOut *= duckerGain;
-  rOut *= duckerGain;
-);
-
-pitch ? (
-  shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
-  shifter.pitchShifterUpdate(lOut, rOut);
-  lOut = shifter.outL;
-  rOut = shifter.outR;
-);
-
-spl0 = l * (1-drywet) + lOut * drywet * gainFactor;
-spl1 = r * (1-drywet) + rOut * drywet * gainFactor;
+outGainEstimate = max(.99999 * outGainEstimate, max(spl0, spl1));
 
 @gfx 1400 850
 scaling = gfx_ext_retina == 2 ? 1 : 0;
