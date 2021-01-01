@@ -1,8 +1,8 @@
 desc:Saike / Nostalgizer / Lo-Fi (BETA)
 tags: detune / envelope muffler / chorus
-version: 0.11
+version: 0.12
 author: Joep Vanlier
-changelog: Added stereo mode for modulator.
+changelog: Added option to bypass LPG. Add side chain option.
 provides:
   nostalgizer_dependencies/* 
 license: MIT
@@ -18,6 +18,7 @@ slider6:flutter_rate=1.0<0,50,.01>-flutter rate
 slider7:enable_hp=0<0,1,1>-Enable high pass
 slider8:linked=1<0,1,1>-L/R LPG Linked
 slider9:mod_linked=1<0,1,1>-L/R Mod Linked
+slider10:bypass_lpg=0<0,1,1>-Bypass LPG
 
 slider11:saturation=0.1003<0,1,.00001>-dynamic saturation (0=off)
 slider12:asymmetry=0.663367<0,1,.00001>-saturation asymmetry
@@ -34,12 +35,15 @@ slider32:attack=9.22<5,80,.001>-Attack [ms]
 slider33:decay=110.666667<5,500,.001>-Decay [ms]
 
 slider34:lp_minimum=0.15<0,1,.00011>-lpg minimum
+slider35:side_chain=0<0,1,1>-Use sidechain for LPG
 
 slider60:show_advanced=0<0,1,1>-Show advanced
 
 options:no_meter
 in_pin:left input
 in_pin:right input
+in_pin:left lpg sidechain
+in_pin:right lpg sidechain
 out_pin:left output
 out_pin:right output
 
@@ -475,15 +479,23 @@ preamp = exp(.11512925464970228420089957273422 * c_input_boost);
 spl0 *= preamp;
 spl1 *= preamp; 
 
+side_chain ? (
+  left_gain_input = spl2;
+  right_gain_input = spl3;
+) : (
+  left_gain_input = spl0;
+  right_gain_input = spl1;
+);
+
 // Overall gain estimator
-vol_est_l = max((1-k_gain) * vol_est_l, abs(spl0));
-vol_est_r = max((1-k_gain) * vol_est_r, abs(spl1));
+vol_est_l = max((1-k_gain) * vol_est_l, abs(left_gain_input));
+vol_est_r = max((1-k_gain) * vol_est_r, abs(right_gain_input));
 
 csample += 1;
 
 ( operating_mode == 2 ) ? (
-  l_cur = abs(spl0);
-  r_cur = abs(spl1);
+  l_cur = abs(left_gain_input);
+  r_cur = abs(right_gain_input);
   
   state_l += state_l < l_cur ? k_atk * (l_cur - state_l) : k_decay * (l_cur - state_l);
   state_r += state_r < r_cur ? k_atk * (r_cur - state_r) : k_decay * (r_cur - state_r);
@@ -500,10 +512,10 @@ csample += 1;
     r_gate_filt.init_linearSVF_absolute(max(50, 44100 * gate_right), resonance);
   );
 ) : (operating_mode == 0) ? (
-  left_change = (abs(spl0) / vol_est_l) < lpf_thresh ? k_atk * (1.0 - gate_left) : - k_decay * gate_left;
+  left_change = (abs(left_gain_input) / vol_est_l) < lpf_thresh ? k_atk * (1.0 - gate_left) : - k_decay * gate_left;
   gate_left += left_change;
 
-  right_change = (abs(spl1) / vol_est_r) < lpf_thresh ? k_atk * (1.0 - gate_right) : - k_decay * gate_right;
+  right_change = (abs(right_gain_input) / vol_est_r) < lpf_thresh ? k_atk * (1.0 - gate_right) : - k_decay * gate_right;
   gate_right += right_change;
   
   (csample % update_rate == 0) ? (  
@@ -515,8 +527,8 @@ csample += 1;
     r_gate_filt.init_linearSVF(gate_right, resonance);
   );
 ) : ( operating_mode == 1 ) ? (
-  mx_l = max(.99*mx_l, abs(spl0));
-  mx_r = max(.99*mx_r, abs(spl1));
+  mx_l = max(.99*mx_l, abs(left_gain_input));
+  mx_r = max(.99*mx_r, abs(right_gain_input));
   
   l_cur = abs(mx_l) / vol_est_l;
   r_cur = abs(mx_r) / vol_est_r;
@@ -642,12 +654,14 @@ noise_level > 0 ? (
 fb_l = l;
 fb_r = r;
 
-l = l_gate_filt.eval_linearSVF_LP(l);
-r = r_gate_filt.eval_linearSVF_LP(r);
+!bypass_lpg ? (
+  l = l_gate_filt.eval_linearSVF_LP(l);
+  r = r_gate_filt.eval_linearSVF_LP(r);
 
-enable_hp ? (
-  l = l_gate_hp.eval_linearSVF_hp(l);
-  r = r_gate_hp.eval_linearSVF_hp(r);
+  enable_hp ? (
+    l = l_gate_hp.eval_linearSVF_hp(l);
+    r = r_gate_hp.eval_linearSVF_hp(r);
+  );
 );
 
 drift = .999 * drift + 0.001 * (abs(l) + abs(r));
@@ -983,8 +997,7 @@ interp = lerpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 gfx_x = 0;
 gfx_y = 0;
-gfx_printf(" v0.11. Warning: this is an alpha version. Plugin may still be subject to change.");
-
+gfx_printf(" v0.12. Warning: this is an alpha version. Plugin may still be subject to change.");
 
 
 cX += 2 * stepSize;
@@ -996,20 +1009,29 @@ inputKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
   slider_automate(input_boost); 
 );
 
+hpToggle.drawToggle(cX - .95 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, enable_hp, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this toggle runs the signal\nthrough a highpass filter.");
+enable_hp = hpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+sidechainToggle.drawToggle(cX + .9 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, side_chain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this toggle uses the side-chain to control the LPG.");
+side_chain = sidechainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
 cX += 3 * stepSize;
 
-lpfKnob.knob_set(sprintf(1, "%.2f", lpf_level), 1, lpf_level);
+bypassToggle.drawToggle(cX - .95 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, 1 - bypass_lpg, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LPG.");
+bypass_lpg = 1 - bypassToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+lpfKnob.knob_set(sprintf(1, "%.2f", lpf_level), 1 - bypass_lpg, lpf_level);
 lpfKnob.drawKnob(cX, cY, knobSize, "Lowpass gate", "Lowpass gate level.", 0);
 lpfKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.701) ? ( 
   lpf_level = lpfKnob.value;
   slider_automate(lpf_level); 
 );
 
-linkToggle.drawToggle(cX - .95 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, linked, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Link L/R for the LPG.");
-linked = linkToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-hpToggle.drawToggle(cX + .9 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, enable_hp, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this toggle runs the signal\nthrough a highpass filter.");
-enable_hp = hpToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+!bypass_lpg ? (
+  linkToggle.drawToggle(cX + .9 * knobSize, cy - .95 * knobSize, .15*knobSize, .15*knobSize, linked, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Link L/R for the LPG.");
+  linkToggle.active = 1 - bypass_lpg;
+  linked = linkToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+);
 
 cX += 3 * stepSize;
 
