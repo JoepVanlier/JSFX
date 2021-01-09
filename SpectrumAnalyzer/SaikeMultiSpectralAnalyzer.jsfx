@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.1
+version: 5.0.2
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Add option to hide all UI data by pressing enter.
+changelog: Improve difference mode.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -1053,9 +1053,11 @@ local(bufout, fout, scfac, jk, tmp, curSize, kern, tsc, i, curh
       M_est, S_est,
       alpha, Sq_est)
 global(smoothing, filtout2,
-       spectrum_xmax, slider37)
+       spectrum_xmax, spectrum_center, slider37)
 instance()
 (
+  gfx_line(0, spectrum_center, 1000, spectrum_center);
+
   ( smoothing > 0 ) ? (
     ( smoothMode == 0 ) ? (
       // Convolve it
@@ -1354,7 +1356,9 @@ function processFFTDifference(rpos, fftwspace, intbuf, bufStart, histEnd,
                               rpos2, fftwspace2, intbuf2, bufStart2, histEnd2, 
                               rr, gg, bb, fill, draw)
 local(buf1, buf2, buf3, bufout, ascale, i, lx, ang, ty, ty2, tx, ly2,
-      yOut, slope, prec, last, y1, y2)
+      yOut, slope, prec, last, y1, y2, eps
+      intbuf_ptr, intbuf2_ptr,
+      )
 global(histsize, fftsize, window, filtout, 
        max_fft_size,
        spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, logf_to_pixels, spectral_offset_pixels,
@@ -1385,38 +1389,43 @@ instance()
   buf3 = fftwspace;
   buf1 = fftwspace2;
   yOut = fftwspace;
-  buf2 = intbuf;
+  
+  intbuf_ptr = intbuf;
+  intbuf2_ptr = intbuf2;
   i    = 0;
   slope = .5*log(2)*slider38;
   prec = (10^(-500/20*2));
+  eps = 0.000000000000000000001;
   loop(fftsize*0.5,
     y1 = sqr(buf3[0])+sqr(buf3[1]);
     y2 = sqr(buf1[0])+sqr(buf1[1]);
-    y1 < .000001 ? y1 = 0;
-    y2 < .000001 ? y2 = 0;
-    y1 == y2 ? (
-      yOut[] = 1.0;    
-    ) : (
-      yOut[] = y1 / y2;
-    );
-    ty = log(max(yOut[],prec));
-    ty = ty + slope*log(1.0+i*xscale);
-    yOut += 1;
-    buf3 += 2;
-    buf1 += 2;
-  
+    
+    ty = log(max(y1,prec));
+    ty2 = log(max(y2,prec));
+
     integrate_en ? (
       maxIntegrate ? (
-        ty = buf2[] = max(ty, buf2[] - integrate_sc);
+        ty = intbuf_ptr[] = max(ty, intbuf_ptr[] - integrate_sc);
+        ty2 = intbuf2_ptr[] = max(ty2, intbuf2_ptr[] - integrate_sc);
       ) : (
-        ty = buf2[] += integrate_sc * (ty - buf2[]);
+        ty = intbuf_ptr[] += integrate_sc * (ty - intbuf_ptr[]);
+        ty2 = intbuf2_ptr[] += integrate_sc * (ty2 - intbuf2_ptr[]);        
       );
-      buf2+=1;
+      intbuf_ptr+=1;
+      intbuf2_ptr+=1;
     );
-      
+    
+    ty -= ty2;
+   // ty2 < eps && ty > eps ? ty = 100000000;
+    yOut[] = ty; 
+    yOut += 1;
+    
     bufout[] = ty*-0.5*logf_to_pixels + spectrum_yoffset - spectral_offset_pixels;
     bufout += 1;
     i += 1;
+    
+    buf3 += 2;
+    buf1 += 2;
   );
     
   // Copy the last few to the front
@@ -1894,7 +1903,7 @@ function DrawButtons()
       show_side_button.str_add_measure("Mid/Side");
       show_side_button.draw_button_wrap(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
       diff_mode_button.str_add_measure("Diff Mode");
-      diff_mode_button.draw_button_wrap(gfx_y, displayMode ? "Diff Mode" : "Normal", storeBX);      
+      diff_mode_button.draw_button_wrap(gfx_y, displayMode ? "Diff (BETA)" : "Normal", storeBX);      
     );
           
   gfx_measurestr("^^:: THEMES ::^^", themeW, themeH);
@@ -2073,6 +2082,8 @@ function updateSpectralBounds()
     sono_yoffset_bottom = 6;
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;
   );
+  
+  spectrum_center = spectrum_yoffset - spectral_offset_pixels;
 
   scaling = slider6;
   bgcolor = slider10;
@@ -2125,6 +2136,10 @@ local(j,
   ccolor   = cref;
   
   (first > -1) && (second > -1) ? (
+    showSide ? processFFTDifference((rpos + maxchannels)[first], (fftw + maxchannels)[first], (ibuf + maxchannels)[first], (shft + maxchannels)[first], (hsiz + maxchannels)[first],
+                                    (rpos + maxchannels)[second], (fftw + maxchannels)[second], (ibuf + maxchannels)[second], (shft + maxchannels)[second], (hsiz + maxchannels)[second],
+                                    ccolor[0], ccolor[1], ccolor[2], 1, 2);
+  
     processFFTDifference(rpos[first], fftw[first], ibuf[first], shft[first], hsiz[first],
                          rpos[second], fftw[second], ibuf[second], shft[second], hsiz[second],
                          ccolor[0], ccolor[1], ccolor[2], 1, 1);
