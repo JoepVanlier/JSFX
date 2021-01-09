@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.2
+version: 5.0.3
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Improve difference mode.
+changelog: Add phase difference to difference spectrum plot.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -1355,29 +1355,73 @@ instance()
 function processFFTDifference(rpos, fftwspace, intbuf, bufStart, histEnd, 
                               rpos2, fftwspace2, intbuf2, bufStart2, histEnd2, 
                               rr, gg, bb, fill, draw)
-local(buf1, buf2, buf3, bufout, ascale, i, lx, ang, ty, ty2, tx, ly2,
-      yOut, slope, prec, last, y1, y2, eps
+local(buf1, buf2, buf3, bufout, ascale, i, lx, ang, last_ang, plot_ang, phase_diff, ty, ty2, tx, ly2,
+      yOut, slope, prec, last, y1, y2, eps, yy, xx, mag,
       intbuf_ptr, intbuf2_ptr,
       )
 global(histsize, fftsize, window, filtout, 
        max_fft_size,
-       spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, logf_to_pixels, spectral_offset_pixels,
+       spectrum_yoffset, bottom_pad, spectrum_xmax, wsc, logf_to_pixels, spectral_offset_pixels, spectrum_yoffsetbottom,
        gfx_x, gfx_y, gfx_h, 
        slider3, slider38, maxIntegrate, slider45, smoothing,
        integrate_en, integrate_sc,
-       kernelSize, xscale)
+       kernelSize, xscale, unwrap)
 instance()
 (
   fftwspace = windowAndTransform(rpos, fftsize, bufStart, histSize, window, fftwspace, histEnd);
   fftwspace2 = windowAndTransform(rpos2, fftsize, bufStart2, histSize, window, fftwspace2, histEnd2);
 
-  ascale=gfx_h/$pi*0.25;
+  ascale=(gfx_h - spectrum_yoffsetbottom - spectrum_yoffset)/$pi*0.25;
   xscale=800.0/(fftsize-4.0);
  
   buf3=fftwspace;
-  buf2=intbuf+max_fft_size*0.5;
+  buf1=fftwspace2;
+  intbuf_ptr=intbuf+max_fft_size*0.5;
   i=0;
   lx=0;
+
+  eps = 0.000000000001;
+  plot_ang = last_ang = intbuf_ptr[];
+  ly2 = (plot_ang * ascale + (gfx_h - spectrum_yoffsetbottom - spectrum_yoffset)*0.5) + spectrum_yoffset;
+
+  // Draw phase (angle)
+  draw ? (
+    slider3 ? loop(fftsize*0.5,
+      yy = buf3[0]*buf1[1]-buf3[1]*buf1[0];
+      xx = buf3[0]*buf1[0]+buf3[1]*buf1[1];
+      mag = 10000000000*(buf3[]*buf3[] + buf3[1]*buf3[1]) * (buf1[]*buf1[] + buf1[1]*buf1[1]);
+      gfx_set(.6, .6, 1, min(mag, 1.0));
+      ang = -atan2(yy, xx);
+      buf3+=2;
+      buf1+=2;
+      
+      integrate_en ? (
+        ang = intbuf_ptr[] += integrate_sc * (ang - intbuf_ptr[]);
+        intbuf_ptr+=1;
+      );
+      
+      unwrap = 0;
+      unwrap ? (
+        phase_diff = ang - last_ang;
+        phase_diff > ($pi-eps) ? phase_diff -= 2.0 * $pi;
+        phase_diff < -($pi-eps) ? phase_diff += 2.0 * $pi;
+        last_ang = ang;
+        plot_ang += phase_diff;
+      ) : plot_ang = ang;
+      
+      ty2=(plot_ang*ascale + (gfx_h - spectrum_yoffsetbottom - spectrum_yoffset)*0.5) + spectrum_yoffset;
+      tx = log(1.0+i*xscale)*wsc;
+  
+      i && ( tx < spectrum_xmax ) ? 
+      ( 
+        //gfx_x=lx; gfx_y=ly2; gfx_lineto(tx,ty2,1) ;
+        gfx_circle(tx, ty2, 2, 1);
+      );
+  
+      lx=tx; ly2=ty2;
+      i+=1;
+    );
+  );
 
   // Process FFT
   kernelSize  = smoothing > 0 ? floor( smoothing/5 + 1 ) : 0;
