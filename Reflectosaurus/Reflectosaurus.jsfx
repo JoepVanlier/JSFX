@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.82
+version: 0.83
 author: Joep Vanlier
-changelog: Minor bugfix initial positions. Minor bugfix delay at zero.
+changelog: Added sync mode for doing more tonal work (karplus stuff etc). Add dc-blocker to node (when DC blocking is enabled). Include HP in verb. Added ring modulation (tuned when notes are coming in) as FX option.
 license: MIT
 provides:  
   Reflectosaurus_Dependencies/*
@@ -37,7 +37,7 @@ import Reflectosaurus_buffers.jsfx-inc
 import Reflectosaurus_allpassverb.jsfx-inc
 
 slider1:drywet=1.0<0,1,.001>-Dry/Wet
-slider2:SyncMode=0<0,1,5{Off,Fourth,Third,Fifth,Eight,Sixth>-Mode
+slider2:SyncMode=0<0,1,6{Off,Fourth,Third,Fifth,Eight,Sixth,Tonal>-Mode
 slider3:Snap=0<0,1,1{Off,On}>-Snap
 slider4:LP=1<0,1,.00001>-Global LP Cutoff
 slider5:HP=0<0,1,.00001>-Global HP Cutoff
@@ -165,10 +165,93 @@ function updateGlobalFeedback()
   (
     globalFeedback = 10^(-36.0*globalFeedbackAttn/20);
   );
+  
+function log2(x)
+local()
+global()
+(
+  log(x)/log(2)
+);
+
+function roundToNote(x)
+global()
+local(c)
+(
+  c = 12 * log2(x/440);
+  c = 440 * 2 ^ (floor(c) / 12)
+);
+
+  
+function xToTime(x)
+global(mintime, maxtime, xmin, xmax, srate, SyncMode)
+local()
+(
+  SyncMode > 0 && ( syncMode < 6 ) ? (
+    maxTime * x + minTime;
+  ) : (
+    minTime * 2^((log2(maxTime)-log2(minTime))*x);
+  );
+);
+
+
+function timeToX(dtime)
+  global(mintime, maxtime, SyncMode)
+  local()
+  (
+    SyncMode && ( syncMode < 6 ) ? (
+      clamp( (dTime - minTime) / maxTime, 0, 1 );
+    ) : (
+//        clamp( log2( ( dTime * 1024 ) / maxTime )/10, 0, 1 );
+      clamp((log2(dTime) - log2(minTime)) / (log2(maxTime) - log2(minTime)), 0, 1)
+    );
+  );
+
+// Input for this function is half divided by the dtime (the frequency)
+function toNote(note_frequency)
+global(tester)
+local(c, st, N)
+(
+  //c = 12 * log(x*512/440) / log(2);
+  c = 12 * log2(note_frequency/440);
+  
+  c -= floor(c/12)*12;
+  N = floor(c+.001);
+  c -= N;
+  st = 104;
+  abs(c) > .009999 ? (
+    N == 0 ? ( sprintf(st, "%s %.2f", "A", c)
+    ) : ( N == 1 ) ? ( sprintf(st, "%s %.2f", "A#", c)
+    ) : ( N == 2 ) ? ( sprintf(st, "%s %.2f", "B", c)
+    ) : ( N == 3 ) ? ( sprintf(st, "%s %.2f", "C", c)
+    ) : ( N == 4 ) ? ( sprintf(st, "%s %.2f", "C#", c)
+    ) : ( N == 5 ) ? ( sprintf(st, "%s %.2f", "D", c)
+    ) : ( N == 6 ) ? ( sprintf(st, "%s %.2f", "D#", c)
+    ) : ( N == 7 ) ? ( sprintf(st, "%s %.2f", "E", c)
+    ) : ( N == 8 ) ? ( sprintf(st, "%s %.2f", "F", c)
+    ) : ( N == 9 ) ? ( sprintf(st, "%s %.2f", "F#", c)
+    ) : ( N == 10 ) ? ( sprintf(st, "%s %.2f", "G", c)
+    ) : ( N == 11 ) ? ( sprintf(st, "%s %.2f", "G#", c)
+    )
+  ) : (
+    N == 0 ? ( sprintf(st, "A")
+    ) : ( N == 1 ) ? ( sprintf(st, "A#")
+    ) : ( N == 2 ) ? ( sprintf(st, "B")
+    ) : ( N == 3 ) ? ( sprintf(st, "C")
+    ) : ( N == 4 ) ? ( sprintf(st, "C#")
+    ) : ( N == 5 ) ? ( sprintf(st, "D")
+    ) : ( N == 6 ) ? ( sprintf(st, "D#")
+    ) : ( N == 7 ) ? ( sprintf(st, "E")
+    ) : ( N == 8 ) ? ( sprintf(st, "F")
+    ) : ( N == 9 ) ? ( sprintf(st, "F#")
+    ) : ( N == 10 ) ? ( sprintf(st, "G")
+    ) : ( N == 11 ) ? ( sprintf(st, "G#")
+    )
+  );
+);
 
 function updateRange()
 (
-  SyncMode ? (
+  SyncMode && (SyncMode < 6) ? (
     SyncMode > 3 ? (
       maxTime = 8*60/tempo;
       minTime = 0;
@@ -177,8 +260,14 @@ function updateRange()
       minTime = 0;
     );
   ) : (
-    minTime = 4/100;
-    maxTime = 4;
+    (SyncMode == 0) ? (
+      //minTime = 4/100;
+      maxTime = 4;
+      minTime = maxTime / 1024;
+    ) : (
+      minTime = 2/440;
+      maxTime = 2/(440/32);
+    );
   );
 );
 updateRange();
@@ -371,7 +460,7 @@ function windowBlock()
       
       /* Fix issue with peak near nyquist */
       fwd = 0;
-      loop(4,
+      loop(35,
         mag_mem[fwd] = 0;
         mag_mem[fftSize-fwd] = 0;
         fwd += 1;
@@ -834,36 +923,6 @@ function octaver_init(filterfreq)
   
   initialize_interpolators();
   
-
-function xToTime(x)
-  global(mintime, maxtime, xmin, xmax, srate, SyncMode)
-  local()
-  (
-    SyncMode > 0 ? (
-      maxTime * x + minTime;
-    ) : ( 
-      (maxTime/1024) * 2^(10*x)
-    );
-  );
-
-function log2(x)
-  local()
-  global()
-  (
-    log(x)/log(2)
-  );
-
-function timeToX(dtime)
-  global(mintime, maxtime, SyncMode)
-  local()
-  (
-    SyncMode ? (
-      clamp( (dTime - minTime) / maxTime, 0, 1 );
-    ) : (
-      clamp( log2( ( dTime * 1024 ) / maxTime )/10, 0, 1 );
-    );
-  );
-  
 function yToVol(y)
   global(minvol, maxvol)
   local()
@@ -993,7 +1052,7 @@ function updateToSliderRec()
 
 function updateNodeBlock()
   local(omega_tilt)
-  global(srate, UPDATE_INTERVAL)
+  global(srate, UPDATE_INTERVAL, pitchMod)
   instance(dtime, recv, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, saturationGain, ceiling, invCeiling, warmth, lWarmth
   l_tilt, r_tilt, l_itilt, r_itilt, tilt_gain, inverse_tilt_gain, slew_target, degrade, invdegrade,
   octaver, rectify, lfo, lfoDepth, lfoFrequency, lfoDepthFactor, lfoAdvanceStep, pitch, shifter, shift_pitch, timeOffset)
@@ -1009,21 +1068,19 @@ function updateNodeBlock()
 
     rectify == 6 ? (
       this.octaver.octaver_init(1-saturationGain/36);   
-    );
-    
-    rectify == 7 ? (
+    ) : ( rectify == 9 ) ? (
+      ceiling = (saturationGain / 9 - 2) * 2 * $pi * 440 / (pitchMod * srate);
+    ) : ( rectify == 7 ) ? (
       slew_target = 1.0 - exp(-0.04797052277070928508370815530592 * saturationGain); // 15 * log(10)/20 / 36
+    ) : ( rectify == 8 ) ? (
+      degrade = 2 + 2^(.44444444*(36.0-saturationGain));
+      invdegrade = 1.0/degrade;
     );
     
     pitch ? (
       shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
     );
     pitch == 1 ? timeOffset -= 1035; /* Approximate latency comp for the shifter */
-    
-    rectify == 8 ? (
-      degrade = 2 + 2^(.44444444*(36.0-saturationGain));
-      invdegrade = 1.0/degrade;
-    );
     
     warmth != lwarmth ? (
       tilt_gain = 10^(12*warmth / 20);
@@ -1045,7 +1102,9 @@ function getReceives()
   global( node1.lastL, node2.lastL, node3.lastL, node4.lastL, node5.lastL, node6.lastL, node7.lastL, node8.lastL, node9.lastL, node10.lastL, node11.lastL, 
           node1.lastR, node2.lastR, node3.lastR, node4.lastR, node5.lastR, node6.lastR, node7.lastR, node8.lastR, node9.lastR, node10.lastR, node11.lastR,
           sendSaturation )
-  instance(recv, lIn, rIn, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11, me)
+  instance(recv, lIn, rIn, 
+           fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
+           me)
   (
     recv ? (
       ( me == 1 )    ? ( fromNode1 *= 0 )
@@ -1171,7 +1230,7 @@ function processWaveshapers(l, r)
 instance(warmth, tilt_gain, ceiling, invCeiling, rectify,
          l_itilt, r_itilt, l_tilt, r_tilt, tilt_gain, inverse_tilt_gain, slew_target,
          shaped_r, lx, slew_target, slew_factor, l_slew, r_slew, degrade, invdegrade)
-global(srate)
+global(srate, samples)
 local(factor, t)
 (
     // De-emphasize before shaper for warmth
@@ -1236,6 +1295,10 @@ local(factor, t)
     ) : ( rectify == 8 ) ? (
       l = floor(degrade * l + .5) * invdegrade;
       r = floor(degrade * r + .5) * invdegrade;
+    ) : ( rectify == 9 ) ? (
+      t = ceiling * samples;
+      l = l * sin(t);
+      r = r * sin(t);
     );
         
     // Re-emphasize after shaper for warmth
@@ -1250,18 +1313,19 @@ local(factor, t)
 
 function process(l_in, r_in)
   local(tmp, lr, ll, t, l, r)
-  global(lOut, rOut, srate)
+  global(lOut, rOut, srate, dc_correction)
   instance(dcfl, dcfr, rectl, rectr, invol, lIn, rIn, buffer, activevol, fbcoeff, lpl, lpr, hpl, hpr, lpf, hpf, pan, level, lPanTerm, rPanTerm, mute, solo, play, lastL, lastR, warmth,
            pingpong, rectify, left_sat, right_sat, modifier, ceiling, invCeiling, midSide,
            granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-           shaper, shaped_r, hq_active, lpfActive, pitch, shifter, allpass, isReverb)
+           shaper, shaped_r, hq_active, lpfActive, pitch, shifter, allpass, isReverb,
+           dc_yl, dc_xl, dc_yr, dc_xr)
   (
     ( !mute || solo ) ? (
       lIn = l_in * invol;
       rIn = r_in * invol;
 
-      this.getReceives();    
-        
+      this.getReceives();
+       
       midSide ? (
         t = lIn;
         lIn = (lIn + rIn) * .5;
@@ -1354,7 +1418,19 @@ function process(l_in, r_in)
         l = l + r;
         r = t - r;
       );
-
+      
+      // DC blocker
+      dc_correction ? (
+        dc_yl = l - dc_xl + 0.998 * dc_yl;
+        dc_xl = l;
+        
+        dc_yr = r - dc_xr + 0.998 * dc_yr;
+        dc_xr = r;
+        
+        l = dc_yl;
+        r = dc_yr;
+      );
+      
       lOut += l;
       rOut += r;
     );
@@ -2187,6 +2263,8 @@ function nodeProcessMouse(xmin, ymin, w, h, mousex, mousey, mousecap, currentCap
           csync = 16;
         ) : ( SyncMode == 5 ) ? (
           csync = 12;
+        ) : ( syncMode == 6 ) ? (
+          csync = 12 * 5;
         );
         csync *= 1 + gridDensity;
         x = floor(x*csync+.5)/csync;
@@ -2850,6 +2928,9 @@ function drawWindow(x, y, w, h)
     ) : ( SyncMode == 5 ) ? ( 
       Nx = 3*4;
       Ny = 10;
+    ) : ( SyncMode == 6 ) ? (
+      Nx = 12 * 5;
+      Ny = 10;
     );
     Nx *= (1+gridDensity);
     Ny *= (1+gridDensity);
@@ -2888,6 +2969,11 @@ function drawWindow(x, y, w, h)
       gfx_line(gfx_x, y, gfx_x, y+h);
       gfx_set(0, 0, 0, .7);
       gfx_line(gfx_x+1, y, gfx_x+1, y+h);
+      
+      (syncMode == 6 && (i%12) == 1 && i > 0 && i < Nx+1) ? (
+        gfx_set(.8, 0, .3, .7);
+        gfx_line(gfx_x, y + 5, gfx_x, y+h);        
+      );
             
       gfx_x = x + dx * i;
       xValue += dxL;
@@ -2920,6 +3006,9 @@ function drawWindowText(x, y, w, h)
     ) : ( SyncMode == 5 ) ? ( 
       Nx = 3*4;
       Ny = 10;
+    ) : ( SyncMode == 6 ) ? (
+      Nx = 12 * 5;
+      Ny = 10;
     );
     dx = w/Nx;
     dy = h/Ny;
@@ -2944,31 +3033,56 @@ function drawWindowText(x, y, w, h)
     gfx_y = h + .5*dy;
     i = 1;
     xValue = 0;
-    loop(Nx+1,
-      //gfx_x = x + .1*pw;
-      ct = 1000*xToTime(xValue);
-      gfx_x += .2*pw;
-      gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
-      syncMode == 0 ? (
-        ( abs(ct - floor(ct+.5)) < .1 ) ? gfx_printf("%d ms", floor(.5*ct+.5)) : gfx_printf("%.1f ms", .5*ct);
-      ) : (
-        syncMode == 1 ? (
-          (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 8/2);
-        ) : ( syncMode == 2 ) ? (
-          (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 6/2);
-        ) : ( syncMode == 3 ) ? (
-          (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 10/2);
-        ) : ( syncMode == 4 ) ? (
-          (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 16/2);
-        ) : ( syncMode == 5 ) ? (
-          (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 12/2);
-        );
+    
+//    syncMode == 6
+
+    gfx_x = x;
+    gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+    syncMode == 6 ? (
+      loop(Nx,
+        gfx_x += .2*pw;
+        (i%12) == 1 ? ( gfx_printf("A")
+        ) : (i%12) == 0 ? ( gfx_x -= 2; gfx_printf("A#")
+        ) : (i%12) == 11 ? ( gfx_printf("B")
+        ) : (i%12) == 10 ? ( gfx_printf("C")
+        ) : (i%12) == 9 ? ( gfx_x -= 2; gfx_printf("C#")
+        ) : (i%12) == 8 ? ( gfx_printf("D")
+        ) : (i%12) == 7 ? ( gfx_x -= 2; gfx_printf("D#")
+        ) : (i%12) == 6 ? ( gfx_printf("E")
+        ) : (i%12) == 5 ? ( gfx_printf("F")
+        ) : (i%12) == 4 ? ( gfx_x -= 2; gfx_printf("F#")
+        ) : (i%12) == 3 ? ( gfx_printf("G")
+        ) : (i%12) == 2 ? ( gfx_x -= 2; gfx_printf("G#") );
+        gfx_x = x + dx * i;
+        i += 1;
       );
-      
-      gfx_x = x + dx * i;
-      xValue += dxL;
-      i += 1;
+    ) : (
+      loop(Nx+1,
+        //gfx_x = x + .1*pw;
+        ct = 1000*xToTime(xValue);
+        gfx_x += .2*pw;
+        syncMode == 0 ? (
+          ( abs(ct - floor(ct+.5)) < .1 ) ? gfx_printf("%d ms", floor(.5*ct+.5)) : gfx_printf("%.1f ms", .5*ct);
+        ) : (
+          syncMode == 1 ? (
+            (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 8/2);
+          ) : ( syncMode == 2 ) ? (
+            (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 6/2);
+          ) : ( syncMode == 3 ) ? (
+            (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 10/2);
+          ) : ( syncMode == 4 ) ? (
+            (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 16/2);
+          ) : ( syncMode == 5 ) ? (
+            (floor(i/2) != i/2) ? gfx_printf("%d/%d", (i-1)/2, 12/2);
+          );
+        );
+        
+        gfx_x = x + dx * i;
+        xValue += dxL;
+        i += 1;
+      );
     );
+    
   );
 
 gfx_set(0,0,0,1);
@@ -3477,54 +3591,6 @@ function processVerbCtrls(cX, cY)
     cX += 5*knobSpacing
   );
 
-function roundToNote(x)
-global()
-local(c)
-(
-  c = floor(.5 + 12 * log(x*512/440) / log(2)) / 12;
-  (440/512) * 2^c
-);
-
-function toNote(x)
-global()
-local(c, st, N)
-(
-  c = 12 * log(x*512/440) / log(2);
-  c -= floor(c/12)*12;
-  N = floor(c+.001);
-  c -= N;
-  st = 104;
-  abs(c) > .009999 ? (
-    N == 0 ? ( sprintf(st, "%s %.2f", "A", c)
-    ) : ( N == 1 ) ? ( sprintf(st, "%s %.2f", "A#", c)
-    ) : ( N == 2 ) ? ( sprintf(st, "%s %.2f", "B", c)
-    ) : ( N == 3 ) ? ( sprintf(st, "%s %.2f", "C", c)
-    ) : ( N == 4 ) ? ( sprintf(st, "%s %.2f", "C#", c)
-    ) : ( N == 5 ) ? ( sprintf(st, "%s %.2f", "D", c)
-    ) : ( N == 6 ) ? ( sprintf(st, "%s %.2f", "D#", c)
-    ) : ( N == 7 ) ? ( sprintf(st, "%s %.2f", "E", c)
-    ) : ( N == 8 ) ? ( sprintf(st, "%s %.2f", "F", c)
-    ) : ( N == 9 ) ? ( sprintf(st, "%s %.2f", "F#", c)
-    ) : ( N == 10 ) ? ( sprintf(st, "%s %.2f", "G", c)
-    ) : ( N == 11 ) ? ( sprintf(st, "%s %.2f", "G#", c)
-    )
-  ) : (
-    N == 0 ? ( sprintf(st, "%s", "A", c)
-    ) : ( N == 1 ) ? ( sprintf(st, "%s", "A#")
-    ) : ( N == 2 ) ? ( sprintf(st, "%s", "B")
-    ) : ( N == 3 ) ? ( sprintf(st, "%s", "C")
-    ) : ( N == 4 ) ? ( sprintf(st, "%s", "C#")
-    ) : ( N == 5 ) ? ( sprintf(st, "%s", "D")
-    ) : ( N == 6 ) ? ( sprintf(st, "%s", "D#")
-    ) : ( N == 7 ) ? ( sprintf(st, "%s", "E")
-    ) : ( N == 8 ) ? ( sprintf(st, "%s", "F")
-    ) : ( N == 9 ) ? ( sprintf(st, "%s", "F#")
-    ) : ( N == 10 ) ? ( sprintf(st, "%s", "G")
-    ) : ( N == 11 ) ? ( sprintf(st, "%s", "G#")
-    )
-  );
-);
-
 function reverbCtrls(cX, cY)
   instance(flutterKnob,
            allpass, allpassToggle,
@@ -3877,12 +3943,12 @@ function processShapers(cX, cY)
          edge_r, edge_g, edge_b, edge_a, panelY, panelPad, panelHeight)
 (
   /* Combobox to select shaper */
-  nShapers = 9;
+  nShapers = 10;
   
   x_start = cX - 1.75*knobSpacing;
   y_start = panelY;
  
-  drawPanel("SATURATION", x_start, y_start - panelPad, 4.75*knobSpacing, panelHeight);
+  drawPanel("FX", x_start, y_start - panelPad, 4.75*knobSpacing, panelHeight);
    
   shaperSelect.combobox(x_start + panelPad, y_start, 4.75*knobSpacing - 1.75 * panelPad, 25*(1+scaling), .4, .4, .8, 1, nShapers, 1, 1, 1, BAND_FONT, "Waveshaper selection." );
   shaperSelect.combobox_setcuritem(rectify);
@@ -3997,7 +4063,7 @@ instance(snap_select, grid_density_select, snap_toggle)
   
   drawPanel("TIMING", x_start - panelPad, y_start - panelPad, width + panelPad, panelHeight);
   
-  nModes = 6;
+  nModes = 7;
   gfx_set(edge_r, edge_g, edge_b, edge_a);
   snap_select.combobox(x_start, y_start, (width-5)*(1+scaling), 25*(1+scaling), .4, .4, .8, 1, nModes, 2, 1, 1, BAND_FONT, "Timing mode\n\nDelays can either be set\non a logarithmic scale\nor a linear rhythmic scale." );
   snap_select.combobox_setcuritem(SyncMode);
