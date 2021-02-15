@@ -3,8 +3,10 @@
 epsilon = 0.00000001;
 //epsilon = 0.01;
 maxiter = 6;
+maxiter_svf = 26;
 safety_limit_ms20 = 0.935;
 safety_limit_moog = 0.25; // Above this level the model suffers from numerical difficulties. Ensures fc < fs/8.
+safety_limit_svf = 0.9;//0.94;//0.9;
 
 current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/22050));
 
@@ -29,6 +31,13 @@ function check_safety()
   (
     cutoff > current_safety_moog ? (
       slider_automate(cutoff = current_safety_moog);
+      warning = 75;
+    );
+  );
+  
+  filter_type == 10 ? (
+    (cutoff > safety_limit_svf) && (oversampling == 1) ? (
+      slider_automate(cutoff = safety_limit_svf);
       warning = 75;
     );
   );
@@ -137,8 +146,8 @@ function eval_303(input, choice, frac)
 
 function init_linearSVF(freq, res)
   global(oversampling)
-  local(g)
-  instance(f0, ic1eq, ic2eq, k, a1, a2, a3)
+  local()
+  instance(f0, ic1eq, ic2eq, g, k, a1, a2, a3)
   (
     f0 = exp( (1-freq) * log(20/22050) ) / oversampling;
     g = tan(.5 * $pi * f0);
@@ -147,7 +156,7 @@ function init_linearSVF(freq, res)
     a1 = 1/(1+g*(g+k));
     a2 = g*a1;
     a3 = g*a2;
-  ); 
+  );
   
 function init_linearSVF_absolute(f0, res)
   global(srate)
@@ -160,7 +169,68 @@ function init_linearSVF_absolute(f0, res)
     a1 = 1/(1+g*(g+k));
     a2 = g*a1;
     a3 = g*a2;
-  ); 
+  );
+  
+function init_linearSVF_all(freq, res, morph)
+  global(oversampling)
+  local(frac)
+  instance(f0, ic1eq, ic2eq, k, g, a1, a2, a3, m0, m1, m2, lastfreq)
+  (
+    (abs(lastfreq - freq) > .001) ? (
+      lastfreq = freq;
+      f0 = exp( (1-freq) * log(20/22050) ) / oversampling;
+      g = tan(.5 * $pi * f0);
+    );
+    k = 2 - 2*res;
+        
+    a1 = 1/(1+g*(g+k));
+    a2 = g*a1;
+    a3 = g*a2;
+    
+    morph *= 4.0;
+    frac = morph - floor(morph);
+    
+    //      v0       v1   v2
+    // LP =               v2
+    // BP =          v1;
+    // HP = v0 - k * v1 - v2;
+    // BR = v0 -     v1;
+    morph < 1 ? (
+      // LP to BP
+      m0 = 0.0;
+      m1 = frac;
+      m2 = (1.0 - frac);
+    ) : ( morph < 2 ) ? (
+      // BP to HP
+      m0 = frac;
+      m1 = (1.0 - frac) - k * frac;
+      m2 = -frac;
+    ) : ( morph < 3 ) ? (
+      // HP to BR
+      m0 = (1.0 - frac) + frac;
+      m1 = -k * (1.0 - frac) - frac;
+      m2 = -(1.0 - frac);
+    ) : (
+      m0 = (1.0 - frac);
+      m1 = -(1.0 - frac);
+      m2 = frac;
+    );
+  );
+  
+function eval_linearSVF_All(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3 * v3;
+    ic1eq = 2.0 * v1 - ic1eq;
+    ic2eq = 2.0 * v2 - ic2eq;
+    
+    m0 * v0 + m1 * v1 + m2 * v2
+  );
+
 
 function reset_linearSVF()
   global()
@@ -169,7 +239,7 @@ function reset_linearSVF()
   (
     ic1eq = ic2eq = 0;  
   );
-  
+
 function eval_linearSVF_LP(v0)
   global()
   local(v1, v2, v3)
@@ -182,21 +252,7 @@ function eval_linearSVF_LP(v0)
     ic2eq = 2*v2 - ic2eq;    
     
     v2
-  );  
-  
-function eval_linearSVF_BP(v0)
-  global()
-  local(v1, v2, v3)
-  instance(ic1eq, ic2eq, k, a1, a2, a3)
-  (
-    v3 = v0 - ic2eq;
-    v1 = a1 * ic1eq + a2 * v3;
-    v2 = ic2eq + a2 * ic1eq + a3*v3;
-    ic1eq = 2*v1 - ic1eq;
-    ic2eq = 2*v2 - ic2eq;    
-    
-    v1
-  );  
+  );
   
 function eval_linearSVF_HP(v0)
   global()
@@ -210,7 +266,35 @@ function eval_linearSVF_HP(v0)
     ic2eq = 2*v2 - ic2eq;    
     
     v0 - k*v1 - v2
-  );  
+  );
+  
+function eval_linearSVF_LPHP(v0, lphp)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, a1, a2, a3, k)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v2 * (1.0 - lphp) - lphp * (v0 - k*v1 - v2)
+  );
+  
+function eval_linearSVF_BP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3*v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    v1
+  );
   
 function eval_linearSVF_BR(v0)
   global()
@@ -395,7 +479,7 @@ function eval_linearSVF_BR(v0)
   
     yi   = yo;
     yd   = k0s * (yi + sf3);
-    y    = yd + si3;
+    y    = yd + si3; 
     yo   = tanh(VT2i * y);
     D = yo;
   
@@ -477,6 +561,176 @@ function eval_linearSVF_BR(v0)
   (
     1 - 1 * (abs(s)>1)
   );
+  
+  function f_g_svf(s)
+  local()
+  global()
+  instance()
+  (
+    s > 0 ? max(-1,min(1,s))
+    : max(-1,min(1,s*.25))
+  );
+  
+  function f_dg_svf(s)
+  local()
+  global()
+  instance()
+  (
+    s > 0 ? 1 - 1 * (abs(s)>1)
+    : .25 - .25 * (abs(s)>4)
+  );
+  
+  function reset_SVF_nonlin()
+  instance(y1, y2, d1, d2)
+  (
+    d1 = d2 = y1 = y2 = 0.0;
+  );
+  
+  function init_SVF_nonlin(cutoff, reso, morph)
+  instance(h, k, hh, h2, k2h, denom, mo0, mo1, mo2)
+  local(f0)
+  global(oversampling)
+  (
+    f0 = exp( (1.0 - cutoff) * log(20/22050) ) / oversampling;
+    h = tan(0.5 * $pi * f0);
+    k = .999 - reso + .01;
+    hh = h * h;
+    h2 = 2.0 * h;
+    k2h = h2 * k;
+    denom = 1.0 / (hh + k2h + 1.0);
+    
+    // The different modes can be obtained from the outputs as follows:
+    //       x   y1   y2
+    // LP    0    0    1
+    // BP    0    1    0
+    // HP    1  2*k   -1
+    // BR    1   -1    0
+    ( morph < 0.25 ) ? (
+      mo0 = 0;
+      mo1 = 16.0*morph;
+      mo2 = 4 - 16.0*morph;
+    ) : ( morph < 0.5 ) ? (
+      mo0 = 16.0*morph - 4.0;
+      mo1 = 4*(2*k - 1)*(4.0*morph - 1.0) + 4;
+      mo2 = 4.0 - 16.0*morph;
+    ) : ( morph < 0.75 ) ? (
+      mo0 = 4;
+      mo1 = 8*k - 4*(2*k + 1)*(4.0*morph - 2.0);
+      mo2 = 16.0*morph - 12.0;
+    ) : ( morph < 1.0 ) ? (
+      mo0 = 16.0 - 16.0*morph;
+      mo1 = 16.0*morph - 16.0;
+      mo2 = 16.0*morph - 12.0;
+    );
+  );
+  
+  
+  function eval_SVF_nonlin(x)
+    global(epsilon, maxiter_svf)
+    local(iter, res,
+          fb, c1, c2, sig, mul,
+          a, b, c, norm,
+          f1, f2,
+          svf_cap_c1, svf_cap_c2
+          svf_cap_deriv_c1, svf_cap_deriv_c2)
+    instance(i, y1, y2, d0, d1, d2, h, h2, k, y1d1, hh, k2h, denom,
+             mo0, mo1, mo2)
+    (
+      iter = 0;
+      x *= .05;
+      
+      // First guess based on linear system
+      y1 = (d0*h - d1*hh - d1*k2h + d1 - d2*h2 + h*x) * denom;
+      y2 = (d0*hh + d1*h2 - d2*hh + d2*k2h + d2 + hh*x) * denom;
+      
+      while(
+        iter += 1;
+        
+        /* Basic SVF */
+        y1d1 = y1 + d1;
+        fb = 2.0 * k * y1d1;
+        c1 = x + d0 - (y2 + d2) - f_g_svf(fb);
+        
+        mul = c1 < 0 ? 1.01 : 0.96;
+        svf_cap_c1 = tanh(mul*c1);
+        svf_cap_c2 = tanh(y1d1);
+        f1 = y1 - d1 - h * svf_cap_c1;
+        f2 = y2 - d2 - h * svf_cap_c2;
+        
+        res = abs(f1) + abs(f2);
+        
+        svf_cap_deriv_c1 = mul * (1.0 - svf_cap_c1 * svf_cap_c1);
+        svf_cap_deriv_c2 = (1.0 - svf_cap_c2 * svf_cap_c2);        
+        a = 1.0 + k2h * svf_cap_deriv_c1 * f_dg_svf(fb);
+        b = h * svf_cap_deriv_c1;
+        c = -h * svf_cap_deriv_c2;
+        
+        norm = 1.0 / ( a - b*c );
+        y1 = y1 - ( f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      d0 = x;
+      d1 = y1;
+      d2 = y2;
+      
+      (mo0 * x + mo1 * y1 + mo2 * y2) * 5
+    );
+  
+  function eval_SVF_nonlin_incorrect(x)
+    global(epsilon, maxiter_svf, oversampling)
+    local(iter, res,
+          fb, c1, c2, sig, mul,
+          a, b, c, norm,
+          f1, f2,
+          svf_cap_c1, svf_cap_c2
+          svf_cap_deriv_c1, svf_cap_deriv_c2)
+    instance(i, y1, y2, d0, d1, d2, h, h2, k, y1d1, hh, k2h, denom,
+             mo0, mo1, mo2)
+    (
+      iter = 0;
+      x *= .25;
+      
+      // First guess based on linear system
+      y1 = (d0*h - d1*hh - d1*k2h + d1 - d2*h2 + h*x) * denom;
+      y2 = (d0*hh + d1*h2 - d2*hh + d2*k2h + d2 + hh*x) * denom;
+      
+      while(
+        iter += 1;
+        
+        /* Basic SVF */
+        y1d1 = y1 + d1;
+        fb = 2.0 * k * y1d1;
+        c1 = x + d0 - (y2 + d2) - f_g_svf(fb);
+        
+        sig = d1 + h * c1;
+        mul = sig < 0 ? 1.01 : 0.96;
+        svf_cap_c1 = tanh(mul*sig/oversampling)*oversampling;
+        svf_cap_c2 = tanh((d2 + h * y1d1)/oversampling)*oversampling;
+        f1 = y1 - svf_cap_c1;
+        f2 = y2 - svf_cap_c2;
+        
+        res = abs(f1) + abs(f2);
+        
+        svf_cap_deriv_c1 = mul * (1.0 - svf_cap_c1 * svf_cap_c1);
+        svf_cap_deriv_c2 = (1.0 - svf_cap_c2 * svf_cap_c2);        
+        a = 1.0 + k2h * svf_cap_deriv_c1 * f_dg_svf(fb);
+        b = h * svf_cap_deriv_c1;
+        c = -h * svf_cap_deriv_c2;
+        
+        norm = 1.0 / ( a - b*c );
+        y1 = y1 - ( f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      d0 = x;
+      d1 = y1;
+      d2 = y2;
+      
+      (mo0 * x + mo1 * y1 + mo2 * y2)
+    );
   
   function init_MS20(freq, reso)
     global(oversampling, srate)
@@ -918,24 +1172,7 @@ function eval_linearSVF_BR(v0)
       LP.eval_MS20_nonlin_tanh_asym(s)
     );
   );  
-  
- function processSample_lin(s, choice)
- local()
- instance(BP, HP, BR, LP)
- global()
-  (
-    (choice == 1) ? (
-      s = BP.eval_linearSVF_BP(s)  
-    ) : (choice == 2) ? (
-      s = HP.eval_linearSVF_HP(s)
-    ) : (choice == 3) ? (
-      s = BR.eval_linearSVF_BR(s)
-    ) : (
-      // LP is last and first
-      s = LP.eval_linearSVF_LP(s)
-    );
-  );
-  
+ 
 function clamp(v, lb, ub)
 (
   min(ub, max(v, lb))
@@ -946,6 +1183,177 @@ function cl01(v)
   min(1, max(0, v))
 );
   
+function init_rectpeak(freq, res, morph)
+  global()
+  local(lhf)
+  instance(svf_res, svf_res2, svf_none, svf_overall)
+  (
+    lhf = cl01(freq + log(2) / (log(20/22050)) );
+    svf_res.init_linearSVF_all(lhf, clamp(res, 0, .92), morph);
+    
+    //svf_res2.init_linearSVF_all(lhf, clamp(res, 0, .92), morph);
+    //svf_none.init_linearSVF_all(lhf, clamp(res, 0, .92), morph);    
+    svf_none.a1 = svf_res2.a1 = svf_res.a1;
+    svf_none.a2 = svf_res2.a2 = svf_res.a2;
+    svf_none.a3 = svf_res2.a3 = svf_res.a3;
+    svf_none.k = svf_res2.k = svf_res.k;
+    svf_none.m0 = svf_res2.m0 = svf_res.m0;
+    svf_none.m1 = svf_res2.m1 = svf_res.m1;
+    svf_none.m2 = svf_res2.m2 = svf_res.m2;
+    
+    svf_overall.init_linearSVF_all(freq, 0, morph);
+  );
+  
+function eval_rectpeak(x0)
+  global()
+  local(resonance, base, peak)
+  instance(svf_res, svf_res2, svf_none, svf_overall)
+  (
+    base = svf_none.eval_linearSVF_All(x0);
+    peak = svf_res2.eval_linearSVF_All(svf_res.eval_linearSVF_All(x0));
+    
+    svf_overall.eval_linearSVF_All(base + tanh(abs(peak - base)))
+  );
+  
+function init_momo(freq, res)
+  global()
+  local()
+  instance(svf_res, svf_none, svf_peak)
+  (
+    svf_res.init_linearSVF(freq, clamp(res, 0, .9));
+    svf_none.init_linearSVF(freq, 0);
+    svf_peak.init_linearSVF(cl01(freq + log(4) / (log(20/22050)) ), .5 + res*.4);
+  );
+  
+function init_dualpeak(freq, res, morph)
+  global()
+  local(h, r)
+  instance(svf_base, svf_no_base, svf_no_peak, svf_two, mo1, mo2, mo3)
+  (
+    h = cl01(freq - log(4) / (log(20/22050)));
+    svf_no_base.init_linearSVF(freq, 0);
+    svf_no_peak.init_linearSVF(h, 0);
+    
+    // Optimization: Avoid tans by not doing full function call for same frequencies
+    //svf_base.init_linearSVF(freq, .95*res);
+    //svf_two.init_linearSVF(h, .95*res);
+    
+    r = 2 - 2 * .98 * res;
+    svf_base.k = r;
+    svf_base.a1 = 1.0/(1.0+svf_no_base.g*(svf_no_base.g+r));
+    svf_base.a2 = svf_no_base.g*svf_base.a1;
+    svf_base.a3 = svf_no_base.g*svf_base.a2;
+
+    svf_two.k = r;
+    svf_two.a1 = 1.0/(1.0+svf_no_peak.g*(svf_no_peak.g+r));
+    svf_two.a2 = svf_no_peak.g*svf_two.a1;
+    svf_two.a3 = svf_no_peak.g*svf_two.a2;
+    
+    morph < 0.25 ? (
+      mo1 = morph * 4;
+      mo2 = 0;
+      mo3 = 0;
+    ) : ( morph < 0.5 ) ? (
+      mo1 = 1;
+      mo2 = (morph - 0.25) * 4;
+      mo3 = 0;
+    ) : ( morph < 0.75 ) ? (
+      mo1 = 1.0;
+      mo2 = 1.0 - (morph - 0.5) * 4;
+      mo3 = (morph - 0.5) * 4;
+    ) : (
+      mo1 = 1 - (morph - 0.75) * 4;
+      mo2 = 0;
+      mo3 = 1 - (morph - 0.75) * 4;
+    );
+  );
+
+function init_triple_peak(freq, res, morph)
+  global()
+  local(m, h, r)
+  instance(svf_no_low, svf_no_mid, svf_no_high, svf_low, svf_mid, svf_high, mo1, mo2, mo3)
+  (
+    h = cl01(freq - log(4) / (log(20/22050)) );
+    m = cl01(freq - log(2) / (log(20/22050)) );
+    svf_no_low.init_linearSVF(freq, 0);
+    svf_no_mid.init_linearSVF(m, 0);
+    svf_no_high.init_linearSVF(h, 0);
+    
+    //res *= .97;
+    //svf_low.init_linearSVF(freq, res);
+    //svf_mid.init_linearSVF(m, res);
+    //svf_high.init_linearSVF(h, res);
+    
+    // Optimization: Avoid tans by not doing full function call for same frequencies
+    r = 2.0 - 2.0 * .98 * res;
+    svf_low.k = r;
+    svf_low.a1 = 1.0/(1.0+svf_no_low.g*(svf_no_low.g+svf_low.k));
+    svf_low.a2 = svf_no_low.g * svf_low.a1;
+    svf_low.a3 = svf_no_low.g * svf_low.a2;
+    
+    svf_mid.k = r;
+    svf_mid.a1 = 1.0/(1.0+svf_no_mid.g*(svf_no_mid.g+svf_mid.k));
+    svf_mid.a2 = svf_no_mid.g * svf_mid.a1;
+    svf_mid.a3 = svf_no_mid.g * svf_mid.a2;
+    
+    svf_high.k = r;
+    svf_high.a1 = 1.0/(1.0+svf_no_high.g*(svf_no_high.g+svf_high.k));
+    svf_high.a2 = svf_no_high.g * svf_high.a1;
+    svf_high.a3 = svf_no_high.g * svf_high.a2;
+    
+    morph < 0.25 ? (
+      mo1 = morph * 4;
+      mo2 = 0;
+      mo3 = 0;
+    ) : ( morph < 0.5 ) ? (
+      mo1 = 1;
+      mo2 = (morph - 0.25) * 4;
+      mo3 = 0;
+    ) : ( morph < 0.75 ) ? (
+      mo1 = 1.0;
+      mo2 = 1.0 - (morph - 0.5) * 4;
+      mo3 = (morph - 0.5) * 4;
+    ) : (
+      mo1 = 1 - (morph - 0.75) * 4;
+      mo2 = 0;
+      mo3 = 1 - (morph - 0.75) * 4;
+    );
+  );  
+  
+function eval_momo(x0)
+  global()
+  local(base, peak, bp)
+  instance(svf_res, svf_none, svf_peak)
+  (
+    peak = svf_res.eval_linearSVF_LP(x0);
+    base = svf_none.eval_linearSVF_LP(x0);
+    peak -= base;
+    peak = expensive_tanh(peak);
+    base = expensive_tanh(base);
+    bp = expensive_tanh(svf_peak.eval_linearSVF_BP(base));
+    expensive_tanh(base + peak + bp)
+  );
+  
+function eval_dualpeak(x0)
+  global()
+  local(base, s)
+  instance(svf_base, svf_no_base, svf_no_peak, svf_two, mo1, mo2, mo3)
+  (
+    base = mo3 * x0 + svf_no_peak.eval_linearSVF_LPHP(svf_no_base.eval_linearSVF_LPHP(x0, mo1), mo2);
+    s = mo3 * x0 + svf_two.eval_linearSVF_LPHP(svf_base.eval_linearSVF_LPHP(x0, mo1), mo2);
+    base + expensive_tanh((s - base))
+  );
+  
+function eval_triple_peak(x0)
+  global()
+  local(base, s)
+  instance(svf_no_low, svf_no_mid, svf_no_high, svf_low, svf_mid, svf_high, mo1, mo2, mo3)
+  (
+    base = mo3 * x0 + svf_no_mid.eval_linearSVF_BR(svf_no_high.eval_linearSVF_LPHP(svf_no_low.eval_linearSVF_LPHP(x0, mo1), mo2));
+    s = mo3 * x0 + svf_mid.eval_linearSVF_BR(svf_high.eval_linearSVF_LPHP(svf_low.eval_linearSVF_LPHP(x0, mo1), mo2));
+    base + expensive_tanh(s - base)
+  );
+  
 function init_filter(filter_type, sliderCutoffL, sliderCutoffR, sliderMorphL, sliderMorphR, sliderReso)
 local()
 instance(
@@ -953,20 +1361,11 @@ instance(
   filter_choiceL, frac_morphL, i_morphL,
   filter_choiceR, frac_morphR, i_morphR,
 )
-global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog)
+global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf)
 (
   filter_type == 0 ? (
-    L.LP.init_linearSVF(sliderCutoffL, sliderReso);
-    L.HP.a1 = L.BR.a1 = L.BP.a1 = L.LP.a1;
-    L.HP.a2 = L.BR.a2 = L.BP.a2 = L.LP.a2;
-    L.HP.a3 = L.BR.a3 = L.BP.a3 = L.LP.a3;
-    L.HP.k  = L.BR.k  = L.BP.k  = L.LP.k;
-    
-    R.LP.init_linearSVF(sliderCutoffR, sliderReso);
-    R.HP.a1 = R.BR.a1 = R.BP.a1 = R.LP.a1;
-    R.HP.a2 = R.BR.a2 = R.BP.a2 = R.LP.a2;
-    R.HP.a3 = R.BR.a3 = R.BP.a3 = R.LP.a3;
-    R.HP.k  = R.BR.k  = R.BP.k  = R.LP.k;
+    L.init_linearSVF_all(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_linearSVF_all(sliderCutoffR, sliderReso, sliderMorphR);
   ) : ( filter_type == 1 ) ? (
     (oversampling == 1) ? (
       sliderCutoffL = sliderCutoffL > safety_limit_ms20 ? safety_limit_ms20 : sliderCutoffL;
@@ -983,17 +1382,12 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog)
     R.HP.h = R.BR.h = R.BP.h = R.LP.h;
     R.HP.k = R.BR.k = R.BP.k = R.LP.k;
   ) : ( filter_type == 2 ) ? (
-    L.LP.init_linearSVF(sliderCutoffL, sliderReso);
-    L2.HP.a1 = L2.BR.a1 = L2.BP.a1 = L2.LP.a1 = L.HP.a1 = L.BR.a1 = L.BP.a1 = L.LP.a1;
-    L2.HP.a2 = L2.BR.a2 = L2.BP.a2 = L2.LP.a2 = L.HP.a2 = L.BR.a2 = L.BP.a2 = L.LP.a2;
-    L2.HP.a3 = L2.BR.a3 = L2.BP.a3 = L2.LP.a3 = L.HP.a3 = L.BR.a3 = L.BP.a3 = L.LP.a3;
-    L2.HP.k  = L2.BR.k  = L2.BP.k  = L2.LP.k  = L.HP.k  = L.BR.k  = L.BP.k  = L.LP.k;
-    
-    R.LP.init_linearSVF(sliderCutoffR, sliderReso);
-    R2.HP.a1 = R2.BR.a1 = R2.BP.a1 = R2.LP.a1 = R.HP.a1 = R.BR.a1 = R.BP.a1 = R.LP.a1;
-    R2.HP.a2 = R2.BR.a2 = R2.BP.a2 = R2.LP.a2 = R.HP.a2 = R.BR.a2 = R.BP.a2 = R.LP.a2;
-    R2.HP.a3 = R2.BR.a3 = R2.BP.a3 = R2.LP.a3 = R.HP.a3 = R.BR.a3 = R.BP.a3 = R.LP.a3;
-    R2.HP.k  = R2.BR.k  = R2.BP.k  = R2.LP.k  = R.HP.k  = R.BR.k  = R.BP.k  = R.LP.k;
+    L.init_linearSVF_all(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_linearSVF_all(sliderCutoffR, sliderReso, sliderMorphR);
+    L2.a1 = L.a1; L2.a2 = L.a2; L2.a3 = L.a3;
+    L2.m0 = L.m0; L2.m1 = L.m1; L2.m2 = L.m2;
+    R2.a1 = R.a1; R2.a2 = R.a2; R2.a3 = R.a3;
+    R2.m0 = R.m0; R2.m1 = R.m1; R2.m2 = R.m2;
   ) : ( filter_type == 3 ) ? (
     sliderCutoffL = sliderCutoffL > current_safety_moog ? current_safety_moog : sliderCutoffL;
     sliderCutoffR = sliderCutoffR > current_safety_moog ? current_safety_moog : sliderCutoffR;
@@ -1024,6 +1418,42 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog)
     R.HP.hh = R.BR.hh = R.BP.hh = R.LP.hh;
     R.HP.h = R.BR.h = R.BP.h = R.LP.h;
     R.HP.k = R.BR.k = R.BP.k = R.LP.k;
+  ) : ( filter_type == 7 ) ? (
+    L.init_momo(sliderCutoffL, sliderReso);
+    R.init_momo(sliderCutoffR, sliderReso);
+  ) : ( filter_type == 8 ) ? (
+    L.init_dualpeak(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_dualpeak(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 9 ) ? (
+    L.init_triple_peak(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_triple_peak(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 10 ) ? (
+    (oversampling == 1) ? (  
+      sliderCutoffL = sliderCutoffL > safety_limit_svf ? safety_limit_svf : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_svf ? safety_limit_svf : sliderCutoffR;
+    );
+    L.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 11 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_svf ? safety_limit_svf : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_svf ? safety_limit_svf : sliderCutoffR;
+    );
+    L.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+    L2.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R2.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 12 ) ? (
+    L.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 13 ) ? (
+    L.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+    L2.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R2.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 14 ) ? (
+    L.init_rectpeak(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_rectpeak(sliderCutoffR, sliderReso, sliderMorphR);
   );
   
   filter_choiceL = floor(sliderMorphL*4);
@@ -1045,8 +1475,8 @@ instance(
 global(ssl, ssr, epsilon)
 (
   filter_type == 0 ? (
-    ssl = L.processSample_lin(ssl, filter_choiceL) * i_morphL + L.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
-    ssr = R.processSample_lin(ssr, filter_choiceR) * i_morphR + R.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
+    ssl = L.eval_linearSVF_All(ssl);
+    ssr = R.eval_linearSVF_All(ssr);
   ) : ( filter_type == 1 ) ? (
     csl = ssl;
     csr = ssr;
@@ -1055,10 +1485,8 @@ global(ssl, ssr, epsilon)
     frac_morphL > epsilon ? ssl += L.processSample_ms20(csl, filter_choiceL + 1) * frac_morphL;
     frac_morphL > epsilon ? ssr += R.processSample_ms20(csr, filter_choiceR + 1) * frac_morphR;
   ) : ( filter_type == 2 ) ? (
-    ssl = L.processSample_lin(ssl, filter_choiceL) * i_morphL + L.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
-    ssr = R.processSample_lin(ssr, filter_choiceR) * i_morphR + R.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
-    ssl = L2.processSample_lin(ssl, filter_choiceL) * i_morphL + L2.processSample_lin(ssl, filter_choiceL + 1) * frac_morphL;
-    ssr = R2.processSample_lin(ssr, filter_choiceR) * i_morphR + R2.processSample_lin(ssr, filter_choiceR + 1) * frac_morphR;
+    ssl = L.eval_linearSVF_All(L2.eval_linearSVF_All(ssl));
+    ssr = R.eval_linearSVF_All(R2.eval_linearSVF_All(ssr));
   ) : ( filter_type == 3 ) ? (
     ssl = L.moog.mix_moog(ssl, filter_choiceL, frac_morphL);
     ssr = R.moog.mix_moog(ssr, filter_choiceR, frac_morphR);
@@ -1075,6 +1503,30 @@ global(ssl, ssr, epsilon)
     ssr = R.processSample_ms20_asym(csr, filter_choiceR) * i_morphR;
     frac_morphL > epsilon ? ssl += L.processSample_ms20_asym(csl, filter_choiceL + 1) * frac_morphL;
     frac_morphR > epsilon ? ssr += R.processSample_ms20_asym(csr, filter_choiceR + 1) * frac_morphR;
+  ) : ( filter_type == 7 ) ? (
+    ssl = L.eval_momo(ssl);
+    ssr = R.eval_momo(ssr);
+  ) : ( filter_type == 8 ) ? (
+    ssl = L.eval_dualpeak(ssl);
+    ssr = R.eval_dualpeak(ssr);
+  ) : ( filter_type == 9 ) ? (
+    ssl = L.eval_triple_peak(ssl);
+    ssr = R.eval_triple_peak(ssr);
+  ) : ( filter_type == 10 ) ? (
+    ssl = L.eval_svf_nonlin(ssl);
+    ssr = R.eval_svf_nonlin(ssr);
+  ) : ( filter_type == 11 ) ? (
+    ssl = L2.eval_svf_nonlin(L.eval_svf_nonlin(ssl));
+    ssr = R2.eval_svf_nonlin(R.eval_svf_nonlin(ssr));
+  ) : ( filter_type == 12 ) ? (
+    ssl = L.eval_svf_nonlin_incorrect(ssl);
+    ssr = R.eval_svf_nonlin_incorrect(ssr);
+  ) : ( filter_type == 13 ) ? (
+    ssl = L2.eval_svf_nonlin_incorrect(L.eval_svf_nonlin_incorrect(ssl));
+    ssr = R2.eval_svf_nonlin_incorrect(R.eval_svf_nonlin_incorrect(ssr));
+  ) : ( filter_type == 14 ) ? (
+    ssl = L.eval_rectpeak(ssl);
+    ssr = R.eval_rectpeak(ssr);
   );
 );
 

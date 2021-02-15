@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.35
+version: 0.36
 author: Joep Vanlier
-changelog: Bugfix PWM anti aliasing.
+changelog: Optimize linear SVFs (especially 4p). Add resonance distortion SVFs. Add implicit non-linear SVF.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -49,7 +49,7 @@ slider22:detune3=0<-1, 1, .00001>-Detune [semitones]
 slider23:amp4=0<0, 1,.00001>-Voice 4 [%]
 slider24:detune4=0<-1, 1, .00001>-Detune [semitones]
 
-slider25:filter_type=1<0,6,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym}>-Filter type
+slider25:filter_type=1<0,14,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance}>-Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:boost=0<-6,48,1>-Post Boost (dB)
 slider28:cutoff=.6<0,1,.0001>-Cutoff
@@ -91,6 +91,8 @@ slider58:noise_type=0<0,4,1>-Noise type
 
 slider59:f_lfo_amnt=0<0,1,.00001>-Free LFO amount
 slider60:f_lfo_speed=0<0,20,.001>-Free LFO speed [-]
+
+slider61:fm_fine=0<0,1,.00001>-fine tune FM
 
 slider62:fix_dc=0<0,1,1>Fix DC
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
@@ -435,7 +437,7 @@ lf_update_step % 8 == 0 ? (
   
   osc1_vol = o1db > -47.8 ? exp(0.11512925464970229 * o1db) * osc1_correction: 0;
   osc2_vol = o2db > -47.8 ? exp(0.11512925464970229 * o2db) * osc2_correction: 0;
-  subosc_vol = sodb > -47.8 ? exp(0.11512925464970229 * sodb);
+  subosc_vol = sodb > -47.8 ? exp(0.11512925464970229 * sodb) : 0;
   lf_update_step = 0;
   
   current_c_lfo_speed = 10^((c_lfo_speed + c_lfo_speed_velmod + c_lfo_speed_mod * mod_level + c_lfo_speed_flfo * free_lfo)/15) - 1;
@@ -634,7 +636,7 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   // FM modulation of the filter
   current_fm_amnt != 0 ? (
     updateFMFilter();
-    FM_t += (2^floor(fm_factor))*440*israte*pitch;
+    FM_t += (2^(floor(fm_factor)))*(1+fudge)*440*israte*pitch;
     fm_mode == 0 ? (
       fm_mod1 = sin(two_pi*FM_t);
       fm_mod2 = sin(two_pi*FM_t+$pi*current_fm_spread);
@@ -1014,11 +1016,11 @@ gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
 ww = 1.3*knobSize;
 hh = .35 * knobSize;
-drawSelectionButton("Saw", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, OSC1_SELECT);
-drawSelectionButton("Square", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, OSC1_SELECT);
-drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, OSC1_SELECT);
-drawSelectionButton("Fin", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, OSC1_SELECT);
-drawSelectionButton("PWM", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, OSC1_SELECT);
+drawSelectionButton("Saw", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, OSC1_SELECT, -1);
+drawSelectionButton("Square", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, OSC1_SELECT, -1);
+drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, OSC1_SELECT, -1);
+drawSelectionButton("Fin", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, OSC1_SELECT, -1);
+drawSelectionButton("PWM", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, OSC1_SELECT, -1);
 
 oscResetToggle.drawToggle(cX-1.85*knobSize, cy+1.1*knobSize, .15*knobSize, .15*knobSize, free_osc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Hard Sync\n\nReset oscillator 2 when oscillator 1 crosses zero.");
 oscResetToggle.label = sprintf(33, " Free");
@@ -1083,11 +1085,11 @@ gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
 ww = 1.3*knobSize;
 hh = .35 * knobSize;
-drawSelectionButton("Saw", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, OSC2_SELECT);
-drawSelectionButton("Square", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, OSC2_SELECT);
-drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, OSC2_SELECT);
-drawSelectionButton("Fin", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, OSC2_SELECT);
-drawSelectionButton("PWM", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, OSC2_SELECT);
+drawSelectionButton("Saw", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, OSC2_SELECT, -1);
+drawSelectionButton("Square", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, OSC2_SELECT, -1);
+drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, OSC2_SELECT, -1);
+drawSelectionButton("Fin", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, OSC2_SELECT, -1);
+drawSelectionButton("PWM", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, OSC2_SELECT, -1);
 
 syncToggle.drawToggle(cX-1.85*knobSize, cy+1.1*knobSize, .15*knobSize, .15*knobSize, hardsync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Hard Sync\n\nReset oscillator 2 when oscillator 1 crosses zero.");
 syncToggle.label = sprintf(15, " Sync");
@@ -1163,11 +1165,11 @@ gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
 ww = 1.3*knobSize;
 hh = .35 * knobSize;
-drawSelectionButton("Sine", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, SUBOSC_SELECT);
-drawSelectionButton("Odd", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, SUBOSC_SELECT);
-drawSelectionButton("Even", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, SUBOSC_SELECT);
-drawSelectionButton("Tri", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, SUBOSC_SELECT);
-drawSelectionButton("Mud", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, SUBOSC_SELECT);
+drawSelectionButton("Sine", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, SUBOSC_SELECT, -1);
+drawSelectionButton("Odd", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, SUBOSC_SELECT, "Odd harmonics");
+drawSelectionButton("Even", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, SUBOSC_SELECT, "Even harmonics");
+drawSelectionButton("Tri", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, SUBOSC_SELECT, "Triangle");
+drawSelectionButton("Mud", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, SUBOSC_SELECT, "Even and odd harmonics");
 
 cX += .65*knobSize;
 
@@ -1209,11 +1211,11 @@ cX += 2.5*knobSize;
 gfx_setfont(KNOB_FONT);
 
 NOISE_SELECT = 58;
-drawSelectionButton("Noise", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, NOISE_SELECT);
-drawSelectionButton("Grating", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, NOISE_SELECT);
-drawSelectionButton("Digit", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, NOISE_SELECT);
-drawSelectionButton("808", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, NOISE_SELECT);
-drawSelectionButton("Bell", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, NOISE_SELECT);
+drawSelectionButton("Noise", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, NOISE_SELECT, -1);
+drawSelectionButton("Grating", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 1, NOISE_SELECT, -1);
+drawSelectionButton("Digit", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 2, NOISE_SELECT, -1);
+drawSelectionButton("808", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, NOISE_SELECT, -1);
+drawSelectionButton("Bell", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, NOISE_SELECT, -1);
 
 cX += .75*knobSize;
 noiseAmpKnob.knob_set(sprintf(1, "%.1f dB", noise_db - 48), 1, noise_db / 48);
@@ -1281,25 +1283,31 @@ activeModifier == 1 ? ( postBoost.knob_modifier_processMouse(0, boost_vel / 54) 
 
 cX = nextPanel + panelSpacing;
 
-nextPanel = drawPanel(s_FILTER, cX, cY - .53*panelHeight + .2*knobSize, 17.75*knobSpacing, panelHeight, 1);
+nextPanel = drawPanel(s_FILTER, cX, cY - .53*panelHeight + .2*knobSize, 20.25*knobSpacing, panelHeight, 1);
 
 cX += 2 * knobSpacing;
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
-ww = 1.3*knobSize;
+ww = 1.5*knobSize;
 hh = .35 * knobSize;
 FILTER_SELECT_BUTTON = 25;
 y_ref = cY - 1.25*knobSize - 1;
-drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON);
-drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON);
-drawSelectionButton("MS-20", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 1, FILTER_SELECT_BUTTON);
-drawSelectionButton("MS-20A", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 6, FILTER_SELECT_BUTTON);
-drawSelectionButton("Moog", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 3, FILTER_SELECT_BUTTON);
-drawSelectionButton("Ladder", cX - 2*knobSize, y_ref + 5*y_move, ww, hh, 4, FILTER_SELECT_BUTTON);
-drawSelectionButton("303", cX - 2*knobSize, y_ref + 6*y_move, ww, hh, 5, FILTER_SELECT_BUTTON);
+drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON, "2-pole linear state variable filter (12 dB/oct).");
+drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON, "4-pole linear state variable filter (12 dB/oct)");
+drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, FILTER_SELECT_BUTTON, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).");
+drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, FILTER_SELECT_BUTTON, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).");
+drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, FILTER_SELECT_BUTTON, "2-pole linear state variable filter where\nthe approximate resonance is rectified.");
 
-cX += .75*knobSize;
+drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, FILTER_SELECT_BUTTON, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).");
+drawSelectionButton("MS-20A", cX - .25*knobSize, y_ref + 1*y_move, ww, hh, 6, FILTER_SELECT_BUTTON, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).");
+drawSelectionButton("Moog", cX - .25*knobSize, y_ref + 2*y_move, ww, hh, 3, FILTER_SELECT_BUTTON, "Moog emulation (24 dB/oct).");
+drawSelectionButton("Ladder", cX - .25*knobSize, y_ref + 3*y_move, ww, hh, 4, FILTER_SELECT_BUTTON, "Ladder filter with two stages (12 dB/oct).");
+drawSelectionButton("303", cX - .25*knobSize, y_ref + 4*y_move, ww, hh, 5, FILTER_SELECT_BUTTON, "Blaukraut's 303 filter emulation");
+drawSelectionButton("nlSVF2p", cX - .25*knobSize, y_ref + 5*y_move, ww, hh, 10, FILTER_SELECT_BUTTON, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+drawSelectionButton("nlSVF4p", cX - .25*knobSize, y_ref + 6*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+
+cX += 2.5*knobSize;
 
 center = .5 * srate * exp( (1-cutoff) * log(20/22050) );
 cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff);
@@ -1361,12 +1369,12 @@ y_move = .4 * knobSize;
 ww = 1.3*knobSize;
 hh = .35 * knobSize;
 FM_MODE_BUTTON = 37;
-drawSelectionButton("MIDI Sin", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, FM_MODE_BUTTON);
-drawSelectionButton("MIDI |Sin|", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 1, FM_MODE_BUTTON);
-drawSelectionButton("MIDI Tri", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 4, FM_MODE_BUTTON);
-drawSelectionButton("Self", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 2, FM_MODE_BUTTON);
-drawSelectionButton("Self Abs", cX - 2*knobSize, cY-1.1*knobSize + 5*y_move, ww, hh, 3, FM_MODE_BUTTON);
-drawSelectionButton("MIDI Sqr", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 5, FM_MODE_BUTTON);
+drawSelectionButton("MIDI Sin", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, FM_MODE_BUTTON, -1);
+drawSelectionButton("MIDI |Sin|", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 1, FM_MODE_BUTTON, -1);
+drawSelectionButton("MIDI Tri", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 4, FM_MODE_BUTTON, -1);
+drawSelectionButton("Self", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 2, FM_MODE_BUTTON, -1);
+drawSelectionButton("Self Abs", cX - 2*knobSize, cY-1.1*knobSize + 5*y_move, ww, hh, 3, FM_MODE_BUTTON, -1);
+drawSelectionButton("MIDI Sqr", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 5, FM_MODE_BUTTON, -1);
 cX += .65*knobSize;
 
 fmlevelKnob.knob_set("", 1, fm_amnt);
