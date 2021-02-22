@@ -17,6 +17,17 @@ current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/2205
   (
     2/(1+exp(-2*x)) - 1
   );
+  
+ 
+function clamp(v, lb, ub)
+(
+  min(ub, max(v, lb))
+);
+
+function cl01(v)
+(
+  min(1, max(0, v))
+);  
 
 function check_safety()
 (
@@ -732,6 +743,220 @@ function eval_linearSVF_BR(v0)
       (mo0 * x + mo1 * y1 + mo2 * y2)
     );
   
+  function init_steiner(cutoff, reso, morph)
+  instance(h, hsq, k, Kh, normalizing_const, vref, alpha, beta, lp, bp, hp)
+  local(f0)
+  global(oversampling)
+  (
+    f0 = exp( (1.0 - cutoff) * log(20/22050) ) / oversampling;
+    h = tan(0.5 * $pi * f0);
+    K = 3.98*reso;
+    hsq = h*h;
+    Kh = K*h;
+    normalizing_const = 1.0 / (-Kh + hsq + 2*h + 1);
+    
+    /*alpha = 20.94153124476462;
+    beta = 0.057872340425531923;
+    vref = log(h / (alpha * beta)) / alpha;*/
+    
+    morph < 0.25 ? (
+      lp = 1.0 - morph*4;
+      bp = morph * 4;
+      hp = 0;
+    ) : ( morph < 0.5 ) ? (
+      bp = 1.0 - (morph - 0.25) * 4;
+      hp = (morph - 0.25) * 4;
+      lp = 0;
+    ) : ( morph < 0.75 ) ? (
+      hp = 1.0;
+      bp = -2.0;
+      lp = (morph - 0.5) * 4;
+    ) : (
+      hp = 1.0 - (morph - 0.75) * 4;
+      bp = 0;
+      lp = (morph - 0.75) * 4;
+    );
+  );
+  
+  
+  function diode(x, alpha, vref)
+  local()
+  global()
+  (
+    exp(alpha*(vref + x)) - exp(alpha*vref)
+  );
+  
+  function ddiode(x, diodeval, alpha, vref)
+  local()
+  global()
+  (
+    alpha * exp(alpha * (vref + x))
+  );
+  
+  function eval_steiner(xn)
+    global(epsilon, maxiter_svf)
+    local(res, f1, f2, x_xn,
+          a, b, c, d, norm, s1, s2, s1_fixed, s2_fixed,
+          xn, v1n, v2n, iter,
+          fb, fb_s1, fb_clipped, kp1,
+          )
+    instance(x, v1, v2, h, hsq, K, Kh, normalizing_const, alpha, vref, beta,
+             lp, hp, bp)
+    (
+      x_xn = x + xn;
+      v1n = (-Kh*v1 + (bp-hp)*h*x_xn + hsq*((lp - hp) * x_xn - v1) + 2*h*v2 + v1) * normalizing_const;
+      v2n = (Kh*((bp-hp) * x_xn + v2 - 2.0 * v1)+ (lp-bp)*hsq*x_xn + (lp-bp)*h*x_xn - hsq*v2 + v2) * normalizing_const;
+      
+      Kp1 = K + 1.0;
+      fb = f_g((K + 1)*(hp*x + v1));
+      s1_fixed = 2.0*bp*x - hp*x - v1 + v2 + fb;
+      s2_fixed = - 4.0*bp*x + hp*x - 2.0*(v2 + fb) + v1 + lp*x;
+      
+      iter = 0;
+      while(
+        iter += 1;
+        
+        fb_s1 = Kp1*(hp*xn + v1n);
+        fb_clipped = f_g(fb_s1);
+        s1 = s1_fixed - hp*xn - v1n + v2n + fb_clipped;
+        s2 = s2_fixed + hp*xn + lp*xn + v1n - 2.0 * (v2n + fb_clipped);
+        
+        f1 = - v1n + v1 + h * s1;
+        f2 = - v2n + v2 + h * s2;
+        
+        res = abs(f1) + abs(f2);
+        
+        a = h * ( Kp1 * f_dg(fb_s1) - 1.0 ) - 1.0;
+        b = h;
+        c = h * ( 1.0 - 2.0 * (K + 1.0) * f_dg(fb_s1) );
+        d = -2.0 * h - 1.0;
+
+        norm = 1.0 / ( a*d - b*c );
+        v1n = v1n - ( d*f1 - b*f2 ) * norm;
+        v2n = v2n - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      x = xn;
+      v1 = v1n;
+      v2 = v2n;
+      
+      Kp1 * (v1n + hp * xn)
+    );
+    
+  function eval_steiner_asym(xn)
+    global(epsilon, maxiter_svf)
+    local(res, f1, f2, x_xn,
+          a, b, c, d, norm, s1, s2, s1_fixed, s2_fixed,
+          xn, v1n, v2n, iter,
+          fb, fb_s1, fb_clipped, kp1,
+          )
+    instance(x, v1, v2, h, hsq, K, Kh, normalizing_const, alpha, vref, beta,
+             lp, hp, bp)
+    (
+      x_xn = x + xn;
+      v1n = (-Kh*v1 + (bp-hp)*h*x_xn + hsq*((lp - hp) * x_xn - v1) + 2*h*v2 + v1) * normalizing_const;
+      v2n = (Kh*((bp-hp) * x_xn + v2 - 2.0 * v1)+ (lp-bp)*hsq*x_xn + (lp-bp)*h*x_xn - hsq*v2 + v2) * normalizing_const;
+      
+      Kp1 = K + 1.0;
+      fb = f_g_asym((K + 1)*(hp*x + v1));
+      s1_fixed = 2.0*bp*x - hp*x - v1 + v2 + fb;
+      s2_fixed = - 4.0*bp*x + hp*x - 2.0*(v2 + fb) + v1 + lp*x;
+      
+      iter = 0;
+      while(
+        iter += 1;
+        
+        fb_s1 = Kp1*(hp*xn + v1n);
+        fb_clipped = f_g_asym(fb_s1);
+        s1 = s1_fixed - hp*xn - v1n + v2n + fb_clipped;
+        s2 = s2_fixed + hp*xn + lp*xn + v1n - 2.0 * (v2n + fb_clipped);
+        
+        f1 = - v1n + v1 + h * s1;
+        f2 = - v2n + v2 + h * s2;
+        
+        res = abs(f1) + abs(f2);
+        
+        a = h * ( Kp1 * f_dg_asym(fb_s1) - 1.0 ) - 1.0;
+        b = h;
+        c = h * ( 1.0 - 2.0 * (K + 1.0) * f_dg_asym(fb_s1) );
+        d = -2.0 * h - 1.0;
+
+        norm = 1.0 / ( a*d - b*c );
+        v1n = v1n - ( d*f1 - b*f2 ) * norm;
+        v2n = v2n - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      x = xn;
+      v1 = v1n;
+      v2 = v2n;
+      
+      Kp1 * (v1n + hp * xn)
+    );    
+    
+  function eval_steiner_old(xn)
+    global(epsilon, maxiter_svf)
+    local(scaling, res, f1, f2, x_xn,
+          a, b, c, d, norm, s1, s2
+          xn, v1n, v2n, diodev2v1, diodexv2, diodev2nv1n, diodexnv2n, ddiodev2nv1n, ddiodexnv2n, iter)
+    instance(x, v1, v2, h, hsq, K, Kh, normalizing_const, alpha, vref, beta,
+             lp, hp, bp)
+    (
+      // First guess based on linear system
+     // v1n = (-K*h*v1 - hsq*v1 + hsq*x + hsq*xn + 2*h*v2 + v1) * normalizing_const;
+     // v2n = (-2*K*h*v1 + K*h*v2 - hsq*v2 + hsq*x + hsq*xn + h*x + h*xn + v2) * normalizing_const;
+      
+      scaling = 1;//0.005;
+      xn *= scaling;
+      
+      x_xn = x + xn;
+      v1n = (-Kh*v1 + (bp-hp)*h*x_xn + hsq*((lp - hp) * x_xn - v1) + 2*h*v2 + v1) * normalizing_const;
+      v2n = (Kh*((bp-hp) * x_xn + v2 - 2.0 * v1)+ (lp-bp)*hsq*x_xn + (lp-bp)*h*x_xn - hsq*v2 + v2) * normalizing_const;
+      
+      /*
+      diodev2v1 = diode(v2 - v1, alpha, vref);
+      diodexv2 = diode(x - v2, alpha, vref);
+      
+      iter = 0;
+      while(
+        iter += 1;
+        
+        diodev2nv1n = diode(v2n - v1n, alpha, vref);
+        diodexnv2n = diode(xn - v2n, alpha, vref);
+        
+        ddiodev2nv1n = ddiode(v2n - v1n, diodev2nv1n, alpha, vref);
+        ddiodexnv2n = ddiode(xn - v2n, diodexnv2n, alpha, vref);
+        
+        s1 = diodev2nv1n + diodev2v1;
+        s2 = diodexnv2n + K * diodev2nv1n + diodexv2 + K * diodev2v1;
+        f1 = v1n - v1 - beta * s1;
+        f2 = v2n - v2 - beta * s2;
+        
+        res = abs(f1) + abs(f2);
+        
+        a = 1.0 + beta * ddiodev2nv1n;
+        b = - beta * ddiodev2nv1n;
+        c = K * beta * ddiodev2nv1n;
+        d = 1.0 - beta * ( K * ddiodev2nv1n - ddiodexnv2n);
+
+        norm = 1.0 / ( a*d - b*c );
+        v1n = v1n - ( d*f1 - b*f2 ) * norm;
+        v2n = v2n - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter_svf);
+      );*/
+      
+      /*v1n = tanh(v1n);
+      v2n = tanh(v2n);*/
+      
+      
+      x = xn;
+      v1 = v1n;
+      v2 = v2n;
+      
+      (1.0 + K) * (v1n + hp * xn) / scaling
+    );      
+  
   function init_MS20(freq, reso)
     global(oversampling, srate)
     local(f0)
@@ -1172,16 +1397,6 @@ function eval_linearSVF_BR(v0)
       LP.eval_MS20_nonlin_tanh_asym(s)
     );
   );  
- 
-function clamp(v, lb, ub)
-(
-  min(ub, max(v, lb))
-);
-
-function cl01(v)
-(
-  min(1, max(0, v))
-);
   
 function init_rectpeak(freq, res, morph)
   global()
@@ -1454,6 +1669,12 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, 
   ) : ( filter_type == 14 ) ? (
     L.init_rectpeak(sliderCutoffL, sliderReso, sliderMorphL);
     R.init_rectpeak(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 15 ) ? (
+    L.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
+  ): ( filter_type == 16 ) ? (
+    L.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
   );
   
   filter_choiceL = floor(sliderMorphL*4);
@@ -1527,6 +1748,12 @@ global(ssl, ssr, epsilon)
   ) : ( filter_type == 14 ) ? (
     ssl = L.eval_rectpeak(ssl);
     ssr = R.eval_rectpeak(ssr);
+  ) : ( filter_type == 15 ) ? (
+    ssl = L.eval_steiner(ssl);
+    ssr = R.eval_steiner(ssr);
+  ) : ( filter_type == 16 ) ? (
+    ssl = L.eval_steiner_asym(ssl);
+    ssr = R.eval_steiner_asym(ssr);
   );
 );
 
