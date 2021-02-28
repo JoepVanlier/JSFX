@@ -1,8 +1,8 @@
 desc:Saike Multiband Ravager (BETA)
 tags: Ravager
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Enforce maximum gain. Make text more readable. Add threshold make-up gain. Add smoothing to drive inputs to prevent clicks.
+changelog: Fix forgotten initialization input gain. Adding an array of clipping options.
 about:
   # Multiband Audio Destroyer. Performs extreme upwards compression akin to DOOM compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
@@ -34,6 +34,7 @@ slider15:fixdc=1<0,1,1>-DC offset filter
 slider16:makeup=0<0,1,0{Off,On}>-Make up gain
 slider17:input_gain=0<-96,96,.001>Input gain
 slider18:bidirectional=0<0,1,1{No,Yes}>-Bidirectional
+slider19:output_squash=0<0,3,1{None,Clip,Soft,ClipAA}>-Output limiting
 slider61:FIR=0<0,1,1>-FIR mode
 
 
@@ -42,7 +43,7 @@ slider61:FIR=0<0,1,1>-FIR mode
 (
  0
 );*/
-
+  current_input_gain = -1000000;
   smoothing_const = 20/srate;
 
   /* Gain computer */
@@ -79,7 +80,7 @@ slider61:FIR=0<0,1,1>-FIR mode
       iratio        = 1/ratio;
       at            = exp(-1/(.5*.001*attack*csrate));
       rt            = exp(-1/(.5*.001*release*csrate));
-    );     
+    );
   
   eps = 0.0000000000005;
   
@@ -1704,6 +1705,61 @@ solo5 ? play5 = 1;
 );
 
 @sample
+  function F0_rect(x)
+  (
+    abs(x) > 1 ? x * sign(x) - 0.5 : 0.5 * x * x;
+  );
+  
+  function F1_rect(x)
+  (
+    abs(x) > 1 ? (0.5 * x * x - 0.166666666666666666666666667) * sign(x) : x * x * x * 0.333333333333333333333;
+  );
+  
+  function clip(x)
+  (
+    max(-1, min(1, x))
+  );
+
+  function clip_linear_aa(xn)
+  local(eps, clip_xn,
+        F0_xn, F1_xn, diff1, diff2, term1, term2, idiff)
+  global()
+  instance(xnm1, xnm2, F0_xnm1, F0_xnm2, F1_xnm1, F1_xnm2)
+  (
+    clip_xn   = clip(xn);
+    F0_xn     = F0_rect(xn);
+    F1_xn     = F1_rect(xn);
+  
+    diff1     = ( xn - xnm1 );
+    diff2     = ( xnm2 - xnm1 );
+    eps       = .002;
+      
+    term1     = (abs(diff1) > eps) ? (
+      idiff = 1.0 / (diff1*diff1);
+      ( xn * ( F0_xn - F0_xnm1 ) - (F1_xn - F1_xnm1) ) * idiff
+    ) : (
+      .5 * clip((xn + 2*xnm1)*.33333333333333333333333333333)
+    );
+    
+    term2     = (abs(diff2) > eps) ? (
+      idiff = 1.0 / (diff2*diff2);
+      ( xnm2 * ( F0_xnm2 - F0_xnm1 ) - (F1_xnm2 - F1_xnm1) ) * idiff
+    ) : (
+      .5 * clip((xnm2 + 2*xnm1)*.33333333333333333333333333333)
+    );
+  
+    F1_xnm2   = F1_xnm1;
+    F1_xnm1   = F1_xn;
+  
+    F0_xnm2   = F0_xnm1;
+    F0_xnm1   = F0_xn;
+    
+    xnm2      = xnm1;
+    xnm1      = xn;
+  
+    term1 + term2
+  );
+
   function init_LR2(freq)
     global(srate)
     local(g, res)
@@ -2285,6 +2341,19 @@ solo5 ? play5 = 1;
     spl1 = dcr.eval_HP6(spl1);
   );
   
+  output_squash ? (
+    output_squash == 1 ? (
+      spl0 = clip(spl0);
+      spl1 = clip(spl1);
+    ) : ( output_squash == 2 ) ? (
+      spl0 = tanh(spl0);
+      spl1 = tanh(spl1);
+    ) : ( output_squash == 3 ) ? (
+      spl0 = l.clip_linear_aa(spl0);
+      spl1 = r.clip_linear_aa(spl1);
+    );
+  );
+  
   out = spl0 + spl1;
 
   spectrumOut.feedSample(.5*out);
@@ -2436,7 +2505,7 @@ solo5 ? play5 = 1;
   FIR = tFIR.processMouseToggle(mouse_x, mouse_y, mouse_cap);*/
 
   tCouple.label = "Coupled L/R";  
-  tCouple.drawToggle(20, 20, 10, 10, coupled, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
+  tCouple.drawToggle(20, 100, 10, 10, coupled, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
   coupled = tCouple.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
   tDC.label = "Filter DC";  
@@ -2451,6 +2520,22 @@ solo5 ? play5 = 1;
   tBidi.drawToggle(20, 80, 10, 10, bidi, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Compress things exceeding threshold downward as well.");
   bidi = tBidi.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
+  tFree.label = "Free";
+  tFree.drawToggle(20, 20, 10, 10, squash == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Don't limit output.");
+  tFree.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? squash = 0;
+  
+  tClip.label = "Clip";  
+  tClip.drawToggle(65, 20, 10, 10, squash == 1, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Hard clip the output.");
+  tClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? squash = 1;
+  
+  sClip.label = "Soft";  
+  sClip.drawToggle(110, 20, 10, 10, squash == 2 , 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Soft clip the output (tanh shape).");
+  sClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? squash = 2;
+  
+  aaClip.label = "Clip (AA)";  
+  aaClip.drawToggle(155, 20, 10, 10, squash == 3, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Hard clip the output with anti aliasing (may exceed bounds!)");
+  aaClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? squash = 3;
+   
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(1,0,0,1);
