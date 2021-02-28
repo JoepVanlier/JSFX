@@ -1,8 +1,8 @@
 desc:Saike Multiband Ravager (BETA)
 tags: Ravager
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog:
+changelog: Enforce maximum gain. Make text more readable. Add threshold make-up gain. Add smoothing to drive inputs to prevent clicks.
 about:
   # Multiband Audio Destroyer. Performs extreme upwards compression akin to DOOM compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
@@ -31,23 +31,32 @@ slider12:ratio=2<0 ,2,.0001>Ratio
 slider13:thresh=0<-20,20,.0001>Thresh
 slider14:coupled=1<0,1,{False,True}>-Couple L/R?
 slider15:fixdc=1<0,1,1>-DC offset filter
+slider16:makeup=0<0,1,0{Off,On}>-Make up gain
+slider17:input_gain=0<-96,96,.001>Input gain
+slider18:bidirectional=0<0,1,1{No,Yes}>-Bidirectional
 slider61:FIR=0<0,1,1>-FIR mode
 
-slider62:masterGainSlider=0<-26,26,.1>-Master Gain
 
 @init
+/*function fft_real(x, x)
+(
+ 0
+);*/
+
+  smoothing_const = 20/srate;
+
   /* Gain computer */
   function calcGain(xG)
     instance(thresh, ratio, iratio)
     local(diff, tmp)
-    global()
+    global(bidi)
     (
       diff = xG - thresh;
       
       ( xG < thresh ) ? (
         thresh + diff * iratio
       ) : (
-        xG + diff * iratio
+        xG - diff * iratio * bidi
       );
     );
 
@@ -71,16 +80,18 @@ slider62:masterGainSlider=0<-26,26,.1>-Master Gain
       at            = exp(-1/(.5*.001*attack*csrate));
       rt            = exp(-1/(.5*.001*release*csrate));
     );     
-    
+  
+  eps = 0.0000000000005;
+  
   // Topology 3:
   /* Level detection log domain */
   function compressor_gain(x)
     instance( rt, at, yL, 
               ya, outGain )
-    global()
+    global(eps)
     local(xL, yG, xG)
     (
-      xG  = 20 * log10(abs(x)); /* Peak */
+      xG  = 20 * log10(abs(x) + eps); /* Peak */
      
       /* Calculate the gain curve */
       yG = this.calcGain(xG);
@@ -407,10 +418,8 @@ function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
   function initBands()
   local()
   global()
-  instance(lg1, lg2, lg3, lg4, lg5, b1, b2, b3, b4, b5)
+  instance(b1, b2, b3, b4, b5)
   (
-    lg1 = lg2 = lg3 = lg4 = lg5 = -1000000;
-    b1.ldrive = b2.ldrive = b3.ldrive = b4.ldrive = b5.ldrive = -1000000;
     b1.initialized = b2.initialized = b3.initialized = b4.initialized = b5.initialized = 0;
   );
 
@@ -1024,7 +1033,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
   );
 
 function drawFFT(fill, r, g, b, a)
-  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft, FIR1 )
+  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft, FIR1, Thresh)
   instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
   local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
   (
@@ -1048,7 +1057,7 @@ function drawFFT(fill, r, g, b, a)
     gfx_g = g;
     gfx_b = b;
     gfx_a = a;
- 
+
     hstep = .5 * stepsize;
     buf = fftLoc+2;
     txl = x;
@@ -1096,6 +1105,9 @@ function drawFFT(fill, r, g, b, a)
       
       buf+=1; i+=1; ixsc+=1;
     );
+    
+    /*gfx_set(1, 1, 1, 1);
+    gfx_line(0, y - max(Thresh, -floorLevel)*h / floorLevel, w, y - max(Thresh, -floorLevel)*h / floorLevel);*/
   );
   
 function drawLineFFT(peakLocation)
@@ -1379,9 +1391,6 @@ function drawBands()
     
     xc = x;
     dx = 5;
-    gfx_set(0,0,0,.3);
-    gfx_line(x, y+.3*h, x+w, y+.3*h);
-    gfx_line(x, y+.3*h+2, x+w, y+.3*h+2);
  
     (Cuts > 0) ? (
       gfx_set(1,1,1,1); v1.fancyLineV(x1, y, x1, y+h);
@@ -1484,8 +1493,10 @@ function initSpectrum(memoryOffset, fftSize, srate)
   local(BW2)
   global( Drive1,    Drive2,    Drive3,     Drive4,     Drive5
           play1,     play2,     play3,      play4,      play5, coupled,
-          bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5)
+          bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5,
+          makeup, Thresh,MakeupGain, smoothing_const)
   instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5,
+           cDrive1, cDrive2, cDrive3, cDrive4, cDrive5,
            rg1, rg2, rg3, rg4, rg5,
            lg1, lg2, lg3, lg4, lg5,
            comp_l1.compressor_gain,
@@ -1507,74 +1518,82 @@ function initSpectrum(memoryOffset, fftSize, srate)
     b1.l = b2.l = b3.l = b4.l = b5.l = 0;
     b1.r = b2.r = b3.r = b4.r = b5.r = 0;
     
+    MakeupGain = makeup ? Thresh : 0;
+    
+    cDrive1 += smoothing_const * (Drive1 - MakeupGain - 200 * (1 - play1) - cDrive1);
+    cDrive2 += smoothing_const * (Drive2 - MakeupGain - 200 * (1 - play2) - cDrive2);
+    cDrive3 += smoothing_const * (Drive3 - MakeupGain - 200 * (1 - play3) - cDrive3);
+    cDrive4 += smoothing_const * (Drive4 - MakeupGain - 200 * (1 - play4) - cDrive4);
+    cDrive5 += smoothing_const * (Drive5 - MakeupGain - 200 * (1 - play5) - cDrive5);
+    
     coupled ? (
-      play1 ? (
-        lg1 = exp(.11512925464970228420089957273422 * (Drive1 - comp_l1.compressor_gain(max(abs(b1.inL), abs(b1.inR)))));
+      cDrive1 > -120 ? (
+        lg1 = exp(.11512925464970228420089957273422 * (cDrive1 - comp_l1.compressor_gain(max(abs(b1.inL), abs(b1.inR)))));
         b1.l = lg1 * b1.inL;
         b1.r = lg1 * b1.inR;
       );
-      play2 ? (
-        lg2 = exp(.11512925464970228420089957273422 * (Drive2 - comp_l2.compressor_gain(max(abs(b2.inL), abs(b2.inR)))));
+      cDrive2 > -120 ? (
+        lg2 = exp(.11512925464970228420089957273422 * (cDrive2 - comp_l2.compressor_gain(max(abs(b2.inL), abs(b2.inR)))));
         b2.l = lg2 * b2.inL;
         b2.r = lg2 * b2.inR;
       );
-      play3 ? (
-        lg3 = exp(.11512925464970228420089957273422 * (Drive3 - comp_l3.compressor_gain(max(abs(b3.inL), abs(b3.inR)))));
+      cDrive3 > -120 ? (
+        lg3 = exp(.11512925464970228420089957273422 * (cDrive3 - comp_l3.compressor_gain(max(abs(b3.inL), abs(b3.inR)))));
         b3.l = lg3 * b3.inL;
         b3.r = lg3 * b3.inR;
       );
-      play4 ? (
-        lg4 = exp(.11512925464970228420089957273422 * (Drive4 - comp_l4.compressor_gain(max(abs(b4.inL), abs(b4.inR)))));
+      cDrive4 > -120 ? (
+        lg4 = exp(.11512925464970228420089957273422 * (cDrive4 - comp_l4.compressor_gain(max(abs(b4.inL), abs(b4.inR)))));
         b4.l = lg4 * b4.inL;
         b4.r = lg4 * b4.inR;
       );
-      play5 ? (
-        lg5 = exp(.11512925464970228420089957273422 * (Drive5 - comp_l5.compressor_gain(max(abs(b5.inL), abs(b5.inR)))));
+      cDrive5 > -120 ? (
+        lg5 = exp(.11512925464970228420089957273422 * (cDrive5 - comp_l5.compressor_gain(max(abs(b5.inL), abs(b5.inR)))));
         b5.l = lg5 * b5.inL;
         b5.r = lg5 * b5.inR;
       );
     ) : (
-      play1 ? (
+      cDrive1 > -120 ? (
         l1_state = comp_l1.compressor_gain(b1.inL);
         r1_state = comp_r1.compressor_gain(b1.inR);
-        lg1 = exp(.11512925464970228420089957273422 * (Drive1 - l1_state));
-        rg1 = exp(.11512925464970228420089957273422 * (Drive1 - r1_state));
+        lg1 = exp(.11512925464970228420089957273422 * (cDrive1 - l1_state));
+        rg1 = exp(.11512925464970228420089957273422 * (cDrive1 - r1_state));
       
         b1.l = lg1 * b1.inL;
         b1.r = rg1 * b1.inR;
       );
-      play2 ? (
+      cDrive2 > -120 ? (
         l2_state = comp_l2.compressor_gain(b2.inL);
         r2_state = comp_r2.compressor_gain(b2.inR);
-        lg2 = exp(.11512925464970228420089957273422 * (Drive2 - l2_state));
-        rg2 = exp(.11512925464970228420089957273422 * (Drive2 - r2_state));
+        lg2 = exp(.11512925464970228420089957273422 * (cDrive2 - l2_state));
+        rg2 = exp(.11512925464970228420089957273422 * (cDrive2 - r2_state));
         
         b2.l = lg2*b2.inL;
         b2.r = rg2*b2.inR;
       );
-      play3 ? (
+      cDrive3 > -120 ? (
         l3_state = comp_l3.compressor_gain(b3.inL);
         r3_state = comp_r3.compressor_gain(b3.inR);
-        lg3 = exp(.11512925464970228420089957273422 * (Drive3 - l3_state));
-        rg3 = exp(.11512925464970228420089957273422 * (Drive3 - r3_state));
+        lg3 = exp(.11512925464970228420089957273422 * (cDrive3 - l3_state));
+        rg3 = exp(.11512925464970228420089957273422 * (cDrive3 - r3_state));
       
         b3.l = lg3*b3.inL;
         b3.r = rg3*b3.inR;
       );
-      play4 ? (
+      cDrive4 > -120 ? (
         l4_state = comp_l4.compressor_gain(b4.inL);
         r4_state = comp_r4.compressor_gain(b4.inR);
-        lg4 = exp(.11512925464970228420089957273422 * (Drive4 - l4_state));
-        rg4 = exp(.11512925464970228420089957273422 * (Drive4 - r4_state));
+        lg4 = exp(.11512925464970228420089957273422 * (cDrive4 - l4_state));
+        rg4 = exp(.11512925464970228420089957273422 * (cDrive4 - r4_state));
         
         b4.l = lg4*b4.inL;
         b4.r = rg4*b4.inR;
       );
-      play5 ? (
+      cDrive5 > -120 ? (
         l5_state = comp_l5.compressor_gain(b5.inL);
         r5_state = comp_r5.compressor_gain(b5.inR);
-        lg5 = exp(.11512925464970228420089957273422 * (Drive5 - l5_state));
-        rg5 = exp(.11512925464970228420089957273422 * (Drive5 - r5_state));
+        lg5 = exp(.11512925464970228420089957273422 * (cDrive5 - l5_state));
+        rg5 = exp(.11512925464970228420089957273422 * (cDrive5 - r5_state));
       
         b5.l = lg5*b5.inL;
         b5.r = rg5*b5.inR;
@@ -1653,6 +1672,7 @@ file_var(0, FIR);
 filterBank.setCompOptions();
 
 @block
+smoothing_const = 20/srate;
 filterBank.setCompOptions();
 dcl.init_HP6(20/srate);
 dcr.init_HP6(20/srate);
@@ -2203,6 +2223,13 @@ solo5 ? play5 = 1;
     
     filterBank.processBands();
   );
+  
+  (current_input_gain != input_gain) ? (
+    current_input_gain += smoothing_const * (input_gain - current_input_gain);
+    g_factor = exp(.11512925464970228420089957273422 * current_input_gain);
+  );
+  spl0 *= g_factor;
+  spl1 *= g_factor;
     
   FIR ? (
     specBuffer.updateBuffer(.5*(spl0+spl1));
@@ -2300,6 +2327,8 @@ solo5 ? play5 = 1;
       oldDest = gfx_dest;
       gfx_setimgdim(gradient_bg, w, h);
       gfx_dest = gradient_bg;
+      gfx_set(0, 0, 0, 1);
+      gfx_rect(0, 0, w, h);
       gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);
       gfx_rectto(w,spectrumH);
       gfx_mode = 1;
@@ -2414,6 +2443,14 @@ solo5 ? play5 = 1;
   tDC.drawToggle(20, 40, 10, 10, fixdc, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Filters DC by applying a high pass on the output.");
   fixdc = tDC.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
+  tMakeUp.label = "Compensate threshold";  
+  tMakeUp.drawToggle(20, 60, 10, 10, makeup, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Compensate threshold gain.");
+  makeup = tMakeUp.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  tBidi.label = "Bidirectional compression";  
+  tBidi.drawToggle(20, 80, 10, 10, bidi, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Compress things exceeding threshold downward as well.");
+  bidi = tBidi.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(1,0,0,1);
@@ -2429,13 +2466,23 @@ solo5 ? play5 = 1;
   
   writeX = 20;
   writeY = gfx_h - 100;
-  
-  gfx_x = writeX;
-  gfx_y = writeY;
-  gfx_setfont(1, "Arial", 30);
-  gfx_set(0, 0, 0, 1);
-  gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio);
-  gfx_x = writeX;
-  gfx_y += 24;
-  gfx_printf("Decay: %.3g ms", filterBank.comp_l1.release);
+  function draw_text(writeX, writeY)
+  (
+    gfx_x = writeX;
+    gfx_y = writeY;
+    gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio);
+    gfx_x = writeX;
+    gfx_y += 24;
+    gfx_printf("Decay: %.3g ms", filterBank.comp_l1.release);
+  );
 
+  gfx_setfont(1, "Arial", 30);
+  
+  gfx_set(0, 0, 0, 1);  
+  draw_text(writeX-2, writeY-2);
+  gfx_set(0, 0, 0, 1);  
+  draw_text(writeX+2, writeY+2);
+
+  gfx_set(1, .4, .2, 1);  
+  draw_text(writeX, writeY);
+  
