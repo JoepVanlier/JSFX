@@ -14,6 +14,8 @@ to your reapack (https://reapack.com/) list of repositories. If you run into iss
 
 Monophonic bass synthesizer with some fancy filters and modulation options.
 
+Note: Remember to import the bass presets when you download this thing.
+
 Features:
 - Anti-aliased oscillators.
 - 14 Filters of which 9 non-linear analog modelled ones, all with their own unique tone. Try driving them!
