@@ -10,7 +10,7 @@ to your reapack (https://reapack.com/) list of repositories. If you run into iss
 
 Note that everything is permissively licensed, but if you use some of the code in your own works, I'd appreciate a mention. Thanks!
 
-# Yutani
+# Yutani - Bass synth
 ![yutani_new_cut](https://user-images.githubusercontent.com/19836026/109434606-678b8c80-7a16-11eb-85d8-9071e82bc312.gif)
 
 Monophonic bass synthesizer with some fancy filters and modulation options.
@@ -38,7 +38,7 @@ Non-linear filter demo (Steiner): https://raw.githubusercontent.com/JoepVanlier/
 Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/more_controlled.mp3
 
 
-# Ravager
+# Ravager - Extreme upwards compressor
 ![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
 
 Destroys incoming audio by performing extreme upward compression.
@@ -56,7 +56,7 @@ Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/mul
 
 Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/upwardcompress.mp3
 
-# Swellotron
+# Swellotron - Soundscape effect
 ![SwellotronUI](https://i.imgur.com/ikizwwk.gif)
 
 Machine for combining two sounds into ambient soundscapes.
@@ -73,7 +73,7 @@ Features:
 - Diffusion: Spectral blur.
 - Ice: Chops small bandwidth bits from the energy at random, and copies them to a higher frequency (at 1x or 2x the frequency), thereby giving narrowband high frequency sounds (sounding very cold).
 
-# ReflectoSaurus
+# ReflectoSaurus - Soundscape effect
 ![reflectosaurus_new_cut](https://user-images.githubusercontent.com/19836026/109434641-93a70d80-7a16-11eb-8279-f1525c676de7.gif)
 
 Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
@@ -108,7 +108,7 @@ https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/ka
 
 https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus_test.mp3 (dry then wet)
 
-# Nostalgizer
+# Nostalgizer - Lo-fi effect
 ![nostalgizer_cut](https://user-images.githubusercontent.com/19836026/109434617-72462180-7a16-11eb-8076-aa596ded1eae.gif)
 
 Make your audio sound old with the nostalgizer.
@@ -123,7 +123,7 @@ Features
 
 Demo: https://www.youtube.com/watch?v=Y8ibWk8Tpm0
 
-# FM Filter
+# FM Filter - Filter
 ![FMFilter](https://imgur.com/iFOhQAd.png)
 
 FM modulated filter. Good for making monophonic bass sounds chunkier. 
@@ -146,7 +146,7 @@ Features:
 - Audio rate cutoff modulation.
 - Basic LFO modulation.
 
-# SatanVerb
+# SatanVerb - Pitching Reverb
 ![SatanUI](https://i.imgur.com/JLXFrOH.png)
 
 Evil sounding reverb unit.
@@ -163,7 +163,7 @@ Features
 - Input non-linearity (dist), spectrum non-linearity (ceiling).
 - Dry/Wet controls.
 
-# Squashman
+# Squashman - Multiband distortion
 Squashman is a multi-band saturation / distortion plugin that allows modulation of several of its parameters.
 
 Features:
@@ -181,7 +181,7 @@ Features:
 A short demo here:
 https://www.youtube.com/watch?v=mK0xAhq4pK4
 
-# Filther
+# Filther - Dynamic filtering effect
 ![Filther](https://i.imgur.com/oCkDyyz.png)
 
 Filther is a distortion / effects unit which allows you to perform dynamic filtering and waveshaping.
@@ -220,7 +220,7 @@ Yet another compressor. This one is quite a tight little peak compressor.
 
 This peak compressor is based on a paper by Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6). It seems to be a pretty decent at tight style compression, with pretty aggressive attack. The compression is continuously visualized to help you dial in the appropriate settings.
 
-# Stereo Bub II
+# Stereo Bub II - Mono compatible stereo widener
 ![StereoBub](https://i.imgur.com/a09HF51.jpg)
 
 Stereo widener that preserves mono compatibility.
@@ -231,11 +231,11 @@ There are two basic modes of operation:
 1. You can either add stereo sound from nothing, using the Strength slider. This adds a comb filtered version of the average signal with opposite polarity to the different channels. Be careful not to overdo it, or you get a flangey sound (unless that is what you want).
 2. You can manipulate the existing side channel that's in the input. The gain of the original side channel is scaled by the old "Old side" knob. Depending on the button "HP original side" this signal route will be highpassed (mono-izing the low frequencies).
 
-# Stereo Bub III
+# Stereo Bub III - Stereo widener
 ![StereoBub3](https://i.imgur.com/1JQFa5w.png)
 It's pretty much the same as II, except it adds vibrato on left and right and a squash option to box in the side channel. This squash option can be useful at times to mask the phasing effects you can sometimes hear on drums. Mind you, too much of it will cause harmonics that will completely vanish when mixing down to mono, so be careful with that one.
 
-# Transience
+# Transience - Transient modifier
 ![TransienceUI](https://imgur.com/TgC7n2B.png)
 
 Transient shaper. Can modify attack and decay of incoming audio.
@@ -248,19 +248,19 @@ Transience is a plugin for enhancing or reducing transients. It works by using t
 Tone Stacks emulates the tone stacks of some classic guitar amps. It is based on the work of jatalahd and ~arph from diystompboxes.com forum. See their visualization tool here: http://www.guitarscience.net/tsc/info.htm 
 Tone stacks contains some bi-linearly transformed versions of these filters.
 
-# Bandsplitter/joiner
+# Bandsplitter/joiner - Tool
 ![BandSplitterUI](https://imgur.com/nOhiaJB.png)
 
 4-pole band splitter that preserves phase between the bands. It has a UI and uses much steeper crossover filters (24 dB/oct) than the default that ships with reaper thereby providing sharper band transitions.
 
 It also has an option for linear phase FIR crossovers instead of the default IIR filters. IIRs cost less CPU and introduce no preringing or latency. The linear phase FIRs however prevent phase distortion (which can be important in some mixing settings), but introduce latency compensation. Note that when using the linear phase filters, it is not recommended to modulate the crossover frequencies as this introduces crackles.
 
-# Amaranth
+# Amaranth - Granular Sampler
 ![AmaranthUI](https://i.imgur.com/CfZ9oLm.png)
 
 Granular sampler.
 
-# Multi-channel spectral analyser with sonogram and time window
+# Multi-channel spectral analyser with sonogram and time window - Tool
 I needed a plugin that I could keep open on one screen to monitor things.
 Hence I modified the stock Reaper spectral analyzer to allow for 
 multi-channel analysis and combine it with a sonogram and time window.
