@@ -10,7 +10,7 @@ to your reapack (https://reapack.com/) list of repositories. If you run
 into issues with these, feel free to open an issue here on github.
 
 # Yutani
-![YutaniUI](https://imgur.com/rXaLzV9.gif)
+![YutaniUI](https://i.imgur.com/rXaLzV9.gif)
 
 3 x osc monophonic synthesizer with some fancy filters and modulation options.
 
@@ -61,7 +61,7 @@ Features:
 - Ice: Chops small bandwidth bits from the energy at random, and copies them to a higher frequency (at 1x or 2x the frequency), thereby giving narrowband high frequency sounds (sounding very cold).
 
 # Nostalgizer
-![Nostalgizer](https://imgur.com/PIZEIC8.gif)
+![Nostalgizer](https://i.imgur.com/PIZEIC8.gif)
 
 Make your audio sound old with the nostalgizer. A combination of a lowpass-gate and random detuning module.
 
@@ -197,7 +197,7 @@ Tone stacks contains some bi-linearly transformed versions of these filters.
 It also has an option for linear phase FIR crossovers instead of the default IIR filters. IIRs cost less CPU and introduce no preringing or latency. The linear phase FIRs however prevent phase distortion (which can be important in some mixing settings), but introduce latency compensation. Note that when using the linear phase filters, it is not recommended to modulate the crossover frequencies as this introduces crackles.
 
 # ReflectoSaurus
-![Reflectosaurus](https://imgur.com/JEOfAVN.gif)
+![Reflectosaurus](https://i.imgur.com/JEOfAVN.gif)
 Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
 
 Nodes can be routed to each-other to create complex effects. Routing sends are sent out before applying the feedback gain, but after the filters. The arc around the routing arrow indicates the volume at which it is being sent to the other node.
