@@ -8,6 +8,7 @@ https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 
 to your reapack (https://reapack.com/) list of repositories. If you run into issues with these, feel free to open an issue here on github.
 
+Note that everything is permissively licensed, but if you use some of the code in your own works, I'd appreciate a mention. Thanks!
 
 # Yutani
 ![yutani_new_cut](https://user-images.githubusercontent.com/19836026/109434606-678b8c80-7a16-11eb-85d8-9071e82bc312.gif)
