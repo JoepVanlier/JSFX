@@ -9,6 +9,42 @@ https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 to your reapack (https://reapack.com/) list of repositories. If you run 
 into issues with these, feel free to open an issue here on github.
 
+# Yutani
+![YutaniUI](https://imgur.com/rXaLzV9.gif)
+
+3 x osc monophonic synthesizer with some fancy filters and modulation options.
+
+Features:
+- Anti-aliased oscillators.
+- 14 Filters of which 9 non-linear analog modelled ones, all with their own unique tone. Try driving them!
+- Audio-rate modulation options on the filter.
+- Velocity, modulation wheel and LFO modulation options.
+- Stereo widening effect.
+- Noise.
+- Distortion module.
+- Glide.
+
+Demo here: https://www.youtube.com/watch?v=rBJ94Ye_az8
+Non-linear filter demo (nlSVF): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/nlSVF3.mp3
+Non-linear filter demo (nlSVF): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/nlSVF.mp3
+Non-linear filter demo (Steiner): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/mean_steiner.mp3
+Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/more_controlled.mp3
+
+# Ravager
+![RavagerUI](https://i.imgur.com/H1MUNgg.gif)
+
+Destroys incoming audio by performing extreme upward compression.
+
+Features:
+- (Optional)Multi-band processing (add/remove with right mouse button).
+- Extreme upward compression pulling up almost anything.
+- Limiting in the forms of hard clipping / soft clipping.
+
+Following demos are Yutani -> Reflectosaurus -> Ravager (no other effects)
+Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/dry_wet.mp3
+Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/multiband_version.mp3
+Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/upwardcompress.mp3
+
 # Swellotron
 ![SwellotronUI](https://i.imgur.com/ikizwwk.gif)
 
@@ -23,6 +59,19 @@ Features:
 - Ruin: Output saturation.
 - Diffusion: Spectral blur.
 - Ice: Chops small bandwidth bits from the energy at random, and copies them to a higher frequency (at 1x or 2x the frequency), thereby giving narrowband high frequency sounds (sounding very cold).
+
+# Nostalgizer
+![Nostalgizer](https://imgur.com/PIZEIC8.gif)
+
+Make your audio sound old with the nostalgizer. A combination of a lowpass-gate and random detuning module.
+
+Features
+- Pitch instability.
+- Low pass gate modelled after a famous unit.
+- Adaptive saturation.
+- Modelled noise as it is taken through a compander.
+
+Demo: https://www.youtube.com/watch?v=Y8ibWk8Tpm0
 
 # FM Filter
 ![FMFilter](https://imgur.com/iFOhQAd.png)
@@ -148,20 +197,34 @@ Tone stacks contains some bi-linearly transformed versions of these filters.
 It also has an option for linear phase FIR crossovers instead of the default IIR filters. IIRs cost less CPU and introduce no preringing or latency. The linear phase FIRs however prevent phase distortion (which can be important in some mixing settings), but introduce latency compensation. Note that when using the linear phase filters, it is not recommended to modulate the crossover frequencies as this introduces crackles.
 
 # ReflectoSaurus
-![Reflectosaurus](https://i.imgur.com/V88Kbiw.png)
+![Reflectosaurus](https://imgur.com/JEOfAVN.gif)
 Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
 
 Nodes can be routed to each-other to create complex effects. Routing sends are sent out before applying the feedback gain, but after the filters. The arc around the routing arrow indicates the volume at which it is being sent to the other node.
 
 Delays/Grid can optionally be synchronized to host tempo on 3/4, 4/4 or 5/4 rhythm. Reflectosaurus also sports one special FFT reverb node, which is indicated in red. Remember to mute all unused nodes as this lowers CPU significantly.
 
-![InfographicReflectoSaurus](https://i.imgur.com/a4ISztr.png)
+Features
+- Building complex chains of delays with negative and positive feedback.
+- Tempo synchronization.
+- Filters on every tap.
+- Various modifiers that modify the delay on each tap (distortion, saturation, modulation and more).
+- Granular resynthesis.
+- Pitch shifting.
+- FFT Reverb. Add this for lush sounds.
+- Tuned mode to achieve Karplus-style string synthesis.
 
 Examples of possibilities:
 
 https://www.youtube.com/watch?v=bGgYUSdWiAA
 
 https://www.youtube.com/watch?v=PJKxva-5x54
+
+Full manual here: https://github.com/JoepVanlier/JSFX/raw/master/Reflectosaurus_Manual/Reflectosaurus_Manual.pdf
+
+Demo of the Karplus style effects. Just Yutani and Reflectosaurus:
+https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus2.mp3
+https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus_test.mp3 (dry then wet)
 
 # Amaranth
 ![AmaranthUI](https://i.imgur.com/CfZ9oLm.png)
