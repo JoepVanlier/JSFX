@@ -25,10 +25,15 @@ Features:
 - Glide.
 
 Demo here: https://www.youtube.com/watch?v=rBJ94Ye_az8
+
 Non-linear filter demo (nlSVF): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/nlSVF3.mp3
+
 Non-linear filter demo (nlSVF): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/nlSVF.mp3
+
 Non-linear filter demo (Steiner): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/mean_steiner.mp3
+
 Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/more_controlled.mp3
+
 
 # Ravager
 ![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
@@ -41,8 +46,11 @@ Features:
 - Limiting in the forms of hard clipping / soft clipping.
 
 Following demos are Yutani -> Reflectosaurus -> Ravager (no other effects)
+
 Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/dry_wet.mp3
+
 Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/multiband_version.mp3
+
 Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/upwardcompress.mp3
 
 # Swellotron
@@ -92,7 +100,9 @@ https://www.youtube.com/watch?v=PJKxva-5x54
 Full manual here: https://github.com/JoepVanlier/JSFX/raw/master/Reflectosaurus_Manual/Reflectosaurus_Manual.pdf
 
 Demo of the Karplus style effects. Just Yutani and Reflectosaurus:
+
 https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus2.mp3
+
 https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus_test.mp3 (dry then wet)
 
 # Nostalgizer
@@ -180,7 +190,9 @@ All the distortion/filtering on that track was done with this filter (mostly non
 https://soundcloud.com/saike/ohnoesitsaboss2/s-zYCOt
 
 It can also sound pretty destructive:
+
 https://soundcloud.com/saike/sine/s-mbHJL
+
 https://soundcloud.com/saike/fm-modes-filther/s-KXwEQ
 
 Youtube tutorial: https://www.youtube.com/watch?v=jtc8kp57xpI
