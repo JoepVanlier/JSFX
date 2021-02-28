@@ -1,18 +1,18 @@
 # JSFX
 
-This is a small bundle of JSFX and scripts for reaper.
- You can install 
-these by adding the link:
+This is a bundle of JSFX and scripts for reaper.
+
+You can install these by adding the link:
 
 https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 
-to your reapack (https://reapack.com/) list of repositories. If you run 
-into issues with these, feel free to open an issue here on github.
+to your reapack (https://reapack.com/) list of repositories. If you run into issues with these, feel free to open an issue here on github.
+
 
 # Yutani
-![YutaniUI](https://i.imgur.com/rXaLzV9.gif)
+![yutani_new_cut](https://user-images.githubusercontent.com/19836026/109434606-678b8c80-7a16-11eb-85d8-9071e82bc312.gif)
 
-3 x osc monophonic synthesizer with some fancy filters and modulation options.
+Monophonic bass synthesizer with some fancy filters and modulation options.
 
 Features:
 - Anti-aliased oscillators.
@@ -31,7 +31,7 @@ Non-linear filter demo (Steiner): https://raw.githubusercontent.com/JoepVanlier/
 Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/more_controlled.mp3
 
 # Ravager
-![RavagerUI](https://i.imgur.com/H1MUNgg.gif)
+![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
 
 Destroys incoming audio by performing extreme upward compression.
 
@@ -48,6 +48,8 @@ Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/upw
 # Swellotron
 ![SwellotronUI](https://i.imgur.com/ikizwwk.gif)
 
+Machine for combining two sounds into ambient soundscapes.
+
 It computes the spectrum of both signals (using the STFT), multiplies the magnitudes in the spectral domain and puts the result of that in an energy buffer. This energy buffer is drained proportionally to its contents. The energy buffer is then used to resynthesize the sound, but this time with a random phase.
 
 In plain terms, it behaves almost like a reverb, where frequencies that both sounds have in common are emphasized and frequencies where the sounds differ are attenuated. This will almost always lead to something that sounds pretty harmonic.
@@ -60,10 +62,45 @@ Features:
 - Diffusion: Spectral blur.
 - Ice: Chops small bandwidth bits from the energy at random, and copies them to a higher frequency (at 1x or 2x the frequency), thereby giving narrowband high frequency sounds (sounding very cold).
 
-# Nostalgizer
-![Nostalgizer](https://i.imgur.com/PIZEIC8.gif)
+# ReflectoSaurus
+![reflectosaurus_new_cut](https://user-images.githubusercontent.com/19836026/109434641-93a70d80-7a16-11eb-8279-f1525c676de7.gif)
 
-Make your audio sound old with the nostalgizer. A combination of a lowpass-gate and random detuning module.
+Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
+
+Nodes can be routed to each-other to create complex effects. Routing sends are sent out before applying the feedback gain, but after the filters. The arc around the routing arrow indicates the volume at which it is being sent to the other node.
+
+Delays/Grid can optionally be synchronized to host tempo on 3/4, 4/4 or 5/4 rhythm. Reflectosaurus also sports one special FFT reverb node, which is indicated in red. Remember to mute all unused nodes as this lowers CPU significantly.
+
+It looks complicated, but learning to use this machine will allow you to make quite some interesting spatial sounds.
+
+Features
+- Building complex chains of delays with negative and positive feedback.
+- Tempo synchronization.
+- Filters on every tap.
+- Various modifiers that modify the delay on each tap (distortion, saturation, modulation and more).
+- Granular resynthesis.
+- Pitch shifting.
+- FFT Reverb. Add this for lush sounds.
+- Tuned mode to achieve Karplus-style string synthesis.
+
+Examples of possibilities:
+
+https://www.youtube.com/watch?v=bGgYUSdWiAA
+
+https://www.youtube.com/watch?v=PJKxva-5x54
+
+Full manual here: https://github.com/JoepVanlier/JSFX/raw/master/Reflectosaurus_Manual/Reflectosaurus_Manual.pdf
+
+Demo of the Karplus style effects. Just Yutani and Reflectosaurus:
+https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus2.mp3
+https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus_test.mp3 (dry then wet)
+
+# Nostalgizer
+![nostalgizer_cut](https://user-images.githubusercontent.com/19836026/109434617-72462180-7a16-11eb-8076-aa596ded1eae.gif)
+
+Make your audio sound old with the nostalgizer.
+
+A combination of a lowpass-gate and random detuning module.
 
 Features
 - Pitch instability.
@@ -99,6 +136,8 @@ Features:
 # SatanVerb
 ![SatanUI](https://i.imgur.com/JLXFrOH.png)
 
+Evil sounding reverb unit.
+
 Satan verb is a reverberation unit mostly meant for diffuse and gated style reverberation. It can either be used without an envelope, to generate large ambient spaces, or be modulated by an envelope based on the input sound to give a sound more body while not adding too much noise to the dead time.
 
 Features
@@ -132,7 +171,7 @@ https://www.youtube.com/watch?v=mK0xAhq4pK4
 # Filther
 ![Filther](https://i.imgur.com/oCkDyyz.png)
 
-Filther is a waveshaping / filterbank plugin that allows for some dynamic processing as well.
+Filther is a distortion / effects unit which allows you to perform dynamic filtering and waveshaping.
 
 **Manual** for Filther here: https://joepvanlier.github.io/FiltherManual/
 
@@ -162,10 +201,14 @@ For more information, or to contact the author, see the forum thread here: https
 # Tight Compressor
 ![TightCompressor](https://i.imgur.com/0rES8lF.jpg)
 
+Yet another compressor. This one is quite a tight little peak compressor.
+
 This peak compressor is based on a paper by Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6). It seems to be a pretty decent at tight style compression, with pretty aggressive attack. The compression is continuously visualized to help you dial in the appropriate settings.
 
 # Stereo Bub II
 ![StereoBub](https://i.imgur.com/a09HF51.jpg)
+
+Stereo widener that preserves mono compatibility.
 
 A fairly basic stereo widening tool. Widens the sound, but makes sure that the mono-mix stays unaffected (unlike Haas). The crossover is basically a 12 pole HPF that cuts the bass of the widening to avoid widening the bass too much. The last slider allows you to mix in the original side channel (which can optionally also be run through the 12-pole highpass).
 
@@ -177,9 +220,10 @@ There are two basic modes of operation:
 ![StereoBub3](https://i.imgur.com/1JQFa5w.png)
 It's pretty much the same as II, except it adds vibrato on left and right and a squash option to box in the side channel. This squash option can be useful at times to mask the phasing effects you can sometimes hear on drums. Mind you, too much of it will cause harmonics that will completely vanish when mixing down to mono, so be careful with that one.
 
-
 # Transience
 ![TransienceUI](https://imgur.com/TgC7n2B.png)
+
+Transient shaper. Can modify attack and decay of incoming audio.
 
 Transience is a plugin for enhancing or reducing transients. It works by using two envelopes. One is an envelope follower (short attack, longer decay; roughly follows the peaks of the sound), the other is a user specified envelope (with attack/decay). You can then shape the sound according to the difference between the two, making attacks or decays longer or shorter. The plugin operates in logarithmic space.
 
@@ -196,40 +240,10 @@ Tone stacks contains some bi-linearly transformed versions of these filters.
 
 It also has an option for linear phase FIR crossovers instead of the default IIR filters. IIRs cost less CPU and introduce no preringing or latency. The linear phase FIRs however prevent phase distortion (which can be important in some mixing settings), but introduce latency compensation. Note that when using the linear phase filters, it is not recommended to modulate the crossover frequencies as this introduces crackles.
 
-# ReflectoSaurus
-![Reflectosaurus](https://i.imgur.com/JEOfAVN.gif)
-Tool for making creative delays and reverbs. Each node indicates a delay. X axis controls the delay time, Y axis controls the volume, while the radius indicates how much feedback the delay has. Each delay node contains a lowpass and highpass filter. The arc indicates which frequency range of the sound is allowed to pass each feedback round. The little knob indicates the panning of the node.
-
-Nodes can be routed to each-other to create complex effects. Routing sends are sent out before applying the feedback gain, but after the filters. The arc around the routing arrow indicates the volume at which it is being sent to the other node.
-
-Delays/Grid can optionally be synchronized to host tempo on 3/4, 4/4 or 5/4 rhythm. Reflectosaurus also sports one special FFT reverb node, which is indicated in red. Remember to mute all unused nodes as this lowers CPU significantly.
-
-Features
-- Building complex chains of delays with negative and positive feedback.
-- Tempo synchronization.
-- Filters on every tap.
-- Various modifiers that modify the delay on each tap (distortion, saturation, modulation and more).
-- Granular resynthesis.
-- Pitch shifting.
-- FFT Reverb. Add this for lush sounds.
-- Tuned mode to achieve Karplus-style string synthesis.
-
-Examples of possibilities:
-
-https://www.youtube.com/watch?v=bGgYUSdWiAA
-
-https://www.youtube.com/watch?v=PJKxva-5x54
-
-Full manual here: https://github.com/JoepVanlier/JSFX/raw/master/Reflectosaurus_Manual/Reflectosaurus_Manual.pdf
-
-Demo of the Karplus style effects. Just Yutani and Reflectosaurus:
-https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus2.mp3
-https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Reflectosaurus/karplus_test.mp3 (dry then wet)
-
 # Amaranth
 ![AmaranthUI](https://i.imgur.com/CfZ9oLm.png)
 
-Graintable tool. Wouldn't recommend using this one for any serious project yet, and if you do, make sure you render out your results, as I may still make changes that break backward compatibility 
+Granular sampler.
 
 # Multi-channel spectral analyser with sonogram and time window
 I needed a plugin that I could keep open on one screen to monitor things.
