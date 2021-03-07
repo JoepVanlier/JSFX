@@ -2,15 +2,29 @@
 
 This is a bundle of JSFX and scripts for reaper.
 
-The easiest way to use these, is to use Reapack. To do this, please follow the installation instructions that can be found here: https://reapack.com/user-guide#installation
+The easiest way to use these, is to use Reapack.
 
-The next step is to add this repository to your reapack.
+### Step 1: Install Reapack
 
-https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
+To do this, please follow the installation instructions here: https://reapack.com/user-guide#installation
 
-See the image below on how to do this.
+### Step 2: Add this repository to Reapack
 
-![image](https://user-images.githubusercontent.com/19836026/110242624-271c9900-7f57-11eb-816d-7226a77efd3c.png)
+The next step is to add the following repository to your reapack: https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
+
+![addrepo](https://user-images.githubusercontent.com/19836026/110243225-c0e54580-7f59-11eb-9ac8-a656b4f45b6f.png)
+
+### Step 3: Find and install the plugin you want.
+
+Now it's just a matter of checking out what's on offer and installing those that you want. No worries, it's all free stuff.
+
+ ![findplugin](https://user-images.githubusercontent.com/19836026/110243230-c8a4ea00-7f59-11eb-9ec4-4ed1fbeab18c.png)
+
+### Step 4: Refresh your FX list (or restart Reaper) and find the plugin.
+
+The plugins won't show up until you refresh your FX list or restart reaper.
+
+### Step 5: Enjoy! :)
 
 Note that everything is permissively licensed, but if you use some of the code in your own works, I'd appreciate a mention. Thanks!
 
