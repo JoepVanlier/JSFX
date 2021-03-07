@@ -10,7 +10,7 @@ The easiest way to use these, is to use Reapack.
 
 To do this, please follow the installation instructions here: https://reapack.com/user-guide#installation
 
-### Step 2: Add this repository to Reapack
+#### Step 2: Add this repository to Reapack
 
 The next step is to add the following repository to your reapack: https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 
@@ -22,7 +22,7 @@ Now it's just a matter of checking out what's on offer and installing those that
 
  ![findplugin](https://user-images.githubusercontent.com/19836026/110243353-48cb4f80-7f5a-11eb-8126-0805a0a223af.png)
 
-### Step 4: Refresh your FX list (or restart Reaper) and find the plugin.
+#### Step 4: Refresh your FX list (or restart Reaper) and find the plugin.
 
 The plugins won't show up until you refresh your FX list or restart reaper.
 
