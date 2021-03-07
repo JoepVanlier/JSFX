@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.40
+version: 0.41
 author: Joep Vanlier
-changelog: Added animation to all knobs, fixed bug which did not allow distortion drive to be automated, fixed bug which did not allow attack/decay/sustain of filter and amplitude envelope to be automated, fixed bug free LFO not resetting when disabled.
+changelog: Update oversampling library to have better attenuation at higher oversampling rates. Compensate for pdc delay in through channel when oversampling.
 
 license: MIT
 provides:
@@ -111,6 +111,7 @@ import Saike_Yutani_Envelope.jsfx-inc
 import Saike_Yutani_interpolators.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
 import Saike_Yutani_oversampling.jsfx-inc
+import Saike_Yutani_upsamplers.jsfx-inc
 import Saike_Yutani_widgets.jsfx-inc
 import Saike_Yutani_sample_delay_buffer.jsfx-inc
 import Saike_Yutani_LFOs.jsfx-inc
@@ -159,11 +160,17 @@ freemem = (sinc_tmp = freemem) + 10000;
 freemem = (l_buffer = freemem) + 2001;
 freemem = (r_buffer = freemem) + 2001;
 
+freemem = (l_pdc_buffer = freemem) + 2001;
+freemem = (r_pdc_buffer = freemem) + 2001;
+
 // Chorus materials
 l_delay.initBuffer(l_buffer, l_buffer + 2000);
 r_delay.initBuffer(r_buffer, r_buffer + 2000);
 l_delay_filt.init_linearSVF_absolute(340, 0);
 r_delay_filt.init_linearSVF_absolute(340, 0);
+
+l_pdc.initBuffer(l_pdc_buffer, l_pdc_buffer + 2000);
+r_pdc.initBuffer(r_pdc_buffer, r_pdc_buffer + 2000);
 
 function initialize_interpolators()
 (
@@ -381,16 +388,28 @@ cutoff_phase_interpolator.interpolator_block();
 current_ceiling_interpolator.interpolator_block();
 warmth_interpolator.interpolator_block();
     
-// Update the oversampling filters when needed.
-( oversampling != lastOversample ) ? (
-  lastOversample = oversampling;   
-  
+oversampling_method = 1;
+
+oversampling_method == 1 ? (
+  curFIRdelay = getFIRdelay(oversampling);
+  (pdc_delay != curFIRdelay) ? (
+    pdc_top_ch = 2;
+    pdc_bot_ch = 0;
+    pdc_delay = curFIRdelay;
+    lastOversample = oversampling;
+  );
+) : (
   // Memory for the sincs is located at sinc_tmp, sinc_flt, sinc_flt2, sinc_flt3 and sinc_flt4
-  sincFilterL.updateSincFilter(oversampling, 8, sinc_flt,  sinc_tmp);
-  sincFilterR.updateSincFilter(oversampling, 8, sinc_flt2, sinc_tmp);
-  nTapSinc = oversampling < 5 ? 16 : oversampling*4;
-  sincDownL.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist1, sinc_flt3);
-  sincDownR.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist2, sinc_flt4);  
+  (pdc_delay != 7) ? (
+    sincFilterL.updateSincFilter(oversampling, 8, sinc_flt,  sinc_tmp);
+    sincFilterR.updateSincFilter(oversampling, 8, sinc_flt2, sinc_tmp);
+    nTapSinc = oversampling < 5 ? 16 : oversampling*4;
+    sincDownL.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist1, sinc_flt3);
+    sincDownR.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist2, sinc_flt4);
+    pdc_top_ch = 2;
+    pdc_bot_ch = 0;
+    pdc_delay = 7;
+  );
 );
 
 osc1_correction = (osc1_shape == 2) || (osc1_shape == 3) ? 1.25 : 1;
@@ -458,8 +477,15 @@ function updateCurrentVelocitySettings()
 // Force an update when knobs are touched
 shouldUpdateCurrentVelocitySettings ? updateCurrentVelocitySettings();
 
-spl_0 = spl0;
-spl_1 = spl1;
+pdc_delay == 0 ? (
+  spl_0 = spl0;
+  spl_1 = spl1;
+) : (
+  l_pdc.writeBuffer(spl0);
+  r_pdc.writeBuffer(spl1);
+  spl_0 = l_pdc.readBuffer_fixed(pdc_delay);
+  spl_1 = r_pdc.readBuffer_fixed(pdc_delay);
+);
 
 shaper ? (
   cur_ceiling = clamp(current_ceiling_interpolator.interpolate() + current_ceiling_vel * midi.lastVel, 0, 48);
@@ -780,24 +806,49 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   
   // Oversampled processing
   ( oversampling > 1 ) ? (
-    sincFilterL.advanceSinc(yl);
-    sincFilterR.advanceSinc(yr);
-    
-    loop( oversampling,
-      ssl = sincFilterL.getSubSample();
-      ssr = sincFilterR.getSubSample();
+    ( oversampling_method == 1 ) ? (
+      upsampleL.updateUpHist(overSampling, yl);
+      upsampleR.updateUpHist(overSampling, yr);
       
-      filter.processSample(filter_type);
-      ssl *= inv_preamp;
-      ssr *= inv_preamp;
-      shaper ? processShaper();
+      f = 0;
+      loop(overSampling,
+        f += 1;
+        ssl = overSampling*upsampleL.upSample(overSampling);
+        ssr = overSampling*upsampleR.upSample(overSampling);
       
-      sincDownL.advanceHist(ssl);
-      sincDownR.advanceHist(ssr);
+        filter.processSample(filter_type);
+        ssl *= inv_preamp;
+        ssr *= inv_preamp;
+        shaper ? processShaper();
+        
+        downL.updateDownHist(overSampling, ssl);
+        downR.updateDownHist(overSampling, ssr);
+        
+        ( f == 1 ) ? (
+          spl0 = downL.downSample(overSampling);
+          spl1 = downR.downSample(overSampling);
+        );
+      );
+    ) : (
+      sincFilterL.advanceSinc(yl);
+      sincFilterR.advanceSinc(yr);
+      
+      loop( oversampling,
+        ssl = sincFilterL.getSubSample();
+        ssr = sincFilterR.getSubSample();
+        
+        filter.processSample(filter_type);
+        ssl *= inv_preamp;
+        ssr *= inv_preamp;
+        shaper ? processShaper();
+        
+        sincDownL.advanceHist(ssl);
+        sincDownR.advanceHist(ssr);
+      );
+      
+      spl0 = sincDownL.sincDownSample();
+      spl1 = sincDownR.sincDownSample();
     );
-    
-    spl0 = sincDownL.sincDownSample();
-    spl1 = sincDownR.sincDownSample();
   ) : (
     ssr = yr;
     ssl = yl;
@@ -2166,7 +2217,7 @@ showOptions ? (
   oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
     oversamplingKnob.value = (oversampling - 1) / 7;
   );
-  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "", 1.0);
+  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "Change the oversampling ratio. Some filters need this for stability.\nNote that it severely affects CPU cost though.", 1.0);
   oversamplingKnob.label = sprintf(7, "x%d", oversampling);
   oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
     newOversampling = floor(oversamplingKnob.value * 7 + 1);
@@ -2181,7 +2232,7 @@ showOptions ? (
   inertiaKnob.active = 1;
   inertiaKnob.value = inertia / 200;
   inertiaKnob.label = sprintf(8, "%d ms", inertia);
-  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "", 1.0);
+  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "Sets how quickly parameters respond to changes.", 1.0);
   inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
     inertia = inertiaKnob.value * 200;
     slider_automate(inertia);

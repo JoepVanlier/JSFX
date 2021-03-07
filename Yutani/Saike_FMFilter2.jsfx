@@ -1,8 +1,8 @@
 desc:Saike FM Filter 2
 tags: audio-rate filters
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: initial commit
+changelog: add pdc compensation for oversampling
 license: MIT
 
 Attribution: Moog filter implementation was based on the paper:
@@ -103,6 +103,7 @@ import Saike_Yutani_Envelope.jsfx-inc
 import Saike_Yutani_interpolators.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
 import Saike_Yutani_oversampling.jsfx-inc
+import Saike_Yutani_upsamplers.jsfx-inc
 import Saike_Yutani_widgets.jsfx-inc
 import Saike_Yutani_sample_delay_buffer.jsfx-inc
 import Saike_Yutani_LFOs.jsfx-inc
@@ -110,6 +111,7 @@ import Saike_Yutani_Delays.jsfx-inc
 
 @init
 style = 1;
+lastOversample = 0;
 
 two_pi = 2 * $pi;
 freemem = 0;
@@ -303,17 +305,30 @@ morph_phase_interpolator.interpolator_block();
 cutoff_phase_interpolator.interpolator_block();
 current_ceiling_interpolator.interpolator_block();
 warmth_interpolator.interpolator_block();
-    
-// Update the oversampling filters when needed.
-( oversampling != lastOversample ) ? (
-  lastOversample = oversampling;   
-  
+
+
+oversampling_method = 1;
+
+oversampling_method == 1 ? (
+  curFIRdelay = getFIRdelay(oversampling); 
+  (pdc_delay != curFIRdelay) ? (
+    pdc_top_ch = 2;
+    pdc_bot_ch = 0;
+    pdc_delay = curFIRdelay;
+    lastOversample = oversampling;
+  );
+) : (
   // Memory for the sincs is located at sinc_tmp, sinc_flt, sinc_flt2, sinc_flt3 and sinc_flt4
-  sincFilterL.updateSincFilter(oversampling, 8, sinc_flt,  sinc_tmp);
-  sincFilterR.updateSincFilter(oversampling, 8, sinc_flt2, sinc_tmp);
-  nTapSinc = oversampling < 5 ? 16 : oversampling*4;
-  sincDownL.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist1, sinc_flt3);
-  sincDownR.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist2, sinc_flt4);  
+  (pdc_delay != 7) ? (
+    sincFilterL.updateSincFilter(oversampling, 8, sinc_flt,  sinc_tmp);
+    sincFilterR.updateSincFilter(oversampling, 8, sinc_flt2, sinc_tmp);
+    nTapSinc = oversampling < 5 ? 16 : oversampling*4;
+    sincDownL.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist1, sinc_flt3);
+    sincDownR.updateSincDownsampleFilter(oversampling, nTapSinc, sinc_hist2, sinc_flt4);
+    pdc_top_ch = 2;
+    pdc_bot_ch = 0;
+    pdc_delay = 7;
+  );
 );
 
 @sample
@@ -597,24 +612,49 @@ cutoff_envelope =
   
   // Oversampled processing
   ( oversampling > 1 ) ? (
-    sincFilterL.advanceSinc(yl);
-    sincFilterR.advanceSinc(yr);
-    
-    loop( oversampling,
-      ssl = sincFilterL.getSubSample();
-      ssr = sincFilterR.getSubSample();
+    ( oversampling_method == 1 ) ? (
+      upsampleL.updateUpHist(overSampling, yl);
+      upsampleR.updateUpHist(overSampling, yr);
       
-      filter.processSample(filter_type);
-      ssl *= inv_preamp;
-      ssr *= inv_preamp;
-      shaper ? processShaper();
+      f = 0;
+      loop(overSampling,
+        f += 1;
+        ssl = overSampling*upsampleL.upSample(overSampling);
+        ssr = overSampling*upsampleR.upSample(overSampling);
       
-      sincDownL.advanceHist(ssl);
-      sincDownR.advanceHist(ssr);
+        filter.processSample(filter_type);
+        ssl *= inv_preamp;
+        ssr *= inv_preamp;
+        shaper ? processShaper();
+        
+        downL.updateDownHist(overSampling, ssl);
+        downR.updateDownHist(overSampling, ssr);
+        
+        ( f == 1 ) ? (
+          spl0 = downL.downSample(overSampling);
+          spl1 = downR.downSample(overSampling);
+        );
+      );
+    ) : (
+      sincFilterL.advanceSinc(yl);
+      sincFilterR.advanceSinc(yr);
+      
+      loop( oversampling,
+        ssl = sincFilterL.getSubSample();
+        ssr = sincFilterR.getSubSample();
+        
+        filter.processSample(filter_type);
+        ssl *= inv_preamp;
+        ssr *= inv_preamp;
+        shaper ? processShaper();
+        
+        sincDownL.advanceHist(ssl);
+        sincDownR.advanceHist(ssr);
+      );
+      
+      spl0 = sincDownL.sincDownSample();
+      spl1 = sincDownR.sincDownSample();
     );
-    
-    spl0 = sincDownL.sincDownSample();
-    spl1 = sincDownR.sincDownSample();
   ) : (
     ssr = yr;
     ssl = yl;
@@ -1585,7 +1625,7 @@ showOptions ? (
   oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
     oversamplingKnob.value = (oversampling - 1) / 7;
   );
-  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "", 1.0);
+  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "Change the oversampling ratio. Some filters need this for stability.\nNote that it severely affects CPU cost though.", 1.0);
   oversamplingKnob.label = sprintf(7, "x%d", oversampling);
   oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
     newOversampling = floor(oversamplingKnob.value * 7 + 1);
@@ -1600,7 +1640,7 @@ showOptions ? (
   inertiaKnob.active = 1;
   inertiaKnob.value = inertia / 200;
   inertiaKnob.label = sprintf(8, "%d ms", inertia);
-  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "", 1.0);
+  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "Sets how quickly parameters respond to changes.", 1.0);
   inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
     inertia = inertiaKnob.value * 200;
     slider_automate(inertia);
