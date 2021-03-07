@@ -2,16 +2,20 @@
 
 This is a bundle of JSFX and scripts for reaper.
 
-You can install these by adding the link:
+The easiest way to use these, is to use Reapack. To do this, please follow the installation instructions that can be found here: https://reapack.com/user-guide#installation
+
+The next step is to add this repository to your reapack.
 
 https://raw.githubusercontent.com/JoepVanlier/JSFX/master/index.xml
 
-to your reapack (https://reapack.com/) list of repositories. If you run into issues with these, feel free to open an issue here on github.
+See the image below on how to do this.
+
+![image](https://user-images.githubusercontent.com/19836026/110242624-271c9900-7f57-11eb-816d-7226a77efd3c.png)
 
 Note that everything is permissively licensed, but if you use some of the code in your own works, I'd appreciate a mention. Thanks!
 
 # Yutani - Bass synth
-![yutani_new_cut](https://user-images.githubusercontent.com/19836026/109434606-678b8c80-7a16-11eb-85d8-9071e82bc312.gif)
+![lights](https://user-images.githubusercontent.com/19836026/110242823-0739a500-7f58-11eb-9473-8cd214746b13.gif)
 
 Monophonic bass synthesizer with some fancy filters and modulation options.
 
@@ -26,6 +30,7 @@ Features:
 - Noise.
 - Distortion module.
 - Glide.
+- Modwheel, MIDI velocity and pitch bend support.
 
 Demo here: https://www.youtube.com/watch?v=rBJ94Ye_az8
 
@@ -37,6 +42,19 @@ Non-linear filter demo (Steiner): https://raw.githubusercontent.com/JoepVanlier/
 
 Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/more_controlled.mp3
 
+# FM Filter 2
+![lights_fmfilter](https://user-images.githubusercontent.com/19836026/110242715-998d7900-7f57-11eb-8c6e-48b825b8f47e.gif)
+
+For those days when you want to have access to Yutani's non-linear filters, but want to use an audio source.
+
+Features:
+- 15 filters, from well behaved linear models, to gnarly analog modelled nastiness.
+- Audio and MIDI controllable filters.
+- Audio and MIDI controllable gate.
+- Three LFOs.
+- Modwheel and MIDI velocity support.
+- Stereo widening effect.
+- Distortion module.
 
 # Ravager - Extreme upwards compressor
 ![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
