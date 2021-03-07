@@ -7,6 +7,7 @@ maxiter_svf = 26;
 safety_limit_ms20 = 0.935;
 safety_limit_moog = 0.25; // Above this level the model suffers from numerical difficulties. Ensures fc < fs/8.
 safety_limit_svf = 0.9;//0.94;//0.9;
+safety_limit_svf2 = 0.85;
 
 current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/22050));
 
@@ -15,9 +16,8 @@ current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/2205
   global()
   instance()
   (
-    2/(1+exp(-2*x)) - 1
+    (2/(1+exp(-2*x)) - 1)
   );
-  
  
 function clamp(v, lb, ub)
 (
@@ -185,27 +185,22 @@ function init_linearSVF_absolute(f0, res)
 function init_linearSVF_all(freq, res, morph)
   global(oversampling)
   local(frac)
-  instance(f0, ic1eq, ic2eq, k, g, a1, a2, a3, m0, m1, m2, lastfreq)
+  instance(f0, ic1eq, ic2eq, k, g, a1, a2, a3, m0, m1, m2)
   (
-    (abs(lastfreq - freq) > .001) ? (
-      lastfreq = freq;
-      f0 = exp( (1-freq) * log(20/22050) ) / oversampling;
-      g = tan(.5 * $pi * f0);
-    );
+    f0 = exp( (1-freq) * log(20/22050) ) / oversampling;
+    g = tan(.5 * $pi * f0);
     k = 2 - 2*res;
-        
     a1 = 1/(1+g*(g+k));
     a2 = g*a1;
     a3 = g*a2;
-    
-    morph *= 4.0;
-    frac = morph - floor(morph);
     
     //      v0       v1   v2
     // LP =               v2
     // BP =          v1;
     // HP = v0 - k * v1 - v2;
     // BR = v0 -     v1;
+    morph *= 4.0;
+    frac = morph - floor(morph);
     morph < 1 ? (
       // LP to BP
       m0 = 0.0;
@@ -226,12 +221,30 @@ function init_linearSVF_all(freq, res, morph)
       m1 = -(1.0 - frac);
       m2 = frac;
     );
+    
+    /*A = sqrt(1-res*res);
+    m0 *= A;
+    m1 *= A;
+    m2 *= A;*/
   );
   
 function eval_linearSVF_All(v0)
   global()
   local(v1, v2, v3)
-  instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2)
+  instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2, k)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3 * v3;
+    ic1eq = 2.0 * v1 - ic1eq;
+    ic2eq = 2.0 * v2 - ic2eq;
+    (m0 * v0 + m1 * v1 + m2 * v2)
+  );
+  
+function eval_linearSVF_All4p(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic1eq, ic2eq, ic3eq, ic4eq, a1, a2, a3, m0, m1, m2, k)
   (
     v3 = v0 - ic2eq;
     v1 = a1 * ic1eq + a2 * v3;
@@ -239,9 +252,14 @@ function eval_linearSVF_All(v0)
     ic1eq = 2.0 * v1 - ic1eq;
     ic2eq = 2.0 * v2 - ic2eq;
     
-    m0 * v0 + m1 * v1 + m2 * v2
+    v3 = (m0 * v0 + m1 * v1 + m2 * v2) - ic4eq;
+    v1 = a1 * ic3eq + a2 * v3;
+    v2 = ic4eq + a2 * ic3eq + a3 * v3;
+    ic3eq = 2.0 * v1 - ic3eq;
+    ic4eq = 2.0 * v2 - ic4eq;
+    
+    (m0 * v0 + m1 * v1 + m2 * v2)
   );
-
 
 function reset_linearSVF()
   global()
@@ -578,8 +596,7 @@ function eval_linearSVF_BR(v0)
   global()
   instance()
   (
-    s > 0 ? max(-1,min(1,s))
-    : max(-1,min(1,s*.25))
+    s > 0 ? min(1,s) : max(-1,s*.25)
   );
   
   function f_dg_svf(s)
@@ -688,6 +705,85 @@ function eval_linearSVF_BR(v0)
       
       (mo0 * x + mo1 * y1 + mo2 * y2) * 5
     );
+    
+  function f_g_svf_broken(s)
+  local()
+  global()
+  instance()
+  (
+    s > 0 ? min(1,s*4) : max(-1,s*.25)
+  );
+  
+  function f_dg_svf_broken(s)
+  local()
+  global()
+  instance()
+  (
+    s > 0 ? 4 - 4 * (abs(s)>.25)
+    : .25 - .25 * (abs(s)>4)
+  );    
+    
+  function tanh_broken(x)
+  local(m)
+  global()
+  instance()
+  (
+    m = x > 0 ? 17 : 3;
+    ((2/(1+exp(-2*x*m)) - 1)) / m
+  );    
+    
+  function eval_SVF_nonlin_broken(x)
+    global(epsilon, maxiter_svf)
+    local(iter, res,
+          fb, c1, c2, sig,
+          a, b, c, norm,
+          f1, f2, as,
+          svf_cap_c1, svf_cap_c2, fb_nl,
+          svf_cap_deriv_c1, svf_cap_deriv_c2)
+    instance(i, y1, y2, d0, d1, d2, h, h2, k, y1d1, hh, k2h, denom,
+             mo0, mo1, mo2)
+    (
+      iter = 0;
+      x *= .05;
+      
+      // First guess based on linear system
+      y1 = (d0*h - d1*hh - d1*k2h + d1 - d2*h2 + h*x) * denom;
+      y2 = (d0*hh + d1*h2 - d2*hh + d2*k2h + d2 + hh*x) * denom;
+      
+      while(
+        iter += 1;
+        
+        /* Basic SVF */
+        y1d1 = y1 + d1;
+        fb = 2.0 * k * y1d1;
+        
+        fb_nl = f_g_svf_broken(fb);
+        c1 = x + d0 - (y2 + d2) - fb_nl;
+
+        svf_cap_c1 = tanh_broken(c1);
+        svf_cap_c2 = tanh_broken(y1d1);
+        f1 = y1 - d1 - h * svf_cap_c1;
+        f2 = y2 - d2 - h * svf_cap_c2;
+        res = abs(f1) + abs(f2);
+        svf_cap_deriv_c1 = (1.0 - svf_cap_c1 * svf_cap_c1);
+        svf_cap_deriv_c2 = (1.0 - svf_cap_c2 * svf_cap_c2);        
+        
+        a = 1.0 + k2h * svf_cap_deriv_c1 * f_dg_svf_broken(fb);
+        b = h * svf_cap_deriv_c1;
+        c = -h * svf_cap_deriv_c2;
+        
+        norm = 1.0 / ( a - b*c );
+        y1 = y1 - ( f1 - b*f2 ) * norm;
+        y2 = y2 - ( a*f2 - c*f1 ) * norm;
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      d0 = x;
+      d1 = y1;
+      d2 = y2;
+      
+      (mo0 * x + mo1 * y1 + mo2 * y2) * 5
+    );    
   
   function eval_SVF_nonlin_incorrect(x)
     global(epsilon, maxiter_svf, oversampling)
@@ -1398,6 +1494,23 @@ function eval_linearSVF_BR(v0)
     );
   );  
   
+ function processSample_broken(s, choice)
+ local()
+ instance(BP, HP, BR, LP)
+ global()
+  (
+    (choice == 1) ? (
+      BP.eval_MS20_nonlinBP_tanh_asym(s)  
+    ) : (choice == 2) ? (
+      HP.eval_MS20_nonlinHP_tanh_asym(s)
+    ) : (choice == 3) ? (
+      BR.eval_MS20_nonlinBR_tanh_asym(s)
+    ) : (
+      // LP is last and first
+      LP.eval_MS20_nonlin_tanh_asym(s)
+    );
+  );    
+  
 function init_rectpeak(freq, res, morph)
   global()
   local(lhf)
@@ -1576,7 +1689,7 @@ instance(
   filter_choiceL, frac_morphL, i_morphL,
   filter_choiceR, frac_morphR, i_morphR,
 )
-global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf)
+global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf, safety_limit_svf2)
 (
   filter_type == 0 ? (
     L.init_linearSVF_all(sliderCutoffL, sliderReso, sliderMorphL);
@@ -1599,10 +1712,6 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, 
   ) : ( filter_type == 2 ) ? (
     L.init_linearSVF_all(sliderCutoffL, sliderReso, sliderMorphL);
     R.init_linearSVF_all(sliderCutoffR, sliderReso, sliderMorphR);
-    L2.a1 = L.a1; L2.a2 = L.a2; L2.a3 = L.a3;
-    L2.m0 = L.m0; L2.m1 = L.m1; L2.m2 = L.m2;
-    R2.a1 = R.a1; R2.a2 = R.a2; R2.a3 = R.a3;
-    R2.m0 = R.m0; R2.m1 = R.m1; R2.m2 = R.m2;
   ) : ( filter_type == 3 ) ? (
     sliderCutoffL = sliderCutoffL > current_safety_moog ? current_safety_moog : sliderCutoffL;
     sliderCutoffR = sliderCutoffR > current_safety_moog ? current_safety_moog : sliderCutoffR;
@@ -1672,9 +1781,19 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, 
   ) : ( filter_type == 15 ) ? (
     L.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
     R.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
-  ): ( filter_type == 16 ) ? (
+  ) : ( filter_type == 16 ) ? (
     L.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
     R.init_steiner(sliderCutoffL, sliderReso, sliderMorphL);
+  ) : ( filter_type == 17 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_svf2 ? safety_limit_svf2 : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_svf2 ? safety_limit_svf2 : sliderCutoffR;
+    );
+    sliderReso *= .975;
+    L2.init_linearSVF_all(sliderCutoffL, sliderReso, sliderMorphL);
+    R2.init_linearSVF_all(sliderCutoffR, sliderReso, sliderMorphR);
+    L.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
+    R.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
   );
   
   filter_choiceL = floor(sliderMorphL*4);
@@ -1706,8 +1825,8 @@ global(ssl, ssr, epsilon)
     frac_morphL > epsilon ? ssl += L.processSample_ms20(csl, filter_choiceL + 1) * frac_morphL;
     frac_morphL > epsilon ? ssr += R.processSample_ms20(csr, filter_choiceR + 1) * frac_morphR;
   ) : ( filter_type == 2 ) ? (
-    ssl = L.eval_linearSVF_All(L2.eval_linearSVF_All(ssl));
-    ssr = R.eval_linearSVF_All(R2.eval_linearSVF_All(ssr));
+    ssl = L.eval_linearSVF_All4p(ssl);
+    ssr = R.eval_linearSVF_All4p(ssr);
   ) : ( filter_type == 3 ) ? (
     ssl = L.moog.mix_moog(ssl, filter_choiceL, frac_morphL);
     ssr = R.moog.mix_moog(ssr, filter_choiceR, frac_morphR);
@@ -1754,6 +1873,9 @@ global(ssl, ssr, epsilon)
   ) : ( filter_type == 16 ) ? (
     ssl = L.eval_steiner_asym(ssl);
     ssr = R.eval_steiner_asym(ssr);
+  ) : ( filter_type == 17 ) ? (
+    ssl = L.eval_SVF_nonlin_broken(L2.eval_linearSVF_All(ssl));
+    ssr = R.eval_SVF_nonlin_broken(R2.eval_linearSVF_All(ssr));
   );
 );
 
