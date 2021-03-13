@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.84
+version: 0.87
 author: Joep Vanlier
-changelog: Add glide time parameter (minimum=1ms to avoid clicks). Make sure pitch matched feedbacks are not affected by tempo.
+changelog: Updated presets. Added a few to demo the Karplus effects.
 license: MIT
 provides:  
   Reflectosaurus_Dependencies/*
@@ -81,7 +81,7 @@ slider39:FB8=0<0,1,.00000001>-Feedback 8
 slider40:FB9=0<0,1,.00000001>-Feedback 9
 slider41:FB10=0<0,1,.00000001>-Feedback 10
 slider42:FB11=0<0,1,.00000001>-Feedback 11
-slider43:dummy=0<0,1,1>-Dummy
+slider43:shine_slider=0<0,1,.0000001>-shine
 slider44:dummy=0<0,1,1>-Dummy
 slider45:dummy=0<0,1,1>-Dummy
 slider46:dummy=0<0,1,1>-Dummy
@@ -195,15 +195,16 @@ local()
 
 
 function timeToX(dtime)
-  global(mintime, maxtime, SyncMode)
-  local()
+  global(mintime, maxtime, SyncMode, freeNodes)
+  local(v)
   (
-    SyncMode && ( syncMode < 6 ) ? (
-      clamp( (dTime - minTime) / maxTime, 0, 1 );
+    v = SyncMode && ( syncMode < 6 ) ? (
+      (dTime - minTime) / maxTime;
     ) : (
-//        clamp( log2( ( dTime * 1024 ) / maxTime )/10, 0, 1 );
-      clamp((log2(dTime) - log2(minTime)) / (log2(maxTime) - log2(minTime)), 0, 1)
+      (log2(dTime) - log2(minTime)) / (log2(maxTime) - log2(minTime));
     );
+    
+    !freeNodes ? clamp(v, 0, 1) : v;
   );
 
 // Input for this function is half divided by the dtime (the frequency)
@@ -942,13 +943,13 @@ function yToVol(y)
   
   function updateNode()
   local(newdtime, current_dtime, dTimeOffset)
-  global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha, pitchMod)
+  global(HQ, srate, MAX_MOVE, globalFeedback, update_alpha, inv_update_alpha, pitchMod, freeNodes)
   instance(hq_active, fbc, diff, buffer, tx, x, y, dtime, ctime, timeOffset, activevol, Gain, invol, invollast, oldvol, vol, pan, panlast, lPanTerm, rPanTerm, lpl, hpl, lpr, hpr, lpf, hpf, llpf, lhpf, fb, fbcoeff, xlast, ylast, fblast, olddtime, mute, solo, flutter,
            lfo, lfoAdvanceStep, lfoDepthFactor, lfoTime, lpfResonance, llreso, lpfActive, lflutter, fbslast, feedbackSign, pitch, pitchTracking,
            isReverb, xSmoothed, lastfb)
   (
     y > 1 ? y = 1;
-    x > 1 ? x = 1;
+    !freeNodes ? ( x > 1 ? x = 1; );
     y < 0 ? y = 0;
     x < 0 ? x = 0;
     
@@ -1005,12 +1006,13 @@ POSITION_LOC = 10;
 FB_LOC = 32;
 function updateFromSlider()
   local()
-  global(slider, POSITION_LOC, FB_LOC)
-  instance(y, dtime, fb, me)
+  global(slider, shine_slider, POSITION_LOC, FB_LOC)
+  instance(y, dtime, fb, me, shine)
   (
     dtime = xToTime( slider(POSITION_LOC + (me-1)*2) );
     y = slider(POSITION_LOC + (me-1)*2 + 1);
     fb = slider(FB_LOC + (me-1));
+    shine = shine_slider;
   );
   
 function updateToSlider()
@@ -1529,7 +1531,7 @@ function initNode(_memloc, _dtime, _y, idx, off, pitchbuffer_location, fftmem1, 
     
     granulator.granulator_init();
     
-    !dtime ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; mute = off; );
+    !dtime && !y ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; mute = off; );
     !grainLength ? ( grain = 0; grainLength = 60; grainJitter = .15; grainOverlap = .66; grainSpeed = 1; grainPanSpread = .5; grainSpeedSpread = .05; );
   );
 
@@ -1558,7 +1560,7 @@ function randomizeGrain()
 
 function serializeNode()
   local()
-  global(readread, SyncMode, quickSwitch)
+  global(readread, SyncMode, quickSwitch, shine_slider)
   instance( x, y, active,
             dtime, temposync, fb, lpf, hpf, lpfResonance, widen, sat, pan, variance, pingpong, rectify, Gain, saturationGain, midside,
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
@@ -1611,6 +1613,7 @@ function serializeNode()
     file_var( 0, saturationGain );    
     file_var( 0, midside );
     file_var( 0, shine );
+    shine_slider = shine;
     file_var( 0, warmth );
     file_var( 0, flutter );
     
@@ -2468,6 +2471,7 @@ file_var(0, duckingKnee);
 file_var(0, pdcToggle);
 file_var(0, shift_pitch);
 file_var(0, pitch);
+file_var(0, freeNodes);
 
 // Some extra padding to make sure that future variables start at zero.
 memset(0,0,100);
@@ -3265,7 +3269,7 @@ hideHints == 0 ? (
   printRight("Ctrl + Shift - HPF\n");
   printRight("Shift + Alt - Add Send\n");
   printRight("LMBx2 on Send - Invert\n");
-  printRight("Alt - Panning\n");
+  printRight("Hold Alt + Drag Node - Panning\n");
   printRight("M - Mute\n");
   printRight("S - Solo\n");
   printRight("P - Ping pong\n");
@@ -3600,7 +3604,7 @@ function reverbCtrls(cX, cY)
   local(gain_string)
   global(widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
          mouse_x, mouse_y, mouse_cap,
-         scaling, knobSize, buttonSize, knobSpacing, panelY, panelPad, panelHeight)
+         scaling, knobSize, buttonSize, knobSpacing, panelY, panelPad, panelHeight, freeNodes)
   (
     gain_string = 101;
     
@@ -3611,7 +3615,7 @@ function reverbCtrls(cX, cY)
     timeKnob.label = 0;
     timeKnob.drawKnob(cX, cY, knobSize, "Size", "Tweak reverb size.", 0);
     timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
-      x = clamp(timeKnob.value,0,1);
+      x = !freeNodes ? clamp(timeKnob.value,0,1) : timeKnob.value;
       dtime = xToTime(x);
       this.updateToSliderRec();
     );
@@ -3646,7 +3650,7 @@ function delayCtrls(cX, cY)
   local(gain_string)
   global(widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a,
          mouse_x, mouse_y, mouse_cap,
-         scaling, knobSize, buttonSize, knobSpacing, panelY, panelPad, panelHeight)
+         scaling, knobSize, buttonSize, knobSpacing, panelY, panelPad, panelHeight, freeNodes)
   (
     gain_string = 101;
     
@@ -3668,7 +3672,7 @@ function delayCtrls(cX, cY)
     
     timeKnob.drawKnob(cX, cY, knobSize, "Delay Time", "Delay time\n\nControls the distance between each delay.", 0);
     timeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.15) ? (
-      x = clamp(timeKnob.value,0,1);
+      x = !freeNodes ? clamp(timeKnob.value, 0, 1) : timeKnob.value;
       dtime = xToTime(x);
       
       mouse_cap & 2 > 0 ? (
@@ -4019,8 +4023,8 @@ function processSettings(cX, cY)
          widget_r, widget_g, widget_b, widget_a,
          toggle_r, toggle_g, toggle_b, toggle_a,
          knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a,
-         panelY, panelPad, panelHeight, compensate_pdc)
-  instance(dcCorrectionToggle, sendSaturationToggle, pdcToggle)
+         panelY, panelPad, panelHeight, compensate_pdc, freeNodes)
+  instance(dcCorrectionToggle, sendSaturationToggle, pdcToggle, clampToggle)
   (
     gfx_set(edge_r, edge_g, edge_b, edge_a);
     x_start = cX - 2*(1+scaling);
@@ -4030,16 +4034,20 @@ function processSettings(cX, cY)
     drawPanel("SETTINGS", x_start - panelPad, y_start - panelPad, width + panelPad, panelHeight);
 
     dcCorrectionToggle.label = "DC Correction";
-    dcCorrectionToggle.drawToggle(cX+1.9*(1+scaling), cy - knobSpacing, buttonSize, buttonSize, dc_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal.\n\nDisable when not needed as it costs CPU.");
+    dcCorrectionToggle.drawToggle(cX+1.9*(1+scaling), cy - 1.2*knobSpacing, buttonSize, buttonSize, dc_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal.\n\nDisable when not needed as it costs CPU.");
     dc_correction = dcCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     sendSaturationToggle.label = "Saturate sends";
-    sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + .5*buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.\n\nDisable when not needed as it costs CPU.");
+    sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy - 1.2*buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.\n\nDisable when not needed as it costs CPU.");
     sendSaturation = sendSaturationToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
     pdcToggle.label = "Pitch PDC";
-    pdcToggle.drawToggle(cX+1.9*(1+scaling), cy + 4.5*buttonSize, buttonSize, buttonSize, compensate_pdc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch delay compensation.\n\nWhen enabled, the plugin reports an\napproximate pdc for the global pitch\nshifting.");
+    pdcToggle.drawToggle(cX+1.9*(1+scaling), cy + 1.9*buttonSize, buttonSize, buttonSize, compensate_pdc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch delay compensation.\n\nWhen enabled, the plugin reports an\napproximate pdc for the global pitch\nshifting.");
     compensate_pdc = pdcToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    clampToggle.label = "Free nodes";
+    clampToggle.drawToggle(cX+1.9*(1+scaling), cy + 5.2*buttonSize, buttonSize, buttonSize, freeNodes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "When enabled, nodes are no longer clamped to the\nvisible X-range, meaning they can be offscreen\nand require a different timing view to see.");
+    freeNodes = clampToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     /*sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + knobSpacing + buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.");
     gfx_x = cX + 2*buttonSize + 1;
