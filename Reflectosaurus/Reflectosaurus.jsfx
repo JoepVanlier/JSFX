@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.87
+version: 0.89
 author: Joep Vanlier
-changelog: Updated presets. Added a few to demo the Karplus effects.
+changelog: Add option to add/remove nodes. This will hide them from view.
 license: MIT
 provides:  
   Reflectosaurus_Dependencies/*
@@ -1490,49 +1490,61 @@ function processVerbNode(l_in, r_in)
     
     level = .5*(abs(l)+abs(r))*play;
   );
-   
-function initNode(_memloc, _dtime, _y, idx, off, pitchbuffer_location, fftmem1, fftmem2)
-  local(transition_region, shifterBufferSize)
-  instance(mute, buffer, memloc, dtime,  y, fb, vol, invollast, pan, hpf, lpf, active, panlast, fblast, llpf, lhpf, me, lastL, lastR, lpl, lpr, hpl, hpr,
-           granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, flutterLpf,
-           octaver, octaver, lfoTime, shifter, lastfb, xSmoothed)
-  global(bufsize, srate)
-  (
-    me = idx;
-    memloc = _memloc;
-    buffer.initBuffer(memloc, memloc+bufsize-4);
-    buffer.resetBuffer();
-    lastL = 0;
-    lastR = 0;
-    
-    lastfb = -1;
-    xSmoothed = 0;
-    
-    transition_region = 1024;
-    shifterBufferSize = 4 * transition_region;
-    shifter.pitchShifter(1, pitchbuffer_location, shifterBufferSize, fftmem1, fftmem2, transition_region, 1);
-    
+
+function resetNode(_dtime, _y)
+instance(granulator, grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread,
+         flutterLpf, octaver, octaver, lfoTime,lastfb, xSmoothed,
+         buffer, mute,
+         panlast, fblast, llpf, lhpf, lastL, lastR,
+         dtime, y, fb, vol, invollast, pan, hpf, lpf,
+         active, rectify,
+         lpl, lpr, hpl, hpr,
+         )
+local()
+global(srate)
+(
     panlast = -9999;
     fblast = -9999;
     llpf = -9999;
     lhpf = -9999;
     invollast = 99999;     
-    lfoTime = 0;   
+    lfoTime = 0;
+    
+    lastL = 0;
+    lastR = 0;
+    lastfb = -1;
+    xSmoothed = 0;
     
     octaver.octaver_reset();
     
     /* Cleanly reset the nodes */
+    buffer.resetBuffer();
     lpl.reset_linearSVF();
     hpl.reset_linearSVF();
     lpr.reset_linearSVF();
     hpr.reset_linearSVF();
     flutterLpf.init_linearSVF_direct(8/srate, 0.999); /* Note that flutter gets updated every fourth sample, cutoff ~2 Hz */
     flutterLpf.reset_linearSVF();
-    
     granulator.granulator_init();
     
-    !dtime && !y ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; mute = off; );
+    !dtime && !y ? ( dtime = _dtime; y = _y; fb = 0.8; vol = 1.0; pan = 0.5; hpf = 0.0; lpf = 1.0; active = 1; mute = 0; rectify=0; );
     !grainLength ? ( grain = 0; grainLength = 60; grainJitter = .15; grainOverlap = .66; grainSpeed = 1; grainPanSpread = .5; grainSpeedSpread = .05; );
+);
+
+function initNode(_memloc, _dtime, _y, idx, off, pitchbuffer_location, fftmem1, fftmem2)
+  local(transition_region, shifterBufferSize)
+  instance(mute, buffer, memloc, me, shifter)
+  global(bufsize, srate)
+  (
+    me = idx;
+    memloc = _memloc;
+    buffer.initBuffer(memloc, memloc+bufsize-4);
+    
+    transition_region = 1024;
+    shifterBufferSize = 4 * transition_region;
+    shifter.pitchShifter(1, pitchbuffer_location, shifterBufferSize, fftmem1, fftmem2, transition_region, 1);
+
+    this.resetNode(_dtime, _y);
   );
 
 function initFFTNode(loc)
@@ -1566,7 +1578,7 @@ function serializeNode()
             mute, solo, play, shine, warmth, flutter, lfo, lfoDepth, lfoFrequency, feedbackSign,
             fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11,
             grain, grainLength, grainJitter, grainOverlap, grainSpeed, grainPanSpread, grainSpeedSpread, grainReverse, grainSizeVar,
-            ice, ice_panned, shift_pitch, pitch, pitchTracking, allpass, isReverb )
+            ice, ice_panned, shift_pitch, pitch, pitchTracking, allpass, isReverb, hidden )
   (
     ( file_avail(0) < 0 ) ? (
       this.updateFromSlider();
@@ -1631,10 +1643,11 @@ function serializeNode()
     file_var( 0, pitchTracking );
     file_var( 0, allpass );
     file_var( 0, isReverb );
+    file_var( 0, hidden );
     
     /* Memory to expand into when features are added */
-    memset(0, 0, 56);
-    file_mem(0, 0, 56); /* Reduce this by one when you want to add features */
+    memset(0, 0, 55);
+    file_mem(0, 0, 55); /* Reduce this by one when you want to add features */
   );
   
 connectorSize = 16;
@@ -1757,232 +1770,235 @@ function drawConnections(xmin, ymin, w, h)
 function draw(xmin, ymin, w, h, verb)
   local(adv, alpha, xl, yl, tf, logLevel, panSize, silent, radius, rectS, cr, cg, cb, fb, anim, scalefactor, tmp, xc, yc, xll, yll)
   global(gfx_a, gfx_x, gfx_y, render_time, scaling)
-  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass, isReverb, pitch)
+  instance(x, y, r, fbcoeff, lpf, hpf, dtime, level, pan, selected, play, mute, solo, pingpong, rectify, gain, grain, outer, mouse_over, allpass, isReverb, pitch, hidden, lasthidden)
   (
-    scalefactor = 1+scaling;
-    silent = max(0,1-play);
-    r = 4 * scalefactor;
-    alpha = 1.0;
-    tf = 100*dtime;
-    radius = .13*log(1.0+200*abs(fbcoeff));
-    
-    adv = min(0.99, radius);
-    xl = floor(xmin + x*w);
-    yl = floor(ymin + y*h);
-    
-    outer = 8+4.15*ceil(log(.2)/log(radius)) * scalefactor;    
-    
-    isReverb ? (
-      gfx_set(1,1,1,.6);
-      rectS = 1.95*outer;
-      gfx_line(xl-rectS, yl+.707*rectS-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
-      gfx_line(xl, yl-rectS-.1*rectS, xl-rectS, yl+.707*rectS-.1*rectS);
-      gfx_line(xl, yl-rectS-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
+    !hidden && (!lasthidden) ? (
+      scalefactor = 1+scaling;
+      silent = max(0,1-play);
+      r = 4 * scalefactor;
+      alpha = 1.0;
+      tf = 100*dtime;
+      radius = .13*log(1.0+200*abs(fbcoeff));
       
-      gfx_set(1,1,1,.2);
-      gfx_line(xl-rectS, yl+.707*rectS-.1*rectS, xl, yl-.1*rectS);
-      gfx_line(xl, yl-rectS-.1*rectS, xl, yl-.1*rectS);
-      gfx_line(xl, yl-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
-    );
+      adv = min(0.99, radius);
+      xl = floor(xmin + x*w);
+      yl = floor(ymin + y*h);
+      
+      outer = 8+4.15*ceil(log(.2)/log(radius)) * scalefactor;    
+      
+      isReverb ? (
+        gfx_set(1,1,1,.6);
+        rectS = 1.95*outer;
+        gfx_line(xl-rectS, yl+.707*rectS-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
+        gfx_line(xl, yl-rectS-.1*rectS, xl-rectS, yl+.707*rectS-.1*rectS);
+        gfx_line(xl, yl-rectS-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
         
-    
-    rectify ? (
-      rectS = outer-3;
-      gfx_set(1, 1, 1,.1);
-      rectS += 13;
-      gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
-    );
-    
-    grain ? (
-      gfx_set(1.6,0.2,1,1);
-      
-      rectS = 0;
-      loop(30,
-        gfx_circle(xl+2*outer*cos(time_precise()*rectS), yl+2*outer*sin(time_precise()*rectS), 2);
-        rectS += $pi/60;
+        gfx_set(1,1,1,.2);
+        gfx_line(xl-rectS, yl+.707*rectS-.1*rectS, xl, yl-.1*rectS);
+        gfx_line(xl, yl-rectS-.1*rectS, xl, yl-.1*rectS);
+        gfx_line(xl, yl-.1*rectS, xl+rectS, yl+.707*rectS-.1*rectS);
       );
-    );
-    
-    cr = .8;
-    cg = .8;
-    cb = .9;
-    
-    panSize = 7 * (1+scaling);
-    gfx_set(cr*.5,cg*.5,cb*.5,.8 - .7*silent);
-    gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize+2, 1);
-    gfx_set(cr,cg,cb,1 - .7*silent);
-    gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);    
-    
-    pingpong ? (
-      gfx_set(cr*.2,cg*.2,cb*.2,.8 - .7*silent);
-      gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize+2, 1);
-      gfx_set(cr,cg,cb,.4 - .7*silent);
-      gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize, 1);    
-    );
-    
-    gfx_set(0,0,.3,.95);
-    gfx_circle(xl, yl, outer, 1, 1);    
-    
-    gfx_set(0.2,0.25,0.1,.4);
-    gfx_circle(xl, yl, outer, 0, 0);
-    gfx_circle(xl, yl, outer+.5, 1, 0);
-    gfx_circle(xl, yl, outer+1, 0, 1);
-    
-    verb ? (
-      gfx_set(1,1,1,.2);
-      rectS = 1.1*outer;
-      panSize = 1.8*outer;
-      gfx_line(xl-rectS, yl-rectS, xl+rectS, yl-rectS);
-      gfx_line(xl-rectS, yl+rectS, xl+rectS, yl+rectS);
-      gfx_line(xl-rectS, yl-rectS, xl-rectS, yl+rectS);
-      gfx_line(xl+rectS, yl-rectS, xl+rectS, yl+rectS);
-    
-      gfx_line(xl-rectS, yl-rectS, xl-panSize, yl-panSize);
-      gfx_line(xl+rectS, yl+rectS, xl+panSize, yl+panSize);
-      gfx_line(xl-rectS, yl+rectS, xl-panSize, yl+panSize);
-      gfx_line(xl+rectS, yl-rectS, xl+panSize, yl-panSize);
+          
       
-      gfx_set(1,1,1,.6);
-      rectS = panSize;
-      gfx_line(xl-rectS, yl-rectS, xl+rectS, yl-rectS);
-      gfx_line(xl-rectS, yl+rectS, xl+rectS, yl+rectS);
-      gfx_line(xl-rectS, yl-rectS, xl-rectS, yl+rectS);
-      gfx_line(xl+rectS, yl-rectS, xl+rectS, yl+rectS);
-    );
-    
-    mute ? (
-      gfx_set(0.7,0,.1,.95);
-      tmp = outer + 1*(1+scaling);
-      loop(5 * (1+scaling),
-        gfx_circle(xl, yl, tmp, 0, 1);
-        tmp += .5;
+      rectify ? (
+        rectS = outer-3;
+        gfx_set(1, 1, 1,.1);
+        rectS += 13;
+        gfx_rect(xl-rectS, yl-rectS, 2*rectS+2, 2*rectS+2);
       );
-    );
-    
-    selected ? (
-      gfx_set(0.45,0.4,.7,1);
+      
+      grain ? (
+        gfx_set(1.6,0.2,1,1);
+        
+        rectS = 0;
+        loop(30,
+          gfx_circle(xl+2*outer*cos(time_precise()*rectS), yl+2*outer*sin(time_precise()*rectS), 2);
+          rectS += $pi/60;
+        );
+      );
+      
+      cr = .8;
+      cg = .8;
+      cb = .9;
+      
+      panSize = 7 * (1+scaling);
+      gfx_set(cr*.5,cg*.5,cb*.5,.8 - .7*silent);
+      gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize+2, 1);
+      gfx_set(cr,cg,cb,1 - .7*silent);
+      gfx_circle(xl-outer*cos($pi*pan), yl-outer*sin($pi*pan), panSize, 1);    
+      
+      pingpong ? (
+        gfx_set(cr*.2,cg*.2,cb*.2,.8 - .7*silent);
+        gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize+2, 1);
+        gfx_set(cr,cg,cb,.4 - .7*silent);
+        gfx_circle(xl-outer*cos($pi*(1-pan)), yl-outer*sin($pi*(1-pan)), panSize, 1);    
+      );
+      
+      gfx_set(0,0,.3,.95);
+      gfx_circle(xl, yl, outer, 1, 1);    
+      
+      gfx_set(0.2,0.25,0.1,.4);
       gfx_circle(xl, yl, outer, 0, 0);
       gfx_circle(xl, yl, outer+.5, 1, 0);
       gfx_circle(xl, yl, outer+1, 0, 1);
-  
-      anim = 3*render_time-floor(3*render_time);
-      rectS = (1.1+.35*anim)*outer;
-      loop(2 * (1+scaling),
-          
-        gfx_set(.4, .3, .8, .7-.7*anim);
+      
+      verb ? (
+        gfx_set(1,1,1,.2);
+        rectS = 1.1*outer;
+        panSize = 1.8*outer;
         gfx_line(xl-rectS, yl-rectS, xl+rectS, yl-rectS);
         gfx_line(xl-rectS, yl+rectS, xl+rectS, yl+rectS);
         gfx_line(xl-rectS, yl-rectS, xl-rectS, yl+rectS);
         gfx_line(xl+rectS, yl-rectS, xl+rectS, yl+rectS);
-        rectS += 1;
+      
+        gfx_line(xl-rectS, yl-rectS, xl-panSize, yl-panSize);
+        gfx_line(xl+rectS, yl+rectS, xl+panSize, yl+panSize);
+        gfx_line(xl-rectS, yl+rectS, xl-panSize, yl+panSize);
+        gfx_line(xl+rectS, yl-rectS, xl+panSize, yl-panSize);
+        
+        gfx_set(1,1,1,.6);
+        rectS = panSize;
+        gfx_line(xl-rectS, yl-rectS, xl+rectS, yl-rectS);
+        gfx_line(xl-rectS, yl+rectS, xl+rectS, yl+rectS);
+        gfx_line(xl-rectS, yl-rectS, xl-rectS, yl+rectS);
+        gfx_line(xl+rectS, yl-rectS, xl+rectS, yl+rectS);
       );
-    ) : ( mouse_over == 1 ) ? (
-      anim = .5 + .5 * sin(render_time*8);
-      gfx_set(0.45,0.4,.7,.1 + .5*anim);
-      gfx_circle(xl, yl, outer, 0, 0);
-      gfx_circle(xl, yl, outer+.5, 1, 0);
-      gfx_circle(xl, yl, outer+1, 0, 1);
-    );
-    
-    solo ? (
-      gfx_set(0,1,.3,.95);
-      tmp = outer + 1*(1+scaling);
-      loop(5 * (1+scaling),
-        gfx_circle(xl, yl, tmp, 0, 1);
-        tmp += .5;
+      
+      mute ? (
+        gfx_set(0.7,0,.1,.95);
+        tmp = outer + 1*(1+scaling);
+        loop(5 * (1+scaling),
+          gfx_circle(xl, yl, tmp, 0, 1);
+          tmp += .5;
+        );
       );
-    );    
+      
+      selected ? (
+        gfx_set(0.45,0.4,.7,1);
+        gfx_circle(xl, yl, outer, 0, 0);
+        gfx_circle(xl, yl, outer+.5, 1, 0);
+        gfx_circle(xl, yl, outer+1, 0, 1);
     
-    gfx_set(cr, cg, cb, 1);
-    
-    gfx_a = alpha;
-    tmp = floor(r-.5);
-    loop(4 * (1+scaling),  
-      gfx_arc(xl, yl, tmp, - $pi, 2*(1-gain)*$pi - $pi, 1);
-      tmp += .5;
-      gfx_a *= .8;
-    );
-    
-    r += 4*scalefactor;
-    alpha *= adv;
-    while(
+        anim = 3*render_time-floor(3*render_time);
+        rectS = (1.1+.35*anim)*outer;
+        loop(2 * (1+scaling),
+            
+          gfx_set(.4, .3, .8, .7-.7*anim);
+          gfx_line(xl-rectS, yl-rectS, xl+rectS, yl-rectS);
+          gfx_line(xl-rectS, yl+rectS, xl+rectS, yl+rectS);
+          gfx_line(xl-rectS, yl-rectS, xl-rectS, yl+rectS);
+          gfx_line(xl+rectS, yl-rectS, xl+rectS, yl+rectS);
+          rectS += 1;
+        );
+      ) : ( mouse_over == 1 ) ? (
+        anim = .5 + .5 * sin(render_time*8);
+        gfx_set(0.45,0.4,.7,.1 + .5*anim);
+        gfx_circle(xl, yl, outer, 0, 0);
+        gfx_circle(xl, yl, outer+.5, 1, 0);
+        gfx_circle(xl, yl, outer+1, 0, 1);
+      );
+      
+      solo ? (
+        gfx_set(0,1,.3,.95);
+        tmp = outer + 1*(1+scaling);
+        loop(5 * (1+scaling),
+          gfx_circle(xl, yl, tmp, 0, 1);
+          tmp += .5;
+        );
+      );    
+      
+      gfx_set(cr, cg, cb, 1);
+      
       gfx_a = alpha;
-      gfx_circle(xl, yl, r, 0, 0);
-      gfx_a = .5*alpha;
-      gfx_circle(xl, yl, r+1, 0, 1);
-      gfx_circle(xl, yl, r-1, 0, 1);
+      tmp = floor(r-.5);
+      loop(4 * (1+scaling),  
+        gfx_arc(xl, yl, tmp, - $pi, 2*(1-gain)*$pi - $pi, 1);
+        tmp += .5;
+        gfx_a *= .8;
+      );
       
       r += 4*scalefactor;
       alpha *= adv;
-      alpha>.2
-    );
-    
-    gfx_a = 1;
-    
-    r -= 5*scaling;
-    hpf < lpf ? (
-      loop(5*scalefactor,
-        gfx_arc(xl, yl, r, 2*lpf*$pi - $pi, 2*hpf*$pi - $pi, 1);
-        r += .5;
+      while(
+        gfx_a = alpha;
+        gfx_circle(xl, yl, r, 0, 0);
+        gfx_a = .5*alpha;
+        gfx_circle(xl, yl, r+1, 0, 1);
+        gfx_circle(xl, yl, r-1, 0, 1);
+        
+        r += 4*scalefactor;
+        alpha *= adv;
+        alpha>.2
       );
-    );
-    
-    logLevel = log(4000*level-2)*scalefactor;
-    silent ? logLevel = 0;
-    
-    fbcoeff < 0 ? (
-      xc = xl + r;
-      yc = yl - r;
-      gfx_line(xc - 4, yc, xc + 4, yc, 1);
-      gfx_line(xc - 4, yc+1, xc + 4, yc+1, 1);
-      gfx_line(xc - 4, yc-1, xc + 4, yc-1, 1);
-    );
-    
-    allpass ? (
-      xc = xl - r;
-      yc = yl - r;
-      //gfx_printf("A");
-      gfx_line(xc - 4, yc, xc, yc-4, 1);
-      gfx_line(xc - 4, yc+1, xc, yc-3, 1);
-      gfx_line(xc - 4, yc-1, xc, yc-5, 1);
-      gfx_line(xc, yc-4, xc+4, yc, 1);
-      gfx_line(xc, yc-3, xc+4, yc+1, 1);
-      gfx_line(xc, yc-5, xc+4, yc-1, 1);
-    );
-    
-    
-    pitch ? (
-      xll = xc = xl - r - 6;
-      yc = yl + r;
-      yl = yll = 0;
-      tmp = sin(4*render_time);
-      tmp = .6 * (1 + tmp*tmp*tmp*tmp);
-      loop(10,
-        xc += 1;
-        yl += tmp;
-        gfx_line(xll, yc + 4*sin(yll), xc, yc + 4*sin(yl));
-        gfx_line(xll, yc + 4*sin(yll)+1, xc, yc + 4*sin(yl)+1);
-        xll = xc;
-        yll = yl;
+      
+      gfx_a = 1;
+      
+      r -= 5*scaling;
+      hpf < lpf ? (
+        loop(5*scalefactor,
+          gfx_arc(xl, yl, r, 2*lpf*$pi - $pi, 2*hpf*$pi - $pi, 1);
+          r += .5;
+        );
       );
+      
+      logLevel = log(4000*level-2)*scalefactor;
+      silent ? logLevel = 0;
+      
+      fbcoeff < 0 ? (
+        xc = xl + r;
+        yc = yl - r;
+        gfx_line(xc - 4, yc, xc + 4, yc, 1);
+        gfx_line(xc - 4, yc+1, xc + 4, yc+1, 1);
+        gfx_line(xc - 4, yc-1, xc + 4, yc-1, 1);
+      );
+      
+      allpass ? (
+        xc = xl - r;
+        yc = yl - r;
+        //gfx_printf("A");
+        gfx_line(xc - 4, yc, xc, yc-4, 1);
+        gfx_line(xc - 4, yc+1, xc, yc-3, 1);
+        gfx_line(xc - 4, yc-1, xc, yc-5, 1);
+        gfx_line(xc, yc-4, xc+4, yc, 1);
+        gfx_line(xc, yc-3, xc+4, yc+1, 1);
+        gfx_line(xc, yc-5, xc+4, yc-1, 1);
+      );
+      
+      
+      pitch ? (
+        xll = xc = xl - r - 6;
+        yc = yl + r;
+        yl = yll = 0;
+        tmp = sin(4*render_time);
+        tmp = .6 * (1 + tmp*tmp*tmp*tmp);
+        loop(10,
+          xc += 1;
+          yl += tmp;
+          gfx_line(xll, yc + 4*sin(yll), xc, yc + 4*sin(yl));
+          gfx_line(xll, yc + 4*sin(yll)+1, xc, yc + 4*sin(yl)+1);
+          xll = xc;
+          yll = yl;
+        );
+      );
+      
+      gfx_set(1, 1, 1, .03);
+      gfx_circle(xl, yl, logLevel*5, 1, 1);
+      
+      gfx_set(1, 1, 1, .03);
+      gfx_circle(xl, yl, logLevel*6, 1, 1);
+      
+      gfx_set(1, 1, 1, .03);
+      gfx_circle(xl, yl, logLevel*8, 1, 1);    
+      
+      silent ? (
+        gfx_set(0.0,0,.0,.7);
+        tmp = outer + 1+scaling;
+        gfx_circle(xl, yl, tmp, 1, 1);
+      );
+      
+      r = r*r;
     );
-    
-    gfx_set(1, 1, 1, .03);
-    gfx_circle(xl, yl, logLevel*5, 1, 1);
-    
-    gfx_set(1, 1, 1, .03);
-    gfx_circle(xl, yl, logLevel*6, 1, 1);
-    
-    gfx_set(1, 1, 1, .03);
-    gfx_circle(xl, yl, logLevel*8, 1, 1);    
-    
-    silent ? (
-      gfx_set(0.0,0,.0,.7);
-      tmp = outer + 1+scaling;
-      gfx_circle(xl, yl, tmp, 1, 1);
-    );
-    
-    r = r*r;
+    lasthidden = hidden;
   );
 
 function clamp(x, lb, ub)
@@ -3143,8 +3159,41 @@ gfx_rect(0, w1y+w1h+1, gfx_w, gfx_h-w1h);
 
 drawWindowText(w1x, w1y, w1w, w1h);
 
+function killNode()
+instance(mute, hidden, fromNode1, fromNode2, fromNode3, fromNode4, fromNode5, fromNode6, fromNode7, fromNode8, fromNode9, fromNode10, fromNode11)
+(
+  fromNode1 = fromNode2 = fromNode3 = fromNode4 = fromNode5 = fromNode6 = fromNode7 = fromNode8 = fromNode9 = fromNode10 = fromNode11 = 0.0;
+  mute = 1;
+  hidden = 1;
+);
+
+lastchar == 6579564 ? (
+  node1.selected  ? ( node1.killNode();  node2.fromNode1  = node3.fromNode1  = node4.fromNode1  = node5.fromNode1  = node6.fromNode1  = node7.fromNode1  = node8.fromNode1  = node9.fromNode1  = node10.fromNode1  = node11.fromNode1  = 0; );
+  node2.selected  ? ( node2.killNode();  node1.fromNode2  = node3.fromNode2  = node4.fromNode2  = node5.fromNode2  = node6.fromNode2  = node7.fromNode2  = node8.fromNode2  = node9.fromNode2  = node10.fromNode2  = node11.fromNode2  = 0; );
+  node3.selected  ? ( node3.killNode();  node2.fromNode3  = node1.fromNode3  = node4.fromNode3  = node5.fromNode3  = node6.fromNode3  = node7.fromNode3  = node8.fromNode3  = node9.fromNode3  = node10.fromNode3  = node11.fromNode3  = 0; );
+  node4.selected  ? ( node4.killNode();  node2.fromNode4  = node3.fromNode4  = node1.fromNode4  = node5.fromNode4  = node6.fromNode4  = node7.fromNode4  = node8.fromNode4  = node9.fromNode4  = node10.fromNode4  = node11.fromNode4  = 0; );
+  node5.selected  ? ( node5.killNode();  node2.fromNode5  = node3.fromNode5  = node4.fromNode5  = node1.fromNode5  = node6.fromNode5  = node7.fromNode5  = node8.fromNode5  = node9.fromNode5  = node10.fromNode5  = node11.fromNode5  = 0; );
+  node6.selected  ? ( node6.killNode();  node2.fromNode6  = node3.fromNode6  = node4.fromNode6  = node5.fromNode6  = node1.fromNode6  = node7.fromNode6  = node8.fromNode6  = node9.fromNode6  = node10.fromNode6  = node11.fromNode6  = 0; );
+  node7.selected  ? ( node7.killNode();  node2.fromNode7  = node3.fromNode7  = node4.fromNode7  = node5.fromNode7  = node6.fromNode7  = node1.fromNode7  = node8.fromNode7  = node9.fromNode7  = node10.fromNode7  = node11.fromNode7  = 0; );
+  node8.selected  ? ( node8.killNode();  node2.fromNode8  = node3.fromNode8  = node4.fromNode8  = node5.fromNode8  = node6.fromNode8  = node7.fromNode8  = node1.fromNode8  = node9.fromNode8  = node10.fromNode8  = node11.fromNode8  = 0; );
+  node9.selected  ? ( node9.killNode();  node2.fromNode9  = node3.fromNode9  = node4.fromNode9  = node5.fromNode9  = node6.fromNode9  = node7.fromNode9  = node8.fromNode9  = node1.fromNode9  = node10.fromNode9  = node11.fromNode9  = 0; );
+  node10.selected ? ( node10.killNode(); node2.fromNode10 = node3.fromNode10 = node4.fromNode10 = node5.fromNode10 = node6.fromNode10 = node7.fromNode10 = node8.fromNode10 = node9.fromNode10 = node1.fromNode10  = node11.fromNode10 = 0; );
+);
+
+function createNode()
+instance(hidden, mute, x, y, dtime, y, grainLength)
+local()
+global(mouse_x, mouse_y, w1x, w1y, w1w, w1h)
+(
+  hidden = 0;
+  dtime = y = grainLength = 0;
+  this.resetNode(xToTime((mouse_x - w1x) / w1w), (mouse_y - w1y) / w1h);
+);
+
 lastleft = left;
+lastright = right;
 left = mouse_cap & 1;
+right = mouse_cap & 2;
 
 ((left > 0) && (lastleft == 0)) ? leftTime = time_precise();
 ddtime  = ( leftTime - lastLeftTime );
@@ -3218,6 +3267,18 @@ comboboxOpen == 0 ? (
           multiSelect = 1;
           refx = mouse_x;
           refy = mouse_y;
+        ) : ( ( lastright == 0 ) && ( right == 2 ) ) ? (
+          // Any nodes free?
+          (node1.hidden == 1) ? ( node1.createNode(); 
+          ) : ( node2.hidden == 1 ) ? ( node2.createNode(); 
+          ) : ( node3.hidden == 1 ) ? ( node3.createNode(); 
+          ) : ( node4.hidden == 1 ) ? ( node4.createNode(); 
+          ) : ( node5.hidden == 1 ) ? ( node5.createNode(); 
+          ) : ( node6.hidden == 1 ) ? ( node6.createNode(); 
+          ) : ( node7.hidden == 1 ) ? ( node7.createNode(); 
+          ) : ( node8.hidden == 1 ) ? ( node8.createNode(); 
+          ) : ( node9.hidden == 1 ) ? ( node9.createNode(); 
+          ) : ( node10.hidden == 1 ) ? ( node10.createNode(); );
         );
       );
     );
