@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.90
+version: 0.92
 author: Joep Vanlier
-changelog: Add randomize button
+changelog: Allow note deletion. Add low pass gate.
 license: MIT
 provides:  
   Reflectosaurus_Dependencies/*
@@ -106,11 +106,23 @@ slider63:Inertia=50<0,500,.001>-Inertia
 slider64:WetGain=0<-32,32,.001>-Gain
 
 @init
-nShapers = 10;
+nShapers = 11;
 allow_updates = 1;
 gfx_ext_retina = 1;
 quickSwitch = 1;
 UPDATE_INTERVAL = 4;
+
+  function init_lpg_time_constants()
+  local(lpg_attack, lpg_decay)
+  global(lpg_k_atk, lpg_k_decay, srate, lpg_srate_norm, lpg_update_rate)
+    (
+      lpg_attack = 9.22;
+      lpg_decay = 110.666667;
+      lpg_k_atk = 1000 / lpg_attack / srate;
+      lpg_k_decay = 1000 / lpg_decay / srate;
+      lpg_srate_norm = 2.0 / srate;
+      lpg_update_rate = 8;
+    );
 
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
   function init_HP6(freq)
@@ -797,7 +809,7 @@ function octaver_reset()
     this.svf2.reset_linearSVF();
     this.svf3.reset_linearSVF();
     this.svf4.reset_linearSVF();
-  );   
+  );
     
 function octaver_eval(sample)
   local(out)
@@ -825,6 +837,45 @@ function octaver_eval(sample)
     out
   );
 
+function lpg_func(lpg, input_gain)
+  global()
+  local(t)
+  instance()
+  (
+    t = (0.573144 + 20.2149 * lpg*lpg*lpg*lpg) * input_gain;
+    0.185304 * (1.0 - exp(- t*t)) - 0.00307613
+  );
+
+function lpg_eval(l, r)
+  global(lpg_srate_norm, lpg_k_atk, lpg_k_decay, lpg_update_rate, samples)
+  local(l_cur, r_cur, gate_left, gate_right)
+  instance(state_l, state_r, lOut, rOut, lpg_level,
+           l_gate_filt.init_linearSVF_direct, r_gate_filt.init_linearSVF_direct,
+           l_gate_filt.eval_linearSVF_LP, r_gate_filt.eval_linearSVF_LP)
+  (
+    l_cur = abs(l);
+    r_cur = abs(r);
+  
+    state_l += state_l < l_cur ? lpg_k_atk * (l_cur - state_l) : lpg_k_decay * (l_cur - state_l);
+    state_r += state_r < r_cur ? lpg_k_atk * (r_cur - state_r) : lpg_k_decay * (r_cur - state_r);
+
+    (samples % lpg_update_rate == 0) ? (
+      gate_left = min(lpg_func(lpg_level, state_l), 1.0);
+      gate_right = min(lpg_func(lpg_level, state_r), 1.0);
+      
+      gate_left = max(50, 44100 * gate_left) * lpg_srate_norm;
+      gate_right = max(50, 44100 * gate_right) * lpg_srate_norm;
+    
+      this.l_gate_filt.init_linearSVF_direct(gate_left, 0);
+      this.r_gate_filt.init_linearSVF_direct(gate_right, 0);
+      this.l_gate_filt.resonance_scaling = 1.0;
+      this.r_gate_filt.resonance_scaling = 1.0;
+    );
+    
+    lOut = this.l_gate_filt.eval_linearSVF_LP(l);
+    rOut = this.r_gate_filt.eval_linearSVF_LP(r);
+  );
+
 function octaver_init(filterfreq)
   local(f_est)
   global()
@@ -838,7 +889,15 @@ function octaver_init(filterfreq)
     this.svf3.init_linearSVF( .0005, 0 );
     this.svf4.init_linearSVF( .01, 0 );
   );
-  
+
+function lpg_init(level)
+  global()
+  local(attack, decay)
+  instance(lpg_level)
+  (
+    lpg_level = level;
+  );
+
 // INTERPOLATOR SECTION
  function smooth_parameter(target)
   instance(s, coeff)
@@ -1078,6 +1137,8 @@ function updateNodeBlock()
     ) : ( rectify == 8 ) ? (
       degrade = 2 + 2^(.44444444*(36.0-saturationGain));
       invdegrade = 1.0/degrade;
+    ) : ( rectify == 10 ) ? (
+      this.lpg.lpg_init(saturationGain/36);
     );
     
     pitch ? (
@@ -1302,6 +1363,10 @@ local(factor, t)
       t = ceiling * samples;
       l = l * sin(t);
       r = r * sin(t);
+    ) : ( rectify == 10 ) ? (
+      this.lpg.lpg_eval(l, r);
+      l = this.lpg.lOut;
+      r = this.lpg.rOut;
     );
         
     // Re-emphasize after shaper for warmth
@@ -2565,6 +2630,7 @@ function rescaleToTempo(ratio)
 
 dc0.init_HP6(19/srate);
 dc1.init_HP6(19/srate);
+init_lpg_time_constants();
 
 @serialize
 allow_updates = 0;
@@ -2612,6 +2678,7 @@ updateFromSliderAll();
 
 @block
 midi.processMIDIBlock();
+init_lpg_time_constants();
 
 // Tempo is only valid once playing has started.
 play_state > 0 ? has_played = 1;
@@ -3394,7 +3461,10 @@ comboboxOpen == 0 ? (
           ) : ( node7.hidden == 1 ) ? ( node7.createNode(); 
           ) : ( node8.hidden == 1 ) ? ( node8.createNode(); 
           ) : ( node9.hidden == 1 ) ? ( node9.createNode(); 
-          ) : ( node10.hidden == 1 ) ? ( node10.createNode(); );
+          ) : ( node10.hidden == 1 ) ? ( node10.createNode(); 
+          ) : (
+            tried_to_make_more_nodes_than_available = 1;
+          );
         );
       );
     );
@@ -3442,6 +3512,7 @@ comboboxOpen == 0 ? (
 gfx_y = w1y + 10;
 hideHints == 0 ? (
   printRight("RMB - Add node\n");
+  printRight("Del - Remove selected nodes\n");
   printRight("RMB + Drag Node - Feedback\n");
   printRight("Shift - LPF\n");
   printRight("Ctrl + Shift - HPF\n");
@@ -4587,6 +4658,16 @@ gfx_mode=1;
 gfx_a = .5*gfx_a;
 gfx_blit(5, (1+scaling), 0);
 gfx_mode=0;
+
+
+tried_to_make_more_nodes_than_available > .001 ? (
+  tried_to_make_more_nodes_than_available *= .95;
+  gfx_set(1, 1, 1, tried_to_make_more_nodes_than_available);
+  gfx_setfont(5, "Arial", 20);
+  gfx_x = gfx_w * .015;
+  gfx_y = gfx_h * .05;
+  gfx_printf("WARNING: You can only make 10 regular nodes!");
+);
 
 mouse_cap == 0 && lcap & 1 > 0 ? (
   ((mouse_x < (185 * (1+scaling))) && (mouse_y < (30 * (1+scaling)))) ? (
