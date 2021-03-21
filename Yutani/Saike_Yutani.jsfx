@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (WORK IN PROGRESS)
 tags: synth bass
-version: 0.45
+version: 0.46
 author: Joep Vanlier
-changelog: When polyphony is attempted in legato mode, just pick one. Add retrigger mode.
+changelog: Beta version of paraphonic mode. Bugfix: Fixed Steiner L/R stereo mode not working. Bugfix: Fix BLEP amplitudes being incorrect for bonus oscs.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -130,6 +130,7 @@ import Saike_Yutani_LFOs.jsfx-inc
 import Saike_Yutani_Delays.jsfx-inc
 
 @init
+amp1 = 1;
 style = 1;
 
 two_pi = 2 * $pi;
@@ -508,13 +509,17 @@ shaper ? (
 
 function update_osc_pitch(note_change)
 (
-  note_1_pitch = note_1 + osc1_semi + osc1_tune_flfo * free_lfo;
-  note_2_pitch = note_2 + osc2_semi + osc2_tune_flfo * free_lfo;
+  o1_offset = osc1_semi + osc1_tune_flfo * free_lfo;
+  o2_offset = osc2_semi + osc2_tune_flfo * free_lfo;
+  note_1_pitch = note_1 + o1_offset;
+  note_2_pitch = note_2 + o2_offset;
   sub_pitch = sub_note + subosc_semi + sosc_tune_flfo * free_lfo;
   oscs.oscs_update_settings(note_1_pitch, note_2_pitch, osc1_shape, osc2_shape, note_change);
-  oscs2.oscs_update_settings(note_1_pitch + detune2, note_2_pitch+detune2, osc1_shape, osc2_shape, note_change);
-  oscs3.oscs_update_settings(note_1_pitch + detune3, note_2_pitch+detune3, osc1_shape, osc2_shape, note_change);
-  oscs4.oscs_update_settings(note_1_pitch + detune4, note_2_pitch+detune4, osc1_shape, osc2_shape, note_change);
+  
+  oscs2.oscs_update_settings(note_1_pitch + detune2, note_2_pitch + detune2, osc1_shape, osc2_shape, note_change);
+  oscs3.oscs_update_settings(note_1_pitch + detune3, note_2_pitch + detune3, osc1_shape, osc2_shape, note_change);
+  oscs4.oscs_update_settings(note_1_pitch + detune4, note_2_pitch + detune4, osc1_shape, osc2_shape, note_change);
+  
   subosc.subosc_update_settings(sub_pitch, note_change);
 );
 
@@ -549,7 +554,7 @@ lf_update_step % 8 == 0 ? (
   current_c_lfo_speed = 10^(current_c_lfo_speed_slider) - 1;
   current_m_lfo_speed = 10^(current_m_lfo_speed_slider) - 1;
   current_f_lfo_speed = 10^(current_f_lfo_speed_slider) - 1;
-  amp_correction = .25 / (1.0 + (amp2 + amp3 + amp4)*bonus_enabled);
+  amp_correction = .25 / (amp1 + (amp2 + amp3 + amp4)*bonus_enabled);
   
   ss += 1;
   faux_analog = (1-hardsync)*(.01*sin(.00008*ss) + .2*(rand()-0.5)) * randomness_level;
@@ -572,15 +577,34 @@ lf_update_step % 8 == 0 ? (
   keyfollow_mod = log(pitch) / log(20/22050);
   noise_follow_mod = keyfollow_mod * noise_follow;
   
-  current_note_played =  midi.lastNote - 69;
+  note_mode > 1 ? (
+    current_note_played = midi.poly_voice - 69;
+    midi.lastVel = midi.polyVel;
+    
+    bonus_enabled = 1;
+    multi = 4;
+    amp1 = midi.voice1 > 0 ? 1 : 0;
+    amp2 = midi.voice2 > 0 ? 1 : 0;
+    amp3 = midi.voice3 > 0 ? 1 : 0;
+    amp4 = midi.voice4 > 0 ? 1 : 0;
+    detune2 = midi.voice2 - midi.poly_voice;
+    detune3 = midi.voice3 - midi.poly_voice;
+    detune4 = midi.voice4 - midi.poly_voice;
+  ) : (
+    amp1 = 1;
+    current_note_played =  midi.lastNote - 69;
+  );
+
   note_1 = current_note_played + osc1_semi_vel * midi.lastVel;
   note_2 = current_note_played * (1-osc2_pitch_lock) + osc2_semi_vel * midi.lastVel;
-  sub_note = current_note_played + subosc_semi_vel * midi.lastVel;
+  sub_note = current_note_played + subosc_semi_vel * midi.lastVel;  
   
   update_osc_pitch(1);
  
   new_trigger = (note_mode == 0) ? ( midi.notesOn > 0 && ((midi.notesOn == midi.lastNotesOn) || midi.lastNotesOn == 0) )
-  : (note_mode == 1) ? ( 1 );
+  : (note_mode == 1) ? ( 1 )
+  : (note_mode == 2) ? ( midi.notesOn > 0 && ((midi.notesOn == midi.lastNotesOn) || midi.lastNotesOn == 0) )
+  : (note_mode == 3) ? ( 1 );
  
   new_trigger && mmsg == 1 ? (
     updateCurrentVelocitySettings();
@@ -646,17 +670,17 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   
   pre_sub ? y += subosc_vol * subosc.update_subosc(subosc_shape) * amp_envelope;
   
-  y += oscs.update_oscs(o1_vol, o2_vol);
+  y += oscs.update_oscs(o1_vol * amp1, o2_vol * amp1);
   bonus_enabled ? (
     multi == 2 ? (
-      y += oscs2.update_oscs(o1_vol, o2_vol)*amp2;
+      y += oscs2.update_oscs(o1_vol * amp2, o2_vol * amp2);
     ) : ( multi == 3 ) ? (
-      y += oscs2.update_oscs(o1_vol, o2_vol)*amp2;
-      y += oscs3.update_oscs(o1_vol, o2_vol)*amp3;
+      y += oscs2.update_oscs(o1_vol * amp2, o2_vol * amp2);
+      y += oscs3.update_oscs(o1_vol * amp3, o2_vol * amp3);
     ) : ( multi == 4 ) ? (
-      y += oscs2.update_oscs(o1_vol, o2_vol)*amp2;
-      y += oscs3.update_oscs(o1_vol, o2_vol)*amp3;
-      y += oscs4.update_oscs(o1_vol, o2_vol)*amp4;
+      y += oscs2.update_oscs(o1_vol * amp2, o2_vol * amp2);
+      y += oscs3.update_oscs(o1_vol * amp3, o2_vol * amp3);
+      y += oscs4.update_oscs(o1_vol * amp4, o2_vol * amp4);
     );
   );
   
@@ -2121,7 +2145,10 @@ cX += 2.07 * knobSpacing;
 enableBonusOsc.drawToggle(cX-knobSize*1.175, cy-knobSize*1.175, .15*knobSize, .15*knobSize, bonus_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable sub oscillator.\n");
 bonus_enabled = enableBonusOsc.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
-xosc2_percent.active = bonus_enabled;
+enableBonusOsc.inactive = note_mode >= 2;
+
+bonus_buttons_active = bonus_enabled && note_mode < 2;
+xosc2_percent.active = bonus_buttons_active;
 xosc2_percent.value = amp2;
 xosc2_percent.label = sprintf(35, "   %d %%%%", 100*amp2);
 xosc2_percent.drawKnob(cX-.5*knobSize, cY-.6*knobSize, .6*knobSize, "Osc A %", "Fractional level", 1.0);
@@ -2130,7 +2157,7 @@ xosc2_percent.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
   slider_automate(amp2);
 );
 
-xosc2_tune.active = bonus_enabled;
+xosc2_tune.active = bonus_buttons_active;
 xosc2_tune.value = (detune2+1)*.5;
 xosc2_tune.label = sprintf(1, "%.2f", detune2);
 xosc2_tune.drawKnob(cX-.5*knobSize, cY+.8*knobSize, .6*knobSize, "", "Tuning", 1.0);
@@ -2141,7 +2168,7 @@ xosc2_tune.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
 
 cX += knobSize*1.4;
 
-xosc3_percent.active = bonus_enabled;
+xosc3_percent.active = bonus_buttons_active;
 xosc3_percent.value = amp3;
 xosc3_percent.label = sprintf(35, "   %d %%%%", 100*amp3);
 xosc3_percent.drawKnob(cX-.5*knobSize, cY-.6*knobSize, .6*knobSize, "Osc B %", "Fractional level", 1.0);
@@ -2150,7 +2177,7 @@ xosc3_percent.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
   slider_automate(amp3);
 );
 
-xosc3_tune.active = bonus_enabled;
+xosc3_tune.active = bonus_buttons_active;
 xosc3_tune.value = (detune3+1)*.5;
 xosc3_tune.label = sprintf(1, "%.2f", detune3);
 xosc3_tune.drawKnob(cX-.5*knobSize, cY+.8*knobSize, .6*knobSize, "", "Tuning", 1.0);
@@ -2161,7 +2188,7 @@ xosc3_tune.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
 
 cX += knobSize*1.4;
 
-xosc4_percent.active = bonus_enabled;
+xosc4_percent.active = bonus_buttons_active;
 xosc4_percent.value = amp4;
 xosc4_percent.label = sprintf(35, "   %d %%%%", 100*amp4);
 xosc4_percent.drawKnob(cX-.5*knobSize, cY-.6*knobSize, .6*knobSize, "Osc B %", "Fractional level", 1.0);
@@ -2170,7 +2197,7 @@ xosc4_percent.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
   slider_automate(amp4);
 );
 
-xosc4_tune.active = bonus_enabled;
+xosc4_tune.active = bonus_buttons_active;
 xosc4_tune.value = (detune4+1)*.5;
 xosc4_tune.label = sprintf(1, "%.2f", detune4);
 xosc4_tune.drawKnob(cX-.5*knobSize, cY+.8*knobSize, .6*knobSize, "", "Tuning", 1.0);
@@ -2265,6 +2292,8 @@ hh = .35 * knobSize;
 y_ref = cY - 1*knobSize - 1;
 drawSelectionButton("Legato", cX - 2*knobSize, y_ref, ww, hh, 0, -note_mode, "Play monophonically with legato.") ? note_mode = 0;
 drawSelectionButton("Retrig", cX - 2*knobSize, y_ref + y_move, ww, hh, 1, -note_mode, "Play monophonically retriggering each note.") ? note_mode = 1;
+drawSelectionButton("ParaLeg", cX - 2*knobSize, y_ref + 2 * y_move, ww, hh, 2, -note_mode, "Play paraphonically with legato.\nWARNING: This feature is still in active development and may still be buggy!") ? note_mode = 2;
+drawSelectionButton("ParaTrig", cX - 2*knobSize, y_ref + 3 * y_move, ww, hh, 3, -note_mode, "Play paraphonically without legato.\nWARNING: This feature is still in active development and may still be buggy!") ? note_mode = 3;
 
 
 cX += 2.25 * knobSize;
@@ -2302,6 +2331,13 @@ gfx_printf(" %d", midi.activeNoteMem[1]);
 gfx_printf(" %d", midi.activeNoteMem[2]);
 gfx_printf(" %d", midi.activeNoteMem[3]);
 gfx_printf(" %d", midi.activeNoteMem[4]);
+gfx_printf(" %d", midi.activeNoteMem[5]);
+
+gfx_printf(" ||");
+gfx_printf(" %d", midi.voice1);
+gfx_printf(" %d", midi.voice2);
+gfx_printf(" %d", midi.voice3);
+gfx_printf(" %d", midi.voice4);
 last_mouse_x = mouse_x;
 last_mouse_y = mouse_y;
 

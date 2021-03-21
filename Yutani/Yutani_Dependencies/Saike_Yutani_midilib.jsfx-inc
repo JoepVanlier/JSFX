@@ -9,8 +9,10 @@ MAX_NOTES = 30;
 function initializeMIDI(mem, mem2, mWheel, passThrough)
 local()
 global(MAX_NOTES)
-instance(noteMem, modWheel, pass, activeNoteMem)
+instance(noteMem, modWheel, pass, activeNoteMem,
+         voice1, voice2, voice3, voice4)
 (
+  voice1 = voice2 = voice3 = voice4 = 0;
   noteMem = mem;
   modWheel = mWheel;
   pass = passThrough;
@@ -75,6 +77,59 @@ instance(notePtr, noteMem, pass, modWheel, curSample, remainingNotes, nextNote)
   nextNote        = notePtr[];
 );
 
+function rem_voice4(stopped_note)
+local()
+global(rem)
+instance(notesOn, activeNoteMem,
+         voice1, voice2, voice3, voice4,
+         voice1_vel, voice2_vel, voice3_vel, voice4_vel,         
+         polyVel,
+         target, ptr, v)
+( 
+  target = 0;
+  ptr = activeNoteMem + notesOn;
+  loop(min(4,notesOn),
+    (target == 0) ? (
+      v = ptr[0];
+      ((v != voice1) && (v != voice2) && (v != voice3) && (v != voice4)) ? (
+        target = v;
+      );
+    );
+    ptr -= 1;
+  );
+  
+  (voice1 == stopped_note) ? ( voice1 = target; );
+  (voice2 == stopped_note) ? ( voice2 = target; );
+  (voice3 == stopped_note) ? ( voice3 = target; );
+  (voice4 == stopped_note) ? ( voice4 = target; );
+  
+  polyVel = max(max(max(voice1_vel, voice2_vel), voice3_vel), voice4_vel);
+); 
+
+function add_voice4(new_note, velocity)
+local()
+global()
+instance(notesOn, activeNoteMem,
+         voice1, voice2, voice3, voice4,
+         voice1_vel, voice2_vel, voice3_vel, voice4_vel,
+         poly_voice, polyVel)
+(
+  velocity == 0 ? (
+    this.rem_voice4(new_note);
+  ) : (
+    ( voice1 == 0 ) ? ( poly_voice = voice1 = new_note; voice1_vel = velocity; )
+    : ( voice2 == 0 ) ? ( voice2 = new_note; voice2_vel = velocity; )
+    : ( voice3 == 0 ) ? ( voice3 = new_note; voice3_vel = velocity; )
+    : ( voice4 == 0 ) ? ( voice4 = new_note; voice4_vel = velocity; )
+    : ( 
+      // voice stealing
+      voice4 = new_note;
+    );
+  );
+  
+  polyVel = max(max(max(voice1_vel, voice2_vel), voice3_vel), voice4_vel);
+);
+
 // Properties that can be polled from sample
 // notesOn - Number of notes active
 // lastVel - Last velocity
@@ -107,6 +162,7 @@ instance(notesOn, lastNotesOn, lastVel, lastNote, lastWheel, smoothWheel,
         lastNote = notePtr[];
         
         activeNoteMem[notesOn - 1] = lastNote;
+        this.add_voice4(lastNote, lastVel);
       ) : (notePtr[] == -1) ? ( // note-off
         
         notesOn = notesOn - 1;
@@ -124,6 +180,7 @@ instance(notesOn, lastNotesOn, lastVel, lastNote, lastWheel, smoothWheel,
           activeNoteMem[i] = activeNoteMem[i+1];
           i += 1;
         );
+        this.rem_voice4(note);
         notesOn > 0 ? (
           lastNote != activeNoteMem[notesOn-1] ? (
             lastNote = activeNoteMem[notesOn-1];
