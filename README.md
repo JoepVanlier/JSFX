@@ -35,7 +35,7 @@ Note that everything is permissively licensed, but if you use some of the code i
 ## Yutani - Bass synth
 ![lights](https://user-images.githubusercontent.com/19836026/110242823-0739a500-7f58-11eb-9473-8cd214746b13.gif)
 
-Monophonic bass synthesizer with some fancy filters and modulation options.
+Monophonic/4-voice paraphonic bass synthesizer with some fancy filters and modulation options.
 
 Note: Remember to import the bass presets when you download this thing.
 
@@ -51,6 +51,8 @@ Features:
 - Modwheel, MIDI velocity and pitch bend support.
 
 Demo here: https://www.youtube.com/watch?v=rBJ94Ye_az8
+
+Demo with the paraphonic mode here (Yutani > Ravager > Reflectosaurus): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/imd_dirt2.mp3
 
 Non-linear filter demo (nlSVF): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/nlSVF3.mp3
 
