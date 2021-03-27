@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.50
+version: 0.51
 author: Joep Vanlier
-changelog: fix issue with paraphony
+changelog: Fix note off issue. Reduce aliasing of "accent" waveshaper.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -569,11 +569,14 @@ lf_update_step % 8 == 0 ? (
   update_osc_pitch(0);
 );
 
-(mmsg = midi.processMIDISample() || settingsChange) ? (
+mmsg = midi.processMIDISample();
+(mmsg || settingsChange) ? (
   settingsChange = 0;
   midiChange = 1;
   
-  FM_t = 0;
+  // Only reset stuff on note on
+  mmsg == 1 ? FM_t = 0;
+  
   pitch = 2^((midi.lastNote - 69)/12);
   keyfollow_mod = log(pitch) / log(20/22050);
   noise_follow_mod = keyfollow_mod * noise_follow;
@@ -600,14 +603,14 @@ lf_update_step % 8 == 0 ? (
   note_2 = current_note_played * (1-osc2_pitch_lock) + osc2_semi_vel * midi.lastVel;
   sub_note = current_note_played + subosc_semi_vel * midi.lastVel;  
   
-  update_osc_pitch(1);
+  update_osc_pitch(mmsg == 1);
  
   new_trigger = (note_mode == 0) ? ( midi.notesOn > 0 && ((midi.notesOn == midi.lastNotesOn) || midi.lastNotesOn == 0) )
   : (note_mode == 1) ? ( 1 )
   : (note_mode == 2) ? ( midi.notesOn > 0 && ((midi.notesOn == midi.lastNotesOn) || midi.lastNotesOn == 0) )
   : (note_mode == 3) ? ( 1 );
  
-  new_trigger && mmsg == 1 ? (
+  new_trigger && (mmsg == 1) ? (
     updateCurrentVelocitySettings();
     
     c_lfo_reset ? c_lfo_time = c_lfo_center_phase;
@@ -696,8 +699,8 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
     blampLevel = blampBuffer.readBLs(MINBLAMP);    
   );
   
-  y = y + amp_accent*y*abs(y)*amp_envelope;
   y += blepLevel + blampLevel;
+  y += amp_accent*y*abs(y)*amp_envelope;  
   y *= amp_correction;
   noise_vol ? y += noise.update_noise(noise_type);
 
@@ -1704,7 +1707,7 @@ style == 0 ? (
 
 ampAccentKnob.active = 1;
 ampAccentKnob.value = (amp_accent + 1) / 2;
-ampAccentKnob.drawKnob(cX, cY, knobSize, "- Accent +", "Accent", 1.0);
+ampAccentKnob.drawKnob(cX, cY, knobSize, "- Accent +", "Accent.\n\nDistorts the signal proportionally to the amplitude envelope.\nNote that this is deprecated functionality which introduces some aliasing.", 1.0);
 ampAccentKnob.label = sprintf(16, "   %d %%%%", 100*amp_accent);
 ampAccentKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
   amp_accent = ampAccentKnob.value * 2 - 1;
