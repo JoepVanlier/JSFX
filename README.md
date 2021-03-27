@@ -280,6 +280,8 @@ Transient shaper. Can modify attack and decay of incoming audio.
 
 Transience is a plugin for enhancing or reducing transients. It works by using two envelopes. One is an envelope follower (short attack, longer decay; roughly follows the peaks of the sound), the other is a user specified envelope (with attack/decay). You can then shape the sound according to the difference between the two, making attacks or decays longer or shorter. The plugin operates in logarithmic space.
 
+*Note: Transience relies on Tight Compressor being installed. If not, it will complain about missing my upsampling library.*
+
 ## Tone Stacks
 ![ToneStacksUI](https://imgur.com/giyF29j.jpg)
 
