@@ -1,0 +1,438 @@
+desc:Saike Sequenced FX (pre-alpha WIP)
+tags: time-based effect
+version: 0.01
+author: Joep Vanlier
+changelog: Initial release
+license: MIT
+about:
+  # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
+  
+slider1:current_speed=4<1,16,1>Current speed
+slider10:reset_enabled=1<0,1,1>-Reset enabled
+slider11:slowdown_enabled=1<0,1,1>-Slowdown enabled
+slider12:dynamic_slowdown_enabled=1<0,1,1>-Dynamic slowdown enabled
+slider13:retrigger_enabled=1<0,1,1>-Retrigger enabled
+slider14:reverse_enabled=1<0,1,1>-Reverse enabled
+slider15:gate_enabled=0<0,1,1>-Gate enabled
+slider16:filter_enabled=0<0,1,1>-Filter enabled
+
+options:maxmem=12000000
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import Saike_Yutani_Delays.jsfx-inc
+import Saike_Yutani_Widgets.jsfx-inc
+
+@init
+selected_details = 0;
+pattern_change = 1;
+current_sample = 0;
+version = 0;
+n_segments = 32;
+max_segments = 64;
+max_effects = 32;
+max_stored_patterns = 64;
+crossfade_samples = 128;
+
+freemem = 0;
+pattern_size = max_segments * max_effects;
+freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
+
+BUF_SIZE = 96000 * 60;
+freemem = (l_buffer = freemem) + BUF_SIZE;
+freemem = (r_buffer = freemem) + BUF_SIZE;
+l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
+r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
+
+function init_playhead()
+(
+  current_playhead = 0;
+  amp0 = 1;
+  amp1 = 0;
+);
+
+function pattern_update()
+(
+  current_pattern = pattern_buffer + current_pattern_index * pattern_size;
+  reset_values = current_pattern;
+  speed_values = current_pattern + max_segments;
+  dynspeed_values = current_pattern + 2 * max_segments;
+  retrig_values = current_pattern + 3 * max_segments;
+  filt_values = current_pattern + 4 * max_segments;
+  reverse_values = current_pattern + 5 * max_segments;
+  gate_values = current_pattern + 6 * max_segments;
+  
+  reset_values[0] = 1;
+);
+
+pattern_update();
+init_playhead();
+
+@slider
+
+@block
+
+@serialize
+file_var(0, version);
+file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
+
+@sample
+function jump_to_target()
+local()
+global(current_playhead, playhead_0, playhead_1,
+       target_position,
+       x_fade_position, crossfade_samples, 
+       too_fast, jumps)
+(
+  jumps += 1;
+
+  // Initiate the crossfade
+  x_fade_position != 0 ? too_fast = 100;
+  x_fade_position = crossfade_samples;
+  
+  // Which playhead are we moving away from?
+  current_playhead == 0 ? (
+    playhead_1 = target_position + crossfade_samples;
+  ) : (
+    playhead_0 = target_position + crossfade_samples;
+  );
+  
+  current_playhead = 1 - current_playhead;
+);
+
+function schedule_jump(offset)
+local(already_set)
+global()
+instance(j1, j2, j3, j4, j5)
+(
+  already_set = (offset == j1) || (offset == j2) || (offset == j3) || (offset == j4) || (offset == j5);
+
+  !already_set ? (
+    (offset < j1) ? (
+      j5 = j4;
+      j4 = j3;
+      j3 = j2;
+      j2 = j1;
+      j1 = offset;
+    ) : (offset < j2) ? (
+      j5 = j4;
+      j4 = j3;
+      j3 = j2;
+      j2 = offset;
+    ) : (offset < j3) ? (
+      j5 = j4;
+      j4 = j3;
+      j3 = offset;
+    ) : (offset < j4) ? (
+      j5 = j4;
+      j4 = offset;
+    ) : ( j5 = offset );
+  );
+);
+
+function reset_jump()
+instance(j1, j2, j3, j4, j5, current)
+(
+  current = 0;
+  j1 = j2 = j3 = j4 = j5 = 10000000000000000;
+);
+
+function eval_jump()
+local()
+global()
+instance(j1, j2, j3, j4, j5, current)
+(
+  (j1 - current) == 0 ? (
+    jump_to_target();
+    j1 = j2;
+    j2 = j3;
+    j4 = j5;
+    j5 = 0;
+  );
+  
+  current += 1;
+);
+
+
+function update_time_info()
+(
+  samples_per_beat = (srate * 60) / tempo / current_speed;
+  pattern_length = n_segments * samples_per_beat;
+  to_index = n_segments / pattern_length;
+);
+
+update_time_info();
+current_sample += 1;
+target_position += 1; /* Target position moves with the track */
+current_sample > pattern_length ? current_sample -= pattern_length;
+sequencer_index = floor(to_index * current_sample);
+
+reset_sample = current_sample + crossfade_samples;
+reset_sample > pattern_length ? reset_sample -= pattern_length;
+reset_index = floor(to_index * reset_sample);
+
+// Delayed sequences to accomodate for crossfades
+(reset_index != last_reset_index) ? (
+  jump_schedule.reset_jump();
+  
+  reset_enabled ? (
+    reset = reset_values[reset_index];
+    reset > 0 ? (
+      // New target position is now
+      target_position = 0;
+      jump_schedule.schedule_jump(0);
+    );
+  );
+  
+  retrigger_enabled ? (
+    retrig = retrig_values[reset_index];
+    retrig == 1 ? ( jump_schedule.schedule_jump(); )
+    : (retrig == 2) ? ( jump_schedule.schedule_jump(); jump_schedule.schedule_jump(floor(0.5 * samples_per_beat)); )
+    : (retrig == 3) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.33333 * samples_per_beat)); jump_schedule.schedule_jump(floor(0.66666 * samples_per_beat)); )
+    : (retrig == 4) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.25 * samples_per_beat)); jump_schedule.schedule_jump(floor(0.5 * samples_per_beat));  jump_schedule.schedule_jump(floor(0.75 * samples_per_beat)); )
+  );
+);
+
+jump_schedule.eval_jump();
+
+
+// Non delayed sequences
+(sequencer_index != last_sequencer_index) ? (
+  
+  slowdown_enabled ? (
+    speed = speed_values[sequencer_index];
+    
+    // Fractional speed
+    speed = (speed == 0) ? 1.0
+    : (speed == 1) ? 0.75
+    : (speed == 2) ? 0.66
+    : (speed == 3) ? 0.5
+    : (speed == 4) ? 0.25
+  ) : ( speed = 1 );
+  
+  // Reverse it?
+  (reverse_enabled && reverse_values[sequencer_index] == 1) ? speed = -speed;
+  
+  // Calculate the actual offset speed.
+  // This is given by - (relative_speed - speed of incoming audio)
+  // Speed of the incoming audio is 1 sample / sample.
+  speed = 1.0 - speed;
+  
+  filter = filt_values[sequencer_index];
+);
+
+last_sequencer_index = sequencer_index;
+last_reset_index = reset_index;
+
+
+l_buffer.writeBuffer(spl0);
+r_buffer.writeBuffer(spl1);
+
+// Reference playhead is where the playhead is sent after a "reset" by retrigger.
+playhead_0 += speed;
+playhead_1 += speed;
+
+// Equal power fades (x^2 + y^2 = 1)
+x_fade_position > 0 ? (
+  // Which playhead are we moving _towards_
+  current_playhead == 0 ? (
+    amp1 = sqrt(x_fade_position / crossfade_samples);
+    amp0 = sqrt(1.0 - amp1);
+    x_fade_position -= 1;
+  ) : (
+    amp0 = sqrt(x_fade_position / crossfade_samples);
+    amp1 = sqrt(1.0 - amp0);
+    x_fade_position -= 1;
+  );
+);
+
+spl0 = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
+spl1 = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
+
+@gfx
+too_fast > 0 ? too_fast -= 1;
+
+scaling = 0;
+
+base_r = .1;
+base_g = .1;
+base_b = .1;
+
+BASE_FONT = 1;
+gfx_setfont(BASE_FONT, "Arial", 16);
+font_r = .8;
+font_g = .7;
+font_b = .8;
+
+grid_origin_x = 5;
+grid_origin_y = 5;
+label_width = 150 * (1 + scaling);
+block_width = 21 * (1 + scaling);
+block_spacing = 1 * (1 + scaling);
+
+function nice_rect(x, y, w, h, value, powered)
+global(base_r, base_g, base_b,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y)
+local(label, txt_w, txt_h, power_intensity)
+(
+  power_intensity = 0.2 + 0.8 * powered;
+  gfx_set(base_r * power_intensity, base_g * power_intensity, base_b * power_intensity, 1.0);
+  gfx_rect(x, y, w, h);
+  
+  gfx_set(2 * base_r * power_intensity, 2 * base_g * power_intensity, 2 * base_b * power_intensity, 1.0);
+  gfx_line(x, y, x + w - 1, y);
+  gfx_line(x, y, x, y + h - 1);
+  gfx_line(x, y + h - 1, x + w - 1, y + h - 1);
+  gfx_line(x + w - 1, y, x + w - 1, y + h - 1);
+  
+  value > 0 ? (
+    gfx_rect(x, y, w, h);
+    gfx_x = x;
+    gfx_y = y;
+    sprintf(label, "%d", value);
+    gfx_measurestr(label, txt_w, txt_h);
+    gfx_x = x - 0.5 * (txt_w - w);
+    gfx_y = y - 0.5 * (txt_h - h);
+    gfx_set(font_r, font_g, font_b, 1.0);
+    gfx_printf(label);
+  );
+);
+
+function power_button(x, y, w, h, powered)
+global(base_r, base_g, base_b,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y)
+local(ww, hh)
+(
+  gfx_set(base_r, base_g, base_b, 1.0);
+  gfx_rect(x, y, w, h);
+  
+  gfx_set(2 * base_r, 2 * base_g, 2 * base_b, 1.0);
+  gfx_line(x, y, x + w - 1, y);
+  gfx_line(x, y, x, y + h - 1);
+  gfx_line(x, y + h - 1, x + w - 1, y + h - 1);
+  gfx_line(x + w - 1, y, x + w - 1, y + h - 1);
+  
+  ww = floor(0.5 * w);
+  hh = floor(0.5 * h);
+  
+  powered ? gfx_set(0.2, 0.7, 0.4, 1) : gfx_set(0, 0, 0, 1);
+  gfx_circle(x + ww, y + hh, ww/2, 0, 1);
+  gfx_circle(x + ww, y + hh, ww/2 + 0.5, 0, 1);
+  gfx_line(x + ww, y + .95 * hh, x + ww, y + 0.25 * hh);
+  gfx_line(x + ww + 1, y + .85 * hh, x + ww + 1, y + 0.25 * hh);
+  gfx_line(x + ww - 1, y + .85 * hh, x + ww - 1, y + 0.25 * hh);
+);
+
+function process_effect_row(me, mem, x, y, label, max_value, power_slider)
+global(label_width, block_width, block_spacing, selected_details,
+       nice_rect,
+       n_segments,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y,
+       BASE_FONT
+       mouse_cap, mouse_x, mouse_y, last_cap, captured_by)
+local(txt_w, txt_h, ptr, idx, target)
+instance(mem, start_idx)
+(
+  nice_rect(x, y, label_width, block_width, 0, slider(power_slider));
+  ptr = mem;
+  
+  // Are we selected?
+  (selected_details == me) ? (
+    gfx_set(1.0, 1.0, 1.0, 0.15 + 0.1 * sin(3*time_precise()));
+    gfx_rect(x, y, label_width, block_width);
+  );
+  
+  gfx_set(font_r, font_r, font_r, 1.0);
+  gfx_setfont(BASE_FONT);
+  gfx_measurestr(label, txt_w, txt_h);
+  gfx_x = x - 0.5 * (txt_w - label_width);
+  gfx_y = y - 0.5 * (txt_h - block_width);
+  gfx_printf(label);
+  
+  // Move to the actual sequencer cols
+  x += label_width - block_spacing;
+  
+  power_button(x, y, block_width, block_width, slider(power_slider));
+  
+  x += block_width + block_spacing;
+  ptr = mem;
+  target = 0;
+  loop(n_segments,
+    nice_rect(x, y, block_width, block_width, ptr[], slider(power_slider));
+    target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, block_width));
+    x += block_spacing + block_width;
+    ptr += 1;
+    target = (target + 1) % 4;
+  );
+  
+  // Any clicked?
+  ((mouse_y > y) && (mouse_y < (y + block_width))) ? (
+    x -= n_segments * (block_width + block_spacing);
+    
+    idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+    (mouse_cap == 1 || mouse_cap == 2) ? (
+      // Not captured, start dragging.
+      (last_cap == 0) ? (
+        // Are we in the positional columns?
+        (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
+          // Start dragging a region
+          start_idx = idx;
+          mouse_cap == 1 ? captured_by = me : captured_by = -me;
+        ) : (
+          ((mouse_x < x) && (mouse_x > x - (block_width + block_spacing))) ? (
+            // Toggle the lane power
+            slider(power_slider) = 1 - slider(power_slider);
+          ) : (mouse_x < x) ? (
+            // Select the lane
+            selected_details = me;
+          );
+        );
+      ) : ( me == abs(captured_by) ) ? (
+        captured_by > 0 ? gfx_set(0, 0, 1, .1) : gfx_set(1, 0, 0, .1);
+        gfx_rect(x + (block_width + block_spacing) * start_idx, y, (idx - start_idx + 1) * (block_width + block_spacing), block_width, 1);
+      );
+    ) : ( abs(captured_by) == me ) ? (
+      // We dragged an area
+      ptr = min(start_idx, idx);
+      idx = max(start_idx, idx);
+      start_idx = ptr;
+      // Left or right mouse drag
+      captured_by > 0 ? (
+        target = mem[ptr] + 1;
+        target > max_value ? target = 0;
+      ) : (
+        target = mem[ptr] - 1;
+        target < 0 ? target = max_value;
+      );
+      loop(idx - start_idx + 1,
+        mem[ptr] = target;
+        ptr += 1;
+      );
+      captured_by = 0;
+    );
+  );
+  
+  y += block_width + block_spacing;
+);
+
+x_current = grid_origin_x;
+y_current = grid_origin_y;
+
+y_current = process_effect_row(1, reset_values, x_current, y_current, "Reset", 1, 10);
+y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown", 4, 11);
+//y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
+y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
+y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
+//y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 4, 16);
+//y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 2, 15);
+
+gfx_set(1, 1, 1, .1);
+gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat), grid_origin_y, block_width, max_effects * block_width);
+
+last_cap = mouse_cap;
+
