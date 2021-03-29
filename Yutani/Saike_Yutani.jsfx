@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.51
+version: 0.52
 author: Joep Vanlier
-changelog: Fix note off issue. Reduce aliasing of "accent" waveshaper.
+changelog: Mitigate clicking in paraphonic mode. Add option to not rescale the volume with new notes. IMPORTANT NOTE: THIS MODE IS THE NEW DEFAULT. TO GET THE OLD MODE, ENABLE THE NORMALIZE TOGGLE UNDER OPTIONS.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -555,7 +555,16 @@ lf_update_step % 8 == 0 ? (
   current_c_lfo_speed = 10^(current_c_lfo_speed_slider) - 1;
   current_m_lfo_speed = 10^(current_m_lfo_speed_slider) - 1;
   current_f_lfo_speed = 10^(current_f_lfo_speed_slider) - 1;
-  amp_correction = .25 / (amp1 + (amp2 + amp3 + amp4)*bonus_enabled);
+
+  current_amp2 = 0.986 * current_amp2 + 0.014 * amp2;
+  current_amp3 = 0.986 * current_amp3 + 0.014 * amp3;
+  current_amp4 = 0.986 * current_amp4 + 0.014 * amp4;
+  
+  perform_amp_correction ? (
+    new_correction = .25 / (amp1 + (current_amp2 + current_amp3 + current_amp4)*bonus_enabled);
+    new_correction = min(new_correction, amp_correction);
+    amp_correction = 0.983 * amp_correction + 0.017 * new_correction;
+  ) : ( amp_correction = 0.25 );
   
   ss += 1;
   faux_analog = (1-hardsync)*(.01*sin(.00008*ss) + .2*(rand()-0.5)) * randomness_level;
@@ -587,7 +596,7 @@ mmsg = midi.processMIDISample();
     
     bonus_enabled = 1;
     multi = 4;
-    amp1 = midi.voice1 > 0 ? midi.voice1_vel : 0;
+    midi.voice1 > 0 ? amp1 = midi.voice1_vel;
     amp2 = midi.voice2 > 0 ? midi.voice2_vel : 0;
     amp3 = midi.voice3 > 0 ? midi.voice3_vel : 0;
     amp4 = midi.voice4 > 0 ? midi.voice4_vel : 0;
@@ -677,14 +686,14 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   y += oscs.update_oscs(o1_vol * amp1, o2_vol * amp1);
   bonus_enabled ? (
     multi == 2 ? (
-      y += oscs2.update_oscs(o1_vol * amp2, o2_vol * amp2);
+      y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
     ) : ( multi == 3 ) ? (
-      y += oscs2.update_oscs(o1_vol * amp2, o2_vol * amp2);
-      y += oscs3.update_oscs(o1_vol * amp3, o2_vol * amp3);
+      y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
+      y += oscs3.update_oscs(o1_vol * current_amp3, o2_vol * current_amp3);
     ) : ( multi == 4 ) ? (
-      y += oscs2.update_oscs(o1_vol * amp2, o2_vol * amp2);
-      y += oscs3.update_oscs(o1_vol * amp3, o2_vol * amp3);
-      y += oscs4.update_oscs(o1_vol * amp4, o2_vol * amp4);
+      y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
+      y += oscs3.update_oscs(o1_vol * current_amp3, o2_vol * current_amp3);
+      y += oscs4.update_oscs(o1_vol * current_amp4, o2_vol * current_amp4);
     );
   );
   
@@ -1154,7 +1163,7 @@ drawSelectionButton("Triangle", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww,
 drawSelectionButton("Fin", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 3, OSC1_SELECT, -1);
 drawSelectionButton("PWM", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 4, OSC1_SELECT, -1);
 
-oscResetToggle.drawToggle(cX-1.85*knobSize, cy+1.1*knobSize, .15*knobSize, .15*knobSize, free_osc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Hard Sync\n\nReset oscillator 2 when oscillator 1 crosses zero.");
+oscResetToggle.drawToggle(cX-1.85*knobSize, cy+1.1*knobSize, .15*knobSize, .15*knobSize, free_osc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Free\n\nDo not reset the phase of oscillator on note on.");
 oscResetToggle.label = sprintf(33, " Free");
 free_osc = oscResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
@@ -2211,9 +2220,9 @@ xosc4_tune.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
 );
 
 new_multi = 1;
-amp2 > 0.001 ? new_multi = 2;
-amp3 > 0.001 ? new_multi = 3;
-amp4 > 0.001 ? new_multi = 4;
+current_amp2 > 0.000001 ? new_multi = 2;
+current_amp3 > 0.000001 ? new_multi = 3;
+current_amp4 > 0.000001 ? new_multi = 4;
 multi = new_multi;
 
 cX = nextPanel + panelSpacing;
@@ -2294,10 +2303,15 @@ y_move = .4 * knobSize;
 ww = 1.5*knobSize;
 hh = .35 * knobSize;
 y_ref = cY - 1*knobSize - 1;
-drawSelectionButton("Legato", cX - 2*knobSize, y_ref, ww, hh, 0, -note_mode, "Play monophonically with legato.") ? note_mode = 0;
-drawSelectionButton("Retrig", cX - 2*knobSize, y_ref + y_move, ww, hh, 1, -note_mode, "Play monophonically retriggering each note.") ? note_mode = 1;
-drawSelectionButton("ParaLeg", cX - 2*knobSize, y_ref + 2 * y_move, ww, hh, 2, -note_mode, "Play paraphonically with legato.\nWARNING: This feature is still in active development and may still be buggy!") ? note_mode = 2;
-drawSelectionButton("ParaTrig", cX - 2*knobSize, y_ref + 3 * y_move, ww, hh, 3, -note_mode, "Play paraphonically without legato.\nWARNING: This feature is still in active development and may still be buggy!") ? note_mode = 3;
+drawSelectionButton("Legato", cX - 1.85*knobSize, y_ref, ww, hh, 0, -note_mode, "Play monophonically with legato.") ? note_mode = 0;
+drawSelectionButton("Retrig", cX - 1.85*knobSize, y_ref + y_move, ww, hh, 1, -note_mode, "Play monophonically retriggering each note.") ? note_mode = 1;
+drawSelectionButton("ParaLeg", cX - 1.85*knobSize, y_ref + 2 * y_move, ww, hh, 2, -note_mode, "Play paraphonically with legato.\nWARNING: This feature is still in active development and may still be buggy!") ? note_mode = 2;
+drawSelectionButton("ParaTrig", cX - 1.85*knobSize, y_ref + 3 * y_move, ww, hh, 3, -note_mode, "Play paraphonically without legato.\nWARNING: This feature is still in active development and may still be buggy!") ? note_mode = 3;
+
+
+noAmpCorrectionToggle.label = sprintf(34, " Normalize");
+noAmpCorrectionToggle.drawToggle(cX-1.95*knobSize, cy+1.1*knobSize, .15*knobSize, .15*knobSize, perform_amp_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable output normalization of the extra oscillators.\n\nTurning this toggle on will normalize the oscillator output\nwhen multiple oscillators are playing.");
+perform_amp_correction = noAmpCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 
 cX += 2.25 * knobSize;
