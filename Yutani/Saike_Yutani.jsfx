@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.53
+version: 0.54
 author: Joep Vanlier
-changelog: Forgot to serialize the new variable.
+changelog: Yet another bugfix for the paraphonic mode :(
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -512,15 +512,22 @@ function update_osc_pitch(note_change)
 (
   o1_offset = osc1_semi + osc1_tune_flfo * free_lfo;
   o2_offset = osc2_semi + osc2_tune_flfo * free_lfo;
-  note_1_pitch = note_1 + o1_offset;
-  note_2_pitch = note_2 + o2_offset;
+  note_1_pitch = notes1.note1 + o1_offset;
+  note_2_pitch = notes1.note2 + o2_offset;
   sub_pitch = sub_note + subosc_semi + sosc_tune_flfo * free_lfo;
   oscs.oscs_update_settings(note_1_pitch, note_2_pitch, osc1_shape, osc2_shape, note_change);
   
-  oscs2.oscs_update_settings(note_1_pitch + detune2, note_2_pitch + detune2, osc1_shape, osc2_shape, note_change);
-  oscs3.oscs_update_settings(note_1_pitch + detune3, note_2_pitch + detune3, osc1_shape, osc2_shape, note_change);
-  oscs4.oscs_update_settings(note_1_pitch + detune4, note_2_pitch + detune4, osc1_shape, osc2_shape, note_change);
-  
+  note_mode > 1 ? (
+    // Paraphonic
+    oscs2.oscs_update_settings(notes2.note1 + o1_offset, notes2.note2 + o2_offset, osc1_shape, osc2_shape, note_change);
+    oscs3.oscs_update_settings(notes3.note1 + o1_offset, notes3.note2 + o2_offset, osc1_shape, osc2_shape, note_change);
+    oscs4.oscs_update_settings(notes4.note1 + o1_offset, notes4.note2 + o2_offset, osc1_shape, osc2_shape, note_change);
+  ) : (
+    // Single but layered
+    oscs2.oscs_update_settings(note_1_pitch + detune2, note_2_pitch + detune2, osc1_shape, osc2_shape, note_change);
+    oscs3.oscs_update_settings(note_1_pitch + detune3, note_2_pitch + detune3, osc1_shape, osc2_shape, note_change);
+    oscs4.oscs_update_settings(note_1_pitch + detune4, note_2_pitch + detune4, osc1_shape, osc2_shape, note_change);
+  );
   subosc.subosc_update_settings(sub_pitch, note_change);
 );
 
@@ -579,6 +586,16 @@ lf_update_step % 8 == 0 ? (
 );
 
 mmsg = midi.processMIDISample();
+
+function update_note(current_note_played, velocity)
+instance(note1, note2)
+global(osc1_semi_vel, osc2_pitch_lock, midi.lastVel, osc2_semi_vel)
+local()
+(
+  note1 = current_note_played + osc1_semi_vel * midi.lastVel;
+  note2 = current_note_played * (1 - osc2_pitch_lock) + osc2_semi_vel * midi.lastVel;
+);
+
 (mmsg || settingsChange) ? (
   settingsChange = 0;
   midiChange = 1;
@@ -596,20 +613,16 @@ mmsg = midi.processMIDISample();
     
     bonus_enabled = 1;
     multi = 4;
-    midi.voice1 > 0 ? amp1 = midi.voice1_vel;
-    amp2 = midi.voice2 > 0 ? midi.voice2_vel : 0;
-    amp3 = midi.voice3 > 0 ? midi.voice3_vel : 0;
-    amp4 = midi.voice4 > 0 ? midi.voice4_vel : 0;
-    detune2 = midi.voice2 - midi.poly_voice;
-    detune3 = midi.voice3 - midi.poly_voice;
-    detune4 = midi.voice4 - midi.poly_voice;
+    
+    midi.voice2 > 0 ? notes2.update_note(midi.voice2 - 69, midi.lastVel);
+    midi.voice3 > 0 ? notes3.update_note(midi.voice3 - 69, midi.lastVel);
+    midi.voice4 > 0 ? notes4.update_note(midi.voice4 - 69, midi.lastVel);
   ) : (
     amp1 = 1;
     current_note_played =  midi.lastNote - 69;
   );
 
-  note_1 = current_note_played + osc1_semi_vel * midi.lastVel;
-  note_2 = current_note_played * (1-osc2_pitch_lock) + osc2_semi_vel * midi.lastVel;
+  notes1.update_note(current_note_played, midi.lastVel);
   sub_note = current_note_played + subosc_semi_vel * midi.lastVel;  
   
   update_osc_pitch(mmsg == 1);
@@ -648,6 +661,13 @@ mmsg = midi.processMIDISample();
       k_glide = calc_k(glide_time);
     );
   );
+);
+
+note_mode > 1 ? (
+  amp1 = midi.voice1 > 0 ? midi.voice1_vel : (1 - amp_env.k_decay) * amp1;
+  amp2 = midi.voice2 > 0 ? midi.voice2_vel : (1 - amp_env.k_decay) * amp2;
+  amp3 = midi.voice3 > 0 ? midi.voice3_vel : (1 - amp_env.k_decay) * amp3;
+  amp4 = midi.voice4 > 0 ? midi.voice4_vel : (1 - amp_env.k_decay) * amp4;
 );
 
 current_pwm_active ? (
