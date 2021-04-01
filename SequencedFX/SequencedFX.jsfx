@@ -1,8 +1,8 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: Initial release
+changelog: Set up filter
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -21,6 +21,10 @@ slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
 slider28:cutoff_final=.6<0,1,.0001>-Cutoff Finish
 slider29:resonance=0.7<0,1,.0001>-Resonance
 slider30:morph=0<0,1,.0001>-Morph
+slider31:cutoff_atk=0<0,1,0.0001>-Envelope Rise
+slider32:cutoff_decay=0<0,1,0.0001>-Envelope Decay
+slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
+slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 
 options:maxmem=12000000
 in_pin:left input
@@ -31,8 +35,11 @@ out_pin:right output
 import Saike_Yutani_Delays.jsfx-inc
 import Saike_Yutani_Widgets.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
+import Saike_Yutani_envelope.jsfx-inc
+import Saike_Yutani_interpolators.jsfx-inc
 
 @init
+sample_clock = 0;
 oversampling = 1;
 pattern_change = 1;
 current_sample = 0;
@@ -74,12 +81,49 @@ function pattern_update()
   reset_values[0] = 1;
 );
 
+function interpolator_init()
+(
+  // Set up the interpolators
+  drive_interpolator.interpolator_init(26);
+  cutoff_start_interpolator.interpolator_init(27);
+  cutoff_final_interpolator.interpolator_init(28);
+  reso_interpolator.interpolator_init(29);
+  morph_interpolator.interpolator_init(30);
+     
+  (last_inertia != inertia) ? (
+    last_inertia = inertia;
+    inertia_cutoff = 1000.0/inertia;
+    drive_interpolator.initialize_smoother(inertia_cutoff);
+    cutoff_start_interpolator.initialize_smoother(inertia_cutoff);
+    cutoff_final_interpolator.initialize_smoother(inertia_cutoff);
+    reso_interpolator.initialize_smoother(inertia_cutoff);
+    morph_interpolator.initialize_smoother(inertia_cutoff);
+    
+    drive_interpolator.s = slider(26);
+    cutoff_start_interpolator.s = slider(27);
+    cutoff_final_interpolator.s = slider(28);
+    reso_interpolator.s = slider(29);
+    morph_interpolator.s = slider(30);
+  );
+);
+
+function interpolators_block()
+(
+  drive_interpolator.interpolator_block();
+  cutoff_start_interpolator.interpolator_block();
+  cutoff_final_interpolator.interpolator_block();
+  reso_interpolator.interpolator_block();
+  morph_interpolator.interpolator_block();
+);
+
+interpolator_init();
 pattern_update();
 init_playhead();
 
 @slider
 
 @block
+interpolators_block();
 
 @serialize
 file_var(0, version);
@@ -92,6 +136,8 @@ file_var(0, reverse_enabled);
 file_var(0, filter_enabled);
 
 @sample
+sample_clock += 1;
+
 function jump_to_target()
 local()
 global(current_playhead, playhead_0, playhead_1,
@@ -168,12 +214,34 @@ instance(j1, j2, j3, j4, j5, current)
   current += 1;
 );
 
-
 function update_time_info()
 (
   samples_per_beat = (srate * 60) / tempo / current_speed;
   pattern_length = n_segments * samples_per_beat;
   to_index = n_segments / pattern_length;
+);
+
+function process_filter()
+(
+  current_drive = clamp(drive_interpolator.interpolate(), -6, 48);
+  
+  sample_clock % 16 == 0 ? (
+    filter_envelope.calc_times(cutoff_atk, cutoff_decay, cutoff_sustain);
+  );
+  
+  current_cutoff = cutoff_start + filter_envelope.update_envelope(filter_target) * (cutoff_final - cutoff_start);
+  sample_clock % 4 == 0 ? (
+    filter.init_filter(filter_type, current_cutoff, current_cutoff, morph, morph, resonance);
+    log10d20_conversion  = 0.11512925464970228420089957273422;
+    preamp      = exp(log10d20_conversion*current_drive);
+    inv_preamp  = exp(-log10d20_conversion*current_drive);
+  );
+  
+  ssl *= preamp;
+  ssr *= preamp;
+  filter.processSample(filter_type);
+  ssl *= inv_preamp;
+  ssr *= inv_preamp;
 );
 
 update_time_info();
@@ -233,7 +301,9 @@ jump_schedule.eval_jump();
   // Speed of the incoming audio is 1 sample / sample.
   speed = 1.0 - speed;
   
-  filter = filt_values[sequencer_index];
+  filter_target = filt_values[sequencer_index];
+  filter_envelope.reset = 0;
+  filter_envelope.reset_envelope();
 );
 
 last_sequencer_index = sequencer_index;
@@ -264,14 +334,7 @@ x_fade_position > 0 ? (
 ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
 ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
 
-filter_enabled ? (
-  //cutoff_start, cutoff_end, resonance, morph
-  /*sliderCutoffL = sliderCutoffR = cutoff_interpolator.interpolate() + cutoff_velmod + cutoff_mw + .1*faux_analog;
-  sliderReso = clamp(reso_interpolator.interpolate() + reso_velmod + reso_mw, 0, 1);
-  sliderMorphL = sliderMorphR = morph_interpolator.interpolate() + morph_velmod;*/
-  filter.init_filter(filter_type, cutoff_start, cutoff_start, morph, morph, resonance);
-  filter.processSample(filter_type);
-);
+filter_enabled ? process_filter();
 
 spl0 = ssl;
 spl1 = ssr;
@@ -307,10 +370,13 @@ function setup_theme()
   scaling = 0;
   style == 0 ? (
     s_FILTER = sprintf(65, "FILTER");
+    s_ENVELOPE = sprintf(66, "ENVELOPE");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
+    s_ENVELOPE = sprintf(66, "Envelope");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "FILTER");
+    s_ENVELOPE = sprintf(66, "Envelope");
   );
   
   style == 0 ? (
@@ -363,7 +429,7 @@ too_fast > 0 ? too_fast -= 1;
 grid_origin_x = 5;
 grid_origin_y = 5;
 label_width = 150 * (1 + scaling);
-block_width = 21 * (1 + scaling);
+block_width = 22.83 * (1 + scaling);
 block_spacing = 1 * (1 + scaling);
 
 function nice_rect(x, y, w, h, value, powered)
@@ -522,7 +588,7 @@ y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown"
 //y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
 y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
 y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
-y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 4, 16);
+y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16);
 //y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 2, 15);
 
 gfx_set(1, 1, 1, .1);
@@ -563,15 +629,15 @@ dial_animation = 0;
 cX = x_current;
 cY = y_current + 2.25 * knobSize;
 
-
-function drawAndProcess(cX, cY, knobSize, label, description, modifier1, modifier2, modifier3)
+dial_animation = 1;
+function drawAndProcess(cX, cY, knobSize, label, description, current, modifier1, modifier2, modifier3, default)
 instance(vel, mod1, mod2)
 (
   this.drawKnob(cX, cY, knobSize, label, description, 1.0);
   
   dial_animation ? (
-    this.knob_draw_modifier(sliderCutoffL - this.value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-    this.knob_draw_modifier(sliderCutoffR - this.value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+    this.knob_draw_modifier(current - this.value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    this.knob_draw_modifier(current - this.value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
   );
   
   modifier1 ? this.knob_draw_modifier(vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
@@ -581,11 +647,11 @@ instance(vel, mod1, mod2)
   activeModifier == 3 ? ( this.knob_modifier_processMouse(0, mod2) ? ( mod2 = this.value; );
   ) : activeModifier == 2 ? ( this.knob_modifier_processMouse(0, mod1) ? ( mod1 = this.value; );
   ) : activeModifier == 1 ? ( this.knob_modifier_processMouse(0, vel) ? ( vel = this.value; );
-  ) : this.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25);
+  ) : this.knob_processMouse(mouse_x, mouse_y, mouse_cap, default);
 );
 
 (selected_details == 7) ? (
-  nextPanel = drawPanel(s_FILTER, cX, cY - 1.5 * knobSize, 22.75*knobSpacing, panelHeight, 1);
+  nextPanel = drawPanel(s_FILTER, cX, cY - 1.5 * knobSize, 26.5*knobSpacing, panelHeight, filter_enabled);
   cX += 2 * knobSpacing;
   cX += knobSize;
   gfx_setfont(KNOB_FONT);
@@ -614,22 +680,26 @@ instance(vel, mod1, mod2)
   
   
   cX += 4.25*knobSize;
+  driveKnob.knob_set(sprintf(1, "%.1f dB", drive), filter_enabled, (drive + 6)/54);
+  driveKnob.drawAndProcess(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", (drive + 6)/54, 1, 1, 1, 6.001/54) ? ( drive = driveKnob.value * 54 - 6; slider_automate(drive); );
+  
+  cX += 2.5*knobSize;
   center = .5 * srate * exp( (1-cutoff_start) * log(20/22050) );
-  cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff_start);
-  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", 1, 1, 1) ? ( cutoff_start = cutoffKnob.value; slider_automate(cutoff_start); );
+  cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), filter_enabled, cutoff_start);
+  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", current_cutoff, 1, 1, 1, 0) ? ( cutoff_start = cutoffKnob.value; slider_automate(cutoff_start); );
   
   cX += 2.5*knobSize;
   center = .5 * srate * exp( (1-cutoff_final) * log(20/22050) );
-  cutoffEndKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff_final);
-  cutoffEndKnob.drawAndProcess(cX, cY, knobSize, "Cutoff End", "Filter Cutoff", 1, 1, 1) ? ( cutoff_final = cutoffEndKnob.value; slider_automate(cutoff_final); );
+  cutoffEndKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), filter_enabled, cutoff_final);
+  cutoffEndKnob.drawAndProcess(cX, cY, knobSize, "Cutoff End", "Filter Cutoff", current_cutoff, 1, 1, 1, 1) ? ( cutoff_final = cutoffEndKnob.value; slider_automate(cutoff_final); );
   
   cX += knobSize*2.5;
-  resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), 1, resonance);
-  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", 0, 0, 0) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
+  resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), filter_enabled, resonance);
+  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", resonance, 0, 0, 0, 0) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
    
   cX += knobSize*2.7;
-  morphKnob.knob_set("", 1, morph);
-  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", 0, 0, 0) ? ( morph = morphKnob.value; slider_automate(morph); );
+  morphKnob.knob_set("", filter_enabled, morph);
+  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", morph, 0, 0, 0, 0) ? ( morph = morphKnob.value; slider_automate(morph); );
   
   gfx_set(1,1,1,1);
   drawKnobLabels(knobSize*1.25, 0, "LP");
@@ -638,6 +708,22 @@ instance(vel, mod1, mod2)
   drawKnobLabels(knobSize*1.25, 3/4, "BR");
   drawKnobLabels(knobSize*1.25, 4/4, "LP");
   
-  cX += knobSize*2.65;
+  
+  cX += knobSize * 2;
+  nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, filter_enabled);
+  
+  cX += knobSize * 1.35;
+  tempo_sync_envelopes ? ( cutoffAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), 1, cutoff_atk);
+  ) : cutoffAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_enabled, cutoff_atk);
+  cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", cutoff_atk, 0, 0, 0, 0.06) ? ( cutoff_atk = cutoffAttackKnob.value; slider_automate(cutoff_atk); );
+
+  cX += knobSize*2.5;
+  tempo_sync_envelopes ? ( cutoffDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), 1, cutoff_decay);
+  ) : cutoffDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_enabled, cutoff_decay );
+  cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", cutoff_decay, 0, 0, 0, 0.6) ? ( cutoff_decay = cutoffDecayKnob.value; slider_automate(cutoff_decay); );
+  
+  cX += knobSize*2.5;
+  cutoffSustainKnob.knob_set(sprintf(1, "%.1f", cutoff_sustain), filter_enabled, cutoff_sustain);
+  cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", cutoff_sustain, 0, 0, 0, 1.0) ? ( cutoff_sustain = cutoffSustainKnob.value; slider_automate(cutoff_sustain); );
 );
 
