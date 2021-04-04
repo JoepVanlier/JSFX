@@ -1,12 +1,12 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.02
+version: 0.04
 author: Joep Vanlier
-changelog: Set up filter
+changelog: Add reverb. Serialize new settings. Add defaults for existing settings.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
-  
+
 slider1:current_speed=4<1,16,1>Current speed
 slider10:reset_enabled=1<0,1,1>-Reset enabled
 slider11:slowdown_enabled=1<0,1,1>-Slowdown enabled
@@ -15,6 +15,7 @@ slider13:retrigger_enabled=1<0,1,1>-Retrigger enabled
 slider14:reverse_enabled=1<0,1,1>-Reverse enabled
 slider15:gate_enabled=0<0,1,1>-Gate enabled
 slider16:filter_enabled=0<0,1,1>-Filter enabled
+slider17:reverb_enabled=0<0,1,1>-Reverb enabled
 slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
@@ -39,6 +40,8 @@ import Saike_Yutani_envelope.jsfx-inc
 import Saike_Yutani_interpolators.jsfx-inc
 
 @init
+log10d20_conversion  = 0.11512925464970228420089957273422;
+
 sample_clock = 0;
 oversampling = 1;
 pattern_change = 1;
@@ -50,15 +53,50 @@ max_effects = 32;
 max_stored_patterns = 64;
 crossfade_samples = 128;
 
-freemem = 0;
-pattern_size = max_segments * max_effects;
-freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
+function load_defaults()
+(
+  verb_diffusion_default = 0.7;
+  verb_decay_default = 0.4;
+  verb_mod_depth_default = 0.0;
+  verb_mod_rate_default = 0.5;
+  verb_lowpass_default = 1.0;
+  verb_highpass_default = 0.3;
+  verb_dry_default = 0;
+  verb_wet_default = -8;
+  verb_gate_atk_default = 0.06;
+  verb_gate_decay_default = 0.6;
+  verb_gate_sustain_default = 0.2;
+  
+  gate_start_default = -12;
+  gate_stop_default = 0;
+  gate_atk_default = 0.06;
+  gate_decay_default = 0.6;
+  gate_sustain_default = 1.0;
+);
 
-BUF_SIZE = 96000 * 60;
-freemem = (l_buffer = freemem) + BUF_SIZE;
-freemem = (r_buffer = freemem) + BUF_SIZE;
-l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
-r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
+function init_to_defaults()
+(
+  verb_diffusion = verb_diffusion_default;
+  verb_decay = verb_decay_default;
+  verb_mod_depth = verb_mod_depth_default;
+  verb_mod_rate = verb_mod_rate_default;
+  verb_lowpass = verb_lowpass_default;
+  verb_highpass = verb_highpass_default;
+  verb_dry = verb_dry_default;
+  verb_wet = verb_wet_default;
+  verb_gate_atk = verb_gate_atk_default;
+  verb_gate_decay = verb_gate_decay_default;
+  verb_gate_sustain = verb_gate_sustain_default;
+  
+  gate_start = gate_start_default;
+  gate_stop = gate_stop_default;
+  gate_atk = gate_atk_default;
+  gate_decay = gate_decay_default;
+  gate_sustain = gate_sustain_default;
+);
+
+load_defaults();
+loaded == 0 ? init_to_defaults();
 
 function init_playhead()
 (
@@ -77,6 +115,7 @@ function pattern_update()
   filt_values = current_pattern + 4 * max_segments;
   reverse_values = current_pattern + 5 * max_segments;
   gate_values = current_pattern + 6 * max_segments;
+  reverb_values = current_pattern + 7 * max_segments;
   
   reset_values[0] = 1;
 );
@@ -116,6 +155,231 @@ function interpolators_block()
   morph_interpolator.interpolator_block();
 );
 
+function init_allpass(buffer, buffer_size)
+instance(buffer)
+(
+  this.initBuffer(buffer, buffer + buffer_size);
+  buffer + buffer_size + 1
+);
+
+function eval_allpass(x)
+local(ap_sample, delayed_sample)
+instance(gain, offset)
+(
+  delayed_sample = this.readBuffer_fixed(offset);
+  ap_sample = x + gain * delayed_sample;
+  y = delayed_sample - gain * ap_sample;
+
+  this.writeBuffer(ap_sample);
+  
+  y
+);
+
+function eval_tpt_monopole(x)
+instance(s, coeff)
+global()
+local(y, v)
+(
+  v = coeff*(x - s);
+  y = v + s;
+  s = y + v;
+  y
+);
+  
+function init_tpt_monopole(cutoff)
+instance(coeff)
+global(srate)
+local(g)
+( 
+  g = tan($pi*cutoff/srate);
+  coeff = g/(1+g);
+);
+
+function init_reverb(buffer_position)
+global(srate)
+local(buffer_size)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right
+         decay_diffuser_left, decay_diffuser_right,
+         delay_left_1, delay_right_1,
+         delay_left_2, delay_right_2,
+         delay_right_2_offset, delay_left_2_offset, 
+         delay_left_1_offset, delay_right_1_offset, 
+         delay_left_2_offset, delay_right_2_offset,
+         srate_scaling,
+         out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left,
+         out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right)
+(
+  /* Datorro Reverb (1997) */
+  buffer_size = 8192;
+  srate_scaling = srate / 29761;
+  
+  buffer_position = diffuser1.init_allpass(buffer_position, buffer_size);
+  diffuser1.offset = 142 * srate_scaling;
+  buffer_position = diffuser2.init_allpass(buffer_position, buffer_size);
+  diffuser2.offset = 107 * srate_scaling;
+  buffer_position = diffuser3.init_allpass(buffer_position, buffer_size);
+  diffuser3.offset = 379 * srate_scaling;
+  buffer_position = diffuser4.init_allpass(buffer_position, buffer_size);
+  diffuser4.offset = 277 * srate_scaling;
+  
+  buffer_position = lfo_diffuser_left.init_allpass(buffer_position, buffer_size);
+  lfo_diffuser_left.offset = 672 * srate_scaling;
+  buffer_position = lfo_diffuser_right.init_allpass(buffer_position, buffer_size);
+  lfo_diffuser_right.offset = 908 * srate_scaling;
+  
+  buffer_position = decay_diffuser_left.init_allpass(buffer_position, buffer_size);
+  decay_diffuser_left.offset = 1800 * srate_scaling;
+  buffer_position = decay_diffuser_right.init_allpass(buffer_position, buffer_size);
+  decay_diffuser_right.offset = 2656 * srate_scaling;
+  
+  buffer_position = delay_left_1.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_right_1.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_left_2.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_right_2.init_allpass(buffer_position, buffer_size);
+  
+  delay_right_2_offset = 3163 * srate_scaling;
+  delay_left_2_offset = 3720 * srate_scaling;
+  delay_left_1_offset = 4453 * srate_scaling;
+  delay_right_1_offset = 4217 * srate_scaling;
+  delay_left_2_offset = 3720 * srate_scaling;
+  delay_right_2_offset = 3163 * srate_scaling;
+  
+  out_delay1_left = 266 * srate_scaling;
+  out_delay2_left = 2974 * srate_scaling;
+  out_delay3_left = 1913 * srate_scaling;
+  out_delay4_left = 1996 * srate_scaling;
+  out_delay5_left = 1990 * srate_scaling;
+  out_delay6_left = 187 * srate_scaling;
+  out_delay7_left = 1066 * srate_scaling;
+  
+  out_delay1_right = 353 * srate_scaling;
+  out_delay2_right = 3627 * srate_scaling;
+  out_delay3_right = 1228 * srate_scaling;
+  out_delay4_right = 2673 * srate_scaling;
+  out_delay5_right = 2111 * srate_scaling;
+  out_delay6_right = 335 * srate_scaling;
+  out_delay7_right = 121 * srate_scaling;  
+  
+  buffer_position
+);
+
+function update_reverb_settings(diffusion, decay, depth, freq, lowpass, highpass)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right,
+         decay_diffuser_left, decay_diffuser_right, fb,
+         mod_depth, mod_rate,
+         lp1, hp1, lp2, hp2)
+local()
+global(srate)
+(
+  diffuser1.gain = - 0.98684211 * diffusion; /* Decorrelate input signal */
+  diffuser2.gain = - 0.98684211 * diffusion; /* Decorrelate input signal */
+  diffuser3.gain = - 0.82236842 * diffusion; /* Decorrelate input signal */
+  diffuser4.gain = - 0.82236842 * diffusion; /* Decorrelate input signal */
+  lfo_diffuser_left.gain = 0.92105263 * diffusion;  /* Tail density */
+  lfo_diffuser_right.gain = 0.92105263 * diffusion;  /* Tail density */
+  decay_diffuser_left.gain = - 0.65789474 * diffusion;  /* Decorrelate tank signal */
+  decay_diffuser_right.gain = - 0.65789474 * diffusion;  /* Decorrelate tank signal */
+  fb = decay;
+  mod_depth = 32 * depth;
+  mod_rate = freq / srate;
+  
+  lp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - lowpass) * log(20/22050) ));
+  lp2.coeff = lp1.coeff;
+  hp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - highpass) * log(20/22050) ));
+  hp2.coeff = hp1.coeff;
+);
+
+function eval_reverb(l, r)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right,
+         decay_diffuser_left, decay_diffuser_right,
+         delay_left_1, delay_right_1,
+         delay_left_2, delay_right_2,
+         delay_right_2_offset, delay_left_2_offset, 
+         delay_left_1_offset, delay_right_1_offset, 
+         delay_left_2_offset, delay_right_2_offset,
+         fb, out_left, out_right, srate_scaling,
+         out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left
+         out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right,
+         mod_rate, mod_depth,
+         lp1, lp2, hp1, hp2)
+local(in, diffused, left_tank, right_tank, l_delay, r_delay, accumulator)
+global(sample_clock)
+(
+  in = 0.5 * (l + r);
+  
+  diffused = 
+    diffuser4.eval_allpass(
+      diffuser3.eval_allpass(
+        diffuser2.eval_allpass(
+          diffuser1.eval_allpass(
+            in
+          )
+        )
+      )
+    );
+  
+  left_tank = right_tank = diffused;
+  
+  // Flipped on purpose!
+  left_tank += fb * delay_right_2.readBuffer_fixed(delay_right_2_offset);
+  right_tank += fb * delay_left_2.readBuffer_fixed(delay_left_2_offset);
+  
+  lfo_diffuser_left.offset = (672 + mod_depth * sin(mod_rate * sample_clock)) * srate_scaling;
+  lfo_diffuser_right.offset = (908 + mod_depth * sin(mod_rate * sample_clock)) * srate_scaling;
+
+  delay_left_1.writeBuffer(lfo_diffuser_left.eval_allpass(left_tank));
+  delay_right_1.writeBuffer(lfo_diffuser_right.eval_allpass(right_tank));
+  
+  // Damping here
+  l_delay = lp1.eval_tpt_monopole(delay_left_1.readBuffer_fixed(delay_left_1_offset));
+  r_delay = lp2.eval_tpt_monopole(delay_right_1.readBuffer_fixed(delay_right_1_offset)) ;
+  
+  l_delay = decay_diffuser_left.eval_allpass(l_delay);
+  r_delay = decay_diffuser_right.eval_allpass(r_delay);
+  
+  delay_left_2.writeBuffer(l_delay);
+  delay_right_2.writeBuffer(r_delay);
+  
+  l_delay = delay_left_2.readBuffer_fixed(delay_left_2_offset);
+  r_delay = delay_right_2.readBuffer_fixed(delay_right_2_offset);
+  
+  // Left output
+  accumulator = 0.6 * delay_right_1.readBuffer_fixed(out_delay1_left);
+  accumulator += 0.6 * delay_right_1.readBuffer_fixed(out_delay2_left);
+  accumulator -= 0.6 * decay_diffuser_right.readBuffer_fixed(out_delay3_left);
+  accumulator += 0.6 * delay_right_2.readBuffer_fixed(out_delay4_left);
+  accumulator -= 0.6 * delay_left_1.readBuffer_fixed(out_delay5_left);
+  accumulator -= 0.6 * decay_diffuser_left.readBuffer_fixed(out_delay6_left);
+  out_left = accumulator - 0.6 * delay_left_2.readBuffer_fixed(out_delay7_left);
+
+  accumulator = 0.6 * delay_left_1.readBuffer_fixed(out_delay1_right);
+  accumulator += 0.6 * delay_left_1.readBuffer_fixed(out_delay2_right);
+  accumulator -= 0.6 * decay_diffuser_left.readBuffer_fixed(out_delay3_right);
+  accumulator += 0.6 * delay_left_2.readBuffer_fixed(out_delay4_right);
+  accumulator -= 0.6 * delay_right_1.readBuffer_fixed(out_delay5_right);
+  accumulator -= 0.6 * decay_diffuser_right.readBuffer_fixed(out_delay6_right);
+  out_right = accumulator - 0.6 * delay_right_2.readBuffer_fixed(out_delay7_right);
+  
+  out_left = out_left - hp1.eval_tpt_monopole(out_left);
+  out_right = out_right - hp2.eval_tpt_monopole(out_right);
+);
+
+
+freemem = 0;
+pattern_size = max_segments * max_effects;
+freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
+
+BUF_SIZE = 96000 * 60;
+freemem = (l_buffer = freemem) + BUF_SIZE;
+freemem = (r_buffer = freemem) + BUF_SIZE;
+l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
+r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
+beatmem.initBuffer(r_buffer, r_buffer + .5*BUF_SIZE);
+freemem = verb.init_reverb(freemem);
+
 interpolator_init();
 pattern_update();
 init_playhead();
@@ -126,17 +390,34 @@ init_playhead();
 interpolators_block();
 
 @serialize
+loaded = 1;
 file_var(0, version);
 file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
 file_var(0, selected_details);
-file_var(0, reset_enabled);
-file_var(0, slowdown_enabled);
-file_var(0, retrig_enabled);
-file_var(0, reverse_enabled);
-file_var(0, filter_enabled);
+
+file_var(0, gate_enabled);
+file_var(0, gate_start);
+file_var(0, gate_stop);
+file_var(0, gate_atk);
+file_var(0, gate_decay);
+file_var(0, gate_sustain);
+
+file_var(0, verb_diffusion);
+file_var(0, verb_decay);
+file_var(0, verb_mod_depth);
+file_var(0, verb_mod_rate);
+file_var(0, verb_lowpass);
+file_var(0, verb_highpass);
+file_var(0, verb_dry);
+file_var(0, verb_wet);
+file_var(0, verb_gate_atk);
+file_var(0, verb_gate_decay);
+file_var(0, verb_gate_sustain);
 
 @sample
 sample_clock += 1;
+
+verb.update_reverb_settings(verb_diffusion, verb_decay, verb_mod_depth, verb_mod_rate, verb_lowpass, verb_highpass);
 
 function jump_to_target()
 local()
@@ -250,7 +531,6 @@ function process_filter()
   current_cutoff = cutoff_start + filter_envelope.update_envelope(filter_target) * (cutoff_final - cutoff_start);
   sample_clock % 4 == 0 ? (
     filter.init_filter(filter_type, current_cutoff, current_cutoff, morph, morph, resonance);
-    log10d20_conversion  = 0.11512925464970228420089957273422;
     preamp      = exp(log10d20_conversion*current_drive);
     inv_preamp  = exp(-log10d20_conversion*current_drive);
   );
@@ -260,6 +540,34 @@ function process_filter()
   filter.processSample(filter_type);
   ssl *= inv_preamp;
   ssr *= inv_preamp;
+);
+
+function process_gate()
+(
+  sample_clock % 16 == 0 ? (
+    gate_envelope.calc_times(gate_atk, gate_decay, gate_sustain);
+  );
+  
+  current_gate = gate_start + gate_envelope.update_envelope(gate_target) * (gate_stop - gate_start);
+  gatemul = exp(log10d20_conversion*current_gate);
+  ssl *= gatemul;
+  ssr *= gatemul;
+);
+
+function process_verb()
+(
+  sample_clock % 16 == 0 ? (
+    verb_envelope.calc_times(verb_gate_atk, verb_gate_decay, verb_gate_sustain);
+    verb_drymul = exp(log10d20_conversion*verb_dry);
+    verb_wetmul = exp(log10d20_conversion*verb_wet);
+    post_gate ? verb_wetmul * current_verb_gate;
+  );
+  
+  current_verb_gate = verb_envelope.update_envelope(reverb_target);
+
+  verb.eval_reverb(ssl * current_verb_gate, ssr * current_verb_gate);
+  ssl = verb_drymul * ssl + verb_wetmul * verb.out_right;
+  ssr = verb_drymul * ssl + verb_wetmul * verb.out_left;
 );
 
 update_time_info();
@@ -326,11 +634,24 @@ jump_schedule.eval_jump();
     filter_envelope.reset = 0;
     filter_envelope.reset_envelope();
   );
+  
+  previous_gate_target = gate_target;
+  gate_target = gate_values[sequencer_index];
+  gate_target != previous_gate_target ? (
+    gate_envelope.reset = 0;
+    gate_envelope.reset_envelope();
+  );
+  
+  previous_reverb_target = reverb_target;
+  reverb_target = reverb_values[sequencer_index];
+  reverb_target != previous_reverb_target ? (
+    verb_envelope.reset = 0;
+    verb_envelope.reset_envelope();
+  );
 );
 
 last_sequencer_index = sequencer_index;
 last_reset_index = reset_index;
-
 
 l_buffer.writeBuffer(spl0);
 r_buffer.writeBuffer(spl1);
@@ -357,6 +678,8 @@ ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhe
 ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
 
 filter_enabled ? process_filter();
+gate_enabled ? process_gate();
+reverb_enabled ? process_verb();
 
 spl0 = ssl;
 spl1 = ssr;
@@ -393,12 +716,18 @@ function setup_theme()
   style == 0 ? (
     s_FILTER = sprintf(65, "FILTER");
     s_ENVELOPE = sprintf(66, "ENVELOPE");
+    s_GATE = sprintf(67, "GATE");
+    s_REVERB = sprintf(68, "REVERB");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
+    s_GATE = sprintf(67, "Gate");
+    s_REVERB = sprintf(68, "Reverb");
   ) : ( style == 2 ) ? (
-    s_FILTER = sprintf(65, "FILTER");
+    s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
+    s_GATE = sprintf(67, "Gate");
+    s_REVERB = sprintf(68, "Reverb");
   );
   
   style == 0 ? (
@@ -553,7 +882,7 @@ instance(mem, start_idx)
   );
   
   // Any clicked?
-  ((mouse_y > y) && (mouse_y < (y + block_width))) ? (
+  (1) ? (
     x -= n_segments * (block_width + block_spacing);
     
     idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
@@ -561,22 +890,26 @@ instance(mem, start_idx)
       // Not captured, start dragging.
       (last_cap == 0) ? (
         // Are we in the positional columns?
-        (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
+        (mouse_y > y) && (mouse_y < (y + block_width)) && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
           // Start dragging a region
           start_idx = idx;
           mouse_cap == 1 ? captured_by = me : captured_by = -me;
         ) : (
-          ((mouse_x < x) && (mouse_x > x - (block_width + block_spacing))) ? (
-            // Toggle the lane power
-            slider(power_slider) = 1 - slider(power_slider);
-          ) : (mouse_x < x) ? (
-            // Select the lane
-            selected_details = me;
+          (mouse_y > y) && (mouse_y < (y + block_width)) ? (
+            ((mouse_x < x) && (mouse_x > x - (block_width + block_spacing))) ? (
+              // Toggle the lane power
+              slider(power_slider) = 1 - slider(power_slider);
+            ) : (mouse_x < x) ? (
+              // Select the lane
+              selected_details = me;
+            );
           );
         );
       ) : ( me == abs(captured_by) ) ? (
         captured_by > 0 ? gfx_set(0, 0, 1, .1) : gfx_set(1, 0, 0, .1);
-        gfx_rect(x + (block_width + block_spacing) * start_idx, y, (idx - start_idx + 1) * (block_width + block_spacing), block_width, 1);
+        ptr = min(start_idx, idx);
+        idx = max(start_idx, idx);
+        gfx_rect(x + (block_width + block_spacing) * ptr, y, (idx - ptr + 1) * (block_width + block_spacing), block_width, 1);
       );
     ) : ( abs(captured_by) == me ) ? (
       // We dragged an area
@@ -602,19 +935,86 @@ instance(mem, start_idx)
   y += block_width + block_spacing;
 );
 
+function draw_scope(scope_w, scope_h)
+global(SCOPE,
+       current_sample, samples_per_beat, sample_clock,
+       block_width, block_spacing, l_buffer.write_ptr,
+       gfx_w, gfx_h, gfx_x, gfx_y, gfx_dest)
+instance(last_scope_w, last_scope_h, last_samples, iter)
+local(lastx, x, s, dx, minacc, maxacc, wave_range, wave_center, x_old, y_old)
+(
+  SCOPE = 1;
+  iter += 1;
+  
+  ((last_scope_w != scope_w) || (last_scope_h != scope_h)) ? (
+    last_scope_w = scope_w;
+    last_scope_h = scope_h;
+    gfx_setimgdim(1, scope_w, scope_h);
+  );
+
+  gfx_dest = 1;
+  x_old = gfx_x;
+  y_old = gfx_y;
+  gfx_x = 0;
+  gfx_y = 0;
+  
+  //(iter % 4) == 0 ? gfx_blurto(scope_w, scope_h);
+  gfx_set(0, 0, 0, .005);
+  gfx_rect(0, 0, scope_w, scope_h);
+  
+  wave_range = 0.5 * scope_h;
+  wave_center = wave_range;
+  x = (block_width + block_spacing) * (current_sample / samples_per_beat);
+  dx = (block_width + block_spacing) / samples_per_beat;
+  s = 1;
+  maxacc = 0;
+  minacc = 0;
+  gfx_set(0.5, 0.5, 0.5, 0.8);
+  loop(sample_clock - last_samples,
+    maxacc = max((l_buffer.write_ptr)[s], maxacc);
+    minacc = min((l_buffer.write_ptr)[s], minacc);
+    
+    (floor(lastx) != floor(x)) ? (
+      gfx_line(x, wave_center + maxacc * wave_range, x, wave_center + minacc * wave_range);
+      lastx = x;
+      maxacc = 0;
+      minacc = 0;
+    );
+    x -= dx;
+    s -= 1;
+  );
+  
+  last_samples = sample_clock;
+  gfx_dest = -1;
+  gfx_x = x_old;
+  gfx_y = y_old;
+  
+  1
+);
+
+scope_w = ceil((block_width + block_spacing) * 32);
+scope_h = 90;
+
+gfx_x = grid_origin_x + label_width + block_width + block_spacing;
+gfx_y = grid_origin_y;
+gfx_blit(draw_scope(scope_w, scope_h), 1, 0);
+
+grid_origin_y += 100;
 x_current = grid_origin_x;
 y_current = grid_origin_y;
 
+y_s = y_current;
 y_current = process_effect_row(1, reset_values, x_current, y_current, "Reset", 1, 10);
 y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown", 4, 11);
 //y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
 y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
 y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
 y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16);
-//y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 2, 15);
+y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15);
+y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb", 1, 17);
 
 gfx_set(1, 1, 1, .1);
-gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat), grid_origin_y, block_width, max_effects * block_width);
+gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
 last_cap = mouse_cap;
 
@@ -673,6 +1073,7 @@ instance(vel, mod1, mod2)
 );
 
 (selected_details == 7) ? (
+  // Filter
   nextPanel = drawPanel(s_FILTER, cX, cY - 1.5 * knobSize, 26.5*knobSpacing, panelHeight, filter_enabled);
   cX += 2 * knobSpacing;
   cX += knobSize;
@@ -747,5 +1148,83 @@ instance(vel, mod1, mod2)
   cX += knobSize*2.5;
   cutoffSustainKnob.knob_set(sprintf(1, "%.1f", cutoff_sustain), filter_enabled, cutoff_sustain);
   cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", cutoff_sustain, 0, 0, 0, 1.0) ? ( cutoff_sustain = cutoffSustainKnob.value; slider_automate(cutoff_sustain); );
+) : ( selected_details == 6 ) ? (
+  // Gate
+  nextPanel = drawPanel(s_GATE, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, gate_enabled);
+  cX += knobSize * 1.35;
+  gateStart.knob_set(sprintf(1, "%.1f dB", gate_start), gate_enabled, (gate_start + 48)/96);
+  gateStart.drawAndProcess(cX, cY, knobSize, "Closed Level", "Gain when gate is closed.", (current_gate + 48)/96, 1, 1, 1, (gate_start_default + 48)/96) ? ( gate_start = gateStart.value * 96 - 48; slider_automate(gate_start); );
+  
+  cX += 2.5*knobSize;
+  gateEnd.knob_set(sprintf(1, "%.1f dB", gate_stop), gate_enabled, (gate_stop + 48)/96);
+  gateEnd.drawAndProcess(cX, cY, knobSize, "Open Level", "Gain level when gate is open.", (current_gate + 48)/96, 1, 1, 1, (gate_stop_default + 48)/96) ? ( gate_stop = gateEnd.value * 96 - 48; slider_automate(gate_stop); );
+  
+  cX += 2.5*knobSize;  
+  tempo_sync_envelopes ? ( gateAttackKnob.knob_set(getFastEnvelopeLabel(gate_atk), 1, gate_atk);
+  ) : gateAttackKnob.knob_set(gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*gate_atk))), gate_enabled, gate_atk);
+  gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", gate_atk, 0, 0, 0, gate_atk_default) ? ( gate_atk = gateAttackKnob.value; slider_automate(gate_atk); );
+  
+  cX += knobSize*2.5;
+  tempo_sync_envelopes ? ( gateDecayKnob.knob_set(getFastEnvelopeLabel(gate_decay), 1, gate_decay);
+  ) : gateDecayKnob.knob_set(gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*gate_decay))), gate_enabled, gate_decay );
+  gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", gate_decay, 0, 0, 0, gate_decay_default) ? ( gate_decay = gateDecayKnob.value; slider_automate(gate_decay); );
+  
+  cX += knobSize*2.5;
+  gateSustainKnob.knob_set(sprintf(1, "%.1f", gate_sustain), gate_enabled, gate_sustain);
+  gateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", gate_sustain, 0, 0, 0, gate_sustain_default) ? ( gate_sustain = gateSustainKnob.value; slider_automate(gate_sustain); );
+) : ( selected_details == 8 ) ? (
+  // Reverb
+  nextPanel = drawPanel(s_REVERB, cX, cY - 1.5 * knobSize, 29*knobSpacing, panelHeight, reverb_enabled);
+  
+  cX += knobSize * 1.35;
+  verbDiffusionKnob.knob_set("", reverb_enabled, verb_diffusion);
+  verbDiffusionKnob.drawAndProcess(cX, cY, knobSize, "Diffusion", "Reverb Diffusion", verb_diffusion, 1, 1, 1, verb_diffusion_default) ? ( verb_diffusion = verbDiffusionKnob.value; slider_automate(verb_diffusion); );
+
+  cX += 2.5*knobSize;
+  verbDecayKnob.knob_set("", reverb_enabled, verb_decay);
+  verbDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Reverb decay", verb_decay, 1, 1, 1, verb_decay_default) ? ( verb_decay = verbDecayKnob.value; slider_automate(verb_decay); );
+  
+  cX += 2.5 * knobSize;
+  verbModDepthKnob.knob_set("", reverb_enabled, verb_mod_depth);
+  verbModDepthKnob.drawAndProcess(cX, cY, knobSize, "Mod Depth", "Modulation depth", verb_mod_depth, 1, 1, 1, verb_mod_depth_default) ? ( verb_mod_depth = verbModDepthKnob.value; slider_automate(verb_mod_depth); );
+  
+  cX += 2.5 * knobSize;
+  verbModRateKnob.knob_set("", reverb_enabled, verb_mod_rate);
+  verbModRateKnob.drawAndProcess(cX, cY, knobSize, "Mod rate", "Mod rate", verb_mod_rate, 1, 1, 1, verb_mod_rate_default) ? ( verb_mod_rate = verbModRateKnob.value; slider_automate(verb_mod_rate); );
+
+  cX += 2.5*knobSize;
+  center = .5 * srate * exp( (1-verb_lowpass) * log(20/22050) );
+  verbLowPassKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), reverb_enabled, verb_lowpass);
+  verbLowPassKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter Cutoff inside the feedback loop", verb_lowpass, 1, 1, 1, verb_lowpass_default) ? ( verb_lowpass = verbLowPassKnob.value; slider_automate(verb_lowpass); );
+  
+  cX += 2.5*knobSize;
+  center = .5 * srate * exp( (1-verb_highpass) * log(20/22050) );
+  verbHighPassKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), reverb_enabled, verb_highpass);
+  verbHighPassKnob.drawAndProcess(cX, cY, knobSize, "Highpass", "Filter Cutoff", verb_highpass, 1, 1, 1, verb_highpass_default) ? ( verb_highpass = verbHighPassKnob.value; slider_automate(verb_highpass); );
+
+  cX += 2.5*knobSize;
+  verbDry.knob_set(sprintf(1, "%.1f dB", verb_dry), reverb_enabled, (verb_dry + 64)/64);
+  verbDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", (verb_dry + 64)/64, 1, 1, 1, (verb_dry_default + 64)/64) ? ( verb_dry = verbDry.value * 64 - 64; slider_automate(verb_dry); );
+  
+  cX += 2.5*knobSize;
+  verbWet.knob_set(sprintf(1, "%.1f dB", verb_wet), reverb_enabled, (verb_wet + 64)/64);
+  verbWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", (verb_wet + 64)/64, 1, 1, 1, (verb_wet_default + 64)/64) ? ( verb_wet = verbWet.value * 64 - 64; slider_automate(verb_wet); );
+
+  cX += knobSize*1.75;
+  nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.125*knobSpacing, panelHeight, reverb_enabled);
+  
+  cX += 1.35*knobSize;  
+  tempo_sync_envelopes ? ( verbGateAttackKnob.knob_set(getFastEnvelopeLabel(verb_gate_atk), 1, verb_gate_atk);
+  ) : verbGateAttackKnob.knob_set(verb_gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*verb_gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*verb_gate_atk))), reverb_enabled, verb_gate_atk);
+  verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", verb_gate_atk, 0, 0, 0, verb_gate_atk_default) ? ( verb_gate_atk = verbGateAttackKnob.value; slider_automate(verb_gate_atk); );
+  
+  cX += knobSize*2.5;
+  tempo_sync_envelopes ? ( verbGateDecayKnob.knob_set(getFastEnvelopeLabel(verb_gate_decay), 1, verb_gate_decay);
+  ) : verbGateDecayKnob.knob_set(verb_gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*verb_gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*verb_gate_decay))), reverb_enabled, verb_gate_decay );
+  verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", verb_gate_decay, 0, 0, 0, verb_gate_decay_default) ? ( verb_gate_decay = verbGateDecayKnob.value; slider_automate(verb_gate_decay); );
+  
+  cX += knobSize*2.5;
+  verbGateSustainKnob.knob_set(sprintf(1, "%.1f", verb_gate_sustain), reverb_enabled, verb_gate_sustain);
+  verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", verb_gate_sustain, 0, 0, 0, verb_gate_sustain_default) ? ( verb_gate_sustain = verbGateSustainKnob.value; slider_automate(verb_gate_sustain); );
 );
 
