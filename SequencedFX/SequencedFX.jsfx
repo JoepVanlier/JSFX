@@ -1,8 +1,8 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.05
+version: 0.07
 author: Joep Vanlier
-changelog: Add logo.
+changelog: Add tempo sync modes.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -16,6 +16,8 @@ slider14:reverse_enabled=1<0,1,1>-Reverse enabled
 slider15:gate_enabled=0<0,1,1>-Gate enabled
 slider16:filter_enabled=0<0,1,1>-Filter enabled
 slider17:reverb_enabled=0<0,1,1>-Reverb enabled
+slider18:degrade_enabled=0<0,1,1>-Degrade enabled
+slider19:tapestop_enabled=0<0,1,1>-Tapestop enabled
 slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
@@ -72,6 +74,10 @@ function load_defaults()
   gate_atk_default = 0.06;
   gate_decay_default = 0.6;
   gate_sustain_default = 1.0;
+  
+  bitrate_default = 16;
+  samplerate_default = 1.0;
+  saturate_default = -6;
 );
 
 function init_to_defaults()
@@ -93,6 +99,12 @@ function init_to_defaults()
   gate_atk = gate_atk_default;
   gate_decay = gate_decay_default;
   gate_sustain = gate_sustain_default;
+  
+  bitrate = bitrate_default;
+  samplerate = samplerate_default;
+  saturate = saturate_default;
+  
+  loaded = 1;
 );
 
 load_defaults();
@@ -116,6 +128,8 @@ function pattern_update()
   reverse_values = current_pattern + 5 * max_segments;
   gate_values = current_pattern + 6 * max_segments;
   reverb_values = current_pattern + 7 * max_segments;
+  degrade_values = current_pattern + 8 * max_segments;
+  tapestop_values = current_pattern + 9 * max_segments;
   
   reset_values[0] = 1;
 );
@@ -388,6 +402,7 @@ init_playhead();
 
 @block
 interpolators_block();
+time_mode == 2 ? current_sample = beat_position * from_beat;
 
 @serialize
 loaded = 1;
@@ -413,6 +428,8 @@ file_var(0, verb_wet);
 file_var(0, verb_gate_atk);
 file_var(0, verb_gate_decay);
 file_var(0, verb_gate_sustain);
+
+file_var(0, time_mode);
 
 @sample
 sample_clock += 1;
@@ -500,6 +517,9 @@ function update_time_info()
   samples_per_beat = (srate * 60) / tempo / current_speed;
   pattern_length = n_segments * samples_per_beat;
   to_index = n_segments / pattern_length;
+  from_beat = 60 * srate / tempo;
+  
+  //srate * 60 / tempo / (n_segments * current_speed) * 64;
 );
 
 function update_envelope_simple(target)
@@ -566,14 +586,99 @@ function process_verb()
   current_verb_gate = verb_envelope.update_envelope(reverb_target);
 
   verb.eval_reverb(ssl * current_verb_gate, ssr * current_verb_gate);
-  ssl = verb_drymul * ssl + verb_wetmul * verb.out_right;
-  ssr = verb_drymul * ssl + verb_wetmul * verb.out_left;
+  ssl = verb_drymul * ssl + verb_wetmul * verb.out_left;
+  ssr = verb_drymul * ssr + verb_wetmul * verb.out_right;
+);
+
+
+function interp(x0, frac)
+instance(x1, x2, x3)
+local(id0, id1, id2, id3)
+global()
+(
+  id0 = x1;
+  id1 = 0.5*(x2 - x0);
+  id2 = x0 - 2.5*x1 + 2*x2 - 0.5*x3;
+  id3 = 0.5*(x3 - x0) + 1.5 * (x1 - x2);
+  
+  x3 = x2;
+  x2 = x1;
+  x1 = x0;
+  
+  ((id3*frac+id2)*frac+id1)*frac+id0
+);
+
+function hist(x0)
+instance(x1, x2, x3)
+local()
+global()
+(
+  x3 = x2;
+  x2 = x1;
+  x1 = x0;
+);
+
+function process_degrade()
+instance(factor,
+         ib_factor, b_factor,
+         cpos, degrade_pos,
+         from_l, from_r, to_l, to_r,
+         l_hist, r_hist, preamp)
+local(target)
+global(sample_clock, ssl, ssr, bitrate, samplerate, srate, degrade_target, saturate, log10d20_conversion)
+(
+  sample_clock % 16 == 0 ? (
+    b_factor = 2^(bitrate - 1);
+    ib_factor = 1/b_factor;
+    
+    target = srate * exp( (1-samplerate) * log(1000/44100) );
+    factor = (srate / target);
+  );
+  
+  degrade_pos += 1;
+  
+  degrade_target ? (
+    ssl = ib_factor * floor(ssl * b_factor);
+    ssr = ib_factor * floor(ssr * b_factor);
+    
+    // "S&H"
+    degrade_pos > factor ? (
+      while(
+        degrade_pos -= factor;
+        cpos > factor
+      );
+      
+      from_l = to_l;
+      from_r = to_r;
+      to_l = l_hist.interp(ssl, cpos);
+      to_r = r_hist.interp(ssr, cpos);
+    ) : (
+      l_hist.hist(ssl);
+      r_hist.hist(ssr);
+    );
+    
+    ssl = to_l;
+    ssr = to_r;
+    
+    saturate > -6 ? (
+      preamp = exp(log10d20_conversion*saturate);
+      ssl = tanh(preamp*ssl)/preamp;
+      ssr = tanh(preamp*ssr)/preamp;
+    );
+  );
 );
 
 update_time_info();
-current_sample += 1;
 target_position += 1; /* Target position moves with the track */
-current_sample > pattern_length ? current_sample -= pattern_length;
+
+current_sample += 1;
+current_sample > pattern_length ? 
+(
+  while(
+    current_sample -= pattern_length;
+    current_sample > pattern_length
+  );
+);
 sequencer_index = floor(to_index * current_sample);
 
 reset_sample = current_sample + crossfade_samples;
@@ -648,6 +753,22 @@ jump_schedule.eval_jump();
     verb_envelope.reset = 0;
     verb_envelope.reset_envelope();
   );
+  
+  degrade_target = degrade_values[sequencer_index];
+  
+  previous_tapestop_target = tapestop_target;
+  tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
+  previous_tapestop_target != tapestop_target ? (
+    stop_factor = 1;
+  );
+  
+  dyn_speed = speed;
+);
+
+tapestop_target ? (
+  stop_factor = .9999 * stop_factor;
+  
+  dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
 );
 
 last_sequencer_index = sequencer_index;
@@ -657,8 +778,8 @@ l_buffer.writeBuffer(spl0);
 r_buffer.writeBuffer(spl1);
 
 // Reference playhead is where the playhead is sent after a "reset" by retrigger.
-playhead_0 += speed;
-playhead_1 += speed;
+playhead_0 += dyn_speed;
+playhead_1 += dyn_speed;
 
 // Equal power fades (x^2 + y^2 = 1)
 x_fade_position > 0 ? (
@@ -677,6 +798,7 @@ x_fade_position > 0 ? (
 ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
 ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
 
+degrade_enabled ? process_degrade();
 filter_enabled ? process_filter();
 gate_enabled ? process_gate();
 reverb_enabled ? process_verb();
@@ -745,16 +867,19 @@ function setup_theme()
     s_ENVELOPE = sprintf(66, "ENVELOPE");
     s_GATE = sprintf(67, "GATE");
     s_REVERB = sprintf(68, "REVERB");
+    s_DEGRADE = sprintf(69, "DEGRADE");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
     s_GATE = sprintf(67, "Gate");
     s_REVERB = sprintf(68, "Reverb");
+    s_DEGRADE = sprintf(69, "Degrade");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
     s_GATE = sprintf(67, "Gate");
     s_REVERB = sprintf(68, "Reverb");
+    s_DEGRADE = sprintf(69, "Degrade");
   );
   
   style == 0 ? (
@@ -809,33 +934,43 @@ label_width = 150 * (1 + scaling);
 block_width = 22.83 * (1 + scaling);
 block_spacing = 1 * (1 + scaling);
 
-function nice_rect(x, y, w, h, value, powered)
-global(base_r, base_g, base_b,
-       font_r, font_g, font_b,
-       gfx_x, gfx_y)
-local(label, txt_w, txt_h, power_intensity)
+function nice_rect_color(x, y, w, h, label, base_r, base_g, base_b, edge_r, edge_g, edge_b)
+local(label, txt_w, txt_h)
+global(font_r, font_g, font_b, gfx_x, gfx_y)
 (
-  power_intensity = 0.2 + 0.8 * powered;
-  gfx_set(base_r * power_intensity, base_g * power_intensity, base_b * power_intensity, 1.0);
+  gfx_set(base_r, base_g, base_b, 1.0);
   gfx_rect(x, y, w, h);
   
-  gfx_set(2 * base_r * power_intensity, 2 * base_g * power_intensity, 2 * base_b * power_intensity, 1.0);
+  gfx_set(edge_r, edge_g, edge_b, 1.0);
   gfx_line(x, y, x + w - 1, y);
   gfx_line(x, y, x, y + h - 1);
   gfx_line(x, y + h - 1, x + w - 1, y + h - 1);
   gfx_line(x + w - 1, y, x + w - 1, y + h - 1);
   
-  value > 0 ? (
-    gfx_rect(x, y, w, h);
-    gfx_x = x;
-    gfx_y = y;
-    sprintf(label, "%d", value);
+  label > 0 ? (
     gfx_measurestr(label, txt_w, txt_h);
     gfx_x = x - 0.5 * (txt_w - w);
     gfx_y = y - 0.5 * (txt_h - h);
     gfx_set(font_r, font_g, font_b, 1.0);
     gfx_printf(label);
   );
+);
+
+function nice_rect(x, y, w, h, value, powered)
+global(base_r, base_g, base_b)
+local(label, txt_w, txt_h, power_intensity, power_intensity, rr, gg, bb, er, eg, eb, p2, pv)
+(
+  power_intensity = 0.2 + 0.8 * powered;
+  p2 = 2 * power_intensity;
+  er = base_r * p2;
+  eg = base_g * p2;
+  eb = base_b * p2;
+  pv = power_intensity * (1 + value);
+  rr = base_r * pv;
+  gg = base_g * pv;
+  bb = base_b * pv;
+  sprintf(1, "%d", value);
+  this.nice_rect_color(x, y, w, h, value > 0 ? 1 : 0, rr, gg, bb, er, eg, eb);
 );
 
 function power_button(x, y, w, h, powered)
@@ -1008,7 +1143,7 @@ local(lastx, x, s, dx, minacc, maxacc, wave_range, wave_center, x_old, y_old)
     );
     x -= dx;
     s -= 1;
-  );
+  ); 
   
   last_samples = sample_clock;
   gfx_dest = -1;
@@ -1018,9 +1153,9 @@ local(lastx, x, s, dx, minacc, maxacc, wave_range, wave_center, x_old, y_old)
   1
 );
 
-draw_logo(10 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
+draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 
-scope_w = ceil((block_width + block_spacing) * 32);
+scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
 
 gfx_x = grid_origin_x + label_width + block_width + block_spacing;
@@ -1035,11 +1170,51 @@ y_s = y_current;
 y_current = process_effect_row(1, reset_values, x_current, y_current, "Reset", 1, 10);
 y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown", 4, 11);
 //y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
+y_current = process_effect_row(10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19);
+
 y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
 y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
+y_current = process_effect_row(9, degrade_values, x_current, y_current, "Degrade", 1, 18);
 y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16);
 y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15);
 y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb", 1, 17);
+
+/* Control strip */
+function selection_button(me, cx, cy, width, height, label, br, bg, bb)
+local()
+global(gfx_x, gfx_y, base_r, base_g, base_b, mouse_x, mouse_y, mouse_cap, last_cap)
+instance(value)
+(
+  value == me ? (
+    br *= 2;
+    bg *= 2;
+    bb *= 2;
+  );
+  
+  nice_rect_color(cx, cy, width, height, label, br, bg, bb, 2 * br, 2 * bg, 2 * bb);
+  (last_cap & 1 == 0) && 
+  (mouse_cap & 1 == 1) && 
+  (mouse_x > cx) && 
+  (mouse_x < (cx + width)) && 
+  (mouse_y > cy) && 
+  (mouse_y < (cy + height)) ? 
+  (
+    value = me;
+  );
+  
+  cx += width + 2;
+);
+nice_rect_color(grid_origin_x, y_current, scope_w + label_width - 3, block_width, 0, 0.2*base_r, 0.2 * base_g, 0.2 * base_b, 2 * base_r, 2*base_g, 2*base_b);
+
+time_mode.value = time_mode;
+cx = grid_origin_x + 2;
+cx = time_mode.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1);
+cx = time_mode.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1);
+cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1);
+time_mode = time_mode.value;
+
+
+y_current += block_width;
 
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
@@ -1254,6 +1429,23 @@ instance(vel, mod1, mod2)
   cX += knobSize*2.5;
   verbGateSustainKnob.knob_set(sprintf(1, "%.1f", verb_gate_sustain), reverb_enabled, verb_gate_sustain);
   verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", verb_gate_sustain, 0, 0, 0, verb_gate_sustain_default) ? ( verb_gate_sustain = verbGateSustainKnob.value; slider_automate(verb_gate_sustain); );
+) : ( selected_details == 9 ) ? (
+  // Degrade
+  min_degrade = 3;
+  nextPanel = drawPanel(s_DEGRADE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, degrade_enabled);
+  
+  cX += knobSize * 1.35;
+  bitrateKnob.knob_set(sprintf(1, "%d", bitrate + .001), degrade_enabled, (bitrate - min_degrade) / 21);
+  bitrateKnob.drawAndProcess(cX, cY, knobSize, "Bit rate", "Bit rate", (bitrate - min_degrade) / 21, 1, 1, 1, (bitrate_default + .0001 - min_degrade) / 21) ? ( bitrate = bitrateKnob.value * 21 + min_degrade; slider_automate(bitrate); );
+
+  cX += 2.5*knobSize;
+  center = srate * exp( (1-samplerate) * log(1000/44100) );
+  samplerateKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), degrade_enabled, samplerate);
+  samplerateKnob.drawAndProcess(cX, cY, knobSize, "Sample rate", "Sample rate", samplerate, 1, 1, 1, samplerate_default) ? ( samplerate = samplerateKnob.value; slider_automate(samplerate); );
+  
+  cX += 2.5*knobSize;
+  satKnob.knob_set(saturate > -6 ? sprintf(1, "%.1f dB", saturate) : "OFF", degrade_enabled, (saturate + 6)/54);
+  satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Sautration.", (saturate + 6)/54, 1, 1, 1, (saturate_default + 6.001)/54) ? ( saturate = satKnob.value * 54 - 6; slider_automate(saturate); );
 );
 
-
+hinter.drawHint_draw();
