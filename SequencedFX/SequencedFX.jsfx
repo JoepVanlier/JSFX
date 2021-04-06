@@ -1,8 +1,8 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.07
+version: 0.08
 author: Joep Vanlier
-changelog: Add tempo sync modes.
+changelog: Add time control time stop. Allow users to choose time representation (beats vs time).
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -78,6 +78,8 @@ function load_defaults()
   bitrate_default = 16;
   samplerate_default = 1.0;
   saturate_default = -6;
+  
+  tapestop_decay_default = 0.6;
 );
 
 function init_to_defaults()
@@ -103,6 +105,8 @@ function init_to_defaults()
   bitrate = bitrate_default;
   samplerate = samplerate_default;
   saturate = saturate_default;
+  
+  tapestop_decay = tapestop_decay_default;
   
   loaded = 1;
 );
@@ -430,8 +434,21 @@ file_var(0, verb_gate_decay);
 file_var(0, verb_gate_sustain);
 
 file_var(0, time_mode);
+file_var(0, tapestop_decay);
+file_var(0, tempo_sync_envelopes);
+
 
 @sample
+function calc_times_universal(atk, decay, sustain)
+instance()
+(
+  tempo_sync_envelopes ? (
+    this.calc_times_sync(atk, decay, sustain);
+  ) : (
+    this.calc_times(atk, decay, sustain);    
+  );
+);
+
 sample_clock += 1;
 
 verb.update_reverb_settings(verb_diffusion, verb_decay, verb_mod_depth, verb_mod_rate, verb_lowpass, verb_highpass);
@@ -545,7 +562,7 @@ function process_filter()
   current_drive = clamp(drive_interpolator.interpolate(), -6, 48);
   
   sample_clock % 16 == 0 ? (
-    filter_envelope.calc_times(cutoff_atk, cutoff_decay, cutoff_sustain);
+    filter_envelope.calc_times_universal(cutoff_atk, cutoff_decay, cutoff_sustain);
   );
   
   current_cutoff = cutoff_start + filter_envelope.update_envelope(filter_target) * (cutoff_final - cutoff_start);
@@ -565,7 +582,7 @@ function process_filter()
 function process_gate()
 (
   sample_clock % 16 == 0 ? (
-    gate_envelope.calc_times(gate_atk, gate_decay, gate_sustain);
+    gate_envelope.calc_times_universal(gate_atk, gate_decay, gate_sustain);
   );
   
   current_gate = gate_start + gate_envelope.update_envelope(gate_target) * (gate_stop - gate_start);
@@ -577,7 +594,7 @@ function process_gate()
 function process_verb()
 (
   sample_clock % 16 == 0 ? (
-    verb_envelope.calc_times(verb_gate_atk, verb_gate_decay, verb_gate_sustain);
+    verb_envelope.calc_times_universal(verb_gate_atk, verb_gate_decay, verb_gate_sustain);
     verb_drymul = exp(log10d20_conversion*verb_dry);
     verb_wetmul = exp(log10d20_conversion*verb_wet);
     post_gate ? verb_wetmul * current_verb_gate;
@@ -759,6 +776,7 @@ jump_schedule.eval_jump();
   previous_tapestop_target = tapestop_target;
   tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
   previous_tapestop_target != tapestop_target ? (
+    tapestop_envelope.calc_times_universal(tapestop_decay, tapestop_decay, 0);
     stop_factor = 1;
   );
   
@@ -766,8 +784,7 @@ jump_schedule.eval_jump();
 );
 
 tapestop_target ? (
-  stop_factor = .9999 * stop_factor;
-  
+  stop_factor = (1 - tapestop_envelope.k_decay) * stop_factor;
   dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
 );
 
@@ -807,6 +824,29 @@ spl0 = ssl;
 spl1 = ssr;
 
 @gfx
+function convert_tempos(target_sync_mode)
+local()
+instance()
+global(converted, cutoff_atk, cutoff_decay, gate_atk, gate_decay, verb_gate_atk, verb_gate_decay, tapestop_decay)
+(
+  target_sync_mode ? (
+    cutoff_atk = to_synced(cutoff_atk, 1.0);
+    cutoff_decay = to_synced(cutoff_decay, 0.1);
+    gate_atk = to_synced(gate_atk, 1.0);
+    gate_decay = to_synced(gate_decay, 0.1);
+    verb_gate_atk = to_synced(verb_gate_atk, 1.0);
+    verb_gate_decay = to_synced(verb_gate_decay, 0.1);
+    tapestop_decay = to_synced(tapestop_decay, 0.1);
+  ) : (
+    cutoff_atk = to_non_synced(cutoff_atk, 1.0);
+    cutoff_decay = to_non_synced(cutoff_decay, 0.1);
+    gate_atk = to_non_synced(gate_atk, 1.0);
+    gate_decay = to_non_synced(gate_decay, 0.1);
+    verb_gate_atk = to_non_synced(verb_gate_atk, 1.0);
+    verb_gate_decay = to_non_synced(verb_gate_decay, 0.1);
+    tapestop_decay = to_non_synced(tapestop_decay, 0.1);
+  );
+);
 
 function draw_logo(x_origin, y_origin, dx, dy)
 local(cx, cy, xs, ys)
@@ -868,18 +908,21 @@ function setup_theme()
     s_GATE = sprintf(67, "GATE");
     s_REVERB = sprintf(68, "REVERB");
     s_DEGRADE = sprintf(69, "DEGRADE");
+    s_TAPESTOP = sprintf(70, "TAPE STOP");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
     s_GATE = sprintf(67, "Gate");
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
+    s_TAPESTOP = sprintf(70, "Tape Stop");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
     s_GATE = sprintf(67, "Gate");
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
+    s_TAPESTOP = sprintf(70, "Tape Stop");
   );
   
   style == 0 ? (
@@ -1179,6 +1222,9 @@ y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1
 y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15);
 y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb", 1, 17);
 
+gfx_set(1, 1, 1, .1);
+gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
+
 /* Control strip */
 function selection_button(me, cx, cy, width, height, label, br, bg, bb)
 local()
@@ -1213,11 +1259,17 @@ cx = time_mode.selection_button(1, cx, y_current + 2, 2 * block_width, block_wid
 cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1);
 time_mode = time_mode.value;
 
+tempo_sync_envelopes.value = tempo_sync_envelopes;
+cx += block_width;
+cx = tempo_sync_envelopes.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Time", 0.2, 0.1, 0.05);
+cx = tempo_sync_envelopes.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "Beats", 0.2, 0.1, 0.05);
+
+tempo_sync_envelopes != tempo_sync_envelopes.value ? (
+  tempo_sync_envelopes = tempo_sync_envelopes.value;
+  convert_tempos(tempo_sync_envelopes);
+);
 
 y_current += block_width;
-
-gfx_set(1, 1, 1, .1);
-gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
 last_cap = mouse_cap;
 
@@ -1446,6 +1498,16 @@ instance(vel, mod1, mod2)
   cX += 2.5*knobSize;
   satKnob.knob_set(saturate > -6 ? sprintf(1, "%.1f dB", saturate) : "OFF", degrade_enabled, (saturate + 6)/54);
   satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Sautration.", (saturate + 6)/54, 1, 1, 1, (saturate_default + 6.001)/54) ? ( saturate = satKnob.value * 54 - 6; slider_automate(saturate); );
+) : ( selected_details == 10 ) ? (
+  // Degrade
+  min_degrade = 3;
+  nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 4*knobSpacing, panelHeight, degrade_enabled);
+  
+  cX += knobSize * 1.35;
+  tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), 1, tapestop_decay);
+  ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
+  
+  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 0, 0, 0, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
 );
 
 hinter.drawHint_draw();
