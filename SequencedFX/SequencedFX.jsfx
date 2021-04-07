@@ -2,7 +2,7 @@ desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
 version: 0.09
 author: Joep Vanlier
-changelog: Bugfix reverb / scope memory. Started work on karplus / pipe sim.
+changelog: Add mixing to tonal delay. Serialize tonal delay settings.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -81,6 +81,13 @@ function load_defaults()
   saturate_default = -6;
   
   tapestop_decay_default = 0.6;
+  
+  karplus_feedback_default = 0.15;
+  karplus_cutoff_default = 0.7;
+  karplus_pitch_default = 0.667;
+  karplus_wet_default = 0.0;
+  karplus_dry_default = -48.0;
+  
 );
 
 function init_to_defaults()
@@ -108,6 +115,12 @@ function init_to_defaults()
   saturate = saturate_default;
   
   tapestop_decay = tapestop_decay_default;
+  
+  karplus_feedback = karplus_feedback_default;
+  karplus_cutoff = karplus_cutoff_default;
+  karplus_pitch = karplus_pitch_default;
+  karplus_wet = karplus_wet_default;
+  karplus_dry = karplus_dry_default;
   
   loaded = 1;
 );
@@ -445,6 +458,12 @@ file_var(0, time_mode);
 file_var(0, tapestop_decay);
 file_var(0, tempo_sync_envelopes);
 
+file_var(0, karplus_feedback);
+file_var(0, karplus_cutoff);
+file_var(0, karplus_pitch);
+file_var(0, karplus_wet);
+file_var(0, karplus_dry);
+file_var(0, snap_karplus);
 
 @sample
 function calc_times_universal(atk, decay, sustain)
@@ -614,25 +633,36 @@ function process_verb()
   ssl = verb_drymul * ssl + verb_wetmul * verb.out_left;
   ssr = verb_drymul * ssr + verb_wetmul * verb.out_right;
 );
- 
+
 function process_karplus()
-instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current)
-local(g, kpr, kpl, lk, rk, v, y, omega, omega_fundamental, max_fb)
+instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain)
+local(g, kpr, kpl, lk, rk, v, y, omega, omega_fundamental, max_fb
+      midi_pitch, current_pitch)
 global(l_karplus, r_karplus,
        l_karplus.readBuffer, r_karplus.readBuffer,
        l_karplus.writeBuffer, r_karplus.writeBuffer,
-       karplus_feedback, karplus_pitch, karplus_cutoff
+       karplus_feedback, karplus_pitch, karplus_cutoff,
+       karplus_wet, karplus_dry, log10d20_conversion,
        srate,
        sample_clock,
        ssl, ssr, igain,
+       snap_karplus,
+       karplus_target
        )
 (
   sample_clock % 16 == 0 ? (
-    karplus_offset = srate / karplus_pitch;
+    midi_pitch = 45 + 36 * karplus_pitch;
+    snap_karplus ? midi_pitch = floor(midi_pitch);
+    current_pitch = 440 * 2^((midi_pitch - 69)/12);
+    
+    karplus_offset = srate / current_pitch;
     cutoff_current = 0.98 * cutoff_current + 0.02 * karplus_cutoff;
     omega = .99999 * $pi * exp((1.0 - cutoff_current) * log(20/22050));
     g = tan(0.5 * omega);
     coeff = g / (1.0 + g);
+
+    current_wet_gain = 0.9 * current_wet_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * karplus_wet) : 0);
+    current_dry_gain = 0.9 * current_dry_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * karplus_dry) : 1);
     
     max_fb = 0.98;
     fb = 2.0 * max_fb * karplus_feedback - max_fb;
@@ -643,7 +673,7 @@ global(l_karplus, r_karplus,
     
     // We need to correct for the phase shift incurred due to our lowpass filter
     // otherwise our karplus will detune as we sweep the cutoff.
-    omega_fundamental = 2.0 * $pi * karplus_pitch / srate;
+    omega_fundamental = 2.0 * $pi * current_pitch / srate;
     
     // Phase shift in radians.
     shift = atan(omega_fundamental / omega);
@@ -668,14 +698,14 @@ global(l_karplus, r_karplus,
   kpl = fb_current * lk;
   kpr = fb_current * rk;
 
-  l_karplus.writeBuffer(ssl + kpl);
-  r_karplus.writeBuffer(ssr + kpr);
+  l_karplus.writeBuffer(ssl * current_wet_gain + kpl);
+  r_karplus.writeBuffer(ssr * current_wet_gain + kpr);
   
   kpl *= igain;
   kpr *= igain;
   
-  ssl = kpl;
-  ssr = kpr;
+  ssl = ssl * current_dry_gain + kpl;
+  ssr = ssr * current_dry_gain + kpr;
 );
 
 
@@ -984,7 +1014,7 @@ function setup_theme()
     s_REVERB = sprintf(68, "REVERB");
     s_DEGRADE = sprintf(69, "DEGRADE");
     s_TAPESTOP = sprintf(70, "TAPE STOP");
-    s_KARPLUS = sprintf(71, "STRING DELAY");
+    s_KARPLUS = sprintf(71, "PITCHED DELAY");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -992,7 +1022,7 @@ function setup_theme()
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
     s_TAPESTOP = sprintf(70, "Tape Stop");
-    s_KARPLUS = sprintf(71, "String Delay");
+    s_KARPLUS = sprintf(71, "Pitched Delay");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -1000,7 +1030,7 @@ function setup_theme()
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
     s_TAPESTOP = sprintf(70, "Tape Stop");
-    s_KARPLUS = sprintf(71, "String Delay");
+    s_KARPLUS = sprintf(71, "Pitched Delay");
   );
   
   style == 0 ? (
@@ -1043,6 +1073,15 @@ function setup_theme()
   mod3_color_g = .6;
   mod3_color_b = 1;
   mod3_color_a = 1;
+  
+  widget_r = 35/255;
+  widget_g = 155/255;
+  widget_b = 30/255;
+  widget_a = 1.0;
+  toggle_r = .5;
+  toggle_g = 1.6;
+  toggle_b = .5;
+  toggle_a = 1.0;
   
   fontscaling = scaling < -.15 ? scaling : 0;
 );
@@ -1294,7 +1333,7 @@ y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown"
 y_current = process_effect_row(10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19);
 y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
 y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
-y_current = process_effect_row(11, karplus_values, x_current, y_current, "String Delay", 1, 20);
+y_current = process_effect_row(11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20);
 y_current = process_effect_row(9, degrade_values, x_current, y_current, "Degrade", 1, 18);
 y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16);
 y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15);
@@ -1469,12 +1508,12 @@ instance(vel, mod1, mod2)
   nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, filter_enabled);
   
   cX += knobSize * 1.35;
-  tempo_sync_envelopes ? ( cutoffAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), 1, cutoff_atk);
+  tempo_sync_envelopes ? ( cutoffAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), filter_enabled, cutoff_atk);
   ) : cutoffAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_enabled, cutoff_atk);
   cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", cutoff_atk, 0, 0, 0, 0.06) ? ( cutoff_atk = cutoffAttackKnob.value; slider_automate(cutoff_atk); );
 
   cX += knobSize*2.5;
-  tempo_sync_envelopes ? ( cutoffDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), 1, cutoff_decay);
+  tempo_sync_envelopes ? ( cutoffDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), filter_enabled, cutoff_decay);
   ) : cutoffDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_enabled, cutoff_decay );
   cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", cutoff_decay, 0, 0, 0, 0.6) ? ( cutoff_decay = cutoffDecayKnob.value; slider_automate(cutoff_decay); );
   
@@ -1493,12 +1532,12 @@ instance(vel, mod1, mod2)
   gateEnd.drawAndProcess(cX, cY, knobSize, "Open Level", "Gain level when gate is open.", (current_gate + 48)/96, 1, 1, 1, (gate_stop_default + 48)/96) ? ( gate_stop = gateEnd.value * 96 - 48; slider_automate(gate_stop); );
   
   cX += 2.5*knobSize;  
-  tempo_sync_envelopes ? ( gateAttackKnob.knob_set(getFastEnvelopeLabel(gate_atk), 1, gate_atk);
+  tempo_sync_envelopes ? ( gateAttackKnob.knob_set(getFastEnvelopeLabel(gate_atk), gate_enabled, gate_atk);
   ) : gateAttackKnob.knob_set(gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*gate_atk))), gate_enabled, gate_atk);
   gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", gate_atk, 0, 0, 0, gate_atk_default) ? ( gate_atk = gateAttackKnob.value; slider_automate(gate_atk); );
   
   cX += knobSize*2.5;
-  tempo_sync_envelopes ? ( gateDecayKnob.knob_set(getFastEnvelopeLabel(gate_decay), 1, gate_decay);
+  tempo_sync_envelopes ? ( gateDecayKnob.knob_set(getFastEnvelopeLabel(gate_decay), gate_enabled, gate_decay);
   ) : gateDecayKnob.knob_set(gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*gate_decay))), gate_enabled, gate_decay );
   gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", gate_decay, 0, 0, 0, gate_decay_default) ? ( gate_decay = gateDecayKnob.value; slider_automate(gate_decay); );
   
@@ -1547,12 +1586,12 @@ instance(vel, mod1, mod2)
   nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.125*knobSpacing, panelHeight, reverb_enabled);
   
   cX += 1.35*knobSize;  
-  tempo_sync_envelopes ? ( verbGateAttackKnob.knob_set(getFastEnvelopeLabel(verb_gate_atk), 1, verb_gate_atk);
+  tempo_sync_envelopes ? ( verbGateAttackKnob.knob_set(getFastEnvelopeLabel(verb_gate_atk), reverb_enabled, verb_gate_atk);
   ) : verbGateAttackKnob.knob_set(verb_gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*verb_gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*verb_gate_atk))), reverb_enabled, verb_gate_atk);
   verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", verb_gate_atk, 0, 0, 0, verb_gate_atk_default) ? ( verb_gate_atk = verbGateAttackKnob.value; slider_automate(verb_gate_atk); );
   
   cX += knobSize*2.5;
-  tempo_sync_envelopes ? ( verbGateDecayKnob.knob_set(getFastEnvelopeLabel(verb_gate_decay), 1, verb_gate_decay);
+  tempo_sync_envelopes ? ( verbGateDecayKnob.knob_set(getFastEnvelopeLabel(verb_gate_decay), reverb_enabled, verb_gate_decay);
   ) : verbGateDecayKnob.knob_set(verb_gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*verb_gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*verb_gate_decay))), reverb_enabled, verb_gate_decay );
   verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", verb_gate_decay, 0, 0, 0, verb_gate_decay_default) ? ( verb_gate_decay = verbGateDecayKnob.value; slider_automate(verb_gate_decay); );
   
@@ -1577,42 +1616,55 @@ instance(vel, mod1, mod2)
   satKnob.knob_set(saturate > -6 ? sprintf(1, "%.1f dB", saturate) : "OFF", degrade_enabled, (saturate + 6)/54);
   satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Sautration.", (saturate + 6)/54, 1, 1, 1, (saturate_default + 6.001)/54) ? ( saturate = satKnob.value * 54 - 6; slider_automate(saturate); );
 ) : ( selected_details == 10 ) ? (
-  // Degrade
+  // Tape stop
   min_degrade = 3;
   nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 4*knobSpacing, panelHeight, degrade_enabled);
   
   cX += knobSize * 1.35;
-  tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), 1, tapestop_decay);
+  tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), tapestop_enabled, tapestop_decay);
   ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
   
   tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 0, 0, 0, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
 ) : ( selected_details == 11 ) ? (
-
   // Tonal delay
   min_degrade = 3;
-  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 14*knobSpacing, panelHeight, karplus_enabled);
-  
-  karplus_feedback_default = 0.5;
+  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, karplus_enabled);
   
   cX += knobSize * 1.35;
+  midi_pitch = (45 + 36 * karplus_pitch);
+  octave = floor((midi_pitch - 21) / 12);
+  note = (midi_pitch - 21) % 12;
+  snap_karplus ? midi_pitch = floor(midi_pitch);
+  note_fractional = midi_pitch - floor(midi_pitch);
+  note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
+  note_fractional > 0.025 ? (
+    sprintf(3, "%s%d (+%.1f)", note_label, octave, note_fractional);
+  ) : (
+    sprintf(3, "%s%d", note_label, octave);
+  );
+
+  karplusPitchKnob.knob_set(3, karplus_enabled, karplus_pitch);
+  karplusPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", karplus_pitch, 1, 1, 1, karplus_pitch_default) ? ( karplus_pitch = karplusPitchKnob.value; slider_automate(karplus_pitch); );
+  
+  pitchSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_karplus, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Snap pitch to full semitones.");
+  snap_karplus = pitchSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += knobSize * 2.5;
   karplusFeedback.knob_set("", karplus_enabled, karplus_feedback);
   karplusFeedback.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", karplus_feedback, 1, 1, 1, karplus_feedback_default) ? ( karplus_feedback = karplusFeedback.value; slider_automate(karplus_feedback); );
   
   cX += knobSize * 2.5;
   center = .5 * srate * exp( (1-karplus_cutoff) * log(20/22050) );
   karplusCutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), karplus_enabled, karplus_cutoff);
-  karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", karplus_cutoff, 1, 1, 1, 0) ? ( karplus_cutoff = karplusCutoffKnob.value; slider_automate(karplus_cutoff); );
+  karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", karplus_cutoff, 1, 1, 1, karplus_cutoff_default) ? ( karplus_cutoff = karplusCutoffKnob.value; slider_automate(karplus_cutoff); );
   
   cX += 2.5*knobSize;
-  tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), 1, tapestop_decay);
-  ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
+  karplusDry.knob_set(sprintf(1, "%.1f dB", karplus_dry), karplus_enabled, (karplus_dry + 48)/96);
+  karplusDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry level when delay is active.", (karplus_dry + 48)/96, 1, 1, 1, (karplus_dry_default + 48)/96) ? ( karplus_dry = karplusDry.value * 96 - 48; slider_automate(karplus_dry); );
   
-  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 0, 0, 0, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
-  
-  
-  karplus_pitch = 440;
-  
-  
+  cX += 2.5*knobSize;
+  karplusWet.knob_set(sprintf(1, "%.1f dB", karplus_wet), karplus_enabled, (karplus_wet + 48)/96);
+  karplusWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when delay is active.", (karplus_wet + 48)/96, 1, 1, 1, (karplus_wet_default + 48)/96) ? ( karplus_wet = karplusWet.value * 96 - 48; slider_automate(karplus_wet); );
 );
 
 hinter.drawHint_draw();
