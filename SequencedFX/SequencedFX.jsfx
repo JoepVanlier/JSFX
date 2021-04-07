@@ -1,13 +1,23 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.10
+version: 0.11
 author: Joep Vanlier
-changelog: Add pattern select. Add copy/paste pattern.
+changelog: Add hints to each effect. Allow switching pattern via MIDI notes.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
 
 slider1:current_speed=4<1,16,1>Current speed
+slider2:current_pattern_index=0<0,63,1>-Current pattern
+
+slider3:dummy=0<0,1,1>-Dummy
+slider4:dummy=0<0,1,1>-Dummy
+slider5:dummy=0<0,1,1>-Dummy
+slider6:dummy=0<0,1,1>-Dummy
+slider7:dummy=0<0,1,1>-Dummy
+slider8:dummy=0<0,1,1>-Dummy
+slider9:dummy=0<0,1,1>-Dummy
+
 slider10:reset_enabled=1<0,1,1>-Reset enabled
 slider11:slowdown_enabled=1<0,1,1>-Slowdown enabled
 slider12:dynamic_slowdown_enabled=1<0,1,1>-Dynamic slowdown enabled
@@ -19,6 +29,12 @@ slider17:reverb_enabled=0<0,1,1>-Reverb enabled
 slider18:degrade_enabled=0<0,1,1>-Degrade enabled
 slider19:tapestop_enabled=0<0,1,1>-Tapestop enabled
 slider20:karplus_enabled=0<0,1,1>-Karplus enabled
+
+slider21:dummy=0<0,1,1>-Dummy
+slider22:dummy=0<0,1,1>-Dummy
+slider23:dummy=0<0,1,1>-Dummy
+slider24:dummy=0<0,1,1>-Dummy
+
 slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
@@ -28,7 +44,9 @@ slider30:morph=0<0,1,.0001>-Morph
 slider31:cutoff_atk=0<0,1,0.0001>-Envelope Rise
 slider32:cutoff_decay=0<0,1,0.0001>-Envelope Decay
 slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
+
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
+slider64:midi_note_pattern_select=96<0,127,1>-First Pattern
 
 options:maxmem=24000000
 in_pin:left input
@@ -36,6 +54,7 @@ in_pin:right input
 out_pin:left output
 out_pin:right output
 
+import Saike_Yutani_midilib.jsfx-inc
 import Saike_Yutani_Delays.jsfx-inc
 import Saike_Yutani_Widgets.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
@@ -127,6 +146,16 @@ function init_to_defaults()
 
 load_defaults();
 loaded == 0 ? init_to_defaults();
+
+function identify_note(midi_pitch)
+local(octave, note, note_label)
+global()
+(
+  octave = floor((midi_pitch - 12) / 12);
+  note = (midi_pitch - 21) % 12;
+  note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
+  sprintf(3, "%s%d", note_label, octave)
+);
 
 function init_playhead()
 (
@@ -415,6 +444,10 @@ freemem = 0;
 pattern_size = max_segments * max_effects;
 freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
 freemem = (copy_buffer = freemem) + pattern_size;
+freemem = (midimem = freemem) + 32768;
+freemem = (note_history = freemem) + 32768;
+midi.initializeMIDI(midimem, note_history, 1, 1);
+midi.notesOn = 0;
 
 BUF_SIZE = 96000 * 60;
 freemem = (l_buffer = freemem) + BUF_SIZE;
@@ -437,6 +470,7 @@ init_playhead();
 @slider
 
 @block
+midi.processMIDIBlock();
 interpolators_block();
 pattern_update();
 time_mode == 2 ? current_sample = beat_position * from_beat;
@@ -796,6 +830,21 @@ global(sample_clock, ssl, ssr, bitrate, samplerate, srate, degrade_target, satur
       preamp = exp(log10d20_conversion*saturate);
       ssl = tanh(preamp*ssl)/preamp;
       ssr = tanh(preamp*ssr)/preamp;
+    );
+  );
+);
+
+mmsg = midi.processMIDISample();
+mmsg ? (
+  // Are we recording a new reference note?
+  (midi_rec_toggle.value == 1) ? (
+    
+    midi_rec_toggle.value = 0;
+    midi_note_pattern_select = midi.lastNote;
+  ) : (
+    midi.lastNote >= midi_note_pattern_select ? (
+      current_pattern_index = midi.lastNote - midi_note_pattern_select;
+      slider_automate(current_pattern_index);
     );
   );
 );
@@ -1173,15 +1222,16 @@ local(ww, hh)
   gfx_line(x + ww - 1, y + .85 * hh, x + ww - 1, y + 0.25 * hh);
 );
 
-function process_effect_row(me, mem, x, y, label, max_value, power_slider)
+function process_effect_row(me, mem, x, y, label, max_value, power_slider, hint)
 global(label_width, block_width, block_spacing, selected_details,
        nice_rect,
        n_segments,
        font_r, font_g, font_b,
        gfx_x, gfx_y,
        BASE_FONT
-       mouse_cap, mouse_x, mouse_y, last_cap, captured_by)
-local(txt_w, txt_h, ptr, idx, target)
+       mouse_cap, mouse_x, mouse_y, last_cap, captured_by,
+       hinter.updateHintTime)
+local(txt_w, txt_h, ptr, idx, target, y_over)
 instance(mem, start_idx)
 (
   nice_rect(x, y, label_width, block_width, 0, slider(power_slider));
@@ -1216,55 +1266,56 @@ instance(mem, start_idx)
     target = (target + 1) % 4;
   );
   
-  // Any clicked?
-  (1) ? (
-    x -= n_segments * (block_width + block_spacing);
-    
-    idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
-    (mouse_cap == 1 || mouse_cap == 2) ? (
-      // Not captured, start dragging.
-      (last_cap == 0) ? (
-        // Are we in the positional columns?
-        (mouse_y > y) && (mouse_y < (y + block_width)) && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
-          // Start dragging a region
-          start_idx = idx;
-          mouse_cap == 1 ? captured_by = me : captured_by = -me;
-        ) : (
-          (mouse_y > y) && (mouse_y < (y + block_width)) ? (
-            ((mouse_x < x) && (mouse_x > x - (block_width + block_spacing))) ? (
-              // Toggle the lane power
-              slider(power_slider) = 1 - slider(power_slider);
-            ) : (mouse_x < x) ? (
-              // Select the lane
-              selected_details = me;
-            );
+  y_over = (mouse_y > y) && (mouse_y < (y + block_width));
+  
+  mouse_x < x && y_over ? hinter.updateHintTime(hint);
+  
+  // Process events
+  x -= n_segments * (block_width + block_spacing);
+  idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  (mouse_cap == 1 || mouse_cap == 2) ? (
+    // Not captured, start dragging.
+    (last_cap == 0) ? (
+      // Are we in the positional columns?
+      y_over && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
+        // Start dragging a region
+        start_idx = idx;
+        mouse_cap == 1 ? captured_by = me : captured_by = -me;
+      ) : (
+        y_over ? (
+          ((mouse_x < x) && (mouse_x > x - (block_width + block_spacing))) ? (
+            // Toggle the lane power
+            slider(power_slider) = 1 - slider(power_slider);
+          ) : (mouse_x < x) ? (
+            // Select the lane
+            selected_details = me;
           );
         );
-      ) : ( me == abs(captured_by) ) ? (
-        captured_by > 0 ? gfx_set(0, 0, 1, .1) : gfx_set(1, 0, 0, .1);
-        ptr = min(start_idx, idx);
-        idx = max(start_idx, idx);
-        gfx_rect(x + (block_width + block_spacing) * ptr, y, (idx - ptr + 1) * (block_width + block_spacing), block_width, 1);
       );
-    ) : ( abs(captured_by) == me ) ? (
-      // We dragged an area
+    ) : ( me == abs(captured_by) ) ? (
+      captured_by > 0 ? gfx_set(0, 0, 1, .1) : gfx_set(1, 0, 0, .1);
       ptr = min(start_idx, idx);
       idx = max(start_idx, idx);
-      start_idx = ptr;
-      // Left or right mouse drag
-      captured_by > 0 ? (
-        target = mem[ptr] + 1;
-        target > max_value ? target = 0;
-      ) : (
-        target = mem[ptr] - 1;
-        target < 0 ? target = max_value;
-      );
-      loop(idx - start_idx + 1,
-        mem[ptr] = target;
-        ptr += 1;
-      );
-      captured_by = 0;
+      gfx_rect(x + (block_width + block_spacing) * ptr, y, (idx - ptr + 1) * (block_width + block_spacing), block_width, 1);
     );
+  ) : ( abs(captured_by) == me ) ? (
+    // We dragged an area
+    ptr = min(start_idx, idx);
+    idx = max(start_idx, idx);
+    start_idx = ptr;
+    // Left or right mouse drag
+    captured_by > 0 ? (
+      target = mem[ptr] + 1;
+      target > max_value ? target = 0;
+    ) : (
+      target = mem[ptr] - 1;
+      target < 0 ? target = max_value;
+    );
+    loop(idx - start_idx + 1,
+      mem[ptr] = target;
+      ptr += 1;
+    );
+    captured_by = 0;
   );
   
   y += block_width + block_spacing;
@@ -1341,25 +1392,26 @@ x_current = grid_origin_x;
 y_current = grid_origin_y;
 
 y_s = y_current;
-y_current = process_effect_row(1, reset_values, x_current, y_current, "Reset", 1, 10);
-y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown", 4, 11);
+y_current = process_effect_row(1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.");
+y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown", 4, 11, "Slow down playback.");
 //y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
-y_current = process_effect_row(10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19);
-y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
-y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
-y_current = process_effect_row(11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20);
-y_current = process_effect_row(9, degrade_values, x_current, y_current, "Degrade", 1, 18);
-y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16);
-y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15);
-y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb", 1, 17);
+y_current = process_effect_row(10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19, "Tape stop effect.");
+y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13, "Retrigger last block N times.");
+y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
+y_current = process_effect_row(11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20, "Apply a pitched delay effect");
+y_current = process_effect_row(9, degrade_values, x_current, y_current, "Degrade", 1, 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.");
+y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
+y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15, "Gate the audio.");
+y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
 
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
 // Control strip
-function selection_button(me, cx, cy, width, height, label, br, bg, bb)
-local()
-global(gfx_x, gfx_y, base_r, base_g, base_b, mouse_x, mouse_y, mouse_cap, last_cap)
+function selection_button(me, cx, cy, width, height, label, br, bg, bb, hint)
+local(over)
+global(gfx_x, gfx_y, base_r, base_g, base_b, mouse_x, mouse_y, mouse_cap, last_cap,
+       hinter.updateHintTime)
 instance(value)
 (
   value == me ? (
@@ -1368,13 +1420,16 @@ instance(value)
     bb *= 2;
   );
   
+  over = (mouse_x > cx) && (mouse_x < (cx + width)) && (mouse_y > cy) && (mouse_y < (cy + height));
+  
+  hint > -1 && over ? (
+    hinter.updateHintTime(hint);
+  );
+  
   nice_rect_color(cx, cy, width, height, label, br, bg, bb, 2 * br, 2 * bg, 2 * bb);
   (last_cap & 1 == 0) && 
   (mouse_cap & 1 == 1) && 
-  (mouse_x > cx) && 
-  (mouse_x < (cx + width)) && 
-  (mouse_y > cy) && 
-  (mouse_y < (cy + height)) ? 
+  over ? 
   (
     value = me;
   );
@@ -1385,15 +1440,15 @@ nice_rect_color(grid_origin_x, y_current, scope_w + label_width - 3, block_width
 
 time_mode.value = time_mode;
 cx = grid_origin_x + 2;
-cx = time_mode.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1);
-cx = time_mode.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1);
-cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1);
+cx = time_mode.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
+cx = time_mode.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1, "Run sequencer in MIDI mode.\nPattern resets on incoming MIDI note.");
+cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
 time_mode = time_mode.value;
 
 tempo_sync_envelopes.value = tempo_sync_envelopes;
 cx += block_width;
-cx = tempo_sync_envelopes.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Time", 0.2, 0.1, 0.05);
-cx = tempo_sync_envelopes.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "Beats", 0.2, 0.1, 0.05);
+cx = tempo_sync_envelopes.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Time", 0.2, 0.1, 0.05, "Show envelope times in milliseconds.");
+cx = tempo_sync_envelopes.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "Beats", 0.2, 0.1, 0.05, "Show envelope times in beats.");
 
 tempo_sync_envelopes != tempo_sync_envelopes.value ? (
   tempo_sync_envelopes = tempo_sync_envelopes.value;
@@ -1402,22 +1457,33 @@ tempo_sync_envelopes != tempo_sync_envelopes.value ? (
 
 pattern_toggle.value = -1;
 cx += block_width;
-cx = pattern_toggle.selection_button(0, cx, y_current + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05);
-cx = pattern_toggle.selection_button(1, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05);
-cx = pattern_toggle.selection_button(2, cx, y_current + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05);
+cx = pattern_toggle.selection_button(0, cx, y_current + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
+cx = pattern_toggle.selection_button(1, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, 0);
+cx = pattern_toggle.selection_button(2, cx, y_current + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
 
-cx = pattern_toggle.selection_button(3, cx + block_width, y_current + 2, 2 * block_width, block_width - 4, "Copy", 0.3, 0.2, 0.00);
-cx = pattern_toggle.selection_button(4, cx, y_current + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05);
-pattern_toggle.value == 0 ? ( current_pattern_index -= 1 ) : 
-( pattern_toggle.value == 2 ) ? ( current_pattern_index += 1 ) : 
-( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
+cx = midi_rec_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, identify_note(midi_note_pattern_select), 0.3, 0.1, 0.05, "Set reference note used for pattern selection via MIDI.\n\nOnce clicked this button lights up and the plugin listens\nfor an incoming MIDI note. This note is then set as the\nreference note.\n\nAny subsequent note will compute a pattern index to jump to\nassuming the reference note to correspond to pattern zero.");
+
+cx = pattern_toggle.selection_button(3, cx + block_width, y_current + 2, 2 * block_width, block_width - 4, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
+cx = pattern_toggle.selection_button(4, cx, y_current + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
+pattern_toggle.value == 0 ? ( 
+  current_pattern_index -= 1;
+  current_pattern_index < 0 ? (
+    current_pattern_index = max_stored_patterns - 1;
+  );
+  
+  slider_automate(current_pattern_index);  
+) 
+: ( pattern_toggle.value == 2 ) ? (
+  current_pattern_index += 1;
+  ( current_pattern_index >= max_stored_patterns ) ? (
+    current_pattern_index = 0;
+  );
+  
+  slider_automate(current_pattern_index);
+) 
+: ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
 ( pattern_toggle.value == 4 ) ? ( paste_pattern() );
 
-current_pattern_index < 0 ? (
-  current_pattern_index = max_stored_patterns - 1;
-) : ( current_pattern_index >= max_stored_patterns ) ? (
-  current_pattern_index = 0;
-);
 
 
 
@@ -1668,15 +1734,13 @@ instance(vel, mod1, mod2)
   
   cX += knobSize * 1.35;
   midi_pitch = (45 + 36 * karplus_pitch);
-  octave = floor((midi_pitch - 21) / 12);
-  note = (midi_pitch - 21) % 12;
   snap_karplus ? midi_pitch = floor(midi_pitch);
   note_fractional = midi_pitch - floor(midi_pitch);
-  note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
+  
   note_fractional > 0.025 ? (
-    sprintf(3, "%s%d (+%.1f)", note_label, octave, note_fractional);
+    sprintf(3, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
   ) : (
-    sprintf(3, "%s%d", note_label, octave);
+    identify_note(midi_pitch);
   );
 
   karplusPitchKnob.knob_set(3, karplus_enabled, karplus_pitch);
