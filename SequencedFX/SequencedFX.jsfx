@@ -1,8 +1,8 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.08
+version: 0.09
 author: Joep Vanlier
-changelog: Add time control time stop. Allow users to choose time representation (beats vs time).
+changelog: Bugfix reverb / scope memory. Started work on karplus / pipe sim.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -18,6 +18,7 @@ slider16:filter_enabled=0<0,1,1>-Filter enabled
 slider17:reverb_enabled=0<0,1,1>-Reverb enabled
 slider18:degrade_enabled=0<0,1,1>-Degrade enabled
 slider19:tapestop_enabled=0<0,1,1>-Tapestop enabled
+slider20:karplus_enabled=0<0,1,1>-Karplus enabled
 slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
@@ -29,7 +30,7 @@ slider32:cutoff_decay=0<0,1,0.0001>-Envelope Decay
 slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 
-options:maxmem=12000000
+options:maxmem=24000000
 in_pin:left input
 in_pin:right input
 out_pin:left output
@@ -134,6 +135,7 @@ function pattern_update()
   reverb_values = current_pattern + 7 * max_segments;
   degrade_values = current_pattern + 8 * max_segments;
   tapestop_values = current_pattern + 9 * max_segments;
+  karplus_values = current_pattern + 10 * max_segments;
   
   reset_values[0] = 1;
 );
@@ -228,7 +230,7 @@ instance(diffuser1, diffuser2, diffuser3, diffuser4,
          out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left,
          out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right)
 (
-  /* Datorro Reverb (1997) */
+  // Datorro Reverb (1997)
   buffer_size = 8192;
   srate_scaling = srate / 29761;
   
@@ -393,9 +395,15 @@ freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
 BUF_SIZE = 96000 * 60;
 freemem = (l_buffer = freemem) + BUF_SIZE;
 freemem = (r_buffer = freemem) + BUF_SIZE;
+freemem = (beat_buffer = freemem) + .5 * BUF_SIZE;
+freemem = (karplus_buffer_l = freemem) + .5 * BUF_SIZE;
+freemem = (karplus_buffer_r = freemem) + .5 * BUF_SIZE;
 l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
 r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
-beatmem.initBuffer(r_buffer, r_buffer + .5*BUF_SIZE);
+beatmem.initBuffer(beat_buffer, beat_buffer + .5*BUF_SIZE);
+l_karplus.initBuffer(karplus_buffer_l, karplus_buffer_l + .5*BUF_SIZE);
+r_karplus.initBuffer(karplus_buffer_r, karplus_buffer_r + .5*BUF_SIZE);
+
 freemem = verb.init_reverb(freemem);
 
 interpolator_init();
@@ -606,6 +614,69 @@ function process_verb()
   ssl = verb_drymul * ssl + verb_wetmul * verb.out_left;
   ssr = verb_drymul * ssr + verb_wetmul * verb.out_right;
 );
+ 
+function process_karplus()
+instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current)
+local(g, kpr, kpl, lk, rk, v, y, omega, omega_fundamental, max_fb)
+global(l_karplus, r_karplus,
+       l_karplus.readBuffer, r_karplus.readBuffer,
+       l_karplus.writeBuffer, r_karplus.writeBuffer,
+       karplus_feedback, karplus_pitch, karplus_cutoff
+       srate,
+       sample_clock,
+       ssl, ssr, igain,
+       )
+(
+  sample_clock % 16 == 0 ? (
+    karplus_offset = srate / karplus_pitch;
+    cutoff_current = 0.98 * cutoff_current + 0.02 * karplus_cutoff;
+    omega = .99999 * $pi * exp((1.0 - cutoff_current) * log(20/22050));
+    g = tan(0.5 * omega);
+    coeff = g / (1.0 + g);
+    
+    max_fb = 0.98;
+    fb = 2.0 * max_fb * karplus_feedback - max_fb;
+    fb = sign(fb) * sqrt(abs(fb));
+    
+    fb_current = 0.996 * fb_current + 0.004 * fb;
+    igain = 2.0 * sqrt(1.0 - abs(fb_current));
+    
+    // We need to correct for the phase shift incurred due to our lowpass filter
+    // otherwise our karplus will detune as we sweep the cutoff.
+    omega_fundamental = 2.0 * $pi * karplus_pitch / srate;
+    
+    // Phase shift in radians.
+    shift = atan(omega_fundamental / omega);
+    
+    // Convert back to samples for the fundamental.
+    shift = - shift / omega_fundamental;
+  );
+  
+  lk = l_karplus.readBuffer(karplus_offset - 2 + shift);
+  rk = r_karplus.readBuffer(karplus_offset - 2 + shift);
+
+  v = coeff*(lk - ls);
+  y = v + ls;
+  ls = y + v;
+  lk = y;
+
+  v = coeff*(rk - rs);
+  y = v + rs;
+  rs = y + v;
+  rk = y;
+
+  kpl = fb_current * lk;
+  kpr = fb_current * rk;
+
+  l_karplus.writeBuffer(ssl + kpl);
+  r_karplus.writeBuffer(ssr + kpr);
+  
+  kpl *= igain;
+  kpr *= igain;
+  
+  ssl = kpl;
+  ssr = kpr;
+);
 
 
 function interp(x0, frac)
@@ -726,7 +797,6 @@ reset_index = floor(to_index * reset_sample);
 
 jump_schedule.eval_jump();
 
-
 // Non delayed sequences
 (sequencer_index != last_sequencer_index) ? (
   
@@ -780,6 +850,8 @@ jump_schedule.eval_jump();
     stop_factor = 1;
   );
   
+  karplus_target = karplus_values[sequencer_index];
+  
   dyn_speed = speed;
 );
 
@@ -819,11 +891,14 @@ degrade_enabled ? process_degrade();
 filter_enabled ? process_filter();
 gate_enabled ? process_gate();
 reverb_enabled ? process_verb();
+karplus_enabled ? karplus.process_karplus();
 
 spl0 = ssl;
 spl1 = ssr;
 
 @gfx
+
+
 function convert_tempos(target_sync_mode)
 local()
 instance()
@@ -909,6 +984,7 @@ function setup_theme()
     s_REVERB = sprintf(68, "REVERB");
     s_DEGRADE = sprintf(69, "DEGRADE");
     s_TAPESTOP = sprintf(70, "TAPE STOP");
+    s_KARPLUS = sprintf(71, "STRING DELAY");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -916,6 +992,7 @@ function setup_theme()
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
     s_TAPESTOP = sprintf(70, "Tape Stop");
+    s_KARPLUS = sprintf(71, "String Delay");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -923,6 +1000,7 @@ function setup_theme()
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
     s_TAPESTOP = sprintf(70, "Tape Stop");
+    s_KARPLUS = sprintf(71, "String Delay");
   );
   
   style == 0 ? (
@@ -1214,9 +1292,9 @@ y_current = process_effect_row(1, reset_values, x_current, y_current, "Reset", 1
 y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown", 4, 11);
 //y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
 y_current = process_effect_row(10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19);
-
 y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13);
 y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14);
+y_current = process_effect_row(11, karplus_values, x_current, y_current, "String Delay", 1, 20);
 y_current = process_effect_row(9, degrade_values, x_current, y_current, "Degrade", 1, 18);
 y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16);
 y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15);
@@ -1225,7 +1303,7 @@ y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb",
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
-/* Control strip */
+// Control strip
 function selection_button(me, cx, cy, width, height, label, br, bg, bb)
 local()
 global(gfx_x, gfx_y, base_r, base_g, base_b, mouse_x, mouse_y, mouse_cap, last_cap)
@@ -1285,14 +1363,14 @@ knobSize = 35*(1+scaling);
 knobSpacing = .7 * knobSize;
 
 buttonSize = floor(.3 * knobSpacing);
-/*widget_r = 35/255;
-widget_g = 155/255;
-widget_b = 30/255;
-widget_a = 1.0;
-toggle_r = .5;
-toggle_g = 1.6;
-toggle_b = .5;
-toggle_a = 1.0;*/
+//widget_r = 35/255;
+//widget_g = 155/255;
+//widget_b = 30/255;
+//widget_a = 1.0;
+//toggle_r = .5;
+//toggle_g = 1.6;
+//toggle_b = .5;
+//toggle_a = 1.0;
 
 panelY = y_current - 32 * (1+scaling);
 panelPad = 6;
@@ -1508,6 +1586,33 @@ instance(vel, mod1, mod2)
   ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
   
   tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 0, 0, 0, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
+) : ( selected_details == 11 ) ? (
+
+  // Tonal delay
+  min_degrade = 3;
+  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 14*knobSpacing, panelHeight, karplus_enabled);
+  
+  karplus_feedback_default = 0.5;
+  
+  cX += knobSize * 1.35;
+  karplusFeedback.knob_set("", karplus_enabled, karplus_feedback);
+  karplusFeedback.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", karplus_feedback, 1, 1, 1, karplus_feedback_default) ? ( karplus_feedback = karplusFeedback.value; slider_automate(karplus_feedback); );
+  
+  cX += knobSize * 2.5;
+  center = .5 * srate * exp( (1-karplus_cutoff) * log(20/22050) );
+  karplusCutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), karplus_enabled, karplus_cutoff);
+  karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", karplus_cutoff, 1, 1, 1, 0) ? ( karplus_cutoff = karplusCutoffKnob.value; slider_automate(karplus_cutoff); );
+  
+  cX += 2.5*knobSize;
+  tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), 1, tapestop_decay);
+  ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
+  
+  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 0, 0, 0, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
+  
+  
+  karplus_pitch = 440;
+  
+  
 );
 
 hinter.drawHint_draw();
