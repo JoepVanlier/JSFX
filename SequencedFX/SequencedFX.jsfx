@@ -1,8 +1,8 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.11
+version: 0.12
 author: Joep Vanlier
-changelog: Add hints to each effect. Allow switching pattern via MIDI notes.
+changelog: Add legato blocks.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -19,10 +19,10 @@ slider8:dummy=0<0,1,1>-Dummy
 slider9:dummy=0<0,1,1>-Dummy
 
 slider10:reset_enabled=1<0,1,1>-Reset enabled
-slider11:slowdown_enabled=1<0,1,1>-Slowdown enabled
-slider12:dynamic_slowdown_enabled=1<0,1,1>-Dynamic slowdown enabled
-slider13:retrigger_enabled=1<0,1,1>-Retrigger enabled
-slider14:reverse_enabled=1<0,1,1>-Reverse enabled
+slider11:slowdown_enabled=0<0,1,1>-Slowdown enabled
+slider12:dynamic_slowdown_enabled=0<0,1,1>-Dynamic slowdown enabled
+slider13:retrigger_enabled=0<0,1,1>-Retrigger enabled
+slider14:reverse_enabled=0<0,1,1>-Reverse enabled
 slider15:gate_enabled=0<0,1,1>-Gate enabled
 slider16:filter_enabled=0<0,1,1>-Filter enabled
 slider17:reverb_enabled=0<0,1,1>-Reverb enabled
@@ -610,8 +610,6 @@ function update_time_info()
   pattern_length = n_segments * samples_per_beat;
   to_index = n_segments / pattern_length;
   from_beat = 60 * srate / tempo;
-  
-  //srate * 60 / tempo / (n_segments * current_speed) * 64;
 );
 
 function update_envelope_simple(target)
@@ -866,25 +864,48 @@ reset_sample = current_sample + crossfade_samples;
 reset_sample > pattern_length ? reset_sample -= pattern_length;
 reset_index = floor(to_index * reset_sample);
 
+// SEQUENCER HANDLING
+function seek_next(position, continue_until, max_value)
+local(idx)
+global(chunk_duration_b)
+(
+  idx = 0;
+  while(
+    idx += 1;
+    position += 1;
+    (idx < max_value) && (position[] == continue_until)
+  );
+  
+  idx
+);
+
+
 // Delayed sequences to accomodate for crossfades
 (reset_index != last_reset_index) ? (
-  jump_schedule.reset_jump();
-  
   reset_enabled ? (
-    reset = reset_values[reset_index];
+    reset = abs(reset_values[reset_index]);
     reset > 0 ? (
       // New target position is now
       target_position = 0;
+      jump_schedule.reset_jump();
       jump_schedule.schedule_jump(0);
     );
   );
   
   retrigger_enabled ? (
+    // If positive, seek to last negative with the same value.
     retrig = retrig_values[reset_index];
+    
+    retrig > 0 ? (
+      jump_schedule.reset_jump();
+      chunk_duration = seek_next(retrig_values + reset_index, -retrig, 64);
+      block_len = samples_per_beat * chunk_duration;
+    );
+    
     retrig == 1 ? ( jump_schedule.schedule_jump(); )
-    : (retrig == 2) ? ( jump_schedule.schedule_jump(); jump_schedule.schedule_jump(floor(0.5 * samples_per_beat)); )
-    : (retrig == 3) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.33333 * samples_per_beat)); jump_schedule.schedule_jump(floor(0.66666 * samples_per_beat)); )
-    : (retrig == 4) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.25 * samples_per_beat)); jump_schedule.schedule_jump(floor(0.5 * samples_per_beat));  jump_schedule.schedule_jump(floor(0.75 * samples_per_beat)); )
+    : (retrig == 2) ? ( jump_schedule.schedule_jump(); jump_schedule.schedule_jump(floor(0.5 * block_len)); )
+    : (retrig == 3) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.33333 * block_len)); jump_schedule.schedule_jump(floor(0.66666 * block_len)); )
+    : (retrig == 4) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.25 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len));  jump_schedule.schedule_jump(floor(0.75 * block_len)); )
   );
 );
 
@@ -894,7 +915,7 @@ jump_schedule.eval_jump();
 (sequencer_index != last_sequencer_index) ? (
   
   slowdown_enabled ? (
-    speed = speed_values[sequencer_index];
+    speed = abs(speed_values[sequencer_index]);
     
     // Fractional speed
     speed = (speed == 0) ? 1.0
@@ -905,7 +926,7 @@ jump_schedule.eval_jump();
   ) : ( speed = 1 );
   
   // Reverse it?
-  (reverse_enabled && reverse_values[sequencer_index] == 1) ? speed = -speed;
+  (reverse_enabled && abs(reverse_values[sequencer_index]) == 1) ? speed = -speed;
   
   // Calculate the actual offset speed.
   // This is given by - (relative_speed - speed of incoming audio)
@@ -914,36 +935,36 @@ jump_schedule.eval_jump();
   
   previous_filter_target = filter_target;
   filter_target = filt_values[sequencer_index];
-  
-  filter_target != previous_filter_target ? (
+  filter_target == 1 ? (
     filter_envelope.reset = 0;
     filter_envelope.reset_envelope();
   );
+  filter_target = abs(filter_target);
   
-  previous_gate_target = gate_target;
   gate_target = gate_values[sequencer_index];
-  gate_target != previous_gate_target ? (
+  gate_target == 1 ? (
     gate_envelope.reset = 0;
     gate_envelope.reset_envelope();
   );
+  gate_target = abs(gate_target);
   
-  previous_reverb_target = reverb_target;
   reverb_target = reverb_values[sequencer_index];
-  reverb_target != previous_reverb_target ? (
+  reverb_target == 1 ? (
     verb_envelope.reset = 0;
     verb_envelope.reset_envelope();
   );
+  reverb_target = abs(reverb_target);
   
-  degrade_target = degrade_values[sequencer_index];
+  degrade_target = abs(degrade_values[sequencer_index]);
   
-  previous_tapestop_target = tapestop_target;
   tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
-  previous_tapestop_target != tapestop_target ? (
+  tapestop_target == 1 ? (
     tapestop_envelope.calc_times_universal(tapestop_decay, tapestop_decay, 0);
     stop_factor = 1;
   );
+  tapestop_target = abs(tapestop_target);
   
-  karplus_target = karplus_values[sequencer_index];
+  karplus_target = abs(karplus_values[sequencer_index]);
   
   dyn_speed = speed;
 );
@@ -1184,7 +1205,7 @@ global(base_r, base_g, base_b)
 local(label, txt_w, txt_h, power_intensity, power_intensity, rr, gg, bb, er, eg, eb, p2, pv)
 (
   power_intensity = 0.2 + 0.8 * powered;
-  p2 = 2 * power_intensity;
+  p2 = (1.5 + 0.25 * (value==0)) * power_intensity * (1 + value);
   er = base_r * p2;
   eg = base_g * p2;
   eb = base_b * p2;
@@ -1193,7 +1214,27 @@ local(label, txt_w, txt_h, power_intensity, power_intensity, rr, gg, bb, er, eg,
   gg = base_g * pv;
   bb = base_b * pv;
   sprintf(1, "%d", value);
-  this.nice_rect_color(x, y, w, h, value > 0 ? 1 : 0, rr, gg, bb, er, eg, eb);
+  this.nice_rect_color(x, y, w, h, value != 0 ? 1 : 0, rr, gg, bb, er, eg, eb);
+);
+
+function connecting_rect(x, y, w, h, value, powered)
+local(pv, rr, gg, bb, er, eg, eb)
+(
+  power_intensity = 0.2 + 0.8 * powered;
+  p2 = 1.5 * power_intensity * (1 + value);
+  er = base_r * p2;
+  eg = base_g * p2;
+  eb = base_b * p2;
+  gfx_set(er, eg, eb, 1.0);
+  gfx_line(x, y-1, x+w, y-1);
+  gfx_line(x, y+h-1, x+w, y+h-1);
+  
+  pv = power_intensity * (1 + value);
+  rr = base_r * pv;
+  gg = base_g * pv;
+  bb = base_b * pv;
+  gfx_set(rr, gg, bb, 1.0);
+  gfx_rect(x, y, w, h);
 );
 
 function power_button(x, y, w, h, powered)
@@ -1230,8 +1271,9 @@ global(label_width, block_width, block_spacing, selected_details,
        gfx_x, gfx_y,
        BASE_FONT
        mouse_cap, mouse_x, mouse_y, last_cap, captured_by,
-       hinter.updateHintTime)
-local(txt_w, txt_h, ptr, idx, target, y_over)
+       hinter.updateHintTime,
+       retrig_toggle.value)
+local(txt_w, txt_h, ptr, idx, target, y_over, last, current)
 instance(mem, start_idx)
 (
   nice_rect(x, y, label_width, block_width, 0, slider(power_slider));
@@ -1259,11 +1301,18 @@ instance(mem, start_idx)
   ptr = mem;
   target = 0;
   loop(n_segments,
-    nice_rect(x, y, block_width, block_width, ptr[], slider(power_slider));
+    current = ptr[];
+    (abs(last) == abs(current)) && (current < 0) ? (
+      nice_rect(x, y, block_width, block_width, abs(current), slider(power_slider));
+      connecting_rect(x-2, y + 1, 4, block_width - 1, abs(current), slider(power_slider));
+    ) : (
+      nice_rect(x, y, block_width, block_width, abs(current), slider(power_slider));
+    );
     target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, block_width));
     x += block_spacing + block_width;
     ptr += 1;
     target = (target + 1) % 4;
+    last = current;
   );
   
   y_over = (mouse_y > y) && (mouse_y < (y + block_width));
@@ -1305,13 +1354,17 @@ instance(mem, start_idx)
     start_idx = ptr;
     // Left or right mouse drag
     captured_by > 0 ? (
-      target = mem[ptr] + 1;
+      target = abs(mem[ptr]) + 1;
       target > max_value ? target = 0;
     ) : (
-      target = mem[ptr] - 1;
+      target = abs(mem[ptr]) - 1;
       target < 0 ? target = max_value;
     );
-    loop(idx - start_idx + 1,
+    // Negative values mean a continuation
+    mem[ptr] = target;
+    ptr += 1;
+    target = retrig_toggle.value ? target : - target;
+    loop(idx - start_idx,
       mem[ptr] = target;
       ptr += 1;
     );
@@ -1484,9 +1537,9 @@ pattern_toggle.value == 0 ? (
 : ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
 ( pattern_toggle.value == 4 ) ? ( paste_pattern() );
 
-
-
-
+cx += block_width;
+cx = retrig_toggle.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Legato", 0.12, 0.15, 0.22, "Draw legato blocks.\n\nLegato blocks work differently from retriggered\nblocks. The exact effect depends on the effect\nrow.\n\nFor retrigger, legato will space the retriggers \nout over the entire block whereas retrigger mode \nwill place the number of retriggers on each block.\n\nFor tapestop, the stopping is reset for each \nnode when using retriggered \nblocks.\n\nFor envelope-based effects, legato mode does not\nrestart the envelope, whereas retriggered mode\ndoes.");
+cx = retrig_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "Retrig", 0.12, 0.15, 0.22, "Draw retriggered blocks.\n\nLegato blocks work differently from retriggered\nblocks. The exact effect depends on the effect\nrow.\n\nFor retrigger, legato will space the retriggers \nout over the entire block whereas retrigger mode \nwill place the number of retriggers on each block.\n\nFor tapestop, the stopping is reset for each \nnode when using retriggered \nblocks.\n\nFor envelope-based effects, legato mode does not\nrestart the envelope, whereas retriggered mode\ndoes.");
 
 y_current += block_width;
 
