@@ -1,8 +1,8 @@
 desc:Saike Sequenced FX (pre-alpha WIP)
 tags: time-based effect
-version: 0.12
+version: 0.13
 author: Joep Vanlier
-changelog: Add legato blocks.
+changelog: Added pitch shifter.
 license: MIT
 about:
   # A small effect for doing sequencing of time based stutters, slowdowns and simple effects.
@@ -29,8 +29,8 @@ slider17:reverb_enabled=0<0,1,1>-Reverb enabled
 slider18:degrade_enabled=0<0,1,1>-Degrade enabled
 slider19:tapestop_enabled=0<0,1,1>-Tapestop enabled
 slider20:karplus_enabled=0<0,1,1>-Karplus enabled
+slider21:pitch_shifter_enabled=0<0,1,1>-Pitch shifter enabled
 
-slider21:dummy=0<0,1,1>-Dummy
 slider22:dummy=0<0,1,1>-Dummy
 slider23:dummy=0<0,1,1>-Dummy
 slider24:dummy=0<0,1,1>-Dummy
@@ -44,6 +44,7 @@ slider30:morph=0<0,1,.0001>-Morph
 slider31:cutoff_atk=0<0,1,0.0001>-Envelope Rise
 slider32:cutoff_decay=0<0,1,0.0001>-Envelope Decay
 slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
+slider34:pitch_shifter_pitch=0<-24,24,.0001>-Pitch Shift
 
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:midi_note_pattern_select=96<0,127,1>-First Pattern
@@ -60,6 +61,7 @@ import Saike_Yutani_Widgets.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
 import Saike_Yutani_envelope.jsfx-inc
 import Saike_Yutani_interpolators.jsfx-inc
+import Reflectosaurus_pitchlib.jsfx-inc
 
 @init
 log10d20_conversion  = 0.11512925464970228420089957273422;
@@ -107,6 +109,8 @@ function load_defaults()
   karplus_wet_default = 0.0;
   karplus_dry_default = -48.0;
   
+  shifter_dry_default = -64;
+  shifter_wet_default = 0;
 );
 
 function init_to_defaults()
@@ -141,6 +145,8 @@ function init_to_defaults()
   karplus_wet = karplus_wet_default;
   karplus_dry = karplus_dry_default;
   
+  shifter_dry = shifter_dry_default;
+  shifter_wet = shifter_wet_default;
   loaded = 1;
 );
 
@@ -178,6 +184,7 @@ function pattern_update()
   degrade_values = current_pattern + 8 * max_segments;
   tapestop_values = current_pattern + 9 * max_segments;
   karplus_values = current_pattern + 10 * max_segments;
+  pitch_shifter_values = current_pattern + 11 * max_segments;
   
   reset_values[0] = 1;
 );
@@ -449,6 +456,25 @@ freemem = (note_history = freemem) + 32768;
 midi.initializeMIDI(midimem, note_history, 1, 1);
 midi.notesOn = 0;
 
+pitch_block_size = 2*4096; /* We have 64 blocks of this */
+freemem = (fftmem1 = freemem) + pitch_block_size;
+freemem = (fftmem2 = freemem) + pitch_block_size;
+freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+
+function update_shifter()
+global(current_shifter_mode, shifter.pitchShifter, shifter_mode,
+       pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2)
+local(transition_region, shifter_buffer_size)
+(
+  current_shifter_mode != shifter_mode ? (
+    current_shifter_mode = shifter_mode;
+    transition_region = shifter_mode ? 1024 : 256;
+    shifter_buffer_size = 4 * transition_region;
+    shifter.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+  );
+);
+update_shifter();
+
 BUF_SIZE = 96000 * 60;
 freemem = (l_buffer = freemem) + BUF_SIZE;
 freemem = (r_buffer = freemem) + BUF_SIZE;
@@ -512,6 +538,12 @@ file_var(0, karplus_dry);
 file_var(0, snap_karplus);
 
 file_mem(0, copy_buffer, pattern_size);
+
+file_var(0, snap_shifter);
+file_var(0, shifter_dry);
+file_var(0, shifter_wet);
+
+file_var(0, shifter_mode);
 
 @sample
 function calc_times_universal(atk, decay, sustain)
@@ -670,6 +702,7 @@ function process_verb()
     verb_envelope.calc_times_universal(verb_gate_atk, verb_gate_decay, verb_gate_sustain);
     verb_drymul = exp(log10d20_conversion*verb_dry);
     verb_wetmul = exp(log10d20_conversion*verb_wet);
+    
     post_gate ? verb_wetmul * current_verb_gate;
   );
   
@@ -832,6 +865,37 @@ global(sample_clock, ssl, ssr, bitrate, samplerate, srate, degrade_target, satur
   );
 );
 
+function process_pitch_shifter()
+local()
+global(pitch_shifter_target,
+       shifter.setPitchShifterSpeed,
+       shifter.pitchShifterUpdate,
+       pitch_shifter_pitch,
+       shifter.outL, shifter.outR,
+       sample_clock, shift_pitch,
+       ssl, ssr,
+       snap_shifter,
+       shifter_dry, shifter_wet,
+       update_shifter,
+       log10d20_conversion)
+instance(dry, wet)
+(
+  pitch_shifter_target ? (
+    sample_clock % 4 == 0 ? (
+      update_shifter();
+      shift_pitch = (snap_shifter ? floor(pitch_shifter_pitch) : pitch_shifter_pitch) / 12;
+      shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
+      
+      dry = exp(log10d20_conversion*shifter_dry);
+      wet = exp(log10d20_conversion*shifter_wet);
+    );
+    
+    shifter.pitchShifterUpdate(ssl, ssr);
+    ssl = ssl * dry + shifter.outL * wet;
+    ssr = ssr * dry + shifter.outR * wet;
+  );
+);
+
 mmsg = midi.processMIDISample();
 mmsg ? (
   // Are we recording a new reference note?
@@ -961,17 +1025,26 @@ jump_schedule.eval_jump();
   tapestop_target == 1 ? (
     tapestop_envelope.calc_times_universal(tapestop_decay, tapestop_decay, 0);
     stop_factor = 1;
+    t_stop = 0;
+    t_stop_length = tapestop_envelope.env_attack_samples;
   );
   tapestop_target = abs(tapestop_target);
   
   karplus_target = abs(karplus_values[sequencer_index]);
+  pitch_shifter_target = abs(pitch_shifter_values[sequencer_index]);
   
   dyn_speed = speed;
 );
 
 tapestop_target ? (
-  stop_factor = (1 - tapestop_envelope.k_decay) * stop_factor;
-  dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
+  move_mode == 0 ? (
+    stop_factor = (1.0 - tapestop_envelope.k_decay) * stop_factor;
+    dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
+  ) : (
+    stop_factor = stop_factor + tapestop_envelope.k_decay * ((t_stop > 10 * tapestop_envelope.env_attack_samples) - stop_factor);
+    t_stop += 1.0;
+    dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
+  );
 );
 
 last_sequencer_index = sequencer_index;
@@ -1001,6 +1074,7 @@ x_fade_position > 0 ? (
 ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
 ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
 
+pitch_shifter_enabled ? process_pitch_shifter();
 degrade_enabled ? process_degrade();
 filter_enabled ? process_filter();
 gate_enabled ? process_gate();
@@ -1094,27 +1168,30 @@ function setup_theme()
   style == 0 ? (
     s_FILTER = sprintf(65, "FILTER");
     s_ENVELOPE = sprintf(66, "ENVELOPE");
-    s_GATE = sprintf(67, "GATE");
+    s_GATE = sprintf(67, "VOLUME ENVELOPE");
     s_REVERB = sprintf(68, "REVERB");
     s_DEGRADE = sprintf(69, "DEGRADE");
     s_TAPESTOP = sprintf(70, "TAPE STOP");
     s_KARPLUS = sprintf(71, "PITCHED DELAY");
+    s_PITCH = sprintf(72, "PITCH SHIFTER");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
-    s_GATE = sprintf(67, "Gate");
+    s_GATE = sprintf(67, "Volume Envelope");
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
     s_TAPESTOP = sprintf(70, "Tape Stop");
     s_KARPLUS = sprintf(71, "Pitched Delay");
+    s_PITCH = sprintf(72, "Pitch Shifter");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
-    s_GATE = sprintf(67, "Gate");
+    s_GATE = sprintf(67, "Volume Envelope");
     s_REVERB = sprintf(68, "Reverb");
     s_DEGRADE = sprintf(69, "Degrade");
     s_TAPESTOP = sprintf(70, "Tape Stop");
     s_KARPLUS = sprintf(71, "Pitched Delay");
+    s_PITCH = sprintf(72, "Pitch Shifter");
   );
   
   style == 0 ? (
@@ -1450,11 +1527,12 @@ y_current = process_effect_row(2, speed_values, x_current, y_current, "Slowdown"
 //y_current = process_effect_row(3, dynspeed_values, x_current, y_current, "Dynamic Slow", 4, 12);
 y_current = process_effect_row(10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19, "Tape stop effect.");
 y_current = process_effect_row(4, retrig_values, x_current, y_current, "Retrigger", 4, 13, "Retrigger last block N times.");
+y_current = process_effect_row(12, pitch_shifter_values, x_current, y_current, "Pitch Shifter", 1, 21, "Apply a pitch shifter.");
 y_current = process_effect_row(5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
 y_current = process_effect_row(11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20, "Apply a pitched delay effect");
 y_current = process_effect_row(9, degrade_values, x_current, y_current, "Degrade", 1, 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.");
 y_current = process_effect_row(7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
-y_current = process_effect_row(6, gate_values, x_current, y_current, "Gate", 1, 15, "Gate the audio.");
+y_current = process_effect_row(6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
 y_current = process_effect_row(8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
 
 gfx_set(1, 1, 1, .1);
@@ -1543,10 +1621,6 @@ cx = retrig_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block
 
 y_current += block_width;
 
-last_cap = mouse_cap;
-
-
-
 render_time += .025;
 
 style = 1;
@@ -1557,21 +1631,9 @@ knobSize = 35*(1+scaling);
 knobSpacing = .7 * knobSize;
 
 buttonSize = floor(.3 * knobSpacing);
-//widget_r = 35/255;
-//widget_g = 155/255;
-//widget_b = 30/255;
-//widget_a = 1.0;
-//toggle_r = .5;
-//toggle_g = 1.6;
-//toggle_b = .5;
-//toggle_a = 1.0;
-
 panelY = y_current - 32 * (1+scaling);
 panelPad = 6;
 panelHeight = 3.2 * knobSize;
-
-
-
 
 dial_animation = 0;
 
@@ -1818,6 +1880,38 @@ instance(vel, mod1, mod2)
   cX += 2.5*knobSize;
   karplusWet.knob_set(sprintf(1, "%.1f dB", karplus_wet), karplus_enabled, (karplus_wet + 48)/96);
   karplusWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when delay is active.", (karplus_wet + 48)/96, 1, 1, 1, (karplus_wet_default + 48)/96) ? ( karplus_wet = karplusWet.value * 96 - 48; slider_automate(karplus_wet); );
+) : ( selected_details == 12 ) ? (
+  // Pitch shifter
+  min_degrade = 3;
+  nextPanel = drawPanel(s_PITCH, cX, cY - 1.5 * knobSize, 14.125*knobSpacing, panelHeight, pitch_shifter_enabled);
+  
+  cX += knobSize * 1.35;
+  shifterSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_shifter, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Snap pitch to full semitones.");
+  snap_shifter = shifterSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  shifterPitchKnob.knob_set(sprintf(3, "%.2f st", snap_shifter ? floor(pitch_shifter_pitch) : pitch_shifter_pitch), pitch_shifter_enabled, (pitch_shifter_pitch + 24) / 48);
+  shifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", (pitch_shifter_pitch + 24) / 48, 1, 1, 1, 0.5) ? 
+  ( 
+    pitch_shifter_pitch = shifterPitchKnob.value * 48 - 24;
+    slider_automate(pitch_shifter_pitch);
+  );
+  
+  cX += 2.5*knobSize;
+  shifterDry.knob_set(sprintf(1, "%.1f dB", shifter_dry), pitch_shifter_enabled, (shifter_dry + 64)/64);
+  shifterDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", (shifter_dry + 64)/64, 1, 1, 1, (shifter_dry_default + 64)/64) ? ( shifter_dry = shifterDry.value * 64 - 64; slider_automate(shifter_dry); );
+  
+  cX += 2.5*knobSize;
+  shifterWet.knob_set(sprintf(1, "%.1f dB", shifter_wet), pitch_shifter_enabled, (shifter_wet + 64)/64);
+  shifterWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", (shifter_wet + 64)/64, 1, 1, 1, (shifter_wet_default + 64)/64) ? ( shifter_wet = shifterWet.value * 64 - 64; slider_automate(shifter_wet); );
+  
+  cx += 1.5 * knobSize;
+  shifterSelect.value = shifter_mode;
+  shifterSelect.selection_button(0, cX, cY - .7 * knobSize, 2.5 * block_width, block_width - 4, "Transients", 0.05, 0.2, 0.1, "Uses shorter window sizes.");
+  shifterSelect.selection_button(1, cX, cY + .3 * knobSize, 2.5 * block_width, block_width - 4, "Melody", 0.05, 0.2, 0.1, "Uses longer window sizes.\nLeads to better phase alignment, but poor transient preservation.");
+  shifter_mode = shifterSelect.value;
 );
 
 hinter.drawHint_draw();
+
+last_cap = mouse_cap;
+
