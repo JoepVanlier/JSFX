@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.18
+version: 0.20
 author: Joep Vanlier
-changelog: Store parameter scaling in the knob itself to make things less error prone.
+changelog: Refactor parameter handling and add parameter modulation. Omit automation-based interpolation for now.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -38,7 +38,7 @@ slider23:dummy=0<0,1,1>-Dummy
 slider24:dummy=0<0,1,1>-Dummy
 
 slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
-slider26:drive=0<-32,48,1>-Filter Drive (dB)
+slider26:drive=0<-6,48,1>-Filter Drive (dB)
 slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
 slider28:cutoff_final=.6<0,1,.0001>-Cutoff Finish
 slider29:resonance=0.7<0,1,.0001>-Resonance
@@ -66,13 +66,15 @@ import saike_seqs_interpolators.jsfx-inc
 import saike_seqs_pitchlib.jsfx-inc
 
 @init
+CURRENT_VERSION = 1;
+version = CURRENT_VERSION;
+
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
 sample_clock = 0;
 oversampling = 1;
 pattern_change = 1;
 current_sample = 0;
-version = 0;
 n_segments = 32;
 max_segments = 64;
 max_effects = 32;
@@ -96,6 +98,155 @@ global(loaded)
     
     value = (default - min_value) / scale;
   );
+);
+
+function set_value(new_value)
+instance(value, scale, min_value)
+global()
+local()
+(
+  value = (new_value - min_value) / scale;
+);
+
+function knob_read_value()
+global()
+instance(value, scale, min_value, slider_idx)
+local()
+(
+  value = (slider(slider_idx) - min_value) / scale;
+);
+
+function serialize_knob()
+instance(value, mod1, mod2, vel, default, min_value, scale)
+local()
+global(writing)
+(
+  !writing ? (
+    value = (default - min_value) / scale;
+    vel = 0;
+    mod1 = 0;
+    mod2 = 0;
+  );
+  file_var(0, value);
+  file_var(0, vel);
+  file_var(0, mod1);
+  file_var(0, mod2);
+);
+
+DB_SLIDER = 1;
+FREQ_SLIDER = 2;
+NORMALIZED_SLIDER = 3;
+ATTACK_SLIDER = 4;
+DECAY_SLIDER = 5;
+SCALED_SLIDER = 6;
+PITCH_SLIDER = 7;
+ROUNDED_PITCH_SLIDER = 8;
+CUSTOM_SLIDER = 9;
+
+function knob_set_display(type, in_active)
+instance(label, active, value, scale, min_value)
+local(center)
+global(srate, tempo_sync_envelopes, getFastEnvelopeLabel,
+       DB_SLIDER,
+       FREQ_SLIDER,
+       NORMALIZED_SLIDER,
+       ATTACK_SLIDER,
+       DECAY_SLIDER,
+       OFF_SLIDER
+       SCALED_SLIDER,
+       PITCH_SLIDER
+       ROUNDED_PITCH_SLIDER,
+       CUSTOM_SLIDER)
+(
+  // Type of slider
+  type == DB_SLIDER ? (
+    // dB
+    label = sprintf(1, "%.1f dB", value * scale + min_value);
+  ) : ( type == FREQ_SLIDER ) ? (
+    // Frequency slider
+    center = .5 * srate * exp( (1 - value) * log(20/22050) );
+    label = center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000)
+  ) : ( type == NORMALIZED_SLIDER ) ? (
+    label = sprintf(1, "%.1f", value)
+  ) : ( type == ATTACK_SLIDER ) ? (
+    label = tempo_sync_envelopes ? ( 
+      getFastEnvelopeLabel(value)
+    ) : ( 
+      (value > .5) ? sprintf(1, "%d ms", (3 * 10^(2*value))) : sprintf(1, "%.1f ms", (3 * 10^(2*value)))
+    );
+  ) : ( type == DECAY_SLIDER ) ?
+  (
+    label = tempo_sync_envelopes ? ( 
+      getFastEnvelopeLabel(value)
+    ) : ( 
+      (value > .5) ? sprintf(1, "%d ms", (30 * 10^(2*value))) : sprintf(1, "%.1f ms", (30 * 10^(2*value)))
+    )
+  ) : ( type == SCALED_SLIDER ) ? (
+    label = sprintf(1, "%.1f", scale * value + min_value);
+  ) : ( type == ROUNDED_PITCH_SLIDER ) ? (
+    label = sprintf(1, "%.2f st", floor(scale * value + min_value));
+  ) : ( type == PITCH_SLIDER ) ? (
+    label = sprintf(1, "%.2f st", scale * value + min_value);
+  ) : (
+    // Unknown labels get forwarded (for now)
+    label = type;
+  );
+  
+  active = in_active;
+);
+
+function getCurrentValue()
+instance(scale, min_value, value, mod1, mod2, modulator)
+global(modulator1_target, modulator2_target)
+local()
+(
+  (value + modulator1_target * mod1 + modulator2_target * mod2) * scale + min_value
+);
+
+function update_current_levels()
+(
+  current_drive = driveKnob.getCurrentValue();
+  current_cutoff_start = cutoffKnob.getCurrentValue();
+  current_cutoff_final = cutoffEndKnob.getCurrentValue();
+  current_resonance = resonanceKnob.getCurrentValue();
+  current_morph = morphKnob.getCurrentValue();
+  current_cutoff_atk = cutoffAttackKnob.getCurrentValue();
+  current_cutoff_decay = cutoffDecayKnob.getCurrentValue();
+  current_cutoff_sustain = cutoffSustainKnob.getCurrentValue();
+
+  current_gate_start = gateStart.getCurrentValue();
+  current_gate_stop = gateEnd.getCurrentValue();
+  current_gate_atk = gateAttackKnob.getCurrentValue();
+  current_gate_decay = gateDecayKnob.getCurrentValue();
+  current_gate_sustain = gateSustainKnob.getCurrentValue();
+  
+  current_verb_diffusion = verbDiffusionKnob.getCurrentValue();
+  current_verb_decay = verbDecayKnob.getCurrentValue();
+  current_verb_mod_depth = verbModDepthKnob.getCurrentValue();
+  current_verb_mod_rate = verbModRateKnob.getCurrentValue();
+  current_verb_lowpass = verbLowPassKnob.getCurrentValue();
+  current_verb_highpass = verbHighPassKnob.getCurrentValue();
+  current_verb_dry = verbDry.getCurrentValue();
+  current_verb_wet = verbWet.getCurrentValue();
+  current_verb_gate_atk = verbGateAttackKnob.getCurrentValue();
+  current_verb_gate_decay = verbGateDecayKnob.getCurrentValue();
+  current_verb_gate_sustain = verbGateSustainKnob.getCurrentValue();
+  
+  current_bitrate = bitrateKnob.getCurrentValue();
+  current_samplerate = samplerateKnob.getCurrentValue();
+  current_saturate = satKnob.getCurrentValue();
+  
+  current_tapestop_decay = tapestopSpeedKnob.getCurrentValue();
+  
+  current_karplus_pitch = karplusPitchKnob.getCurrentValue();
+  current_karplus_feedback = karplusFeedback.getCurrentValue();
+  current_karplus_cutoff = karplusCutoffKnob.getCurrentValue();
+  current_karplus_dry = karplusDry.getCurrentValue();
+  current_karplus_wet = karplusWet.getCurrentValue();
+  
+  current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
+  current_shifter_dry = shifterDry.getCurrentValue();
+  current_shifter_wet = shifterWet.getCurrentValue();
 );
 
 function init_controls()
@@ -143,6 +294,8 @@ function init_controls()
   shifterPitchKnob.init_knob(48, -24, 34, 0);
   shifterDry.init_knob(64, -64, 0, -64);
   shifterWet.init_knob(64, -64, 0, 0);
+  
+  update_current_levels();
 );
 
 init_controls();
@@ -150,12 +303,12 @@ loaded = 1;
 
 function identify_note(midi_pitch)
 local(octave, note, note_label)
-global()
+global(CUSTOM_SLIDER)
 (
   octave = floor((midi_pitch - 12) / 12);
   note = (midi_pitch - 21) % 12;
   note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
-  sprintf(3, "%s%d", note_label, octave)
+  sprintf(CUSTOM_SLIDER, "%s%d", note_label, octave)
 );
 
 function init_playhead()
@@ -197,6 +350,7 @@ function paste_pattern()
   memcpy(pattern_buffer + current_pattern_index * pattern_size, copy_buffer, pattern_size);
 );
 
+/*
 function interpolator_init()
 (
   // Set up the interpolators
@@ -231,6 +385,7 @@ function interpolators_block()
   reso_interpolator.interpolator_block();
   morph_interpolator.interpolator_block();
 );
+*/
 
 function init_allpass(buffer, buffer_size)
 instance(buffer)
@@ -493,20 +648,42 @@ pattern_update();
 init_playhead();
 
 @slider
+  slidercalled += 1;
+  driveKnob.knob_read_value();
+  cutoffKnob.knob_read_value();
+  cutoffEndKnob.knob_read_value();
+  resonanceKnob.knob_read_value();
+  morphKnob.knob_read_value();
+  cutoffAttackKnob.knob_read_value();
+  cutoffDecayKnob.knob_read_value();
+  cutoffSustainKnob.knob_read_value();
+  shifterPitchKnob.knob_read_value();
+
+  current_drive = driveKnob.getCurrentValue();
+  current_cutoff_start = cutoffKnob.getCurrentValue();
+  current_cutoff_final = cutoffEndKnob.getCurrentValue();
+  current_resonance = resonanceKnob.getCurrentValue();
+  current_morph = morphKnob.getCurrentValue();
+  current_cutoff_atk = cutoffAttackKnob.getCurrentValue();
+  current_cutoff_decay = cutoffDecayKnob.getCurrentValue();
+  current_cutoff_sustain = cutoffSustainKnob.getCurrentValue();
+  current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
 
 @block
 midi.processMIDIBlock();
-interpolators_block();
+//interpolators_block();
 pattern_update();
 time_mode == 2 ? current_sample = beat_position * from_beat;
 
 @serialize
+writing = file_avail(0) < 0;
 loaded = 1;
 file_var(0, version);
 file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
 file_var(0, selected_details);
 
 file_var(0, gate_enabled);
+
 file_var(0, gate_start);
 file_var(0, gate_stop);
 file_var(0, gate_atk);
@@ -544,6 +721,102 @@ file_var(0, shifter_wet);
 
 file_var(0, shifter_mode);
 
+// Serialize all the parameters in one go. Note that due to version 1, we have to override some later because they are stored earlier.
+driveKnob.serialize_knob(); 
+cutoffKnob.serialize_knob();
+cutoffEndKnob.serialize_knob();
+resonanceKnob.serialize_knob();
+morphKnob.serialize_knob();
+cutoffAttackKnob.serialize_knob();
+cutoffDecayKnob.serialize_knob();
+cutoffSustainKnob.serialize_knob();
+  
+gateStart.serialize_knob();
+gateEnd.serialize_knob();
+gateAttackKnob.serialize_knob();
+gateDecayKnob.serialize_knob();
+gateSustainKnob.serialize_knob();
+  
+verbDiffusionKnob.serialize_knob();
+verbDecayKnob.serialize_knob();
+verbModDepthKnob.serialize_knob();
+verbModRateKnob.serialize_knob();
+verbLowPassKnob.serialize_knob();
+verbHighPassKnob.serialize_knob();
+verbDry.serialize_knob();
+verbWet.serialize_knob();
+verbGateAttackKnob.serialize_knob();
+verbGateDecayKnob.serialize_knob();
+verbGateSustainKnob.serialize_knob();
+  
+bitrateKnob.serialize_knob();
+samplerateKnob.serialize_knob();
+satKnob.serialize_knob();
+  
+tapestopSpeedKnob.serialize_knob();
+
+karplusPitchKnob.serialize_knob();
+karplusFeedback.serialize_knob();
+karplusCutoffKnob.serialize_knob();
+karplusDry.serialize_knob();
+karplusWet.serialize_knob();
+  
+shifterPitchKnob.serialize_knob();
+shifterDry.serialize_knob();
+shifterWet.serialize_knob();
+
+// Version 0 compatibility
+version == 0 && !writing ? (
+  driveKnob.set_value(drive);
+  cutoffKnob.set_value(cutoff_start);
+  cutoffEndKnob.set_value(cutoff_final);
+  resonanceKnob.set_value(resonance);
+  morphKnob.set_value(morph);
+  cutoffAttackKnob.set_value(cutoff_atk);
+  cutoffDecayKnob.set_value(cutoff_decay);
+  cutoffSustainKnob.set_value(cutoff_sustain);
+    
+  gateStart.set_value(gate_start);
+  gateEnd.set_value(gate_stop);
+  gateAttackKnob.set_value(gate_atk);
+  gateDecayKnob.set_value(gate_decay);
+  gateSustainKnob.set_value(gate_sustain);
+    
+  verbDiffusionKnob.set_value(verb_diffusion);
+  verbDecayKnob.set_value(verb_decay);
+  verbModDepthKnob.set_value(verb_mod_depth);
+  verbModRateKnob.set_value(verb_mod_rate);
+  verbLowPassKnob.set_value(verb_lowpass);
+  verbHighPassKnob.set_value(verb_highpass);
+  verbDry.set_value(verb_dry);
+  verbWet.set_value(verb_wet);
+  verbGateAttackKnob.set_value(verb_gate_atk);
+  verbGateDecayKnob.set_value(verb_gate_decay);
+  verbGateSustainKnob.set_value(verb_gate_sustain);
+    
+  /*
+  These were forgotten in v1 :o
+  bitrateKnob.set_value();
+  samplerateKnob.set_value();
+  satKnob.set_value();*/
+    
+  tapestopSpeedKnob.set_value(tapestop_decay);
+  
+  karplusPitchKnob.set_value(karplus_pitch);
+  karplusFeedback.set_value(karplus_feedback);
+  karplusCutoffKnob.set_value(karplus_cutoff);
+  karplusDry.set_value(karplus_dry);
+  karplusWet.set_value(karplus_wet);
+    
+  shifterPitchKnob.set_value(pitch_shifter_pitch);
+  shifterDry.set_value(shifter_dry);
+  shifterWet.set_value(shifter_wet);
+);
+
+update_current_levels();
+version = CURRENT_VERSION; // Update to current version
+
+
 @sample
 function calc_times_universal(atk, decay, sustain)
 instance()
@@ -556,8 +829,6 @@ instance()
 );
 
 sample_clock += 1;
-
-verb.update_reverb_settings(verb_diffusion, verb_decay, verb_mod_depth, verb_mod_rate, verb_lowpass, verb_highpass);
 
 function jump_to_target()
 local()
@@ -662,16 +933,30 @@ local()
 );
 
 function process_filter()
+local()
+global(ssl, ssr,
+       filter_envelope.update_envelope,
+       filter_envelope.calc_times_universal,
+       filter.init_filter,
+       filter.processSample,
+       sample_clock, filter_target,
+       log10d20_conversion,
+       
+       current_drive, current_cutoff,
+       
+       // Controlled variables
+       filter_type, current_morph, current_resonance,
+       current_cutoff_start, current_cutoff_final,
+       current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain)
+instance(preamp, inv_preamp)
 (
-  current_drive = clamp(drive_interpolator.interpolate(), -6, 48);
-  
   sample_clock % 16 == 0 ? (
-    filter_envelope.calc_times_universal(cutoff_atk, cutoff_decay, cutoff_sustain);
+    filter_envelope.calc_times_universal(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
   );
   
-  current_cutoff = cutoff_start + filter_envelope.update_envelope(filter_target) * (cutoff_final - cutoff_start);
+  current_cutoff = current_cutoff_start + filter_envelope.update_envelope(filter_target) * (current_cutoff_final - current_cutoff_start);
   sample_clock % 4 == 0 ? (
-    filter.init_filter(filter_type, current_cutoff, current_cutoff, morph, morph, resonance);
+    filter.init_filter(filter_type, current_cutoff, current_cutoff, current_morph, current_morph, current_resonance);
     preamp      = exp(log10d20_conversion*current_drive);
     inv_preamp  = exp(-log10d20_conversion*current_drive);
   );
@@ -686,30 +971,45 @@ function process_filter()
 function process_gate()
 (
   sample_clock % 16 == 0 ? (
-    gate_envelope.calc_times_universal(gate_atk, gate_decay, gate_sustain);
+    gate_envelope.calc_times_universal(current_gate_atk, current_gate_decay, current_gate_sustain);
   );
   
-  current_gate = gate_start + gate_envelope.update_envelope(gate_target) * (gate_stop - gate_start);
+  current_gate = current_gate_start + gate_envelope.update_envelope(gate_target) * (current_gate_stop - current_gate_start);
   gatemul = exp(log10d20_conversion*current_gate);
   ssl *= gatemul;
   ssr *= gatemul;
 );
 
 function process_verb()
+local()
+global(ssl, ssr,
+      verb_envelope.calc_times_universal, verb_envelope.update_envelope,
+      
+      log10d20_conversion, sample_clock, current_verb_gate,
+      reverb_target,
+
+      // User controlled
+      post_gate,
+      current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass,
+      current_verb_gate_atk, current_verb_gate_decay, current_verb_gate_sustain,
+      current_verb_dry, current_verb_wet,
+      )
+instance(verb_drymul, verb_wetmul)
 (
   sample_clock % 16 == 0 ? (
-    verb_envelope.calc_times_universal(verb_gate_atk, verb_gate_decay, verb_gate_sustain);
-    verb_drymul = exp(log10d20_conversion*verb_dry);
-    verb_wetmul = exp(log10d20_conversion*verb_wet);
+    this.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    verb_envelope.calc_times_universal(current_verb_gate_atk, current_verb_gate_decay, current_verb_gate_sustain);
+    verb_drymul = exp(log10d20_conversion*current_verb_dry);
+    verb_wetmul = exp(log10d20_conversion*current_verb_wet);
     
     post_gate ? verb_wetmul * current_verb_gate;
   );
   
   current_verb_gate = verb_envelope.update_envelope(reverb_target);
 
-  verb.eval_reverb(ssl * current_verb_gate, ssr * current_verb_gate);
-  ssl = verb_drymul * ssl + verb_wetmul * verb.out_left;
-  ssr = verb_drymul * ssr + verb_wetmul * verb.out_right;
+  this.eval_reverb(ssl * current_verb_gate, ssr * current_verb_gate);
+  ssl = verb_drymul * ssl + verb_wetmul * this.out_left;
+  ssr = verb_drymul * ssr + verb_wetmul * this.out_right;
 );
 
 function process_karplus()
@@ -719,8 +1019,8 @@ local(g, kpr, kpl, lk, rk, v, y, omega, omega_fundamental, max_fb
 global(l_karplus, r_karplus,
        l_karplus.readBuffer, r_karplus.readBuffer,
        l_karplus.writeBuffer, r_karplus.writeBuffer,
-       karplus_feedback, karplus_pitch, karplus_cutoff,
-       karplus_wet, karplus_dry, log10d20_conversion,
+       current_karplus_feedback, current_karplus_pitch, current_karplus_cutoff,
+       current_karplus_wet, current_karplus_dry, log10d20_conversion,
        srate,
        sample_clock,
        ssl, ssr, igain,
@@ -729,21 +1029,21 @@ global(l_karplus, r_karplus,
        )
 (
   sample_clock % 16 == 0 ? (
-    midi_pitch = 45 + 36 * karplus_pitch;
+    midi_pitch = 45 + 36 * current_karplus_pitch;
     snap_karplus ? midi_pitch = floor(midi_pitch);
     current_pitch = 440 * 2^((midi_pitch - 69)/12);
     
     karplus_offset = srate / current_pitch;
-    cutoff_current = 0.98 * cutoff_current + 0.02 * karplus_cutoff;
+    cutoff_current = 0.98 * cutoff_current + 0.02 * current_karplus_cutoff;
     omega = .99999 * $pi * exp((1.0 - cutoff_current) * log(20/22050));
     g = tan(0.5 * omega);
     coeff = g / (1.0 + g);
 
-    current_wet_gain = 0.9 * current_wet_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * karplus_wet) : 0);
-    current_dry_gain = 0.9 * current_dry_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * karplus_dry) : 1);
+    current_wet_gain = 0.9 * current_wet_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * current_karplus_wet) : 0);
+    current_dry_gain = 0.9 * current_dry_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * current_karplus_dry) : 1);
     
     max_fb = 0.98;
-    fb = 2.0 * max_fb * karplus_feedback - max_fb;
+    fb = 2.0 * max_fb * current_karplus_feedback - max_fb;
     fb = sign(fb) * sqrt(abs(fb));
     
     fb_current = 0.996 * fb_current + 0.004 * fb;
@@ -821,13 +1121,13 @@ instance(factor,
          from_l, from_r, to_l, to_r,
          l_hist, r_hist, preamp)
 local(target)
-global(sample_clock, ssl, ssr, bitrate, samplerate, srate, degrade_target, saturate, log10d20_conversion)
+global(sample_clock, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion)
 (
   sample_clock % 16 == 0 ? (
-    b_factor = 2^(bitrate - 1);
+    b_factor = 2^(current_bitrate - 1);
     ib_factor = 1/b_factor;
     
-    target = srate * exp( (1-samplerate) * log(1000/44100) );
+    target = srate * exp( (1-current_samplerate) * log(1000/44100) );
     factor = (srate / target);
   );
   
@@ -856,8 +1156,8 @@ global(sample_clock, ssl, ssr, bitrate, samplerate, srate, degrade_target, satur
     ssl = to_l;
     ssr = to_r;
     
-    saturate > -6 ? (
-      preamp = exp(log10d20_conversion*saturate);
+    current_saturate > -6 ? (
+      preamp = exp(log10d20_conversion*current_saturate);
       ssl = tanh(preamp*ssl)/preamp;
       ssr = tanh(preamp*ssr)/preamp;
     );
@@ -869,24 +1169,25 @@ local()
 global(pitch_shifter_target,
        shifter.setPitchShifterSpeed,
        shifter.pitchShifterUpdate,
-       pitch_shifter_pitch,
        shifter.outL, shifter.outR,
        sample_clock, shift_pitch,
        ssl, ssr,
        snap_shifter,
-       shifter_dry, shifter_wet,
        update_shifter,
+
+       current_pitch_shifter_pitch,
+       current_shifter_dry, current_shifter_wet,
        log10d20_conversion)
 instance(dry, wet)
 (
   pitch_shifter_target ? (
     sample_clock % 4 == 0 ? (
       update_shifter();
-      shift_pitch = (snap_shifter ? floor(pitch_shifter_pitch) : pitch_shifter_pitch) / 12;
+      shift_pitch = (snap_shifter ? floor(current_pitch_shifter_pitch) : current_pitch_shifter_pitch) / 12;
       shifter.setPitchShifterSpeed(2*((2^(shift_pitch))-1.0));
       
-      dry = exp(log10d20_conversion*shifter_dry);
-      wet = exp(log10d20_conversion*shifter_wet);
+      dry = exp(log10d20_conversion*current_shifter_dry);
+      wet = exp(log10d20_conversion*current_shifter_wet);
     );
     
     shifter.pitchShifterUpdate(ssl, ssr);
@@ -1027,7 +1328,7 @@ jump_schedule.eval_jump();
   
   tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
   tapestop_target == 1 ? (
-    tapestop_envelope.calc_times_universal(tapestop_decay, tapestop_decay, 0);
+    tapestop_envelope.calc_times_universal(current_tapestop_decay, current_tapestop_decay, 0);
     stop_factor = 1;
     t_stop = 0;
     t_stop_length = tapestop_envelope.env_attack_samples;
@@ -1038,6 +1339,10 @@ jump_schedule.eval_jump();
   pitch_shifter_target = abs(pitch_shifter_values[sequencer_index]);
   
   dyn_speed = speed;
+  
+  modulator1_target = modulator1_values[sequencer_index];
+  modulator2_target = modulator2_values[sequencer_index];
+  update_current_levels();
 );
 
 tapestop_target ? (
@@ -1080,9 +1385,9 @@ ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhe
 
 pitch_shifter_enabled ? process_pitch_shifter();
 degrade_enabled ? process_degrade();
-filter_enabled ? process_filter();
+filter_enabled ? filter.process_filter();
 gate_enabled ? process_gate();
-reverb_enabled ? process_verb();
+reverb_enabled ? verb.process_verb();
 karplus_enabled ? karplus.process_karplus();
 
 spl0 = ssl;
@@ -1225,19 +1530,6 @@ function setup_theme()
   edge_font_r = 0.9;
   edge_font_g = 0.9;
   edge_font_b = 0.8;
-  
-  mod1_color_r = .3;
-  mod1_color_g = .47;
-  mod1_color_b = .6;
-  mod1_color_a = 1;
-  mod2_color_r = .2;
-  mod2_color_g = .5;
-  mod2_color_b = 1;
-  mod2_color_a = 1;
-  mod3_color_r = .1;
-  mod3_color_g = .6;
-  mod3_color_b = 1;
-  mod3_color_a = 1;
   
   widget_r = 35/255;
   widget_g = 155/255;
@@ -1664,10 +1956,19 @@ y_current = process_effect_row(7, 9, degrade_values, x_current, y_current, "Degr
 y_current = process_effect_row(8, 7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
 y_current = process_effect_row(9, 6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
 y_current = process_effect_row(10, 8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
-/*
-y_current = process_modulation_row(0, 2, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
-y_current = process_modulation_row(12, 3, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
-*/
+
+y_current = process_modulation_row(3, 2, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
+mod2_color_r = row_color_r * 2;
+mod2_color_g = row_color_g * 2;
+mod2_color_b = row_color_b * 2;
+mod2_color_a = 1.0;
+
+y_current = process_modulation_row(11, 3, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
+mod3_color_r = row_color_r * 2;
+mod3_color_g = row_color_g * 2;
+mod3_color_b = row_color_b * 2;
+mod3_color_a = 1.0;
+
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
@@ -1775,32 +2076,43 @@ cY = y_current + 2.25 * knobSize;
 
 dial_animation = 1;
 function drawAndProcess(cX, cY, knobSize, label, description, current, modifier1, modifier2, modifier3)
-instance(vel, mod1, mod2, default)
+instance(vel, mod1, mod2, default, slider_idx, value, scale, min_value, newValue)
+global(mouse_x, mouse_y, mouse_cap,
+       dial_animation, bipolar, activeModifier,
+       dial_position_color_r, dial_position_color_g, dial_position_color_b
+       mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a,
+       mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a,
+       mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a,
+       current_mod1, current_mod2)
+local(norm_current)
 (
   this.drawKnob(cX, cY, knobSize, label, description, 1.0);
   
   dial_animation ? (
-    this.knob_draw_modifier(current - this.value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-    this.knob_draw_modifier(current - this.value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+    norm_current = (current - min_value) / scale;
+    this.knob_draw_modifier(norm_current - value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -0.1);
+    this.knob_draw_modifier(norm_current - value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, 0.1);
   );
   
   modifier1 ? this.knob_draw_modifier(vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-  modifier2 ? this.knob_draw_modifier(mod1, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  modifier2 ? this.knob_draw_modifier(mod1, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 1.5);
   modifier3 ? this.knob_draw_modifier(mod2, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
    
   activeModifier == 3 ? (
-    old_value = value;
-    this.knob_modifier_processMouse(0, mod2) ? ( mod2 = this.value; );
-    value = old_value;
+    this.knob_modifier_processMouse(0, mod2) ? ( mod2 = newValue; update_current_levels(); );
   ) : activeModifier == 2 ? ( 
-    old_value = value;  
-    this.knob_modifier_processMouse(0, mod1) ? ( mod1 = this.value; );
-    value = old_value;
+    this.knob_modifier_processMouse(0, mod1) ? ( mod1 = newValue; update_current_levels(); );
   ) : activeModifier == 1 ? ( 
-    old_value = value;  
-    this.knob_modifier_processMouse(0, vel) ? ( vel = this.value; );
-    value = old_value;
-  ) : this.knob_processMouse(mouse_x, mouse_y, mouse_cap, default);
+    this.knob_modifier_processMouse(0, vel) ? ( vel = newValue; update_current_levels(); );
+  ) : (
+    this.knob_processMouse(mouse_x, mouse_y, mouse_cap, default) ? (
+      slider_idx > 0 ? (
+        slider(slider_idx) = scale * value + min_value;
+        slider_automate(slider_idx);
+      );
+      update_current_levels(); 
+    );
+  );
 );
 
 set_row_color(selected_row);
@@ -1833,28 +2145,25 @@ set_row_color(selected_row);
   drawSelectionButton("SteinerA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 16, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.");
   drawSelectionButton("Bent", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 17, FILTER_SELECT_BUTTON, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.");
   
-  
   cX += 4.25*knobSize;
-  driveKnob.knob_set(sprintf(1, "%.1f dB", drive), filter_enabled, (drive + 6)/54);
-  driveKnob.drawAndProcess(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", (drive + 6)/54, 1, 1, 1) ? ( drive = driveKnob.value * 54 - 6; slider_automate(drive); );
+  driveKnob.knob_set_display(DB_SLIDER, filter_enabled);
+  driveKnob.drawAndProcess(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", current_drive, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  center = .5 * srate * exp( (1-cutoff_start) * log(20/22050) );
-  cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), filter_enabled, cutoff_start);
-  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", current_cutoff, 1, 1, 1) ? ( cutoff_start = cutoffKnob.value; slider_automate(cutoff_start); );
+  cutoffKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
+  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", current_cutoff, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  center = .5 * srate * exp( (1-cutoff_final) * log(20/22050) );
-  cutoffEndKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), filter_enabled, cutoff_final);
-  cutoffEndKnob.drawAndProcess(cX, cY, knobSize, "Cutoff End", "Filter Cutoff", current_cutoff, 1, 1, 1) ? ( cutoff_final = cutoffEndKnob.value; slider_automate(cutoff_final); );
+  cutoffEndKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
+  cutoffEndKnob.drawAndProcess(cX, cY, knobSize, "Cutoff End", "Filter Cutoff", current_cutoff, 1, 1, 1);
   
   cX += knobSize*2.5;
-  resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), filter_enabled, resonance);
-  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", resonance, 1, 1, 1) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
+  resonanceKnob.knob_set_display(NORMALIZED_SLIDER, filter_enabled);
+  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", current_resonance, 1, 1, 1);
    
   cX += knobSize*2.7;
-  morphKnob.knob_set("", filter_enabled, morph);
-  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", morph, 1, 1, 1) ? ( morph = morphKnob.value; slider_automate(morph); );
+  morphKnob.knob_set_display("", filter_enabled);
+  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", current_morph, 1, 1, 1);
   
   gfx_set(1,1,1,1);
   drawKnobLabels(knobSize*1.25, 0, "LP");
@@ -1863,166 +2172,153 @@ set_row_color(selected_row);
   drawKnobLabels(knobSize*1.25, 3/4, "BR");
   drawKnobLabels(knobSize*1.25, 4/4, "LP");
   
-  
   cX += knobSize * 2;
   nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, filter_enabled);
   
   cX += knobSize * 1.35;
-  tempo_sync_envelopes ? ( cutoffAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), filter_enabled, cutoff_atk);
-  ) : cutoffAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_enabled, cutoff_atk);
-  cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", cutoff_atk, 1, 1, 1) ? ( cutoff_atk = cutoffAttackKnob.value; slider_automate(cutoff_atk); );
+  cutoffAttackKnob.knob_set_display(ATTACK_SLIDER, filter_enabled);
+  cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_cutoff_atk, 1, 1, 1);
 
   cX += knobSize*2.5;
-  tempo_sync_envelopes ? ( cutoffDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), filter_enabled, cutoff_decay);
-  ) : cutoffDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_enabled, cutoff_decay );
-  cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", cutoff_decay, 1, 1, 1) ? ( cutoff_decay = cutoffDecayKnob.value; slider_automate(cutoff_decay); );
+  cutoffDecayKnob.knob_set_display(DECAY_SLIDER, filter_enabled);
+  cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_cutoff_decay, 1, 1, 1);
   
   cX += knobSize*2.5;
-  cutoffSustainKnob.knob_set(sprintf(1, "%.1f", cutoff_sustain), filter_enabled, cutoff_sustain);
-  cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", cutoff_sustain, 1, 1, 1) ? ( cutoff_sustain = cutoffSustainKnob.value; slider_automate(cutoff_sustain); );
+  cutoffSustainKnob.knob_set_display(NORMALIZED_SLIDER, filter_enabled);
+  cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_cutoff_sustain, 1, 1, 1);
 ) : ( selected_details == 6 ) ? (
   // Gate
   nextPanel = drawPanel(s_GATE, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, gate_enabled);
   cX += knobSize * 1.35;
-  gateStart.knob_set(sprintf(1, "%.1f dB", gate_start), gate_enabled, (gate_start + 48)/96);
-  gateStart.drawAndProcess(cX, cY, knobSize, "Closed Level", "Gain when gate is closed.", (current_gate + 48)/96, 1, 1, 1) ? ( gate_start = gateStart.value * 96 - 48; slider_automate(gate_start); );
+  gateStart.knob_set_display(DB_SLIDER, gate_enabled);
+  gateStart.drawAndProcess(cX, cY, knobSize, "Closed Level", "Gain when gate is closed.", current_gate, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  gateEnd.knob_set(sprintf(1, "%.1f dB", gate_stop), gate_enabled, (gate_stop + 48)/96);
-  gateEnd.drawAndProcess(cX, cY, knobSize, "Open Level", "Gain level when gate is open.", (current_gate + 48)/96, 1, 1, 1) ? ( gate_stop = gateEnd.value * 96 - 48; slider_automate(gate_stop); );
+  gateEnd.knob_set_display(DB_SLIDER, gate_enabled);
+  gateEnd.drawAndProcess(cX, cY, knobSize, "Open Level", "Gain level when gate is open.", current_gate, 1, 1, 1);
   
   cX += 2.5*knobSize;  
-  tempo_sync_envelopes ? ( gateAttackKnob.knob_set(getFastEnvelopeLabel(gate_atk), gate_enabled, gate_atk);
-  ) : gateAttackKnob.knob_set(gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*gate_atk))), gate_enabled, gate_atk);
-  gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", gate_atk, 1, 1, 1) ? ( gate_atk = gateAttackKnob.value; slider_automate(gate_atk); );
+  gateAttackKnob.knob_set_display(ATTACK_SLIDER, gate_enabled);
+  gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_gate_atk, 1, 1, 1);
   
   cX += knobSize*2.5;
-  tempo_sync_envelopes ? ( gateDecayKnob.knob_set(getFastEnvelopeLabel(gate_decay), gate_enabled, gate_decay);
-  ) : gateDecayKnob.knob_set(gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*gate_decay))), gate_enabled, gate_decay );
-  gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", gate_decay, 1, 1, 1) ? ( gate_decay = gateDecayKnob.value; slider_automate(gate_decay); );
+  gateDecayKnob.knob_set_display(DECAY_SLIDER, gate_enabled );
+  gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_gate_decay, 1, 1, 1);
   
   cX += knobSize*2.5;
-  gateSustainKnob.knob_set(sprintf(1, "%.1f", gate_sustain), gate_enabled, gate_sustain);
-  gateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", gate_sustain, 1, 1, 1) ? ( gate_sustain = gateSustainKnob.value; slider_automate(gate_sustain); );
+  gateSustainKnob.knob_set_display(NORMALIZED_SLIDER, gate_enabled);
+  gateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_gate_sustain, 1, 1, 1);
 ) : ( selected_details == 8 ) ? (
   // Reverb
   nextPanel = drawPanel(s_REVERB, cX, cY - 1.5 * knobSize, 29*knobSpacing, panelHeight, reverb_enabled);
   
   cX += knobSize * 1.35;
-  verbDiffusionKnob.knob_set("", reverb_enabled, verb_diffusion);
-  verbDiffusionKnob.drawAndProcess(cX, cY, knobSize, "Diffusion", "Reverb Diffusion", verb_diffusion, 1, 1, 1) ? ( verb_diffusion = verbDiffusionKnob.value; slider_automate(verb_diffusion); );
+  verbDiffusionKnob.knob_set_display("", reverb_enabled);
+  verbDiffusionKnob.drawAndProcess(cX, cY, knobSize, "Diffusion", "Reverb Diffusion", current_verb_diffusion, 1, 1, 1);
 
   cX += 2.5*knobSize;
-  verbDecayKnob.knob_set("", reverb_enabled, verb_decay);
-  verbDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Reverb decay", verb_decay, 1, 1, 1) ? ( verb_decay = verbDecayKnob.value; slider_automate(verb_decay); );
+  verbDecayKnob.knob_set_display("", reverb_enabled);
+  verbDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Reverb decay", current_verb_decay, 1, 1, 1);
   
   cX += 2.5 * knobSize;
-  verbModDepthKnob.knob_set("", reverb_enabled, verb_mod_depth);
-  verbModDepthKnob.drawAndProcess(cX, cY, knobSize, "Mod Depth", "Modulation depth", verb_mod_depth, 1, 1, 1) ? ( verb_mod_depth = verbModDepthKnob.value; slider_automate(verb_mod_depth); );
+  verbModDepthKnob.knob_set_display("", reverb_enabled);
+  verbModDepthKnob.drawAndProcess(cX, cY, knobSize, "Mod Depth", "Modulation depth", current_verb_mod_depth, 1, 1, 1);
   
   cX += 2.5 * knobSize;
-  verbModRateKnob.knob_set("", reverb_enabled, verb_mod_rate);
-  verbModRateKnob.drawAndProcess(cX, cY, knobSize, "Mod rate", "Mod rate", verb_mod_rate, 1, 1, 1) ? ( verb_mod_rate = verbModRateKnob.value; slider_automate(verb_mod_rate); );
+  verbModRateKnob.knob_set_display("", reverb_enabled);
+  verbModRateKnob.drawAndProcess(cX, cY, knobSize, "Mod rate", "Mod rate", current_verb_mod_rate, 1, 1, 1);
 
   cX += 2.5*knobSize;
-  center = .5 * srate * exp( (1-verb_lowpass) * log(20/22050) );
-  verbLowPassKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), reverb_enabled, verb_lowpass);
-  verbLowPassKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter Cutoff inside the feedback loop", verb_lowpass, 1, 1, 1) ? ( verb_lowpass = verbLowPassKnob.value; slider_automate(verb_lowpass); );
+  verbLowPassKnob.knob_set_display(FREQ_SLIDER, reverb_enabled);
+  verbLowPassKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter Cutoff inside the feedback loop", current_verb_lowpass, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  center = .5 * srate * exp( (1-verb_highpass) * log(20/22050) );
-  verbHighPassKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), reverb_enabled, verb_highpass);
-  verbHighPassKnob.drawAndProcess(cX, cY, knobSize, "Highpass", "Filter Cutoff", verb_highpass, 1, 1, 1) ? ( verb_highpass = verbHighPassKnob.value; slider_automate(verb_highpass); );
+  verbHighPassKnob.knob_set_display(FREQ_SLIDER, reverb_enabled);
+  verbHighPassKnob.drawAndProcess(cX, cY, knobSize, "Highpass", "Filter Cutoff", current_verb_highpass, 1, 1, 1);
 
   cX += 2.5*knobSize;
-  verbDry.knob_set(sprintf(1, "%.1f dB", verb_dry), reverb_enabled, (verb_dry + 64)/64);
-  verbDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", (verb_dry + 64)/64, 1, 1, 1) ? ( verb_dry = verbDry.value * 64 - 64; slider_automate(verb_dry); );
+  verbDry.knob_set_display(DB_SLIDER, reverb_enabled);
+  verbDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", current_verb_dry, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  verbWet.knob_set(sprintf(1, "%.1f dB", verb_wet), reverb_enabled, (verb_wet + 64)/64);
-  verbWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", (verb_wet + 64)/64, 1, 1, 1) ? ( verb_wet = verbWet.value * 64 - 64; slider_automate(verb_wet); );
+  verbWet.knob_set_display(DB_SLIDER, reverb_enabled);
+  verbWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", current_verb_wet, 1, 1, 1);
 
   cX += knobSize*1.75;
   nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.125*knobSpacing, panelHeight, reverb_enabled);
   
   cX += 1.35*knobSize;  
-  tempo_sync_envelopes ? ( verbGateAttackKnob.knob_set(getFastEnvelopeLabel(verb_gate_atk), reverb_enabled, verb_gate_atk);
-  ) : verbGateAttackKnob.knob_set(verb_gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*verb_gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*verb_gate_atk))), reverb_enabled, verb_gate_atk);
-  verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", verb_gate_atk, 1, 1, 1) ? ( verb_gate_atk = verbGateAttackKnob.value; slider_automate(verb_gate_atk); );
+  verbGateAttackKnob.knob_set_display(ATTACK_SLIDER, reverb_enabled);
+  verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_verb_gate_atk, 1, 1, 1);
   
   cX += knobSize*2.5;
-  tempo_sync_envelopes ? ( verbGateDecayKnob.knob_set(getFastEnvelopeLabel(verb_gate_decay), reverb_enabled, verb_gate_decay);
-  ) : verbGateDecayKnob.knob_set(verb_gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*verb_gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*verb_gate_decay))), reverb_enabled, verb_gate_decay );
-  verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", verb_gate_decay, 1, 1, 1) ? ( verb_gate_decay = verbGateDecayKnob.value; slider_automate(verb_gate_decay); );
+  verbGateDecayKnob.knob_set_display(ATTACK_SLIDER, reverb_enabled);
+  verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_verb_gate_decay, 1, 1, 1);
   
   cX += knobSize*2.5;
-  verbGateSustainKnob.knob_set(sprintf(1, "%.1f", verb_gate_sustain), reverb_enabled, verb_gate_sustain);
-  verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", verb_gate_sustain, 1, 1, 1) ? ( verb_gate_sustain = verbGateSustainKnob.value; slider_automate(verb_gate_sustain); );
+  verbGateSustainKnob.knob_set_display(NORMALIZED_SLIDER, reverb_enabled);
+  verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_verb_gate_sustain, 1, 1, 1);
 ) : ( selected_details == 9 ) ? (
   // Degrade
   min_degrade = 3;
   nextPanel = drawPanel(s_DEGRADE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, degrade_enabled);
   
   cX += knobSize * 1.35;
-  bitrateKnob.knob_set(sprintf(1, "%d", bitrate + .001), degrade_enabled, (bitrate - min_degrade) / 21);
-  bitrateKnob.drawAndProcess(cX, cY, knobSize, "Bit rate", "Bit rate", (bitrate - min_degrade) / 21, 1, 1, 1) ? ( bitrate = bitrateKnob.value * 21 + min_degrade; slider_automate(bitrate); );
+  bitrateKnob.knob_set_display(SCALED_SLIDER, degrade_enabled);
+  bitrateKnob.drawAndProcess(cX, cY, knobSize, "Bit rate", "Bit rate", current_bitrate, 1, 1, 1);
 
   cX += 2.5*knobSize;
-  center = srate * exp( (1-samplerate) * log(1000/44100) );
-  samplerateKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), degrade_enabled, samplerate);
-  samplerateKnob.drawAndProcess(cX, cY, knobSize, "Sample rate", "Sample rate", samplerate, 1, 1, 1) ? ( samplerate = samplerateKnob.value; slider_automate(samplerate); );
+  samplerateKnob.knob_set_display(FREQ_SLIDER, degrade_enabled);
+  samplerateKnob.drawAndProcess(cX, cY, knobSize, "Sample rate", "Sample rate", current_samplerate, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  satKnob.knob_set(saturate > -6 ? sprintf(1, "%.1f dB", saturate) : "OFF", degrade_enabled, (saturate + 6)/54);
-  satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Sautration.", (saturate + 6)/54, 1, 1, 1) ? ( saturate = satKnob.value * 54 - 6; slider_automate(saturate); );
+  satKnob.knob_set_display(satKnob.value < .00001 ? "OFF" : DB_SLIDER, degrade_enabled);
+  satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Saturation.", current_saturate, 1, 1, 1);
 ) : ( selected_details == 10 ) ? (
   // Tape stop
   min_degrade = 3;
-  nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 4*knobSpacing, panelHeight, degrade_enabled);
+  nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 4*knobSpacing, panelHeight, tapestop_enabled);
   
   cX += knobSize * 1.35;
-  tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), tapestop_enabled, tapestop_decay);
-  ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
-  
-  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 1, 1, 1) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
+  tapestopSpeedKnob.knob_set_display(DECAY_SLIDER, tapestop_enabled);
+  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", current_tapestop_decay, 1, 1, 1);
 ) : ( selected_details == 11 ) ? (
   // Tonal delay
   min_degrade = 3;
   nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, karplus_enabled);
   
   cX += knobSize * 1.35;
-  midi_pitch = (45 + 36 * karplus_pitch);
+  midi_pitch = (45 + 36 * current_karplus_pitch);
   snap_karplus ? midi_pitch = floor(midi_pitch);
   note_fractional = midi_pitch - floor(midi_pitch);
   
   note_fractional > 0.025 ? (
-    sprintf(3, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
+    sprintf(CUSTOM_SLIDER, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
   ) : (
     identify_note(midi_pitch);
   );
 
-  karplusPitchKnob.knob_set(3, karplus_enabled, karplus_pitch);
-  karplusPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", karplus_pitch, 1, 1, 1) ? ( karplus_pitch = karplusPitchKnob.value; slider_automate(karplus_pitch); );
+  karplusPitchKnob.knob_set_display(CUSTOM_SLIDER, karplus_enabled);
+  karplusPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_karplus_pitch, 1, 1, 1);
   
   pitchSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_karplus, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Snap pitch to full semitones.");
   snap_karplus = pitchSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   cX += knobSize * 2.5;
-  karplusFeedback.knob_set("", karplus_enabled, karplus_feedback);
-  karplusFeedback.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", karplus_feedback, 1, 1, 1) ? ( karplus_feedback = karplusFeedback.value; slider_automate(karplus_feedback); );
+  karplusFeedback.knob_set_display("", karplus_enabled);
+  karplusFeedback.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", current_karplus_feedback, 1, 1, 1);
   
   cX += knobSize * 2.5;
-  center = .5 * srate * exp( (1-karplus_cutoff) * log(20/22050) );
-  karplusCutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), karplus_enabled, karplus_cutoff);
-  karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", karplus_cutoff, 1, 1, 1) ? ( karplus_cutoff = karplusCutoffKnob.value; slider_automate(karplus_cutoff); );
+  karplusCutoffKnob.knob_set_display(FREQ_SLIDER, karplus_enabled);
+  karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", current_karplus_cutoff, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  karplusDry.knob_set(sprintf(1, "%.1f dB", karplus_dry), karplus_enabled, (karplus_dry + 48)/96);
-  karplusDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry level when delay is active.", (karplus_dry + 48)/96, 1, 1, 1) ? ( karplus_dry = karplusDry.value * 96 - 48; slider_automate(karplus_dry); );
+  karplusDry.knob_set_display(DB_SLIDER, karplus_enabled);
+  karplusDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry level when delay is active.", current_karplus_dry, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  karplusWet.knob_set(sprintf(1, "%.1f dB", karplus_wet), karplus_enabled, (karplus_wet + 48)/96);
-  karplusWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when delay is active.", (karplus_wet + 48)/96, 1, 1, 1) ? ( karplus_wet = karplusWet.value * 96 - 48; slider_automate(karplus_wet); );
+  karplusWet.knob_set_display(DB_SLIDER, karplus_enabled);
+  karplusWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when delay is active.", current_karplus_wet, 1, 1, 1);
 ) : ( selected_details == 12 ) ? (
   // Pitch shifter
   min_degrade = 3;
@@ -2032,20 +2328,16 @@ set_row_color(selected_row);
   shifterSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_shifter, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Snap pitch to full semitones.");
   snap_shifter = shifterSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
-  shifterPitchKnob.knob_set(sprintf(3, "%.2f st", snap_shifter ? floor(pitch_shifter_pitch) : pitch_shifter_pitch), pitch_shifter_enabled, (pitch_shifter_pitch + 24) / 48);
-  shifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", (pitch_shifter_pitch + 24) / 48, 1, 1, 1) ? 
-  ( 
-    pitch_shifter_pitch = shifterPitchKnob.value * 48 - 24;
-    slider_automate(pitch_shifter_pitch);
-  );
+  shifterPitchKnob.knob_set_display(snap_shifter ? ROUNDED_PITCH_SLIDER : PITCH_SLIDER, pitch_shifter_enabled);
+  shifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_pitch_shifter_pitch, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  shifterDry.knob_set(sprintf(1, "%.1f dB", shifter_dry), pitch_shifter_enabled, (shifter_dry + 64)/64);
-  shifterDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", (shifter_dry + 64)/64, 1, 1, 1) ? ( shifter_dry = shifterDry.value * 64 - 64; slider_automate(shifter_dry); );
+  shifterDry.knob_set_display(DB_SLIDER, pitch_shifter_enabled);
+  shifterDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", current_shifter_dry, 1, 1, 1);
   
   cX += 2.5*knobSize;
-  shifterWet.knob_set(sprintf(1, "%.1f dB", shifter_wet), pitch_shifter_enabled, (shifter_wet + 64)/64);
-  shifterWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", (shifter_wet + 64)/64, 1, 1, 1) ? ( shifter_wet = shifterWet.value * 64 - 64; slider_automate(shifter_wet); );
+  shifterWet.knob_set_display(DB_SLIDER, pitch_shifter_enabled);
+  shifterWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", current_shifter_wet, 1, 1, 1);
   
   cx += 1.5 * knobSize;
   shifterSelect.value = shifter_mode;
