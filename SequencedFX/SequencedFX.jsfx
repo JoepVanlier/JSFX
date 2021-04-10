@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.16
+version: 0.17
 author: Joep Vanlier
-changelog: Add color coding to strips. Copy all the libraries.
+changelog: Preparatory work for the modulators.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -187,6 +187,9 @@ function pattern_update()
   tapestop_values = current_pattern + 9 * max_segments;
   karplus_values = current_pattern + 10 * max_segments;
   pitch_shifter_values = current_pattern + 11 * max_segments;
+  
+  modulator1_values = current_pattern + 30 * max_segments;
+  modulator2_values = current_pattern + 31 * max_segments;
   
   reset_values[0] = 1;
 );
@@ -1567,6 +1570,80 @@ local(lastx, x, s, dx, minacc, maxacc, wave_range, wave_center, x_old, y_old)
   1
 );
 
+function process_modulation_row(row_index, modulator_index, mem, x, y, h, label, hint)
+global(label_width, block_width, block_spacing, selected_details,
+       nice_rect,
+       n_segments,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y,
+       BASE_FONT
+       mouse_cap, mouse_x, mouse_y, last_cap, captured_by,
+       hinter.updateHintTime,
+       retrig_toggle.value
+       base_r, base_g, base_b,
+       row_color_r, row_color_g, row_color_b, printed_value,
+       activeModifier)
+local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset)
+instance(mem, start_idx)
+(
+  set_row_color(row_index);
+  nice_rect(x, y, label_width - 1, h, 0, 1, row_color_r, row_color_g, row_color_b);
+  nice_rect(x + label_width, y, block_width - 1, h, 0, 1, base_r, base_g, base_b);
+  ptr = mem;
+  
+  // Are we selected?
+  (activeModifier == modulator_index) ? (
+    gfx_set(1.0, 1.0, 1.0, 0.15 + 0.1 * sin(3*time_precise()));
+    gfx_rect(x, y, label_width, h);
+  );
+  
+  gfx_set(font_r, font_r, font_r, 1.0);
+  gfx_setfont(BASE_FONT);
+  gfx_measurestr(label, txt_w, txt_h);
+  gfx_x = x - 0.5 * (txt_w - label_width);
+  gfx_y = y - 0.5 * (txt_h - block_width);
+  gfx_printf(label);
+  
+  // Move to the actual sequencer cols
+  x += label_width - block_spacing;
+  x += block_width + block_spacing;
+  ptr = mem;
+  target = 0;
+  loop(n_segments,
+    current = ptr[];
+    nice_rect(x, y, block_width, h, printed_value, 1, base_r, base_g, base_b);
+    offset = floor(current * h);
+    nice_rect(x, y + h - offset, block_width, offset, printed_value, 1, 1.5 * row_color_r, 1.5 * row_color_g, 1.5 * row_color_b);
+    
+    target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, h));
+    x += block_spacing + block_width;
+    ptr += 1;
+    target = (target + 1) % 4;
+    last = current;
+  );
+  
+  y_over = (mouse_y > y) && (mouse_y < (y + h));
+  
+  mouse_x < x && y_over ? (
+    hinter.updateHintTime(hint);
+    (mouse_cap == 1) && (last_cap == 0) ? (
+      // Select row
+      activeModifier = activeModifier == modulator_index ? 0 : modulator_index;
+    );
+  );
+  
+  // Process events
+  x -= n_segments * (block_width + block_spacing);
+  idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  y_over && (idx >= 0) && (idx < n_segments) ? (
+    mouse_cap == 1 ? (
+      mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
+    );
+  );
+  
+  y += h + block_spacing;
+);
+
 draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 
 scope_w = ceil((block_width + block_spacing) * 33);
@@ -1594,7 +1671,10 @@ y_current = process_effect_row(7, 9, degrade_values, x_current, y_current, "Degr
 y_current = process_effect_row(8, 7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
 y_current = process_effect_row(9, 6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
 y_current = process_effect_row(10, 8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
-
+/*
+y_current = process_modulation_row(0, 2, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
+y_current = process_modulation_row(12, 3, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
+*/
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
@@ -1715,9 +1795,18 @@ instance(vel, mod1, mod2)
   modifier2 ? this.knob_draw_modifier(mod1, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
   modifier3 ? this.knob_draw_modifier(mod2, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
    
-  activeModifier == 3 ? ( this.knob_modifier_processMouse(0, mod2) ? ( mod2 = this.value; );
-  ) : activeModifier == 2 ? ( this.knob_modifier_processMouse(0, mod1) ? ( mod1 = this.value; );
-  ) : activeModifier == 1 ? ( this.knob_modifier_processMouse(0, vel) ? ( vel = this.value; );
+  activeModifier == 3 ? (
+    old_value = value;
+    this.knob_modifier_processMouse(0, mod2) ? ( mod2 = this.value; );
+    value = old_value;
+  ) : activeModifier == 2 ? ( 
+    old_value = value;  
+    this.knob_modifier_processMouse(0, mod1) ? ( mod1 = this.value; );
+    value = old_value;
+  ) : activeModifier == 1 ? ( 
+    old_value = value;  
+    this.knob_modifier_processMouse(0, vel) ? ( vel = this.value; );
+    value = old_value;
   ) : this.knob_processMouse(mouse_x, mouse_y, mouse_cap, default);
 );
 
@@ -1768,11 +1857,11 @@ set_row_color(selected_row);
   
   cX += knobSize*2.5;
   resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), filter_enabled, resonance);
-  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", resonance, 0, 0, 0, 0) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
+  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", resonance, 1, 1, 1, 0) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
    
   cX += knobSize*2.7;
   morphKnob.knob_set("", filter_enabled, morph);
-  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", morph, 0, 0, 0, 0) ? ( morph = morphKnob.value; slider_automate(morph); );
+  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", morph, 1, 1, 1, 0) ? ( morph = morphKnob.value; slider_automate(morph); );
   
   gfx_set(1,1,1,1);
   drawKnobLabels(knobSize*1.25, 0, "LP");
@@ -1788,16 +1877,16 @@ set_row_color(selected_row);
   cX += knobSize * 1.35;
   tempo_sync_envelopes ? ( cutoffAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), filter_enabled, cutoff_atk);
   ) : cutoffAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_enabled, cutoff_atk);
-  cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", cutoff_atk, 0, 0, 0, 0.06) ? ( cutoff_atk = cutoffAttackKnob.value; slider_automate(cutoff_atk); );
+  cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", cutoff_atk, 1, 1, 1, 0.06) ? ( cutoff_atk = cutoffAttackKnob.value; slider_automate(cutoff_atk); );
 
   cX += knobSize*2.5;
   tempo_sync_envelopes ? ( cutoffDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), filter_enabled, cutoff_decay);
   ) : cutoffDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_enabled, cutoff_decay );
-  cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", cutoff_decay, 0, 0, 0, 0.6) ? ( cutoff_decay = cutoffDecayKnob.value; slider_automate(cutoff_decay); );
+  cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", cutoff_decay, 1, 1, 1, 0.6) ? ( cutoff_decay = cutoffDecayKnob.value; slider_automate(cutoff_decay); );
   
   cX += knobSize*2.5;
   cutoffSustainKnob.knob_set(sprintf(1, "%.1f", cutoff_sustain), filter_enabled, cutoff_sustain);
-  cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", cutoff_sustain, 0, 0, 0, 1.0) ? ( cutoff_sustain = cutoffSustainKnob.value; slider_automate(cutoff_sustain); );
+  cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", cutoff_sustain, 1, 1, 1, 1.0) ? ( cutoff_sustain = cutoffSustainKnob.value; slider_automate(cutoff_sustain); );
 ) : ( selected_details == 6 ) ? (
   // Gate
   nextPanel = drawPanel(s_GATE, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, gate_enabled);
@@ -1812,16 +1901,16 @@ set_row_color(selected_row);
   cX += 2.5*knobSize;  
   tempo_sync_envelopes ? ( gateAttackKnob.knob_set(getFastEnvelopeLabel(gate_atk), gate_enabled, gate_atk);
   ) : gateAttackKnob.knob_set(gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*gate_atk))), gate_enabled, gate_atk);
-  gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", gate_atk, 0, 0, 0, gate_atk_default) ? ( gate_atk = gateAttackKnob.value; slider_automate(gate_atk); );
+  gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", gate_atk, 1, 1, 1, gate_atk_default) ? ( gate_atk = gateAttackKnob.value; slider_automate(gate_atk); );
   
   cX += knobSize*2.5;
   tempo_sync_envelopes ? ( gateDecayKnob.knob_set(getFastEnvelopeLabel(gate_decay), gate_enabled, gate_decay);
   ) : gateDecayKnob.knob_set(gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*gate_decay))), gate_enabled, gate_decay );
-  gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", gate_decay, 0, 0, 0, gate_decay_default) ? ( gate_decay = gateDecayKnob.value; slider_automate(gate_decay); );
+  gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", gate_decay, 1, 1, 1, gate_decay_default) ? ( gate_decay = gateDecayKnob.value; slider_automate(gate_decay); );
   
   cX += knobSize*2.5;
   gateSustainKnob.knob_set(sprintf(1, "%.1f", gate_sustain), gate_enabled, gate_sustain);
-  gateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", gate_sustain, 0, 0, 0, gate_sustain_default) ? ( gate_sustain = gateSustainKnob.value; slider_automate(gate_sustain); );
+  gateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", gate_sustain, 1, 1, 1, gate_sustain_default) ? ( gate_sustain = gateSustainKnob.value; slider_automate(gate_sustain); );
 ) : ( selected_details == 8 ) ? (
   // Reverb
   nextPanel = drawPanel(s_REVERB, cX, cY - 1.5 * knobSize, 29*knobSpacing, panelHeight, reverb_enabled);
@@ -1866,16 +1955,16 @@ set_row_color(selected_row);
   cX += 1.35*knobSize;  
   tempo_sync_envelopes ? ( verbGateAttackKnob.knob_set(getFastEnvelopeLabel(verb_gate_atk), reverb_enabled, verb_gate_atk);
   ) : verbGateAttackKnob.knob_set(verb_gate_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*verb_gate_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*verb_gate_atk))), reverb_enabled, verb_gate_atk);
-  verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", verb_gate_atk, 0, 0, 0, verb_gate_atk_default) ? ( verb_gate_atk = verbGateAttackKnob.value; slider_automate(verb_gate_atk); );
+  verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", verb_gate_atk, 1, 1, 1, verb_gate_atk_default) ? ( verb_gate_atk = verbGateAttackKnob.value; slider_automate(verb_gate_atk); );
   
   cX += knobSize*2.5;
   tempo_sync_envelopes ? ( verbGateDecayKnob.knob_set(getFastEnvelopeLabel(verb_gate_decay), reverb_enabled, verb_gate_decay);
   ) : verbGateDecayKnob.knob_set(verb_gate_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*verb_gate_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*verb_gate_decay))), reverb_enabled, verb_gate_decay );
-  verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", verb_gate_decay, 0, 0, 0, verb_gate_decay_default) ? ( verb_gate_decay = verbGateDecayKnob.value; slider_automate(verb_gate_decay); );
+  verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", verb_gate_decay, 1, 1, 1, verb_gate_decay_default) ? ( verb_gate_decay = verbGateDecayKnob.value; slider_automate(verb_gate_decay); );
   
   cX += knobSize*2.5;
   verbGateSustainKnob.knob_set(sprintf(1, "%.1f", verb_gate_sustain), reverb_enabled, verb_gate_sustain);
-  verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", verb_gate_sustain, 0, 0, 0, verb_gate_sustain_default) ? ( verb_gate_sustain = verbGateSustainKnob.value; slider_automate(verb_gate_sustain); );
+  verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", verb_gate_sustain, 1, 1, 1, verb_gate_sustain_default) ? ( verb_gate_sustain = verbGateSustainKnob.value; slider_automate(verb_gate_sustain); );
 ) : ( selected_details == 9 ) ? (
   // Degrade
   min_degrade = 3;
@@ -1902,7 +1991,7 @@ set_row_color(selected_row);
   tempo_sync_envelopes ? ( tapestopSpeedKnob.knob_set(getFastEnvelopeLabel(tapestop_decay), tapestop_enabled, tapestop_decay);
   ) : tapestopSpeedKnob.knob_set(tapestop_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*tapestop_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*tapestop_decay))), tapestop_enabled, tapestop_decay);
   
-  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 0, 0, 0, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
+  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", tapestop_decay, 1, 1, 1, tapestop_decay_default) ? ( tapestop_decay = tapestopSpeedKnob.value; slider_automate(tapestop_decay); );
 ) : ( selected_details == 11 ) ? (
   // Tonal delay
   min_degrade = 3;
