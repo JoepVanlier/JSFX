@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.25
+version: 0.26
 author: Joep Vanlier
-changelog: Fix focus issue.
+changelog: Added row drag (hold ALT). Have right drag only decrement and left only increment (no wrap around). Make host time mode the default. Fix issue with MIDI note resetting position in all time modes instead of just MIDI mode.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -633,9 +633,10 @@ update_shifter();
 BUF_SIZE = 96000 * 60;
 freemem = (l_buffer = freemem) + BUF_SIZE;
 freemem = (r_buffer = freemem) + BUF_SIZE;
-freemem = (beat_buffer = freemem) + .5 * BUF_SIZE;
+freemem = (beat_buffer = freemem) + .5 * BUF_SIZE - max_segments;
 freemem = (karplus_buffer_l = freemem) + .5 * BUF_SIZE;
 freemem = (karplus_buffer_r = freemem) + .5 * BUF_SIZE;
+freemem = (shuffle_buffer = freemem) + max_segments;
 l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
 r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
 beatmem.initBuffer(beat_buffer, beat_buffer + .5*BUF_SIZE);
@@ -674,7 +675,7 @@ init_playhead();
 midi.processMIDIBlock();
 //interpolators_block();
 pattern_update();
-time_mode == 2 ? current_sample = beat_position * from_beat;
+time_mode == 0 ? current_sample = beat_position * from_beat;
 
 @serialize
 writing = file_avail(0) < 0;
@@ -1213,7 +1214,7 @@ mmsg ? (
       slider_automate(current_pattern_index);
     );
     
-    mmsg == 1 ? (
+    mmsg == 1 && time_mode == 1 ? (
       current_sample = 0;
       reset_sample = 0;
     );
@@ -1398,6 +1399,8 @@ spl0 = ssl;
 spl1 = ssr;
 
 @gfx 1009 570
+current_cursor = 32512;
+
 function convert_tempos(target_sync_mode)
 local()
 instance()
@@ -1673,10 +1676,64 @@ global(colormap_scaling,
   dial_position_color_b = 1.1 * row_color_b;
 );
 
+function release_drag()
+global(drag_mode, captured_by, dragging)
+local()
+(
+  dragging = drag_mode = captured_by = 0;
+);
+
+function shift_drag(y_over, me, mem, idx)
+global(n_segments, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
+       shift_ref, dragging, captured_by, drag_mode, idx_ref)
+local(shift)
+(
+  // Shift row
+  y_over && (idx >= 0) && (idx <= n_segments) ? (
+    (mouse_cap & 16) == 16 ? (
+      current_cursor = 32644;
+      (mouse_cap == (1 + 16)) ? (
+        // ALT + DRAG
+        (last_cap & 1 == 0) ? (
+          captured_by = me;
+          dragging = 1;
+          drag_mode = 2;
+          idx_ref = idx;
+        );
+      );
+    );
+  );
+  
+  // Shifting rows ...
+  (drag_mode == 2) && (captured_by == me) ? (
+    (mouse_cap & 1 == 0) ? (
+      release_drag();
+    ) : (
+      shift = idx - idx_ref;
+      
+      last_shift = max(last_shift, shift);
+      // It's a rotate!
+      //   ... albeit a very inefficient one.
+      loop(abs(shift),
+        shift > 0 ? (
+          shuffle_buffer[0] = mem[n_segments - 1];
+          memcpy(shuffle_buffer + 1, mem, n_segments - 1);
+        ) : ( shift < 0 ) ? (
+          shuffle_buffer[n_segments - 1] = mem[0];
+          memcpy(shuffle_buffer, mem + 1, n_segments - 1);
+        );
+        memcpy(mem, shuffle_buffer, n_segments);
+      );
+      
+      idx_ref = idx;
+    );
+  );
+);
+
 function process_effect_row(row_index, me, mem, x, y, label, max_value, power_slider, hint)
 global(label_width, block_width, block_spacing, selected_details,
        nice_rect,
-       n_segments,
+       n_segments, potato,
        font_r, font_g, font_b,
        gfx_x, gfx_y,
        BASE_FONT
@@ -1685,9 +1742,8 @@ global(label_width, block_width, block_spacing, selected_details,
        retrig_toggle.value
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
-       selected_row, dragging)
+       start_idx, selected_row, dragging, drag_mode)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
-instance(mem, start_idx)
 (
   set_row_color(row_index);
   nice_rect(x, y, label_width - 1, block_width, 0, slider(power_slider), row_color_r * .8, row_color_g * .8, row_color_b * .8);
@@ -1750,6 +1806,10 @@ instance(mem, start_idx)
   // Process events
   x -= n_segments * (block_width + block_spacing);
   idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  
+  shift_drag(y_over, me, mem, idx);
+  
+  // Drag out new items
   (mouse_cap == 1 || mouse_cap == 2) ? (
     // Not captured, start dragging.
     (last_cap == 0) ? (
@@ -1757,6 +1817,7 @@ instance(mem, start_idx)
       y_over && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
         // Start dragging a region
         start_idx = idx;
+        drag_mode = 1;
         mouse_cap == 1 ? captured_by = me : captured_by = -me;
       ) : (
         y_over ? (
@@ -1775,7 +1836,7 @@ instance(mem, start_idx)
       idx = max(start_idx, idx);
       gfx_rect(x + (block_width + block_spacing) * ptr, y, (idx - ptr + 1) * (block_width + block_spacing), block_width, 1);
     );
-  ) : ( abs(captured_by) == me ) ? (
+  ) : ( (abs(captured_by) == me) && (drag_mode == 1) ) ? (
     // We dragged an area
     ptr = min(start_idx, idx);
     idx = max(start_idx, idx);
@@ -1783,10 +1844,10 @@ instance(mem, start_idx)
     // Left or right mouse drag
     captured_by > 0 ? (
       target = abs(mem[ptr]) + 1;
-      target > max_value ? target = 0;
+      target > max_value ? target = max_value;
     ) : (
       target = abs(mem[ptr]) - 1;
-      target < 0 ? target = max_value;
+      target < 0 ? target = 0; // max_value;
     );
     // Negative values mean a continuation
     mem[ptr] = target;
@@ -1796,7 +1857,7 @@ instance(mem, start_idx)
       mem[ptr] = target;
       ptr += 1;
     );
-    captured_by = 0;
+    this.release_drag();
   );
   
   y += block_width + block_spacing;
@@ -1871,7 +1932,7 @@ global(label_width, block_width, block_spacing, selected_details,
        retrig_toggle.value
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
-       activeModifier, dragging, captured_by)
+       activeModifier, dragging, captured_by, drag_mode)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset)
 instance(mem, start_idx)
 (
@@ -1921,15 +1982,18 @@ instance(mem, start_idx)
     );
   );
   
-  // Process events
   x -= n_segments * (block_width + block_spacing);
   idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  
+  shift_drag(y_over, me, mem, idx);
+  
+  // Process events
   (y_over || captured_by == me) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
     mouse_cap == 1 ? (
       mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
       captured_by = me;
     ) : (
-      captured_by == me ? captured_by = 0;
+      captured_by == me && drag_mode == 1 ? release_drag();
     );
   );
   
@@ -2012,9 +2076,9 @@ nice_rect_color(grid_origin_x, y_current, scope_w + label_width - 3, block_width
 
 time_mode.value = time_mode;
 cx = grid_origin_x + 2;
-cx = time_mode.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
+cx = time_mode.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
+cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
 cx = time_mode.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1, "Run sequencer in MIDI mode.\nPattern resets on incoming MIDI note.");
-cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
 time_mode = time_mode.value;
 
 tempo_sync_envelopes.value = tempo_sync_envelopes;
@@ -2361,4 +2425,4 @@ set_row_color(selected_row);
 hinter.drawHint_draw();
 
 last_cap = mouse_cap;
-
+gfx_setcursor(current_cursor, "arrow");
