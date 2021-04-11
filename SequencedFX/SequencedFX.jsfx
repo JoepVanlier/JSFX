@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.30
+version: 0.31
 author: Joep Vanlier
-changelog: Add control modifier for deleting stuff.
+changelog: Bugfix modulator selection.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -645,10 +645,11 @@ update_shifter();
 BUF_SIZE = 96000 * 60;
 freemem = (l_buffer = freemem) + BUF_SIZE;
 freemem = (r_buffer = freemem) + BUF_SIZE;
-freemem = (beat_buffer = freemem) + .5 * BUF_SIZE - max_segments;
-freemem = (karplus_buffer_l = freemem) + .5 * BUF_SIZE;
-freemem = (karplus_buffer_r = freemem) + .5 * BUF_SIZE;
+freemem = (beat_buffer = freemem) + .5 * BUF_SIZE;
+freemem = (karplus_buffer_l = freemem) + .5 * BUF_SIZE - max_segments;
+freemem = (karplus_buffer_r = freemem) + .5 * BUF_SIZE - max_segments;
 freemem = (shuffle_buffer = freemem) + max_segments;
+freemem = (order_mem = freemem) + max_segments;
 l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
 r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
 beatmem.initBuffer(beat_buffer, beat_buffer + .5*BUF_SIZE);
@@ -688,6 +689,38 @@ midi.processMIDIBlock();
 //interpolators_block();
 pattern_update();
 time_mode == 0 ? current_sample = beat_position * from_beat;
+
+function from_order_mem()
+(
+  effect1 = order_mem[0];
+  effect2 = order_mem[1];
+  effect3 = order_mem[2];
+  effect4 = order_mem[3];
+  effect5 = order_mem[4];
+  effect6 = order_mem[5];
+
+  effect1 = effect1 ? effect1 : 1;
+  effect2 = effect2 ? effect2 : 2;
+  effect3 = effect3 ? effect3 : 3;
+  effect4 = effect4 ? effect4 : 4;
+  effect5 = effect5 ? effect5 : 5;
+  effect6 = effect6 ? effect6 : 6;
+);
+
+function to_order_mem()
+(
+  memset(order_mem, 0, max_segments - 1);
+  order_mem[0];
+  order_mem[1];
+  order_mem[2];
+  order_mem[3];
+  order_mem[4];
+  order_mem[5];
+);
+
+effect1 == 0 ? (
+  from_order_mem();
+);
 
 @serialize
 writing = file_avail(0) < 0;
@@ -1414,12 +1447,37 @@ x_fade_position > 0 ? (
 ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
 ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
 
-pitch_shifter_enabled ? process_pitch_shifter();
+
+function do_effect(effect_idx)
+(
+  effect_idx == 1 ? (
+    pitch_shifter_enabled ? process_pitch_shifter();
+  ) : ( effect_idx == 2 ) ? (
+    degrade_enabled ? process_degrade();
+  ) : ( effect_idx == 3 ) ? (
+    filter_enabled ? filter.process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+  ) : ( effect_idx == 4 ) ? (
+    gate_enabled ? process_gate();
+  ) : ( effect_idx == 5 ) ? (
+    reverb_enabled ? verb.process_verb();
+  ) : ( effect_idx == 6 ) ? (
+    karplus_enabled ? karplus.process_karplus();
+  );
+);
+
+/*pitch_shifter_enabled ? process_pitch_shifter();
 degrade_enabled ? process_degrade();
 filter_enabled ? filter.process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
 gate_enabled ? process_gate();
 reverb_enabled ? verb.process_verb();
-karplus_enabled ? karplus.process_karplus();
+karplus_enabled ? karplus.process_karplus();*/
+
+do_effect(effect1);
+do_effect(effect2);
+do_effect(effect3);
+do_effect(effect4);
+do_effect(effect5);
+do_effect(effect6);
 
 spl0 = ssl;
 spl1 = ssr;
@@ -1848,7 +1906,16 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
   x -= n_segments * (block_width + block_spacing);
   idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
   
-  shift_drag(y_over, me, mem, idx);
+//  shift_drag(y_over, me, mem, idx);
+  
+  // Dragging order
+  /*((drag_mode == 3) && (captured_by == me)) ? (
+    (mouse_cap == 1) ? (
+      gfx_rect(mouse_x, mouse_y, label_width, block_width);
+    ) : (
+      this.release_drag();
+    );
+  );*/
   
   // Drag out new items
   (mouse_cap == 1 || mouse_cap == 2 || mouse_cap == 5) ? (
@@ -1866,8 +1933,9 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
             // Toggle the lane power
             slider(power_slider) = 1 - slider(power_slider);
           ) : (mouse_x < x) ? (
-            // Select the lane
+            // Select the lane and potentially reorder things
             selected_details = me;
+            //drag_mode = 3;
           );
         );
       );
@@ -1901,7 +1969,7 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
       mem[ptr] = target;
       ptr += 1;
     );
-    this.release_drag();
+    release_drag();
   );
   
   y += block_width + block_spacing;
@@ -2001,6 +2069,16 @@ instance(mem, start_idx)
   // Move to the actual sequencer cols
   x += label_width - block_spacing;
   x += block_width + block_spacing;
+  
+  y_over = (mouse_y > y) && (mouse_y < (y + h));
+  (mouse_x < x) && y_over ? (
+    hinter.updateHintTime(hint);
+    (mouse_cap == 1) && (last_cap == 0) ? (
+      // Select row
+      activeModifier = (activeModifier == modulator_index) ? 0 : modulator_index;
+    );
+  );
+  
   ptr = mem;
   target = 0;
   loop(n_segments,
@@ -2016,16 +2094,6 @@ instance(mem, start_idx)
     last = current;
   );
   
-  y_over = (mouse_y > y) && (mouse_y < (y + h));
-  
-  mouse_x < x && y_over ? (
-    hinter.updateHintTime(hint);
-    (mouse_cap == 1) && (last_cap == 0) ? (
-      // Select row
-      activeModifier = activeModifier == modulator_index ? 0 : modulator_index;
-    );
-  );
-  
   x -= n_segments * (block_width + block_spacing);
   idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
   
@@ -2037,7 +2105,7 @@ instance(mem, start_idx)
       mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
       captured_by = me;
     ) : (
-      captured_by == me && drag_mode == 1 ? release_drag();
+      (captured_by == me) ? release_drag();
     );
   );
   
