@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.34
+version: 0.35
 author: Joep Vanlier
-changelog: Allow some effect reordering (consider this a beta feature for now!).
+changelog: Add dry/wet slider for degrader.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -282,6 +282,7 @@ function update_current_levels()
   current_bitrate = bitrateKnob.getCurrentValue();
   current_samplerate = samplerateKnob.getCurrentValue();
   current_saturate = satKnob.getCurrentValue();
+  current_degrade_mix = degradeMix.getCurrentValue();
   
   current_tapestop_decay = tapestopSpeedKnob.getCurrentValue();
   
@@ -329,6 +330,7 @@ function init_controls()
   bitrateKnob.init_knob(21, 3, 0, 16);
   samplerateKnob.init_knob(1, 0, 0, 1.0);
   satKnob.init_knob(54, -6, 0, -6);
+  degradeMix.init_knob(1, 0, 0, 1.0);
   
   tapestopSpeedKnob.init_knob(1, 0, 0, 0.6);
   
@@ -883,6 +885,7 @@ writing ? (
   from_order_mem();
 );
 
+degradeMix.serialize_knob();
 
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
@@ -1200,9 +1203,10 @@ instance(factor,
          ib_factor, b_factor,
          cpos, degrade_pos,
          from_l, from_r, to_l, to_r,
-         l_hist, r_hist, preamp)
-local(target)
-global(sample_clock, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion)
+         l_hist, r_hist, preamp,
+         degrade_mix)
+local(target, dry_l, dry_r)
+global(sm, sample_clock, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion, current_degrade_mix)
 (
   sample_clock % 16 == 0 ? (
     b_factor = 2^(current_bitrate - 1);
@@ -1210,8 +1214,12 @@ global(sample_clock, ssl, ssr, current_bitrate, current_samplerate, srate, degra
     
     target = srate * exp( (1-current_samplerate) * log(1000/44100) );
     factor = (srate / target);
+    
+    degrade_mix = degrade_mix == 0 ? current_degrade_mix : degrade_mix * 0.97 + current_degrade_mix * 0.03;
   );
   
+  dry_l = ssl;
+  dry_r = ssr;
   degrade_pos += 1;
   
   degrade_target ? (
@@ -1242,6 +1250,9 @@ global(sample_clock, ssl, ssr, current_bitrate, current_samplerate, srate, degra
       ssl = tanh(preamp*ssl)/preamp;
       ssr = tanh(preamp*ssr)/preamp;
     );
+    
+    ssl = ssl * degrade_mix + dry_l * (1.0 - degrade_mix);
+    ssr = ssr * degrade_mix + dry_r * (1.0 - degrade_mix);
   );
 );
 
@@ -2548,7 +2559,7 @@ set_row_color(selected_row);
 ) : ( selected_details == 9 ) ? (
   // Degrade
   min_degrade = 3;
-  nextPanel = drawPanel(s_DEGRADE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, degrade_enabled);
+  nextPanel = drawPanel(s_DEGRADE, cX, cY - 1.5 * knobSize, 14.75*knobSpacing, panelHeight, degrade_enabled);
   
   cX += knobSize * 1.35;
   bitrateKnob.knob_set_display(SCALED_SLIDER, degrade_enabled);
@@ -2561,6 +2572,11 @@ set_row_color(selected_row);
   cX += 2.5*knobSize;
   satKnob.knob_set_display(satKnob.value < .00001 ? "OFF" : DB_SLIDER, degrade_enabled);
   satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Saturation.", current_saturate, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  degradeMix.knob_set_display(NORMALIZED_SLIDER, degrade_enabled);
+  degradeMix.drawAndProcess(cX, cY, knobSize, "Dry/Wet", "Degrade mix.", current_degrade_mix, 1, 1, 1);  
+  
 ) : ( selected_details == 10 ) ? (
   // Tape stop
   min_degrade = 3;
