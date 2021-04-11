@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.32
+version: 0.34
 author: Joep Vanlier
-changelog: Reintroduce shift behaviour.
+changelog: Allow some effect reordering (consider this a beta feature for now!).
 license: MIT
 provides:
   seqs_dependencies/*
@@ -69,6 +69,11 @@ import saike_seqs_pitchlib.jsfx-inc
 @init
 CURRENT_VERSION = 1;
 version = CURRENT_VERSION;
+DRAG_STRING = 50;
+DRAG_BLOCK = 1;
+DRAG_NUDGE = 2;
+DRAG_EFFECT = 3;
+DRAG_EFFECT_2 = 4;
 
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
@@ -81,6 +86,35 @@ max_segments = 64;
 max_effects = 32;
 max_stored_patterns = 64;
 crossfade_samples = 128;
+
+free_effects = 6;
+function from_order_mem()
+(
+  effect1 = order_mem[0];
+  effect2 = order_mem[1];
+  effect3 = order_mem[2];
+  effect4 = order_mem[3];
+  effect5 = order_mem[4];
+  effect6 = order_mem[5];
+
+  effect1 = effect1 ? effect1 : 1;
+  effect2 = effect2 ? effect2 : 2;
+  effect3 = effect3 ? effect3 : 3;
+  effect4 = effect4 ? effect4 : 4;
+  effect5 = effect5 ? effect5 : 5;
+  effect6 = effect6 ? effect6 : 6;
+);
+
+function to_order_mem()
+(
+  memset(order_mem, 0, max_segments - 1);
+  order_mem[0] = effect1;
+  order_mem[1] = effect2;
+  order_mem[2] = effect3;
+  order_mem[3] = effect4;
+  order_mem[4] = effect5;
+  order_mem[5] = effect6;
+);
 
 function init_knob(sc, minimum, idx, def)
 instance(scale, min_value, slider_idx, default, value)
@@ -690,34 +724,6 @@ midi.processMIDIBlock();
 pattern_update();
 time_mode == 0 ? current_sample = beat_position * from_beat;
 
-function from_order_mem()
-(
-  effect1 = order_mem[0];
-  effect2 = order_mem[1];
-  effect3 = order_mem[2];
-  effect4 = order_mem[3];
-  effect5 = order_mem[4];
-  effect6 = order_mem[5];
-
-  effect1 = effect1 ? effect1 : 1;
-  effect2 = effect2 ? effect2 : 2;
-  effect3 = effect3 ? effect3 : 3;
-  effect4 = effect4 ? effect4 : 4;
-  effect5 = effect5 ? effect5 : 5;
-  effect6 = effect6 ? effect6 : 6;
-);
-
-function to_order_mem()
-(
-  memset(order_mem, 0, max_segments - 1);
-  order_mem[0];
-  order_mem[1];
-  order_mem[2];
-  order_mem[3];
-  order_mem[4];
-  order_mem[5];
-);
-
 effect1 == 0 ? (
   from_order_mem();
 );
@@ -866,6 +872,17 @@ file_var(0, post_gate);
 
 !writing ? filter_on_off = 0;
 file_var(0, filter_on_off);
+
+writing ? (
+  memset(order_mem, 0, max_segments);
+  to_order_mem();
+  file_mem(0, order_mem, max_segments);
+) : (
+  memset(order_mem, 0, max_segments);
+  file_mem(0, order_mem, max_segments);
+  from_order_mem();
+);
+
 
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
@@ -1784,7 +1801,8 @@ local()
 
 function shift_drag(y_over, me, mem, idx)
 global(n_segments, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
-       shift_ref, dragging, captured_by, drag_mode, idx_ref)
+       shift_ref, dragging, captured_by, drag_mode, idx_ref,
+       DRAG_NUDGE)
 local(shift)
 (
   // Shift row
@@ -1796,7 +1814,7 @@ local(shift)
         (last_cap & 1 == 0) ? (
           captured_by = me;
           dragging = 1;
-          drag_mode = 2;
+          drag_mode = DRAG_NUDGE;
           idx_ref = idx;
         );
       );
@@ -1804,7 +1822,7 @@ local(shift)
   );
   
   // Shifting rows ...
-  (drag_mode == 2) && (captured_by == me) ? (
+  (drag_mode == DRAG_NUDGE) && (captured_by == me) ? (
     (mouse_cap & 1 == 0) ? (
       release_drag();
     ) : (
@@ -1829,6 +1847,69 @@ local(shift)
   );
 );
 
+function move_to(loc, grab, insert, n)
+local(from_value)
+global()
+(
+  from_value = loc[grab];
+  memcpy(loc + grab, loc + grab + 1, n - grab);
+  memcpy(loc + insert, loc + insert - 1, n - insert);
+  loc[insert] = from_value;
+);
+
+function handle_effect_drag(first, n_effects)
+global(drag_mode, captured_by, drag_row_index,
+       mouse_x, mouse_y, mouse_cap,
+       grid_origin_x, grid_origin_y,
+       label_width, block_width, block_spacing,
+       nice_rect, DRAG_STRING,
+       row_color_r, row_color_g, row_color_b,
+       drag_ref_x, drag_ref_y, effect_insertion_idx,
+       DRAG_EFFECT, DRAG_EFFECT_2,
+       to_order_mem
+       from_order_mem
+       order_mem,
+       drag_color_idx)
+local(ret, from, to, last)
+(
+  last = 6 + n_effects - 1;
+  ret = 0;
+  set_row_color(drag_color_idx);
+
+  // Dragging order
+  (drag_mode == DRAG_EFFECT || drag_mode == DRAG_EFFECT_2) ? (
+    (captured_by < first) ? (
+      release_drag();
+    );
+  
+    (mouse_cap == 1) ? (
+      (abs(mouse_x - drag_ref_x) + abs(mouse_y - drag_ref_y)) > 20 ? drag_mode = 4;
+    
+      drag_mode == 4 ? (
+        nice_rect_color(mouse_x, mouse_y - block_width, label_width, block_width, DRAG_STRING,row_color_r, row_color_g, row_color_b, row_color_r * 2, row_color_g * 2, row_color_b * 2);
+        
+        effect_insertion_idx = floor(mouse_y / (block_width + block_spacing)) - 1;
+        effect_insertion_idx = clamp(effect_insertion_idx, first - 1, last);
+        
+        gfx_set(1, 1, 1, .3);
+        gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - 1 - block_spacing, label_width, 3);
+        gfx_set(1, 1, 1, 1);
+        gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - block_spacing, label_width, 1);
+      );
+    ) : (
+      (drag_mode == 4) ? (
+        to_order_mem();
+        move_to(order_mem, drag_row_index - first - 1, clamp(effect_insertion_idx - first + 1, 0, n_effects - 1), n_effects);
+        from_order_mem();
+      );
+      release_drag();
+      ret = 1;
+    );
+  );
+  
+  ret
+);
+
 function process_effect_row(row_index, me, mem, x, y, label, max_value, power_slider, hint)
 global(label_width, block_width, block_spacing, selected_details,
        nice_rect,
@@ -1841,7 +1922,8 @@ global(label_width, block_width, block_spacing, selected_details,
        retrig_toggle.value
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
-       start_idx, selected_row, dragging, drag_mode, current_cursor)
+       start_idx, selected_row, dragging, drag_mode, current_cursor, drag_row_index, drag_color_idx, DRAG_STRING, drag_ref_x, drag_ref_y,
+       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
 (
   set_row_color(row_index);
@@ -1908,15 +1990,6 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
   
   shift_drag(y_over, me, mem, idx);
   
-  // Dragging order
-  ((drag_mode == 3) && (captured_by == me)) ? (
-    (mouse_cap == 1) ? (
-      gfx_rect(mouse_x, mouse_y, label_width, block_width);
-    ) : (
-      this.release_drag();
-    );
-  );
-  
   // Drag out new items
   (mouse_cap == 1 || mouse_cap == 2 || mouse_cap == 5) ? (
     // Not captured, start dragging.
@@ -1925,7 +1998,7 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
       y_over && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
         // Start dragging a region
         start_idx = idx;
-        drag_mode = 1;
+        drag_mode = DRAG_BLOCK;
         ((mouse_cap & 1) > 0) ? captured_by = me : captured_by = -me;
       ) : (
         y_over ? (
@@ -1935,7 +2008,13 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
           ) : (mouse_x < x) ? (
             // Select the lane and potentially reorder things
             selected_details = me;
-            //drag_mode = 3;
+            captured_by = me;
+            drag_mode = DRAG_EFFECT;
+            sprintf(DRAG_STRING, "%s", label);
+            drag_row_index = floor(mouse_y / (block_width + block_spacing));
+            drag_color_idx = row_index;
+            drag_ref_x = mouse_x;
+            drag_ref_y = mouse_y;
           );
         );
       );
@@ -1948,7 +2027,7 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
       gfx_set(0, 0, 0, .6);
       mouse_cap == 5 ? gfx_rect(x + (block_width + block_spacing) * ptr + 2, y + 2, (idx - ptr + 1) * (block_width + block_spacing) - 4, block_width - 4, 1);
     );
-  ) : ( (abs(captured_by) == me) && (drag_mode == 1) ) ? (
+  ) : ( (abs(captured_by) == me) && (drag_mode == DRAG_BLOCK) ) ? (
     // We dragged an area
     ptr = min(start_idx, idx);
     idx = max(start_idx, idx);
@@ -2044,7 +2123,7 @@ global(label_width, block_width, block_spacing, selected_details,
        retrig_toggle.value
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
-       activeModifier, dragging, captured_by, drag_mode)
+       activeModifier, dragging, captured_by, drag_mode, DRAG_BLOCK)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset)
 instance(mem, start_idx)
 (
@@ -2104,9 +2183,9 @@ instance(mem, start_idx)
     mouse_cap == 1 ? (
       mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
       captured_by = me;
-      drag_mode = 1;
+      drag_mode = DRAG_BLOCK;
     ) : (
-      (captured_by == me) && (drag_mode == 1) ? release_drag();
+      (captured_by == me) && (drag_mode == DRAG_BLOCK) ? release_drag();
     );
   );
   
@@ -2134,12 +2213,24 @@ y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdo
 y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19, "Tape stop effect.");
 y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", 4, 13, "Retrigger last block N times.");
 y_current = process_effect_row(4, 5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
-y_current = process_effect_row(5, 12, pitch_shifter_values, x_current, y_current, "Pitch Shifter", 1, 21, "Apply a pitch shifter.");
-y_current = process_effect_row(6, 9, degrade_values, x_current, y_current, "Degrade", 1, 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.");
-y_current = process_effect_row(7, 7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
-y_current = process_effect_row(8, 6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
-y_current = process_effect_row(9, 8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
-y_current = process_effect_row(10, 11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20, "Apply a pitched delay effect");
+
+function draw_effect(row, effect_idx)
+(
+  effect_idx == 1 ? ( process_effect_row(row, 12, pitch_shifter_values, x_current, y_current, "Pitch Shifter", 1, 21, "Apply a pitch shifter.")
+  ) : ( effect_idx == 2 ) ? ( y_current = process_effect_row(row, 9, degrade_values, x_current, y_current, "Degrade", 1, 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.")
+  ) : ( effect_idx == 3 ) ? ( y_current = process_effect_row(row, 7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
+  ) : ( effect_idx == 4 ) ? ( y_current = process_effect_row(row, 6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
+  ) : ( effect_idx == 5 ) ? ( y_current = process_effect_row(row, 8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
+  ) : ( effect_idx == 6 ) ? ( y_current = process_effect_row(row, 11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20, "Apply a pitched delay effect");
+  );
+);
+
+y_current = draw_effect(5, effect1);
+y_current = draw_effect(6, effect2);
+y_current = draw_effect(7, effect3);
+y_current = draw_effect(8, effect4);
+y_current = draw_effect(9, effect5);
+y_current = draw_effect(10, effect6);
 
 y_current = process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
 mod2_color_r = row_color_r * 2;
@@ -2152,6 +2243,10 @@ mod3_color_r = row_color_r * 2;
 mod3_color_g = row_color_g * 2;
 mod3_color_b = row_color_b * 2;
 mod3_color_a = 1.0;
+
+handle_effect_drag(6, free_effects);
+
+
 
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
