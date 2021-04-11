@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.26
+version: 0.28
 author: Joep Vanlier
-changelog: Added row drag (hold ALT). Have right drag only decrement and left only increment (no wrap around). Make host time mode the default. Fix issue with MIDI note resetting position in all time modes instead of just MIDI mode.
+changelog: Convert filter to instance. Smooth drive a little bit. Add mode where filter is bypassed when block is inactive.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -818,6 +818,9 @@ version == 0 && !writing ? (
 !writing ? post_gate = 0;
 file_var(0, post_gate);
 
+!writing ? filter_on_off = 0;
+file_var(0, filter_on_off);
+
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
 
@@ -937,40 +940,50 @@ local()
   );
 );
 
-function process_filter()
-local()
+function process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain)
+local(pre_l, pre_r, filter_on)
 global(ssl, ssr,
-       filter_envelope.update_envelope,
-       filter_envelope.calc_times_universal,
-       filter.init_filter,
-       filter.processSample,
-       sample_clock, filter_target,
-       log10d20_conversion,
-       
-       current_drive, current_cutoff,
-       
-       // Controlled variables
-       filter_type, current_morph, current_resonance,
-       current_cutoff_start, current_cutoff_final,
-       current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain)
-instance(preamp, inv_preamp)
+       sample_clock,
+       log10d20_conversion)
+instance(preamp, inv_preamp, current_cutoff, declick)
 (
   sample_clock % 16 == 0 ? (
-    filter_envelope.calc_times_universal(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+    this.filter_envelope.calc_times_universal(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
   );
   
-  current_cutoff = current_cutoff_start + filter_envelope.update_envelope(filter_target) * (current_cutoff_final - current_cutoff_start);
+  current_cutoff = current_cutoff_start + this.filter_envelope.update_envelope(filter_target) * (current_cutoff_final - current_cutoff_start);
   sample_clock % 4 == 0 ? (
-    filter.init_filter(filter_type, current_cutoff, current_cutoff, current_morph, current_morph, current_resonance);
-    preamp      = exp(log10d20_conversion*current_drive);
-    inv_preamp  = exp(-log10d20_conversion*current_drive);
+    this.filter.init_filter(filter_type, current_cutoff, current_cutoff, current_morph, current_morph, current_resonance);
+    
+    preamp == 0 ? (
+      preamp      = exp(log10d20_conversion*current_drive);
+      inv_preamp  = exp(-log10d20_conversion*current_drive);
+    ) : (
+      preamp      = 0.993 * preamp + 0.007 * exp(log10d20_conversion*current_drive);
+      inv_preamp  = 1.0 / preamp;
+    );
   );
   
-  ssl *= preamp;
-  ssr *= preamp;
-  filter.processSample(filter_type);
-  ssl *= inv_preamp;
-  ssr *= inv_preamp;
+  pre_l = ssl;
+  pre_r = ssr;
+  
+  filter_on = !filter_on_off || filter_target || declick > 0.001;
+  
+  declick = filter_target ? filter_on_off : .98 * declick;
+  
+  filter_on ? (
+    ssl *= preamp;
+    ssr *= preamp;
+    this.filter.processSample(filter_type);
+    ssl *= inv_preamp;
+    ssr *= inv_preamp;
+  );
+  
+  declick ? (
+    ssl = ssl * declick + pre_l * (1.0 - declick);
+    ssr = ssr * declick + pre_r * (1.0 - declick);
+  );
+  
 );
 
 function process_gate()
@@ -1310,8 +1323,8 @@ jump_schedule.eval_jump();
   previous_filter_target = filter_target;
   filter_target = filt_values[sequencer_index];
   filter_target == 1 ? (
-    filter_envelope.reset = 0;
-    filter_envelope.reset_envelope();
+    filter.filter_envelope.reset = 0;
+    filter.filter_envelope.reset_envelope();
   );
   filter_target = abs(filter_target);
   
@@ -1390,7 +1403,7 @@ ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhe
 
 pitch_shifter_enabled ? process_pitch_shifter();
 degrade_enabled ? process_degrade();
-filter_enabled ? filter.process_filter();
+filter_enabled ? filter.process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
 gate_enabled ? process_gate();
 reverb_enabled ? verb.process_verb();
 karplus_enabled ? karplus.process_karplus();
@@ -2224,7 +2237,10 @@ set_row_color(selected_row);
   
   cX += 2.5*knobSize;
   cutoffKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
-  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", current_cutoff, 1, 1, 1);
+  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", filter.current_cutoff, 1, 1, 1);
+  
+  filterOnOffToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, filter_on_off, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Turn filter on and off.\n\nEnabling this will bypass the filter when there is no block.");
+  filter_on_off = filterOnOffToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   cX += 2.5*knobSize;
   cutoffEndKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
