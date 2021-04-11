@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.35
+version: 0.36
 author: Joep Vanlier
-changelog: Add dry/wet slider for degrader.
+changelog: Allow dragging the power button. Fixup drag and drop: disallow tape stop from being dragged.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -74,6 +74,7 @@ DRAG_BLOCK = 1;
 DRAG_NUDGE = 2;
 DRAG_EFFECT = 3;
 DRAG_EFFECT_2 = 4;
+DRAG_SOLO = 5;
 
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
@@ -1889,32 +1890,32 @@ local(ret, from, to, last)
 
   // Dragging order
   (drag_mode == DRAG_EFFECT || drag_mode == DRAG_EFFECT_2) ? (
-    (captured_by < first) ? (
+    (drag_row_index <= first) ? (
       release_drag();
-    );
-  
-    (mouse_cap == 1) ? (
-      (abs(mouse_x - drag_ref_x) + abs(mouse_y - drag_ref_y)) > 20 ? drag_mode = 4;
-    
-      drag_mode == 4 ? (
-        nice_rect_color(mouse_x, mouse_y - block_width, label_width, block_width, DRAG_STRING,row_color_r, row_color_g, row_color_b, row_color_r * 2, row_color_g * 2, row_color_b * 2);
-        
-        effect_insertion_idx = floor(mouse_y / (block_width + block_spacing)) - 1;
-        effect_insertion_idx = clamp(effect_insertion_idx, first - 1, last);
-        
-        gfx_set(1, 1, 1, .3);
-        gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - 1 - block_spacing, label_width, 3);
-        gfx_set(1, 1, 1, 1);
-        gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - block_spacing, label_width, 1);
-      );
     ) : (
-      (drag_mode == 4) ? (
-        to_order_mem();
-        move_to(order_mem, drag_row_index - first - 1, clamp(effect_insertion_idx - first + 1, 0, n_effects - 1), n_effects);
-        from_order_mem();
+      (mouse_cap == 1) ? (
+        (abs(mouse_x - drag_ref_x) + abs(mouse_y - drag_ref_y)) > 20 ? drag_mode = 4;
+      
+        drag_mode == 4 ? (
+          nice_rect_color(mouse_x, mouse_y - block_width, label_width, block_width, DRAG_STRING,row_color_r, row_color_g, row_color_b, row_color_r * 2, row_color_g * 2, row_color_b * 2);
+          
+          effect_insertion_idx = floor(mouse_y / (block_width + block_spacing)) - 1;
+          effect_insertion_idx = clamp(effect_insertion_idx, first - 1, last);
+          
+          gfx_set(1, 1, 1, .3);
+          gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - 1 - block_spacing, label_width, 3);
+          gfx_set(1, 1, 1, 1);
+          gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - block_spacing, label_width, 1);
+        );
+      ) : (
+        (drag_mode == DRAG_EFFECT_2) ? (
+          to_order_mem();
+          move_to(order_mem, drag_row_index - first - 1, clamp(effect_insertion_idx - first + 1, 0, n_effects - 1), n_effects);
+          from_order_mem();
+        );
+        release_drag();
+        ret = 1;
       );
-      release_drag();
-      ret = 1;
     );
   );
   
@@ -1934,7 +1935,7 @@ global(label_width, block_width, block_spacing, selected_details,
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
        start_idx, selected_row, dragging, drag_mode, current_cursor, drag_row_index, drag_color_idx, DRAG_STRING, drag_ref_x, drag_ref_y,
-       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK)
+       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
 (
   set_row_color(row_index);
@@ -2000,9 +2001,16 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
   idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
   
   shift_drag(y_over, me, mem, idx);
-  
+ 
   // Drag out new items
   (mouse_cap == 1 || mouse_cap == 2 || mouse_cap == 5) ? (
+ ((drag_mode == DRAG_SOLO) && y_over) ? (
+      (drag_ref_y != me) ? (
+        slider(power_slider) = drag_ref_x;
+        drag_ref_y = me;
+      );
+    );
+  
     // Not captured, start dragging.
     (last_cap == 0) ? (
       // Are we in the positional columns?
@@ -2013,9 +2021,12 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
         ((mouse_cap & 1) > 0) ? captured_by = me : captured_by = -me;
       ) : (
         y_over ? (
-          ((mouse_x < x) && (mouse_x > x - (block_width + block_spacing))) ? (
+          (mouse_x < x) && (mouse_x > x - (block_width + block_spacing)) ? (
             // Toggle the lane power
             slider(power_slider) = 1 - slider(power_slider);
+            drag_mode = DRAG_SOLO;
+            drag_ref_x = slider(power_slider);
+            drag_ref_y = me;
           ) : (mouse_x < x) ? (
             // Select the lane and potentially reorder things
             selected_details = me;
