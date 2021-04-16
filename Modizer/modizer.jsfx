@@ -1,8 +1,8 @@
 desc:Mod-izer
 tags: lo-fi effect
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Minor update bugfix
+changelog: Fix annoying jitter in scroller. Fix bug in interpolator. Add button to prevent following MIDI pitch.
 license: MIT
 provides:
   modizer_dependencies/* 
@@ -11,6 +11,7 @@ slider1:samplerate=28000<8192,48000,1>-samplerate
 slider2:record_pitch=57<1,108,1>-midi pitch
 slider3:bitrate=8<2,24,.1>-pseudo-bitrate
 slider4:paula=1<0,1,1{Off,On}>-LED
+slider5:dont_follow_pitch=0<0,1,1>-Don't follow incoming MIDI pitch
 slider7:interp=0<0,1,{S&H,linear}>-Interpolation
 
 in_pin:left input
@@ -117,7 +118,7 @@ function update_bitrate()
 
 function update_srate()
 (
-  (current_note_played == 0) ? current_note_played = 69;
+  ((current_note_played == 0) || dont_follow_pitch) ? current_note_played = 69;
   
   noteFactor = 2^((record_pitch - current_note_played)/12);
   factor = noteFactor * (srate / samplerate);
@@ -127,15 +128,21 @@ update_bitrate();
 update_srate();
 
 @slider
-update_bitrate();
-update_srate();
 cpos = 0;
+update_bitrate_now = 1;
 
 @block
 midi.processMIDIBlock();
 update_bitrate();
+update_srate();
 
 @sample
+update_bitrate_now ? (
+  update_bitrate();
+  update_srate();
+  update_bitrate_now = 0;
+);
+
 midi.processMIDISample() ? (
   (midi.lastNote > 0) ? current_note_played = midi.lastNote;
   update_srate();
@@ -175,6 +182,7 @@ global()
 );
 
 // Only mess with the sampling if the factor is actually > 1.
+c += 1;
 factor > 1 ? (
   // "S&H"
   cpos > factor ? (
@@ -185,12 +193,12 @@ factor > 1 ? (
     
     from_l = to_l;
     from_r = to_r;
-    to_l = l_hist.interp(l, cpos);
-    to_r = r_hist.interp(r, cpos);
-  ) : (
-    l_hist.hist(l);
-    r_hist.hist(r);
+    to_l = l_hist.interp(l, cpos - floor(cpos));
+    to_r = r_hist.interp(r, cpos - floor(cpos));
   );
+  
+  l_hist.hist(l);
+  r_hist.hist(r);
 
   // "Linear"
   interp ? (
@@ -288,8 +296,8 @@ function blit_letter(destx, desty, char, warp)
   gfx_deltablit(5, scale, char*58 - 1, cw, ch, destx, desty, cw*scale, ch*scale, 2/scale, 0, 0, 2/scale, warp, warp, 0);
 );
 
-current_char += .4;
-offset = current_char - floor(current_char + .01);
+current_char += 0.25;
+offset = current_char - floor(current_char + .00001);
 
 gfx_mode = 1;
 cs = current_char;
@@ -331,7 +339,7 @@ samplerateKnob.drawKnob(cX, cY, knobSize, "Sample rate", "Sample rate of the sim
 samplerateKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (28000-8192) / (48000 - 8192)) ? ( 
   samplerate = samplerateKnob.value * (48000 - 8192) + 8192;
   slider_automate(samplerateKnob); 
-  update_srate();
+  update_bitrate_now = 1;
 );
 
 cX += 2.5*stepSize;
@@ -340,9 +348,12 @@ recPitchKnob.knob_set(sprintf(1, "%d st", record_pitch), 1, (record_pitch - 1) /
 recPitchKnob.drawKnob(cX, cY, knobSize, "Record pitch", "MIDI Pitch that the used\nsample was recorded at.", 0);
 recPitchKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (57 - 1) / (108 - 1)) ? (
   record_pitch = recPitchKnob.value * (108 - 1) + 1;
+  update_bitrate_now = 1;
   slider_automate(recPitchKnob);
-  update_srate();
 );
+
+followPitch.drawToggle(cX - 0.95 * knobSize, cY - 0.95 * knobSize, 0.18 * knobSize, 0.18 * knobSize, dont_follow_pitch, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this button will ignore incoming MIDI.");
+dont_follow_pitch = followPitch.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 cX += 2.5*stepSize;
 
@@ -351,7 +362,7 @@ bitKnob.drawKnob(cX, cY, knobSize, "Bitrate", "Pseudo bitrate.\n\nNote that ", 0
 bitKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, (8 - 2) / (24 - 2)) ? ( 
   bitrate = bitKnob.value * (24 - 2) + 2;
   slider_automate(bitrate);
-  update_srate()
+  update_bitrate_now = 1;
 );
 
 hinter.drawHint_draw();
