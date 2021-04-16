@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.42
+version: 0.43
 author: Joep Vanlier
-changelog: Bugfix samplerate reduction (fix incorrect subsample position).
+changelog: Add basic randomization.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -75,6 +75,7 @@ DRAG_NUDGE = 2;
 DRAG_EFFECT = 3;
 DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
+DRAG_RANDOM = 6;
 
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
@@ -1636,7 +1637,7 @@ spl0 = ssl;
 spl1 = ssr;
 
 @gfx 1009 620
-current_cursor = 32512;
+current_cursor = randomize_toggle.value ? 32515 : 32512;
 
 function convert_tempos(target_sync_mode)
 local()
@@ -2052,6 +2053,46 @@ local(ret, from, to, last)
   ret
 );
 
+function randomize_row(mem, n_segments, max_value)
+local(ptr, val, last_val, long_note_prob)
+global()
+(
+  long_note_prob = rand();
+  val = last_val = 0;
+  ptr = mem;
+  loop(n_segments - 1,
+    last_val = val;
+    val = floor(rand() * (max_value + 1));
+    
+    (abs(val) == abs(last_val)) && (rand() < long_note_prob) ? val = -abs(val);
+    ptr[] = val;
+    ptr += 1;
+  );
+);
+
+function randomize_row_modulator(mem, n_segments)
+local(ptr, val, last_val, mode, idx)
+global()
+(
+  mode = rand();
+  idx = val = last_val = 0;
+  ptr = mem;
+  
+  loop(n_segments - 1,
+    last_val = val;
+    val = rand();
+    (mode < 0.25) ? (
+      val /= (1.0 + idx % 4);
+    ) : (mode < 0.5) ? (
+      val *= val;
+    );
+    
+    ptr[] = val;
+    ptr += 1;
+    idx += 1;
+  );
+);
+
 function process_effect_row(row_index, me, mem, x, y, label, max_value, power_slider, hint)
 global(label_width, block_width, block_spacing, selected_details,
        nice_rect,
@@ -2065,7 +2106,8 @@ global(label_width, block_width, block_spacing, selected_details,
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
        start_idx, selected_row, dragging, drag_mode, current_cursor, drag_row_index, drag_color_idx, DRAG_STRING, drag_ref_x, drag_ref_y,
-       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO)
+       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO,
+       randomize_toggle.value)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
 (
   set_row_color(row_index);
@@ -2158,15 +2200,20 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
             drag_ref_y = me;
             slider(power_slider) = drag_ref_x;
           ) : (mouse_x < x) ? (
-            // Select the lane and potentially reorder things
-            selected_details = me;
-            captured_by = me;
-            drag_mode = DRAG_EFFECT;
-            sprintf(DRAG_STRING, "%s", label);
-            drag_row_index = floor(mouse_y / (block_width + block_spacing));
-            drag_color_idx = row_index;
-            drag_ref_x = mouse_x;
-            drag_ref_y = mouse_y;
+            (randomize_toggle.value) ? (
+              // Randomize drag
+              randomize_row(mem, n_segments, max_value);
+            ) : (
+              // Select the lane and potentially reorder things
+              selected_details = me;
+              captured_by = me;
+              drag_mode = DRAG_EFFECT;
+              sprintf(DRAG_STRING, "%s", label);
+              drag_row_index = floor(mouse_y / (block_width + block_spacing));
+              drag_color_idx = row_index;
+              drag_ref_x = mouse_x;
+              drag_ref_y = mouse_y;
+            );
           );
         );
       );
@@ -2281,7 +2328,8 @@ global(label_width, block_width, block_spacing, selected_details,
        retrig_toggle.value
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
-       activeModifier, dragging, captured_by, drag_mode, DRAG_BLOCK)
+       activeModifier, dragging, captured_by, drag_mode, DRAG_BLOCK,
+       randomize_toggle.value)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset)
 instance(mem, start_idx)
 (
@@ -2311,8 +2359,12 @@ instance(mem, start_idx)
   (mouse_x < x) && y_over ? (
     hinter.updateHintTime(hint);
     (mouse_cap == 1) && (last_cap == 0) ? (
-      // Select row
-      activeModifier = (activeModifier == modulator_index) ? 0 : modulator_index;
+      (randomize_toggle.value) ? (
+        randomize_row_modulator(mem, n_segments);
+      ) : (
+        // Select row
+        activeModifier = (activeModifier == modulator_index) ? 0 : modulator_index;
+      );
     );
   );
   
@@ -2496,7 +2548,7 @@ cx = retrig_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block
 
 cx += block_width;
 
-cx = randomize_toggle.selection_button(-1, cx, y_current + 2, 3 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize properties.");
+cx = randomize_toggle.selection_button(-1, cx, y_current + 2, 3 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
 
 y_current += block_width;
 
