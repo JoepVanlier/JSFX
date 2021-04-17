@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.46
+version: 0.47
 author: Joep Vanlier
-changelog: Add a delay. Add a chorus. Smoothen pitch shifter transition a tiny bit.
+changelog: Minor optimization.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -1047,6 +1047,7 @@ instance()
 );
 
 sample_clock += 1;
+bigger_update = sample_clock % 16 == 0;
 
 function jump_to_target()
 local()
@@ -1153,11 +1154,11 @@ local()
 function process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain)
 local(pre_l, pre_r, filter_on)
 global(ssl, ssr,
-       sample_clock,
+       sample_clock, bigger_update,
        log10d20_conversion)
 instance(preamp, inv_preamp, current_cutoff, declick)
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     this.filter_envelope.calc_times_universal(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
   );
   
@@ -1196,7 +1197,7 @@ instance(preamp, inv_preamp, current_cutoff, declick)
 );
 
 function process_modulator()
-global(sample_clock, radians_to_dt, ssl, ssr, modulation_target,
+global(bigger_update, radians_to_dt, ssl, ssr, modulation_target,
        snap_modulator,
        current_modulator_wet, current_modulator_phase, current_modulator_offset,
        current_modulator_pitch,
@@ -1204,7 +1205,7 @@ global(sample_clock, radians_to_dt, ssl, ssr, modulation_target,
 local(midi_pitch, env, wet, dry, mul, off)
 instance(t, current_phase_advance, current_pitch, current_phase)
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     midi_pitch = 45 + 36 * current_modulator_pitch;
     snap_modulator ? midi_pitch = floor(midi_pitch);
     current_pitch = 440 * 2^((midi_pitch - 69)/12);
@@ -1227,7 +1228,7 @@ instance(t, current_phase_advance, current_pitch, current_phase)
 
 function process_gate()
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     gate_envelope.calc_times_universal(current_gate_atk, current_gate_decay, current_gate_sustain);
   );
   
@@ -1242,7 +1243,7 @@ local()
 global(ssl, ssr,
       verb_envelope.calc_times_universal, verb_envelope.update_envelope,
       
-      log10d20_conversion, sample_clock, current_verb_gate,
+      log10d20_conversion, bigger_update, current_verb_gate,
       reverb_target,
 
       // User controlled
@@ -1253,7 +1254,7 @@ global(ssl, ssr,
       )
 instance(verb_drymul, verb_wetmul)
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     this.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
     verb_envelope.calc_times_universal(current_verb_gate_atk, current_verb_gate_decay, current_verb_gate_sustain);
     verb_drymul = exp(log10d20_conversion*current_verb_dry);
@@ -1279,13 +1280,13 @@ global(l_karplus, r_karplus,
        current_karplus_feedback, current_karplus_pitch, current_karplus_cutoff,
        current_karplus_wet, current_karplus_dry, log10d20_conversion,
        srate,
-       sample_clock,
+       bigger_update,
        ssl, ssr, igain,
        snap_karplus,
        karplus_target
        )
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     midi_pitch = 45 + 36 * current_karplus_pitch;
     snap_karplus ? midi_pitch = floor(midi_pitch);
     current_pitch = 440 * 2^((midi_pitch - 69)/12);
@@ -1352,7 +1353,7 @@ global(ssl, ssr,
        current_delay_cutoff_lp, current_delay_cutoff_hp,
        current_delay_sat,
        current_delay_dry, current_delay_wet,
-       sample_clock,
+       bigger_update,
        l_delay.writeBuffer, r_delay.writeBuffer
        l_delay.readBuffer, r_delay.readBuffer,
        log10d20_conversion)
@@ -1361,7 +1362,7 @@ instance(current_wet_gain, current_dry_gain, fb_current,
          lp_l, lp_r, hp_l, hp_r, smoothed_target)
 local(fb, max_fb, dl, dr, delay_offset, omega, g, v, y)
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     smoothed_target = 0.9 * smoothed_target + 0.1 * delay_target;
     !delay_gain_mode ? smoothed_target = 1;
     current_wet_gain = 0.9 * current_wet_gain + 0.1 * ((delay_target || delay_gain_mode) ? exp(log10d20_conversion * current_delay_wet) : 0);
@@ -1432,14 +1433,14 @@ global(ssl, ssr,
        current_chorus_depth, current_chorus_speed,
        current_chorus_feedback, current_chorus_voices, chorus_speed,
        current_chorus_dry, current_chorus_wet,
-       sample_clock,
+       bigger_update,
        l_chorus.writeBuffer, r_chorus.writeBuffer
        l_chorus.readBuffer_cheapo, r_chorus.readBuffer_cheapo,
        log10d20_conversion)
 instance(current_wet_gain, current_dry_gain, fb_current, current_depth, current_pos, chorus_dt, voices, voice_step, inv_voice)
 local(fb, max_fb, dl, dr, omega, p)
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     current_wet_gain = 0.9 * current_wet_gain + 0.1 * (chorus_target ? exp(log10d20_conversion * current_chorus_wet) : 0);
     current_dry_gain = 0.9 * current_dry_gain + 0.1 * (chorus_target ? exp(log10d20_conversion * current_chorus_dry) : 1);
     
@@ -1510,9 +1511,9 @@ instance(factor,
          l_hist, r_hist, preamp,
          degrade_mix)
 local(target, dry_l, dry_r)
-global(sm, sample_clock, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion, current_degrade_mix)
+global(sm, bigger_update, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion, current_degrade_mix)
 (
-  sample_clock % 16 == 0 ? (
+  bigger_update ? (
     b_factor = 2^(current_bitrate - 1);
     ib_factor = 1/b_factor;
     
