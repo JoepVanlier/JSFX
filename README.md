@@ -76,6 +76,36 @@ Features:
 - Stereo widening effect.
 - Distortion module.
 
+## SEQS - Effects Sequencer
+
+SEQS: A small GUI-based effect sequencer for stutters, slowdowns and various audio effects.
+
+![drag_drop](https://user-images.githubusercontent.com/19836026/115153701-a2ee2300-a077-11eb-86bc-8eab6f13450d.gif)
+
+![modulators_new](https://user-images.githubusercontent.com/19836026/115153706-a681aa00-a077-11eb-8105-ec78bf7133e1.gif)
+
+Features:
+- Choose from 14 effects, with lots of parameters inside each effect.
+- Modulate all of the effect parameters by linking them up to the two macro modulator controls.
+- Drag and drop to reorder the effects that do not control the playhead.
+- Synchronize the patterns to the host, free or MIDI.
+- See exactly what audio is coming in, right above the pattern, making it easier to place the blocks in the correct places.
+- Build up to 64 patterns.
+- Select pattern by incoming MIDI note.
+- Choose to set times in the plugin by time or beats.
+- Randomize tracks.
+- Choose from a large number of effects:
+  - Effects that modify the playhead: Slowdown, Tape stop, Retrigger, Reverse.
+  - Chorus / Phaser / Flaser module.
+  - Pitch shifter.
+  - Degradation effects (sample rate and bitrate reduction).
+  - Two non-linear envelope controlled multimode filters (choose from 15 filter types, with several non-linear ones).
+  - Volume envelope.
+  - Reverb.
+  - Pitched Delay (delay with delaylength such that it produces tonal sounds).
+  - Amplitude / Ring modulation module.
+  - Tempo synchronized delay.
+
 ## Ravager - Extreme upwards compressor
 ![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
 
