@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (pre-alpha WIP)
 tags: time-based effect
-version: 0.51
+version: 0.52
 author: Joep Vanlier
-changelog: Bugfix effect list.
+changelog: Allow using only a subset of the segments (smaller loop length).
 license: MIT
 provides:
   seqs_dependencies/*
@@ -82,6 +82,7 @@ oversampling = 1;
 pattern_change = 1;
 current_sample = 0;
 n_segments = 32;
+loop_point = 32;
 max_segments = 64;
 max_effects = 32;
 max_stored_patterns = 64;
@@ -1034,6 +1035,9 @@ file_var(0, delay_gain_mode);
 !writing ? modulation_reset_phase = 0;
 file_var(0, modulation_reset_phase);
 
+!writing ? loop_point = n_segments;
+file_var(0, loop_point);
+
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
 
@@ -1131,6 +1135,7 @@ instance(j1, j2, j3, j4, j5, current)
 function update_time_info()
 (
   samples_per_beat = (srate * 60) / tempo / current_speed;
+  loop_length = loop_point * samples_per_beat;
   pattern_length = n_segments * samples_per_beat;
   to_index = n_segments / pattern_length;
   from_beat = 60 * srate / tempo;
@@ -1627,17 +1632,17 @@ update_time_info();
 target_position += 1; /* Target position moves with the track */
 
 current_sample += 1;
-current_sample > pattern_length ? 
+current_sample > loop_length ? 
 (
   while(
-    current_sample -= pattern_length;
-    current_sample > pattern_length
+    current_sample -= loop_length;
+    current_sample > loop_length
   );
 );
 sequencer_index = floor(to_index * current_sample);
 
 reset_sample = current_sample + crossfade_samples;
-reset_sample > pattern_length ? reset_sample -= pattern_length;
+reset_sample > loop_length ? reset_sample -= loop_length;
 reset_index = floor(to_index * reset_sample);
 
 // SEQUENCER HANDLING
@@ -2169,13 +2174,13 @@ local()
 );
 
 function shift_drag(y_over, me, mem, idx)
-global(n_segments, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
+global(loop_point, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
        shift_ref, dragging, captured_by, drag_mode, idx_ref,
        DRAG_NUDGE)
 local(shift)
 (
   // Shift row
-  y_over && (idx >= 0) && (idx <= n_segments) ? (
+  y_over && (idx >= 0) && (idx <= loop_point) ? (
     (mouse_cap & 16) == 16 ? (
       current_cursor = 32644;
       (mouse_cap == (1 + 16)) ? (
@@ -2202,13 +2207,13 @@ local(shift)
       //   ... albeit a very inefficient one.
       loop(abs(shift),
         shift > 0 ? (
-          shuffle_buffer[0] = mem[n_segments - 1];
-          memcpy(shuffle_buffer + 1, mem, n_segments - 1);
+          shuffle_buffer[0] = mem[loop_point - 1];
+          memcpy(shuffle_buffer + 1, mem, loop_point - 1);
         ) : ( shift < 0 ) ? (
-          shuffle_buffer[n_segments - 1] = mem[0];
-          memcpy(shuffle_buffer, mem + 1, n_segments - 1);
+          shuffle_buffer[loop_point - 1] = mem[0];
+          memcpy(shuffle_buffer, mem + 1, loop_point - 1);
         );
-        memcpy(mem, shuffle_buffer, n_segments);
+        memcpy(mem, shuffle_buffer, loop_point);
       );
       
       idx_ref = idx;
@@ -2688,8 +2693,10 @@ mod3_color_g = row_color_g * 2;
 mod3_color_b = row_color_b * 2;
 mod3_color_a = 1.0;
 
-handle_effect_drag(6, free_effects);
+gfx_set(0, 0, 0, .6);
+gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_point + 1) - 2, grid_origin_y, (n_segments - loop_point) * (block_width + block_spacing) + 1, y_current - grid_origin_y);
 
+handle_effect_drag(6, free_effects);
 
 
 gfx_set(1, 1, 1, .1);
@@ -2751,6 +2758,12 @@ cx = pattern_toggle.selection_button(2, cx, y_current + 2, block_width, block_wi
 
 cx = midi_rec_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, identify_note(midi_note_pattern_select), 0.3, 0.1, 0.05, "Set reference note used for pattern selection via MIDI.\n\nOnce clicked this button lights up and the plugin listens\nfor an incoming MIDI note. This note is then set as the\nreference note.\n\nAny subsequent note will compute a pattern index to jump to\nassuming the reference note to correspond to pattern zero.");
 
+cx += block_width;
+
+cx = pattern_toggle.selection_button(5, cx, y_current + 2, block_width, block_width - 4, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
+cx = pattern_toggle.selection_button(6, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, 0);
+cx = pattern_toggle.selection_button(7, cx, y_current + 2, block_width, block_width - 4, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
+
 cx = pattern_toggle.selection_button(3, cx + block_width, y_current + 2, 2 * block_width, block_width - 4, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
 cx = pattern_toggle.selection_button(4, cx, y_current + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
 pattern_toggle.value == 0 ? ( 
@@ -2770,7 +2783,9 @@ pattern_toggle.value == 0 ? (
   slider_automate(current_pattern_index);
 ) 
 : ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
-( pattern_toggle.value == 4 ) ? ( paste_pattern() );
+( pattern_toggle.value == 4 ) ? ( paste_pattern() ) :
+( pattern_toggle.value == 5 ) ? ( loop_point = min(loop_point + 1, 32); ) :
+( pattern_toggle.value == 7 ) ? ( loop_point = max(loop_point - 1, 2); );
 
 cx += block_width;
 cx = retrig_toggle.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Legato", 0.12, 0.15, 0.22, "Draw legato blocks.\n\nLegato blocks work differently from retriggered\nblocks. The exact effect depends on the effect\nrow.\n\nFor retrigger, legato will space the retriggers \nout over the entire block whereas retrigger mode \nwill place the number of retriggers on each block.\n\nFor tapestop, the stopping is reset for each \nnode when using retriggered \nblocks.\n\nFor envelope-based effects, legato mode does not\nrestart the envelope, whereas retriggered mode\ndoes.");
