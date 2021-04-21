@@ -2,7 +2,7 @@ desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
 version: 0.55
 author: Joep Vanlier
-changelog: Better description of the effect so people can actually find it.
+changelog: Darken inactive filter labels. Allow lower Karplus pitches. Display pitches on pitch knobs. Display secondary pitches when modulator is fully extended on knobs when modulator is being linked. Allow resizing the modulators.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -91,7 +91,7 @@ import saike_seqs_interpolators.jsfx-inc
 import saike_seqs_pitchlib.jsfx-inc
 
 @init
-CURRENT_VERSION = 1;
+CURRENT_VERSION = 2;
 version = CURRENT_VERSION;
 DRAG_STRING = 50;
 DRAG_BLOCK = 1;
@@ -99,6 +99,7 @@ DRAG_NUDGE = 2;
 DRAG_EFFECT = 3;
 DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
+DRAG_MODSIZE = 6;
 
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
@@ -412,7 +413,7 @@ function init_controls()
   
   tapestopSpeedKnob.init_knob(1, 0, 0, 0.6);
   
-  karplusPitchKnob.init_knob(1, 0, 0, 0.667);
+  karplusPitchKnob.init_knob(1, 0, 0, 0.5);
   karplusFeedback.init_knob(1, 0, 0, 0.15);
   karplusCutoffKnob.init_knob(1, 0, 0, 0.7);
   karplusDry.init_knob(96, -48, 0, -48.0);
@@ -942,7 +943,17 @@ karplusFeedback.serialize_knob();
 karplusCutoffKnob.serialize_knob();
 karplusDry.serialize_knob();
 karplusWet.serialize_knob();
-  
+
+// Karplus pitch changed in version 2
+(!writing) ?
+(
+  (version < 2) ? (
+    karplusPitchKnob.value = (karplusPitchKnob.value * 36 + 12) / 48;
+    karplusPitchKnob.mod1 *= (36 / 48);
+    karplusPitchKnob.mod2 *= (36 / 48);
+  );
+);
+
 shifterPitchKnob.serialize_knob();
 shifterDry.serialize_knob();
 shifterWet.serialize_knob();
@@ -1341,7 +1352,7 @@ global(l_karplus, r_karplus,
        )
 (
   bigger_update ? (
-    midi_pitch = 45 + 36 * current_karplus_pitch;
+    midi_pitch = 33 + 48 * current_karplus_pitch;
     snap_karplus ? midi_pitch = floor(midi_pitch);
     current_pitch = 440 * 2^((midi_pitch - 69)/12);
     
@@ -2629,9 +2640,39 @@ local(lastx, x, s, dx, minacc, maxacc, wave_range, wave_center, x_old, y_old)
   1
 );
 
-function process_modulation_row(row_index, modulator_index, me, mem, x, y, h, label, hint)
+function handle_drag_y_resize(me, x, drag_min, drag_max)
+global(mouse_cap, mouse_x, mouse_y, last_cap,
+       drag_mode, DRAG_MODSIZE, captured_by,
+       current_cursor)
+instance(reference_y)
+local(delta)
+(
+  delta = 0;
+  
+  // Handle resizing
+  ((drag_mode == DRAG_MODSIZE) && (captured_by == -me)) ? (
+    mouse_cap == 1 ? (
+      delta = mouse_y - reference_y;
+      reference_y = mouse_y;
+    ) : release_drag();
+  );
+  (mouse_x < x) && (mouse_y > drag_min) && (mouse_y < drag_max) ? (
+    current_cursor = 32645;
+    (mouse_cap == 1) && (last_cap == 0) ? (
+      drag_mode = DRAG_MODSIZE;
+      captured_by = -me;
+      reference_y = mouse_y;
+    );
+  );
+  
+  delta
+);
+
+
+function process_modulation_row(row_index, modulator_index, me, mem, x, y, height, label, hint)
 global(label_width, block_width, block_spacing, selected_details,
        nice_rect,
+       scaling,
        n_segments,
        font_r, font_g, font_b,
        gfx_x, gfx_y,
@@ -2642,10 +2683,19 @@ global(label_width, block_width, block_spacing, selected_details,
        base_r, base_g, base_b,
        row_color_r, row_color_g, row_color_b, printed_value,
        activeModifier, dragging, captured_by, drag_mode, DRAG_BLOCK,
-       randomize_toggle.value)
-local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset)
-instance(mem, start_idx)
+       randomize_toggle.value
+       resize_drag.handle_drag_y_resize)
+local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max)
+instance(start_idx, h)
 (
+  h == 0 ? h = height;
+
+  drag_min = y + h - 5 * (1 + scaling);
+  drag_max = drag_min + 10 * (1+scaling);
+  y_over = (mouse_y > y + 5 * (1+scaling)) && (mouse_y < drag_min);
+
+  h = max(h + resize_drag.handle_drag_y_resize(me, x + label_width, drag_min, drag_max), height);
+
   set_row_color(row_index);
   nice_rect(x, y, label_width - 1, h, 0, 1, row_color_r, row_color_g, row_color_b);
   nice_rect(x + label_width, y, block_width - 1, h, 0, 1, base_r, base_g, base_b);
@@ -2668,7 +2718,6 @@ instance(mem, start_idx)
   x += label_width - block_spacing;
   x += block_width + block_spacing;
   
-  y_over = (mouse_y > y) && (mouse_y < (y + h));
   (mouse_x < x) && y_over ? (
     hinter.updateHintTime(hint);
     (mouse_cap == 1) && (last_cap == 0) ? (
@@ -2763,13 +2812,13 @@ y_current = draw_effect(12, effect8);
 y_current = draw_effect(13, effect9);
 y_current = draw_effect(14, effect10);
 
-y_current = process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
+y_current = modrow1.process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
 mod2_color_r = row_color_r * 2;
 mod2_color_g = row_color_g * 2;
 mod2_color_b = row_color_b * 2;
 mod2_color_a = 1.0;
 
-y_current = process_modulation_row(14, 3, 51, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
+y_current = modrow2.process_modulation_row(14, 3, 51, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
 mod3_color_r = row_color_r * 2;
 mod3_color_g = row_color_g * 2;
 mod3_color_b = row_color_b * 2;
@@ -2941,6 +2990,17 @@ local(norm_current)
   );
 );
 
+function pitch_label(label, midi_pitch, note_fractional)
+local()
+global()
+(
+  note_fractional > 0.025 ? (
+    sprintf(label, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
+  ) : (
+    sprintf(label, "%s", identify_note(midi_pitch));
+  );
+);
+  
 dragging = 0;
 set_row_color(selected_row);
 (selected_details == 21) ? (
@@ -2995,7 +3055,7 @@ set_row_color(selected_row);
   morphKnob2.knob_set_display("", filter2_enabled);
   morphKnob2.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", current_morph2, 1, 1, 1);
   
-  gfx_set(1,1,1,1);
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * filter2_enabled);
   drawKnobLabels(knobSize*1.25, 0, "LP");
   drawKnobLabels(knobSize*1.25, 1/4, "BP");
   drawKnobLabels(knobSize*1.25, 2/4, "HP");
@@ -3068,7 +3128,7 @@ set_row_color(selected_row);
   morphKnob.knob_set_display("", filter_enabled);
   morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", current_morph, 1, 1, 1);
   
-  gfx_set(1,1,1,1);
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * filter_enabled);
   drawKnobLabels(knobSize*1.25, 0, "LP");
   drawKnobLabels(knobSize*1.25, 1/4, "BP");
   drawKnobLabels(knobSize*1.25, 2/4, "HP");
@@ -3199,18 +3259,33 @@ set_row_color(selected_row);
   nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, karplus_enabled);
   
   cX += knobSize * 1.35;
-  midi_pitch = (45 + 36 * current_karplus_pitch);
+  midi_pitch = 45 - 12 + 48 * karplusPitchKnob.value;
   snap_karplus ? midi_pitch = floor(midi_pitch);
   note_fractional = midi_pitch - floor(midi_pitch);
   
-  note_fractional < 0.025 ? (
-    sprintf(CUSTOM_SLIDER, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
-  ) : (
-    identify_note(midi_pitch);
+  activeModifier == 0 ? (
+    pitch_label(CUSTOM_SLIDER, midi_pitch, note_fractional);
+  ) : ( activeModifier == 2 ) ? (
+    m_pitch = 45 - 12 + 48 * (karplusPitchKnob.value + karplusPitchKnob.mod1);
+    snap_karplus ? m_pitch = floor(m_pitch);
+    m_fractional = m_pitch - floor(m_pitch);
+    sprintf(CUSTOM_SLIDER, "%s\n%s", pitch_label(60, midi_pitch, note_fractional), pitch_label(61, m_pitch, m_fractional));
+  ) : ( activeModifier == 3 ) ? (
+    m_pitch = 45 - 12 + 48 * (karplusPitchKnob.value + karplusPitchKnob.mod2);
+    snap_karplus ? m_pitch = floor(m_pitch);
+    m_fractional = m_pitch - floor(m_pitch);
+    sprintf(CUSTOM_SLIDER, "%s\n%s", pitch_label(60, midi_pitch, note_fractional), pitch_label(61, m_pitch, m_fractional));
   );
-
+  
   karplusPitchKnob.knob_set_display(CUSTOM_SLIDER, karplus_enabled);
   karplusPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_karplus_pitch, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * karplus_enabled);
+  drawKnobLabels(knobSize*1.25, 0, "A1");
+  drawKnobLabels(knobSize*1.25, 1/4, "A2");
+  drawKnobLabels(knobSize*1.25, 2/4, "A3");
+  drawKnobLabels(knobSize*1.25, 3/4, "A4");
+  drawKnobLabels(knobSize*1.25, 1, "A5");
   
   pitchSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_karplus, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Snap pitch to full semitones.");
   snap_karplus = pitchSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
@@ -3241,6 +3316,13 @@ set_row_color(selected_row);
   
   shifterPitchKnob.knob_set_display(snap_shifter ? ROUNDED_PITCH_SLIDER : PITCH_SLIDER, pitch_shifter_enabled);
   shifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_pitch_shifter_pitch, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * pitch_shifter_enabled);
+  drawKnobLabels(knobSize*1.25, 0, "-2");
+  drawKnobLabels(knobSize*1.25, 1/4, "-1");
+  drawKnobLabels(knobSize*1.25, 2/4, "0");
+  drawKnobLabels(knobSize*1.25, 3/4, "+1");
+  drawKnobLabels(knobSize*1.25, 1, "+2");
   
   cX += 2.5*knobSize;
   shifterDry.knob_set_display(DB_SLIDER, pitch_shifter_enabled);
