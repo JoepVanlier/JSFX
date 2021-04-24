@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.55
+version: 0.56
 author: Joep Vanlier
-changelog: Darken inactive filter labels. Allow lower Karplus pitches. Display pitches on pitch knobs. Display secondary pitches when modulator is fully extended on knobs when modulator is being linked. Allow resizing the modulators.
+changelog: Add optional vertical snap lines. Click the value to enable snapping. Added multi-voice option to pitched delay
 license: MIT
 provides:
   seqs_dependencies/*
@@ -338,6 +338,8 @@ function update_current_levels()
   current_karplus_cutoff = karplusCutoffKnob.getCurrentValue();
   current_karplus_dry = karplusDry.getCurrentValue();
   current_karplus_wet = karplusWet.getCurrentValue();
+  current_karplus_voices = karplusVoicesKnob.getCurrentValue();
+  current_karplus_detune = karplusDetune.getCurrentValue();
   
   current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
   current_shifter_dry = shifterDry.getCurrentValue();
@@ -418,6 +420,8 @@ function init_controls()
   karplusCutoffKnob.init_knob(1, 0, 0, 0.7);
   karplusDry.init_knob(96, -48, 0, -48.0);
   karplusWet.init_knob(96, -48, 0, 0.0);
+  karplusVoicesKnob.init_knob(1, 0, 0, 0);
+  karplusDetune.init_knob(1, 0, 0, 0);
   
   shifterPitchKnob.init_knob(48, -24, 34, 0);
   shifterDry.init_knob(64, -64, 0, -64);
@@ -794,26 +798,35 @@ local(transition_region, shifter_buffer_size)
 );
 update_shifter();
 
-BUF_SIZE = 96000 * 60;
+BUF_SIZE = 32768 * 3 * 60;
 CHORUS_SIZE = 32768 * 3;
+KARPLUS_SIZE = 32768;
 freemem = (l_buffer = freemem) + BUF_SIZE;
 freemem = (r_buffer = freemem) + BUF_SIZE;
-freemem = (beat_buffer = freemem) + .5 * BUF_SIZE;
-freemem = (karplus_buffer_l = freemem) + .5 * BUF_SIZE - max_segments;
-freemem = (karplus_buffer_r = freemem) + .5 * BUF_SIZE - max_segments;
-freemem = (delay_buffer_l = freemem) + .5 * BUF_SIZE;
-freemem = (delay_buffer_r = freemem) + .5 * BUF_SIZE;
+freemem = (beat_buffer = freemem) + 0.5 * BUF_SIZE;
+freemem = (karplus_buffer_l = freemem) + 0.5 * BUF_SIZE - max_segments;
+freemem = (karplus_buffer_r = freemem) + 0.5 * BUF_SIZE - max_segments;
+freemem = (delay_buffer_l = freemem) + 0.5 * BUF_SIZE;
+freemem = (delay_buffer_r = freemem) + 0.5 * BUF_SIZE;
 freemem = (chorus_buffer_l = freemem) + CHORUS_SIZE;
 freemem = (chorus_buffer_r = freemem) + CHORUS_SIZE;
 freemem = (shuffle_buffer = freemem) + max_segments;
 freemem = (order_mem = freemem) + max_segments;
 l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
 r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
-beatmem.initBuffer(beat_buffer, beat_buffer + .5*BUF_SIZE);
-l_karplus.initBuffer(karplus_buffer_l, karplus_buffer_l + .5*BUF_SIZE);
-r_karplus.initBuffer(karplus_buffer_r, karplus_buffer_r + .5*BUF_SIZE);
-l_delay.initBuffer(delay_buffer_l, delay_buffer_l + .5 * BUF_SIZE);
-r_delay.initBuffer(delay_buffer_r, delay_buffer_r + .5 * BUF_SIZE);
+beatmem.initBuffer(beat_buffer, beat_buffer + 0.5*BUF_SIZE);
+karplus.l_karplus.initBuffer(karplus_buffer_l, karplus_buffer_l + 0.1*BUF_SIZE);
+karplus.r_karplus.initBuffer(karplus_buffer_r, karplus_buffer_r + 0.1*BUF_SIZE);
+karplus2.l_karplus.initBuffer(karplus_buffer_l + 0.1 * BUF_SIZE, karplus_buffer_l + 0.2 * BUF_SIZE);
+karplus2.r_karplus.initBuffer(karplus_buffer_r + 0.1 * BUF_SIZE, karplus_buffer_r + 0.2 * BUF_SIZE);
+karplus3.l_karplus.initBuffer(karplus_buffer_l + 0.2 * BUF_SIZE, karplus_buffer_l + 0.3 * BUF_SIZE);
+karplus3.r_karplus.initBuffer(karplus_buffer_r + 0.2 * BUF_SIZE, karplus_buffer_r + 0.3 * BUF_SIZE);
+karplus4.l_karplus.initBuffer(karplus_buffer_l + 0.3 * BUF_SIZE, karplus_buffer_l + 0.4 * BUF_SIZE);
+karplus4.r_karplus.initBuffer(karplus_buffer_r + 0.3 * BUF_SIZE, karplus_buffer_r + 0.4 * BUF_SIZE);
+karplus5.l_karplus.initBuffer(karplus_buffer_l + 0.4 * BUF_SIZE, karplus_buffer_l + 0.5 * BUF_SIZE);
+karplus5.r_karplus.initBuffer(karplus_buffer_r + 0.4 * BUF_SIZE, karplus_buffer_r + 0.5 * BUF_SIZE);
+l_delay.initBuffer(delay_buffer_l, delay_buffer_l + 0.5 * BUF_SIZE);
+r_delay.initBuffer(delay_buffer_r, delay_buffer_r + 0.5 * BUF_SIZE);
 l_chorus.initBuffer(chorus_buffer_l, chorus_buffer_l + CHORUS_SIZE);
 r_chorus.initBuffer(chorus_buffer_r, chorus_buffer_r + CHORUS_SIZE);
 
@@ -1074,9 +1087,11 @@ file_var(0, modulation_reset_phase);
 !writing ? loop_point = n_segments;
 file_var(0, loop_point);
 
+karplusVoicesKnob.serialize_knob();
+karplusDetune.serialize_knob();
+
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
-
 
 @sample
 function calc_times_universal(atk, decay, sustain)
@@ -1335,18 +1350,15 @@ instance(verb_drymul, verb_wetmul)
   ssr = verb_drymul * ssr + verb_wetmul * this.out_right;
 );
 
-function process_karplus()
-instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain)
-local(g, kpr, kpl, lk, rk, v, y, omega, omega_fundamental, max_fb
+function process_karplus(current_karplus_pitch, ssl, ssr)
+instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain, l_karplus, r_karplus, kpl, kpr)
+local(g, lk, rk, v, y, omega, omega_fundamental, max_fb
       midi_pitch, current_pitch)
-global(l_karplus, r_karplus,
-       l_karplus.readBuffer, r_karplus.readBuffer,
-       l_karplus.writeBuffer, r_karplus.writeBuffer,
-       current_karplus_feedback, current_karplus_pitch, current_karplus_cutoff,
+global(current_karplus_feedback, current_karplus_cutoff,
        current_karplus_wet, current_karplus_dry, log10d20_conversion,
        srate,
        bigger_update,
-       ssl, ssr, igain,
+       igain,
        snap_karplus,
        karplus_target
        )
@@ -1404,9 +1416,6 @@ global(l_karplus, r_karplus,
   
   kpl *= igain;
   kpr *= igain;
-  
-  ssl = ssl * current_dry_gain + kpl;
-  ssr = ssr * current_dry_gain + kpr;
 );
 
 function process_delay()
@@ -1886,7 +1895,44 @@ function do_effect(effect_idx)
   ) : ( effect_idx == 5 ) ? (
     reverb_enabled ? verb.process_verb();
   ) : ( effect_idx == 6 ) ? (
-    karplus_enabled ? karplus.process_karplus();
+    karplus_enabled ? (
+      karplus.process_karplus(current_karplus_pitch, ssl, ssr);
+      kpl = karplus.kpl;
+      kpr = karplus.kpr;
+      
+      // Make only multi-voice pay for selection
+      // Also: yuck :(
+      current_karplus_voices > 0.25 ? (
+        pitch_offset = 0.02 * current_karplus_detune;
+        pitch_offset2 = 0.01 * current_karplus_detune;
+        current_karplus_voices > 0.99 ? (
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          karplus3.process_karplus(current_karplus_pitch - pitch_offset, ssl, ssr);
+          karplus4.process_karplus(current_karplus_pitch - pitch_offset2, ssl, ssr);
+          karplus5.process_karplus(current_karplus_pitch + pitch_offset2, ssl, ssr);
+          kpl = (kpl + karplus2.kpl + karplus3.kpl + karplus4.kpl + karplus5.kpl) * 0.4472136;
+          kpr = (kpr + karplus2.kpr + karplus3.kpr + karplus4.kpr + karplus5.kpr) * 0.4472136;
+        ) : ( current_karplus > 0.75 ) ? (
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          karplus3.process_karplus(current_karplus_pitch - pitch_offset, ssl, ssr);
+          karplus4.process_karplus(current_karplus_pitch - pitch_offset2, ssl, ssr);
+          kpl = (kpl + karplus2.kpl + karplus3.kpl + karplus4.kpl) * 0.5;
+          kpr = (kpr + karplus2.kpr + karplus3.kpr + karplus4.kpr) * 0.5;
+        ) : ( current_karplus > 0.5 ) ? (
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          karplus3.process_karplus(current_karplus_pitch - pitch_offset, ssl, ssr);
+          kpl = (kpl + karplus2.kpl + karplus3.kpl) * 0.5573502;
+          kpr = (kpr + karplus2.kpr + karplus3.kpr) * 0.5573502;
+        ) : ( 
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          kpl = (kpl + karplus2.kpl) * 0.7071068;
+          kpr = (kpr + karplus2.kpr) * 0.7071068;
+        );
+      );
+       
+      ssl = ssl * karplus.current_dry_gain + kpl;
+      ssr = ssr * karplus.current_dry_gain + kpr;
+    );
   ) : ( effect_idx == 7 ) ? (
     modulation_enabled ? modulation_effect.process_modulator();
   ) : ( effect_idx == 8 ) ? (
@@ -2006,6 +2052,9 @@ function setup_theme()
   
   TOGGLE_FONT = 9;
   gfx_setfont(TOGGLE_FONT, "Arial", floor(13 * (1+fontscaling)));
+  
+  MOD_FONT = 10;
+  gfx_setfont(MOD_FONT, "Arial", 12);
   
   scaling = 0;
   style == 0 ? (
@@ -2676,7 +2725,7 @@ global(label_width, block_width, block_spacing, selected_details,
        n_segments,
        font_r, font_g, font_b,
        gfx_x, gfx_y,
-       BASE_FONT
+       BASE_FONT, MOD_FONT,
        mouse_cap, mouse_x, mouse_y, last_cap, captured_by,
        hinter.updateHintTime,
        retrig_toggle.value
@@ -2686,9 +2735,10 @@ global(label_width, block_width, block_spacing, selected_details,
        randomize_toggle.value
        resize_drag.handle_drag_y_resize)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max)
-instance(start_idx, h)
+instance(start_idx, h, subdiv, snap)
 (
   h == 0 ? h = height;
+  subdiv == 0 ? subdiv = 12;
 
   drag_min = y + h - 5 * (1 + scaling);
   drag_max = drag_min + 10 * (1+scaling);
@@ -2716,7 +2766,6 @@ instance(start_idx, h)
   
   // Move to the actual sequencer cols
   x += label_width - block_spacing;
-  x += block_width + block_spacing;
   
   (mouse_x < x) && y_over ? (
     hinter.updateHintTime(hint);
@@ -2729,6 +2778,22 @@ instance(start_idx, h)
       );
     );
   );
+  
+  gfx_set(font_r, font_r, font_r, 0.1 + 0.9 * snap);
+  gfx_measurestr("12", txt_w, txt_h);
+  gfx_x = x + block_spacing + 0.5 * (block_width + block_spacing - txt_w);
+  gfx_setfont(MOD_FONT);
+  gfx_printf("12");
+  gfx_setfont(BASE_FONT);
+  
+  (mouse_x > x) && y_over && (mouse_x < (x + block_width)) ? (
+    hinter.updateHintTime("Enable snap");
+    (mouse_cap == 1) && (last_cap == 0) ? (
+      snap = 1.0 - snap;
+    );
+  );
+  
+  x += block_width + block_spacing;
   
   ptr = mem;
   target = 0;
@@ -2748,12 +2813,19 @@ instance(start_idx, h)
   x -= n_segments * (block_width + block_spacing);
   idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
   
+  gfx_y = y;
+  loop(subdiv,
+    gfx_set(1, 1, 1, .05);
+    gfx_rect(x, floor(gfx_y), n_segments * (block_width + block_spacing), 1);
+    gfx_y += h / subdiv;
+  );
+  
   shift_drag(y_over, me, mem, idx);
   
   // Process events
   (y_over || captured_by == me) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
     mouse_cap == 1 ? (
-      mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
+      mem[idx] = snap ? ceil(subdiv * (1.0 - clamp((mouse_y - y) / h, 0, 1))) / subdiv : mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
       captured_by = me;
       drag_mode = DRAG_BLOCK;
     ) : (
@@ -2979,7 +3051,7 @@ local(norm_current)
   ) : activeModifier == 1 ? ( 
     this.knob_modifier_processMouse(0, vel) ? ( vel = newValue; update_current_levels(); dragging = 1; );
   ) : (
-    this.knob_processMouse(mouse_x, mouse_y, mouse_cap, default) ? (
+    this.knob_processMouse(mouse_x, mouse_y, mouse_cap, (default - min_value)/scale ) ? (
       slider_idx > 0 ? (
         slider(slider_idx) = scale * value + min_value;
         slider_automate(slider_idx);
@@ -3256,7 +3328,7 @@ set_row_color(selected_row);
 ) : ( selected_details == 11 ) ? (
   // Tonal delay
   min_degrade = 3;
-  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, karplus_enabled);
+  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 25.5*knobSpacing, panelHeight, karplus_enabled);
   
   cX += knobSize * 1.35;
   midi_pitch = 45 - 12 + 48 * karplusPitchKnob.value;
@@ -3297,6 +3369,14 @@ set_row_color(selected_row);
   cX += knobSize * 2.5;
   karplusCutoffKnob.knob_set_display(FREQ_SLIDER, karplus_enabled);
   karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", current_karplus_cutoff, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  karplusVoicesKnob.knob_set_display(sprintf(CUSTOM_SLIDER, "%d", floor(1 + 4 * karplusVoicesKnob.value)), karplus_enabled);
+  karplusVoicesKnob.drawAndProcess(cX, cY, knobSize, "Voices", "Number of voices.", current_karplus_voices, 1, 1, 1);
+
+  cX += knobSize * 2.5;
+  karplusDetune.knob_set_display("", karplus_enabled && karplusVoicesKnob.value > 0.25);
+  karplusDetune.drawAndProcess(cX, cY, knobSize, "Detune", "Voice detuning.", current_karplus_detune, 1, 1, 1);
   
   cX += 2.5*knobSize;
   karplusDry.knob_set_display(DB_SLIDER, karplus_enabled);
