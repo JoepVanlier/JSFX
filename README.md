@@ -164,9 +164,9 @@ Features
 
 Examples of possibilities:
 
-https://www.youtube.com/watch?v=bGgYUSdWiAA
+https://www.youtube.com/watch?v=47L9bysgIiA
 
-https://www.youtube.com/watch?v=PJKxva-5x54
+https://www.youtube.com/watch?v=pUu3h21yARY
 
 Full manual here: https://github.com/JoepVanlier/JSFX/raw/master/Reflectosaurus_Manual/Reflectosaurus_Manual.pdf
 
