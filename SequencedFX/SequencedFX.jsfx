@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.60
+version: 0.63
 author: Joep Vanlier
-changelog: Increased overlap a little bit. Use a better window.
+changelog: Serialize data more space savingly (run length encode zeroes).
 license: MIT
 provides:
   seqs_dependencies/*
@@ -92,7 +92,7 @@ import saike_seqs_pitchlib.jsfx-inc
 
 @init
 gfx_ext_retina = 1;
-CURRENT_VERSION = 2;
+CURRENT_VERSION = 3;
 version = CURRENT_VERSION;
 DRAG_STRING = 50;
 DRAG_BLOCK = 1;
@@ -872,10 +872,70 @@ effect1 == 0 ? (
 );
 
 @serialize
+function serialize_rle(mem, len, writing)
+local(ptr, end_ptr, count, value, validate)
+global(critical_error)
+(
+  ptr = mem;
+  (!writing) ?
+  (
+    end_ptr = mem + len - 1;
+    while(ptr < end_ptr)
+    (
+      file_var(0, value);
+      (value == 1337) ? (validate = ptr - mem);
+       
+      // We only apply RLE to zeros
+      (value == 0) ? (
+        file_var(0, count);
+        memset(ptr, 0, count);
+        ptr += count;
+      ) : (
+        ptr[] = value;
+        ptr += 1;
+      );
+    );
+    
+    file_var(0, validate);
+    critical_error = validate == 1337 ? 0 : 1;
+  ) : (
+    count = 0;
+    loop(len - 1,
+      value = ptr[];
+      
+      (value == 0) ? (
+        count += 1;
+      ) : ( 
+        (count > 0) ? (
+          file_var(0, 0);
+          file_var(0, count);
+          count = 0;
+        );
+        
+        file_var(0, value);      
+      );
+      
+      ptr += 1;
+    );
+    
+    // Eww :(
+    (count > 0) ? (
+      file_var(0, 0);
+      file_var(0, count);
+    );
+    
+    file_var(0, 1337);
+  );
+);
+
 writing = file_avail(0) < 0;
 loaded = 1;
 file_var(0, version);
-file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
+(version < 3) ? (
+  file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
+) : (
+  serialize_rle(pattern_buffer, pattern_size * max_stored_patterns, writing);
+);
 file_var(0, selected_details);
 
 file_var(0, gate_enabled);
@@ -3562,3 +3622,15 @@ hinter.drawHint_draw();
 
 last_cap = mouse_cap;
 gfx_setcursor(current_cursor, "arrow");
+
+critical_error ? (
+  gfx_set(1, 0, 0, 1);
+  gfx_setfont(5, "Arial", 55);
+  gfx_x = 35;
+  gfx_y = 45;
+  gfx_printf("CRITICAL ERROR LOADING PRESET!");
+  gfx_x = 35;
+  gfx_y += 55;
+  gfx_printf("PLEASE NOTIFY ME OF THIS");
+);
+
