@@ -41,8 +41,8 @@ slider3:dummy=0<0,1,1>-Dummy
 slider4:dummy=0<0,1,1>-Dummy
 slider5:dummy=0<0,1,1>-Dummy
 slider6:dummy=0<0,1,1>-Dummy
-slider7:dummy=0<0,1,1>-Dummy
-slider8:dummy=0<0,1,1>-Dummy
+slider7:playback_enabled=0<0,1,1>Playback enabled
+slider8:record_enabled=0<0,1,1>Record enabled
 slider9:chorus_enabled=0<0,1,1>-Chorus enabled
 
 slider10:reset_enabled=1<0,1,1>-Reset enabled
@@ -114,8 +114,10 @@ max_segments = 64;
 max_effects = 32;
 max_stored_patterns = 64;
 crossfade_samples = 128*2;
+pi_inv_crossfade_samples = $pi / crossfade_samples;
 
-free_effects = 10;
+fixed_effects = 7;
+free_effects = 11;
 function from_order_mem()
 (
   effect1 = order_mem[0];
@@ -128,6 +130,7 @@ function from_order_mem()
   effect8 = order_mem[7];
   effect9 = order_mem[8];
   effect10 = order_mem[9];
+  effect11 = order_mem[10];
 
   effect1 = effect1 ? effect1 : 1;
   effect2 = effect2 ? effect2 : 2;
@@ -139,6 +142,7 @@ function from_order_mem()
   effect8 = effect8 ? effect8 : 8;
   effect9 = effect9 ? effect9 : 9;
   effect10 = effect10 ? effect10 : 10;
+  effect11 = effect11 ? effect11 : 11;
 );
 
 function to_order_mem()
@@ -154,11 +158,121 @@ function to_order_mem()
   order_mem[7] = effect8;
   order_mem[8] = effect9;
   order_mem[9] = effect10;
+  order_mem[10] = effect11;
 );
 
 // Generated functions with labels for tempo sync delays
 function delay_time_string(x) local() global() ( (x < 0.038461538461538464) ? "1/16" : (x < 0.07692307692307693) ? "1/12" : (x < 0.11538461538461539) ? "1/8" : (x < 0.15384615384615385) ? "1/7" : (x < 0.19230769230769232) ? "1/6" : (x < 0.23076923076923078) ? "1/5" : (x < 0.2692307692307692) ? "1/4" : (x < 0.3076923076923077) ? "1/3" : (x < 0.34615384615384615) ? "1/2" : (x < 0.38461538461538464) ? "3/5" : (x < 0.4230769230769231) ? "2/3" : (x < 0.46153846153846156) ? "3/4" : (x < 0.5) ? "1" : (x < 0.5384615384615384) ? "4/3" : (x < 0.5769230769230769) ? "5/4" : (x < 0.6153846153846154) ? "5/3" : (x < 0.6538461538461539) ? "1.5" : (x < 0.6923076923076923) ? "2" : (x < 0.7307692307692307) ? "3" : (x < 0.7692307692307693) ? "4" : (x < 0.8076923076923077) ? "5" : (x < 0.8461538461538461) ? "6" : (x < 0.8846153846153846) ? "7" : (x < 0.9230769230769231) ? "8" : (x < 0.9615384615384616) ? "12" : "16");
 function delay_time(x) local() global() ( (x < 0.038461538461538464) ? 0.0625 : (x < 0.07692307692307693) ? 0.08333333333333333 : (x < 0.11538461538461539) ? 0.125 : (x < 0.15384615384615385) ? 0.14285714285714285 : (x < 0.19230769230769232) ? 0.16666666666666666 : (x < 0.23076923076923078) ? 0.2 : (x < 0.2692307692307692) ? 0.25 : (x < 0.3076923076923077) ? 0.3333333333333333 : (x < 0.34615384615384615) ? 0.5 : (x < 0.38461538461538464) ? 0.6 : (x < 0.4230769230769231) ? 0.6666666666666666 : (x < 0.46153846153846156) ? 0.75 : (x < 0.5) ? 1 : (x < 0.5384615384615384) ? 1.3333333333333333 : (x < 0.5769230769230769) ? 1.25 : (x < 0.6153846153846154) ? 1.6666666666666667 : (x < 0.6538461538461539) ? 1.5 : (x < 0.6923076923076923) ? 2 : (x < 0.7307692307692307) ? 3 : (x < 0.7692307692307693) ? 4 : (x < 0.8076923076923077) ? 5 : (x < 0.8461538461538461) ? 6 : (x < 0.8846153846153846) ? 7 : (x < 0.9230769230769231) ? 8 : (x < 0.9615384615384616) ? 12 : 1);
+
+function initialize_sample(mem_loc, max_len)
+instance(mem, mem_end)
+global()
+(
+  mem = mem_loc;
+  mem_end = mem_loc + max_len - 2;
+);
+
+// We maintain the length of the recorded sample in the first memory location.
+// If we are past this, we fade out.
+function start_recording_sample(buffer_location, mem_final)
+instance(mem, mem_end, write_ptr, rec, stopping)
+global()
+(
+  stopping = 0;
+  mem = buffer_location;
+  mem[] = 0; // Set current length
+  write_ptr = mem + 1;
+  mem_end = mem_final;
+  
+  rec = 1;
+);
+
+function stop_recording_sample()
+instance(stopping, rec)
+global(crossfade_samples)
+(
+  rec ? (
+    /* Record a little bit extra for the fades */
+    stopping = crossfade_samples + 2;
+  );
+);
+
+// We record and store the current length in mem[].
+// Note that when we start fading out, we stop updating the length.
+// This will result in any playhead that's following this to start
+// fading out.
+function record(left, right)
+instance(mem, mem_end, write_ptr, stopping, rec)
+global()
+(
+  write_ptr < mem_end ? (
+    write_ptr[] = left;
+    write_ptr[1] = right;
+    write_ptr += 2;
+  );
+
+  // Don't stop immediately (need a few extra samples for the fade).
+  stopping > 0 ? (
+    stopping == 1 ? rec = 0;
+    stopping -= 1;
+  ) : (
+    // Store current location on the buffer. Note that when we are stopping.
+    // we stop updating this value. Note that this will indicate to the 
+    // player that it needs to start fading out, and that for serialization
+    // purposes, we need crossfade_samples more samples.
+    mem[] = write_ptr;
+  );
+);
+
+function start_playback(buffer_loc)
+instance(mem, read_ptr, x_fade_position, playing)
+global(crossfade_samples)
+(
+  mem = buffer_loc;
+  read_ptr = mem + 1;
+  x_fade_position = crossfade_samples;
+  playing = 1;
+);
+
+function stop_playback()
+instance(x_fade_position)
+global(crossfade_samples)
+(
+  x_fade_position = - crossfade_samples;
+);
+
+function play()
+instance(mem, read_ptr, x_fade_position,
+         outL, outR, playing, fade_level)
+global(crossfade_samples, pi_inv_crossfade_samples)
+local()
+(
+  // Positive fade means fading in
+  (x_fade_position > 0.01) ? (
+    fade_level = 1.0 - sqrt(0.5 - 0.5 * cos(x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position -= 1;
+  // Negative fade means fading out
+  ) : (x_fade_position < -0.01) ? (
+    fade_level = sqrt(0.5 - 0.5 * cos(- x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position += 1;
+    (x_fade_position == 0) ? (
+      playing = 0; // Terminate playback
+    );
+  ) : (
+    // Fade out if we're approaching the end of the recorded sample
+    fade_level = 1;
+    (read_ptr > mem[]) ? (
+      x_fade_position = - crossfade_samples;
+    );
+  );
+  
+  outL = fade_level * read_ptr[];
+  outR = fade_level * read_ptr[1];
+  read_ptr += 2;
+  
+  fade_level
+);
 
 function init_knob(sc, minimum, idx, def)
 instance(scale, min_value, slider_idx, default, value)
@@ -504,6 +618,9 @@ function pattern_update()
   delay_values = current_pattern + 14 * max_segments;
   chorus_values = current_pattern + 15 * max_segments;
   
+  record_values = current_pattern + 16 * max_segments;
+  playback_values = current_pattern + 17 * max_segments;
+  
   modulator1_values = current_pattern + 30 * max_segments;
   modulator2_values = current_pattern + 31 * max_segments;
   
@@ -801,7 +918,7 @@ update_shifter();
 
 BUF_SIZE = 32768 * 3 * 60;
 CHORUS_SIZE = 32768 * 3;
-KARPLUS_SIZE = 32768;
+SAMPLE_DURATION = 16 * 32768; // 5.46 seconds at 96 kHz max
 freemem = (l_buffer = freemem) + BUF_SIZE;
 freemem = (r_buffer = freemem) + BUF_SIZE;
 freemem = (beat_buffer = freemem) + 0.5 * BUF_SIZE;
@@ -830,6 +947,15 @@ l_delay.initBuffer(delay_buffer_l, delay_buffer_l + 0.5 * BUF_SIZE);
 r_delay.initBuffer(delay_buffer_r, delay_buffer_r + 0.5 * BUF_SIZE);
 l_chorus.initBuffer(chorus_buffer_l, chorus_buffer_l + CHORUS_SIZE);
 r_chorus.initBuffer(chorus_buffer_r, chorus_buffer_r + CHORUS_SIZE);
+
+
+// Sample locations are recorded as [memory location, length]
+freemem = (samplelocs = freemem) + 10;
+idx = 0;
+loop(10,
+  freemem = (samplelocs[idx] = freemem) + SAMPLE_DURATION;
+  idx += 1;
+);
 
 freemem = verb.init_reverb(freemem);
 
@@ -1771,6 +1897,7 @@ reset_sample = current_sample + crossfade_samples;
 reset_sample > loop_length ? reset_sample -= loop_length;
 reset_index = floor(to_index * reset_sample);
 
+//////////////////////////////////////////////////////////////////////////
 // SEQUENCER HANDLING
 function seek_next(position, continue_until, max_value)
 local(idx)
@@ -1815,6 +1942,45 @@ global(chunk_duration_b)
     : (retrig == 4) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.25 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.75 * block_len)); )
     : (retrig == 5) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.2 * block_len)); jump_schedule.schedule_jump(floor(0.4 * block_len)); jump_schedule.schedule_jump(floor(0.6 * block_len)); jump_schedule.schedule_jump(floor(0.8 * block_len)); )
     : (retrig == 6) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.16666666667 * block_len)); jump_schedule.schedule_jump(floor(0.333333333333333 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.66666666666666666667 * block_len)); jump_schedule.schedule_jump(floor(0.83333333333333333333 * block_len)); )
+  );
+  
+  ////////////////////////////
+  /* Handle sample playback */
+  ////////////////////////////
+  
+  // If record is positive, it's a start
+  // If it's negative it's a continuation.
+  record_enabled ? (
+    record_value = record_values[reset_index];
+    ((last_record_value != record_value) && (record_value >= 0)) ?
+    (
+      // Initiate recording into buffer
+      (current_recorder == 1) ? (
+        (record_value >= 0) ? rec1.stop_recording_sample();
+        (record_value > 0) ? rec0.start_recording_sample(samplelocs[record_value - 1], samplelocs[record_value - 1] + SAMPLE_DURATION);
+      ) : (
+        (record_value >= 0) ? rec0.stop_recording_sample();
+        (record_value > 0) ? rec1.start_recording_sample(samplelocs[record_value - 1], samplelocs[record_value - 1] + SAMPLE_DURATION);
+      );
+      current_recorder = 1.0 - current_recorder;
+    );
+    last_record_value = record_value;
+  );
+  
+  playback_enabled ? (
+    playback_value = playback_values[reset_index];
+    ((last_playback_value != playback_value) && (playback_value >= 0)) ?
+    (
+      (current_playback == 1) ? (
+        (playback_value > 0) ? play0.start_playback(samplelocs[playback_value - 1]);
+        (playback_value >= 0) ? play1.stop_playback();
+      ) : (
+        (playback_value > 0) ? play1.start_playback(samplelocs[playback_value - 1]);
+        (playback_value >= 0) ? play0.stop_playback();      
+      );
+      current_playback = 1.0 - current_playback;
+    );
+    last_playback_value = playback_value;
   );
 );
 
@@ -1901,6 +2067,7 @@ jump_schedule.eval_jump();
   
   modulator1_target = modulator1_values[sequencer_index];
   modulator2_target = modulator2_values[sequencer_index];
+  
   update_current_levels();
 );
 
@@ -1918,6 +2085,20 @@ tapestop_target ? (
 last_sequencer_index = sequencer_index;
 last_reset_index = reset_index;
 
+(record_at_input && record_enabled) ? (
+  rec0.rec ? rec0.record(spl0, spl1);
+  rec1.rec ? rec1.record(spl0, spl1);
+);
+
+playback_enabled ? (
+  sample_fade = 0;
+  play0.playing ? sample_fade += play0.play();
+  play1.playing ? sample_fade += play1.play();
+  spl0 = spl0 * (1.0 - sample_fade) + play0.outL + play1.outL;
+  spl1 = spl1 * (1.0 - sample_fade) + play0.outR + play1.outR;
+);
+
+
 l_buffer.writeBuffer(spl0);
 r_buffer.writeBuffer(spl1);
 
@@ -1928,8 +2109,7 @@ playhead_1 += dyn_speed;
 // Equal power fades (x^2 + y^2 = 1)
 x_fade_position > 0 ? (
   // Which playhead are we moving _towards_
-  fade_level = x_fade_position / crossfade_samples;
-  fade_level = 0.5 - 0.5 * cos($pi * fade_level);
+  fade_level = 0.5 - 0.5 * cos(x_fade_position * pi_inv_crossfade_samples);
   current_playhead == 0 ? (
     amp1 = sqrt(fade_level);
     amp0 = sqrt(1.0 - amp1);
@@ -2002,8 +2182,14 @@ function do_effect(effect_idx)
     filter2_enabled ? filter2.process_filter(filter_on_off2, filter2_target, filter2_type, current_drive2, current_morph2, current_resonance2, current_cutoff_start2, current_cutoff_final2, current_cutoff_atk2, current_cutoff_decay2, current_cutoff_sustain2);
   ) : ( effect_idx == 9 ) ? (
     delay_enabled ? delay.process_delay();
-  ) : ( effect_idx = 10 ) ? (
+  ) : ( effect_idx == 10 ) ? (
     chorus_enabled ? chorus.process_chorus();
+    effect10_yah = 1;
+  ) : ( effect_idx == 11 ) ? (
+    (record_enabled && !record_at_input) ? (
+      rec0.rec ? rec0.record(ssl, ssl);
+      rec1.rec ? rec1.record(ssr, ssr);
+    );
   );
 );
 
@@ -2017,6 +2203,7 @@ do_effect(effect7);
 do_effect(effect8);
 do_effect(effect9);
 do_effect(effect10);
+do_effect(effect11);
 
 spl0 = ssl;
 spl1 = ssr;
@@ -2139,6 +2326,7 @@ function setup_theme()
     s_MODFX = sprintf(74, "MOD FX");
     s_DELAY = sprintf(75, "DELAY");
     s_CHORUS = sprintf(76, "CHORUS");
+    s_SAMPLE = sprintf(77, "SAMPLE");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2152,6 +2340,7 @@ function setup_theme()
     s_MODFX = sprintf(74, "Modulation Effects");
     s_DELAY = sprintf(75, "Delay");
     s_CHORUS = sprintf(76, "Chorus");
+    s_SAMPLE = sprintf(77, "Sample");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2165,6 +2354,7 @@ function setup_theme()
     s_MODFX = sprintf(74, "Modulation Effects");
     s_DELAY = sprintf(75, "Delay");
     s_CHORUS = sprintf(76, "Chorus");
+    s_SAMPLE = sprintf(77, "Sample");    
   );
 
   style == 0 ? (
@@ -2688,6 +2878,8 @@ local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g,
         mem[ptr] = target;
         ptr += 1;
       );
+      
+      mem[ptr] = abs(mem[ptr]); /* TODO: Add bound verification here for last sample */
       release_drag();
     );
     
@@ -2916,10 +3108,11 @@ grid_origin_y += 40 * (1 + scaling);
 x_current = grid_origin_x;
 y_current = grid_origin_y;
 
-select_colormap(15);
+select_colormap(16);
 
 y_s = y_current;
-y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.");
+y_current = process_effect_row(5, 25, playback_values, x_current, y_current, "Play Sample", 8, 7, "Playback from recorded sample.");
+y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.\n\nNote that the first block cannot be removed.");
 y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", 4, 11, "Slow down playback.");
 y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19, "Tape stop effect.");
 y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", 6, 13, "Retrigger last block N times.");
@@ -2937,19 +3130,21 @@ function draw_effect(row, effect_idx)
   ) : ( effect_idx == 8 ) ? ( y_current = process_effect_row(row, 21, filt2_values, x_current, y_current, "Filter 2", 1, 23, "Filter 2");
   ) : ( effect_idx == 9 ) ? ( y_current = process_effect_row(row, 22, delay_values, x_current, y_current, "Delay", 1, 24, "Delay");
   ) : ( effect_idx == 10 ) ? ( y_current = process_effect_row(row, 23, chorus_values, x_current, y_current, "Chorus", 1, 9, "Chorus");  
+  ) : ( effect_idx == 11 ) ? ( y_current = process_effect_row(row, 24, record_values, x_current, y_current, "Record Sample", 8, 8, "Record to a sample that can be played back");
   );
 );
 
-y_current = draw_effect(5, effect1);
-y_current = draw_effect(6, effect2);
-y_current = draw_effect(7, effect3);
-y_current = draw_effect(8, effect4);
-y_current = draw_effect(9, effect5);
-y_current = draw_effect(10, effect6);
-y_current = draw_effect(11, effect7);
-y_current = draw_effect(12, effect8);
-y_current = draw_effect(13, effect9);
-y_current = draw_effect(14, effect10);
+y_current = draw_effect(6, effect1);
+y_current = draw_effect(7, effect2);
+y_current = draw_effect(8, effect3);
+y_current = draw_effect(9, effect4);
+y_current = draw_effect(10, effect5);
+y_current = draw_effect(11, effect6);
+y_current = draw_effect(12, effect7);
+y_current = draw_effect(13, effect8);
+y_current = draw_effect(14, effect9);
+y_current = draw_effect(15, effect10);
+y_current = draw_effect(16, effect11);
 
 y_current = modrow1.process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
 mod2_color_r = row_color_r * 2;
@@ -2966,7 +3161,7 @@ mod3_color_a = 1.0;
 gfx_set(0, 0, 0, .6);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_point + 1) - 2, grid_origin_y, (n_segments - loop_point) * (block_width + block_spacing) + 1, y_current - grid_origin_y);
 
-handle_effect_drag(6, free_effects);
+handle_effect_drag(fixed_effects, free_effects);
 
 
 gfx_set(1, 1, 1, .1);
@@ -3153,7 +3348,52 @@ global()
   
 dragging = 0;
 set_row_color(selected_row);
-(selected_details == 21) ? (
+
+function drawBuf(idx, x, y, w, h)
+global(samplelocs, row_color_r, row_color_g, row_color_b)
+local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc)
+(
+  gfx_set(0, 0, 0, 0.8);
+  gfx_rect(x, y, w, h);
+  
+  gfx_set(0, 1, 0, 1);
+  
+  length_in_samples = samplelocs[idx][] - samplelocs[idx];
+  len = max(0, floor((length_in_samples - 1) / 2));
+  ptr = samplelocs[idx] + 1;
+  step = floor(len / w);
+  gfx_set(row_color_r, row_color_g, row_color_b, 1.0);
+  xp = x;
+  ym = y + 0.5 * h;
+  hh = 0.5 * h;
+  loop(w,
+    maxacc = 0;
+    minacc = 0;
+    loop(step,
+      maxacc = max(ptr[], maxacc);
+      minacc = min(ptr[], minacc);
+      ptr += 2;
+    );
+    maxacc = min(1.0, maxacc);
+    minacc = max(-1.0, minacc);
+    gfx_line(xp, ym + hh * minacc, xp, ym + hh * maxacc);
+    xp += 1;
+  );
+);
+
+( (selected_details == 24) || (selected_details == 25) ) ? (
+  nextPanel = drawPanel(s_SAMPLE, cX, cY - 1.5 * knobSize, 25*knobSpacing, panelHeight, chorus_enabled);
+  cX += 0.5 * knobSpacing;
+  
+  sample_idx = 0;
+  loop(8,
+    gfx_x = cX;
+    gfx_y = cY - 0.9;
+    drawBuf(sample_idx, cX, cY - 0.9 * knobSize, 2 * knobSize, 2 * knobSize);
+    cX += 2.1 * knobSize;
+    sample_idx += 1;
+  );
+) : (selected_details == 21) ? (
   // Filter 2
   nextPanel = drawPanel(s_FILTER2, cX, cY - 1.5 * knobSize, 26.5*knobSpacing, panelHeight, filter2_enabled);
   cX += 2 * knobSpacing;
