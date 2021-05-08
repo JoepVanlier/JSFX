@@ -1,8 +1,8 @@
 desc:Saike ToneStacks (BETA)
 tags: parametric eq equalization tonestack tone guitar
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Fix samplerate scaling (note that you can get the old incorrect behaviour back by setting the non_legacy slider to 1. Rewrite evaluation functions in transformed direct form II for better stability.
+changelog: Fix issue with gain estimation not happening on initialization. Reduce CPU usage.
 license: MIT
 
 This plugin is based on the work of jatalahd and ~arph from diystompboxes.com forum.
@@ -21,6 +21,12 @@ slider7:Kstar=.95<0.2,1,.00001>-Magic factor
 slider8:non_legacy=1<0,1,1{No,Yes}>-Use the correct frequency scaling
 
 @init
+  init             = 0;
+  fftSize          = 8192;
+  bufferDist       = 65536;
+  impulseLoc       = 4*bufferDist;
+  impulseLocGainEs = 5*bufferDist;
+
   // Pot A
   function logA(r)
     instance()
@@ -1316,7 +1322,7 @@ slider8:non_legacy=1<0,1,1{No,Yes}>-Use the correct frequency scaling
       s6 = b6 * x - a6 * y;
       
       y
-    );    
+    );
     
   function initToneStack()
     instance()
@@ -1325,52 +1331,51 @@ slider8:non_legacy=1<0,1,1{No,Yes}>-Use the correct frequency scaling
     (
       non_legacy ? (
         Kbase = 2 * srate;
-        Kmod = Kbase;// * Kstar;
+        Kmod = Kbase;
       ) : (
         Kbase = srate;
         Kmod = Kbase * Kstar;
       );
       ( ToneStack == 0 ) ? (
-        this.initMarshall(Kbase);
+        this.initMarshall(Kbase)
       ) : ( ToneStack == 1 ) ? (
-        this.initFender(Kbase);
+        this.initFender(Kbase)
       ) : ( ToneStack == 2 ) ? (
-        this.initVox(Kmod);
+        this.initVox(Kmod)
       ) : ( ToneStack == 3 ) ? (
-        this.initJames(Kmod);
+        this.initJames(Kmod)
       ) : ( ToneStack == 4 ) ? (
-        this.initESeries(Kmod);
+        this.initESeries(Kmod)
       ) : ( ToneStack == 5 ) ? (
-        this.initBench(Kmod);
+        this.initBench(Kmod)
       ) : ( ToneStack == 6 ) ? (
-        this.initBigMuff(Kmod);
+        this.initBigMuff(Kmod)
       ) : ( ToneStack == 7 ) ? (
-        this.initHiwatt(Kmod);
+        this.initHiwatt(Kmod)
       ) : ( ToneStack == 8 ) ? (
-        this.initCrate(Kmod);
+        this.initCrate(Kmod)
       ) : ( ToneStack == 9 ) ? (
-        this.initDumbleRock(Kmod);
+        this.initDumbleRock(Kmod)
       ) : ( ToneStack == 10 ) ? (
         this.initDumbleJazz(Kmod);
       ) : ( ToneStack == 11 ) ? (
-        this.initAria(Kmod);
+        this.initAria(Kmod)
       );
     );
   
   function evalToneStack(s)
-    instance()
-    local(cf)
+    instance(coeffs)
+    local()
     global(ToneStack)
     (
-      cf = this.coeffs;
-      ( cf == 4 ) ? (
-        this.eval4(s);
-      ) : ( cf == 5 ) ? (
-        this.eval5(s);
-      ) : ( cf == 6 ) ? (
-        this.eval6(s);
-      ) : ( cf == 7 ) ? (
-        this.eval7(s);
+      ( coeffs == 4 ) ? (
+        this.eval4(s)
+      ) : ( coeffs == 5 ) ? (
+        this.eval5(s)
+      ) : ( coeffs == 6 ) ? (
+        this.eval6(s)
+      ) : ( coeffs == 7 ) ? (
+        this.eval7(s)
       );
     );
 
@@ -1637,7 +1642,7 @@ function drawFFT(fill, oversamplingFactor)
     (
       recPtr[] = sample;
       recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
-    );  
+    );
   
   function setToFFTLoc()
    global(fftSize)
@@ -1647,27 +1652,23 @@ function drawFFT(fill, oversamplingFactor)
       recPtr = rStart + fftSize;
    ); 
   
-  fftSize          = 8192;
-  bufferDist       = 65536;
-  impulseLoc       = 4*bufferDist;
-  impulseLocGainEs = 5*bufferDist;
   gfxFilter.initSpectrum(impulseLoc);
   gfxFilter.initWindow(4);
 
-@slider
   function estimateGain(impulseLocGain)
     local(ptr)
-    global(dummy.initToneStack, dummy.evalToneStack, dummy.resetStack, gainEst, compensateGain)
+    global(test, gainEst, compensateGain, ToneStack)
+    instance()
     (
       /* Detect max gain */
-      dummy.resetStack();
-      dummy.initToneStack();
+      this.initToneStack();
+      this.resetStack();
       ptr = impulseLocGain;
       
-      ptr[] = dummy.evalToneStack(1);
+      ptr[] = this.evalToneStack(1);
       ptr += 1;
       loop(2048,
-        ptr[] = dummy.evalToneStack(0);
+        ptr[] = this.evalToneStack(0);
         ptr += 1;
       );
       
@@ -1688,48 +1689,70 @@ function drawFFT(fill, oversamplingFactor)
           gainEst = gainEst + sqr(ptr[])+sqr(ptr[1]);
           ptr += 2;
         );
-        gainEst = sqrt(2)*sqrt(gainEst / 2048);
+        gainEst = sqrt(2)*sqrt(gainEst / 2048)
       );
     );
-    
-  maxGain = estimateGain(impulseLocGainEs);
-  gainComp = 2/maxGain;
+  init = 0;
+
+@slider
+  
 @block
 
 @sample
+  !init ? (
+    maxGain = dummy.estimateGain(impulseLocGainEs);
+    gainComp = 2/maxGain;
+    sBass = slider_Bass;
+    sMid = slider_Mid;
+    sTreble = slider_Treble;
+    init = 1;
+  );
+  
   csample += 1;
   gainV = (compensateGain > 0) ? .95*gainV + .05*gainComp : 1;
 
   ( ToneStack != currentModel ) ? 
   (
     currentModel = ToneStack;
-    L.resetStack();
-    R.resetStack();
+    force_reinit = 1;
     L.initToneStack();
     R.initToneStack();
-    
-    /*loop(100,
-      L.evalToneStack(0);
-      R.evalToneStack(0);
-    );*/
+    L.resetStack();
+    R.resetStack();
   );
 
   // Really basic smoothing
-  sBass = 0.99 * sBass + 0.01 * slider_Bass;
-  sMid = 0.99 * sMid + 0.01 * slider_Mid;
-  sTreble = 0.99 * sTreble + 0.01 * slider_Treble;
+  dBass = (slider_Bass - sBass);
+  dMid = (slider_Mid - sMid);
+  dTreble = (slider_Treble - sTreble);
+  sBass = sBass + 0.01 * dBass;
+  sMid = sMid + 0.01 * dMid;
+  sTreble = sTreble + 0.01 * dTreble;
   
-  (cSample % 10) == 0 ? (
-    L.initToneStack();
-    R.initToneStack();
+  /* Don't pay cost if we aren't moving the sliders */
+  (abs(dBass) + abs(dMid) + abs(dTreble) + force_reinit) > 0.0000001 ? (
+    (cSample % 10) == 0 ? (
+      L.initToneStack();
+      R.initToneStack();
+      force_reinit = 0;
+      reestimate_gain = 1;
+    );
+  );
+  
+  reestimate_gain ? (
+    (cSample % 512) == 0 ? (
+      maxGain = dummy.estimateGain(impulseLocGainEs);
+      gainComp = 2/maxGain;
+      reestimate_gain = 0;
+    );
   );
 
   spl0 = gainV*L.evalToneStack(spl0);
   spl1 = gainV*R.evalToneStack(spl1);
   
 @gfx 600 600
-  gfxFilter.resetStack();
   gfxFilter.initToneStack();
+  gfxFilter.resetStack();
   
   gfxFilter.x = -40;
   gfxFilter.y = 0;
@@ -1755,4 +1778,5 @@ function drawFFT(fill, oversamplingFactor)
   gfxFilter.setToFFTLoc();
   gfxFilter.drawGrid();
   gfxFilter.drawFFT(2, max(1, slider54));
-  
+
+
