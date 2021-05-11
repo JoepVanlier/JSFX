@@ -1,8 +1,8 @@
 desc:Amaranth (BETA)
 tags: amaranth granular synth graintable grains
-version: 0.15
+version: 0.16
 author: Joep Vanlier
-changelog: Make sure amaranth keeps playing when playback is stopped.
+changelog: Fix bidi ending up leaving the envelope backwards. Add amplitude envelope. Correctly disable octave sliders when effect is not active. Allow modulating envelope loop points for envelope 1 (experimental).
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -29,6 +29,12 @@ slider20:F1_res=0<0,1,.0000000000000001>-F1 Resonance
 slider21:F2_type=0<0,1,6>-F2 Type
 slider22:F2_freq=0<0,1,.0000000000000001>-F2 Freq
 slider23:F2_res=0<0,1,.0000000000000001>-F2 Resonance
+slider24:amp_atk=0.1<0,1,0.000001>-Amp Attack
+slider25:amp_decay=0.56<0,1,0.000001>-Amp Decay
+slider26:amp_release=0.56<0,1,0.000001>-Amp Release
+slider27:amp_sustain=0.6<0,1,0.00001>-Sustain level
+slider28:env1_loop_start=0<0,1,.00001>-Env1 Loop Start (experimental)
+slider29:env1_loop_end=0<0,1,.00001>-Env1 Loop End (experimental)
 slider62:storeSample=0<0,1,0>-Store sample in preset
 slider63:updateBuffer=1<0,1,1>-Update Buffer
 slider61:preGain=0<-32,32,.00001>-preGain
@@ -55,6 +61,7 @@ import Amaranth_mouse.jsfx-inc
 // 11 - Monstro
 
 @init
+notesOn = 0;
 nModulators = 4;
 nFilters = 12;
 
@@ -549,6 +556,10 @@ function drawBuffer(x, y, w, h, fill)
   file_var(0, oversamplingMode);
 
   file_mem(0, marker_memory, MAX_MARKERS);
+  file_var(0, envelope_enabled);
+  
+  env1_loop_start = envWindow1.LoopStart;
+  env1_loop_end = envWindow1.LoopEnd;
 
 @slider
 
@@ -599,7 +610,19 @@ function drawBuffer(x, y, w, h, fill)
   note_next       = notePtr[];  
 
 @sample
+  envWindow1.loopStart = min(env1_loop_end, env1_loop_start);
+  envWindow1.loopEnd = max(env1_loop_end, env1_loop_start);
+
   curSample += 1;
+  
+  amp = envelope_enabled ? (
+    (curSample % 8) ? (
+      c_sustain == 0 ? c_sustain = amp_sustain;
+      c_sustain = 0.97 * c_sustain + 0.03 * amp_sustain;
+      amp_env.calc_times(amp_atk, amp_decay, c_sustain, amp_release);
+    );
+    amp = amp_env.update_envelope(notesOn > 0)
+  ) : 1;
   
   // Does this plugin respond to MIDI signals?
   // Take notes from the stack until we hit the end marker -1
@@ -608,6 +631,7 @@ function drawBuffer(x, y, w, h, fill)
     noteF = 1;
       notePtr += 1;
       (notePtr[] > 0) ? ( // note-on
+        amp_env.tEnvelope = 0;
         notesOn = notesOn + 1;
         lastVel_cur = notePtr[]/127;
         lastVel = ( (slider45 == 4) || (slider45 == 5) ) ? lastVel_cur : 1;
@@ -731,8 +755,8 @@ function drawBuffer(x, y, w, h, fill)
   fbL = outL = spLeft;
   fbR = outR = spRight;
 
-  spl0 = ( outL + grainsFeedback.L ) * cPostGain;
-  spl1 = ( outR + grainsFeedback.R ) * cPostGain;
+  spl0 = ( outL + grainsFeedback.L ) * cPostGain * amp;
+  spl1 = ( outR + grainsFeedback.R ) * cPostGain * amp;
 
 @gfx 1200 760
   mouse.updateMouseState();
@@ -918,8 +942,18 @@ function drawBuffer(x, y, w, h, fill)
   envH = .4*audioH;
   envY = .95*gfx_h - envH;
   envWindow1.initEnvelope(envX, envY, envW, envH, 6, "ENVELOPE 1", env1_widget_r, env1_widget_g, env1_widget_b, env1_widget_a );    
+
   envWindow1.drawEnvelopeWindow();
   envWindow1.processMouseEnvelope();
+  
+  /* Sync envelope slider */
+  (env1_loop_start != envWindow1.LoopStart) ? (
+    slider_automate(env1_loop_start = envWindow1.LoopStart);
+  );
+  
+  (env1_loop_end != envWindow1.LoopEnd) ? (
+    slider_automate(env1_loop_end = envWindow1.LoopEnd);
+  );
   
   envX = audioX + envW + .04*audioW;
   envW = .48*audioW;
@@ -1154,49 +1188,46 @@ function drawBuffer(x, y, w, h, fill)
   
   yPos += yDist;  
   
-  /* Knob which controls the gain */
+  /* TO DO */
+  /* Envelope */
   xPos = col1;
-  pregainKnob.active = 1;
-  pregainKnob.value  = (preGain - GAIN_MIN)/GAIN_RANGE;
-  pregainKnob.value2 = preGainModulatorAmount;
-  pregainKnob.noSegments = 1;
-  pregainKnob.drawKnob(xPos, yPos, knobSize, "Pre-Gain", "Modify pre-gain.");
-  pregainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? slider_automate( preGain = GAIN_RANGE * pregainKnob.value + GAIN_MIN );
+  envelopeToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, envelope_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable amplitude envelope (based on MIDI input).");
+  envelope_enabled = envelopeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
-  /* Combobox to select envelope for gain modulator */
-  preGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, MODULATOR_HELPSTRING );
-  preGainModulatorSelect.combobox_setcuritem(preGainModulator);
-  preGainModulatorSelect.value = preGainModulatorAmount;
-  preGainModulatorSelect.combomodulator_draw();
-  preGainModulatorSelect.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
-    preGainModulator       = preGainModulatorSelect.curItem;
-    preGainModulatorAmount = preGainModulatorSelect.value;
-  );
-  preGainModulatorSelect.combobox_draw_top();
+  attackKnob.active = envelope_enabled;
+  attackKnob.value = amp_atk;
+  attackKnob.noSegments = 1;
+  attackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( amp_atk = attackKnob.value ); );
+  amp_atk > .5 ? sprintf(5, "%d", (30 * 10^(2*amp_atk))) : sprintf(5, "%.1f", (30 * 10^(2*amp_atk)));
+  attackKnob.label = 5;
+  attackKnob.drawKnob(xPos, yPos, knobSize, "Attack [ms]", "Attack time.");
   
-  /* Knob which controls the grain variance */
   xPos = col2;
-  minl = -6;
-  maxl = 0;
-  postGainKnob.active = 1;
-  postGainKnob.value  = (postGain - GAIN_MIN)/GAIN_RANGE;
-  postGainKnob.value2 = postGainModulatorAmount;
-  postGainKnob.noSegments = 1;
-  postGainKnob.drawKnob(xPos, yPos, knobSize, "Post-Gain", "Modify output gain.");
-  postGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? slider_automate( postGain = GAIN_RANGE * postGainKnob.value + GAIN_MIN );  
+  decayKnob.active = envelope_enabled;
+  decayKnob.value = amp_decay;
+  decayKnob.noSegments = 1;
+  decayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( amp_decay = decayKnob.value ); );
+  amp_decay > .5 ? sprintf(5, "%d", (30 * 10^(2*amp_decay))) : sprintf(5, "%.1f", (30 * 10^(2*amp_decay)));
+  decayKnob.label = 5;
+  decayKnob.drawKnob(xPos, yPos, knobSize, "Decay [ms]", "Decay time.");
+  yPos += 70*(1+scaling);
   
-  /* Combobox to select envelope for gain modulator */
-  postGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, MODULATOR_HELPSTRING );
-  postGainModulatorSelect.combobox_setcuritem(postGainModulator);
-  postGainModulatorSelect.value = postGainModulatorAmount;
-  postGainModulatorSelect.combomodulator_draw();
-  postGainModulatorSelect.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
-    postGainModulator       = postGainModulatorSelect.curItem;
-    postGainModulatorAmount = postGainModulatorSelect.value;
-  );
-  postGainModulatorSelect.combobox_draw_top();  
+  xPos = col1;
+  sustainKnob.active = envelope_enabled;
+  sustainKnob.value = amp_sustain;
+  sustainKnob.noSegments = 1;
+  sustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( amp_sustain = sustainKnob.value ); );
+  sustainKnob.drawKnob(xPos, yPos, knobSize, "Sustain [%%]", "Sustain level [%].");
   
-  yPos += yDist;  
+  xPos = col2;
+  releaseKnob.active = envelope_enabled;
+  releaseKnob.value = amp_release;
+  releaseKnob.noSegments = 1;
+  releaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( slider_automate( amp_release = releaseKnob.value ); );
+  amp_release > .5 ? sprintf(5, "%d", (30 * 10^(2*amp_release))) : sprintf(5, "%.1f", (30 * 10^(2*amp_release)));
+  releaseKnob.label = 5;
+  releaseKnob.drawKnob(xPos, yPos, knobSize, "Release [ms]", "Release time.");
+  yPos += 70*(1+scaling);
   
   /* Knob which controls the speed */
   xPos = col1;
@@ -1250,14 +1281,14 @@ function drawBuffer(x, y, w, h, fill)
   sprintf( 5, "%d", floor(refPitchKnob.value*96-48) );
   refPitchKnob.label = 5;
   refPitchKnob.drawKnob(xPos, yPos, knobSize, "Ref Note", "Reference pitch for MIDI input.");
-  yPos += 70*(1+scaling);  
+  yPos += 70*(1+scaling);
   
   /* Knob which controls the minimum shift for the octaver */
   xPos = col1;
   octaverToggle.drawToggle(xPos + 1.1*knobSize, yPos - 1.1*knobSize, buttonSize, buttonSize, Octaver, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable octaving.\n\nEnabling this makes the pitch randomize over octaves.");
   Octaver = octaverToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
-  octaveMinKnob.active = 1;
+  octaveMinKnob.active = Octaver;
   octaveMinKnob.value  = (octaveMin+4)/8;
   octaveMinKnob.noSegments = 1;
   octaveMinKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( octaveMin = 8*octaveMinKnob.value-4 );
@@ -1267,7 +1298,7 @@ function drawBuffer(x, y, w, h, fill)
   
   /* Knob which controls the max for the octaver */
   xPos = col2;
-  octaveMaxKnob.active = 1;
+  octaveMaxKnob.active = Octaver;
   octaveMaxKnob.value  = (octaveMax+4)/8;
   octaveMaxKnob.noSegments = 1;
   octaveMaxKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? slider_automate( octaveMax = 8*octaveMaxKnob.value-4 );
@@ -1294,6 +1325,50 @@ function drawBuffer(x, y, w, h, fill)
   fbKnob.drawKnob(xPos, yPos, knobSize, "Feedback", "Feedback strength."); 
   
   yPos += yDist;
+  
+  /* Knob which controls the gain */
+  xPos = col1;
+  pregainKnob.active = 1;
+  pregainKnob.value  = (preGain - GAIN_MIN)/GAIN_RANGE;
+  pregainKnob.value2 = preGainModulatorAmount;
+  pregainKnob.noSegments = 1;
+  pregainKnob.drawKnob(xPos, yPos, knobSize, "Pre-Gain", "Modify pre-gain.");
+  pregainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? slider_automate( preGain = GAIN_RANGE * pregainKnob.value + GAIN_MIN );
+  
+  /* Combobox to select envelope for gain modulator */
+  preGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, MODULATOR_HELPSTRING );
+  preGainModulatorSelect.combobox_setcuritem(preGainModulator);
+  preGainModulatorSelect.value = preGainModulatorAmount;
+  preGainModulatorSelect.combomodulator_draw();
+  preGainModulatorSelect.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    preGainModulator       = preGainModulatorSelect.curItem;
+    preGainModulatorAmount = preGainModulatorSelect.value;
+  );
+  preGainModulatorSelect.combobox_draw_top();
+  
+  /* Knob which controls the min gain */
+  xPos = col2;
+  minl = -6;
+  maxl = 0;
+  postGainKnob.active = 1;
+  postGainKnob.value  = (postGain - GAIN_MIN)/GAIN_RANGE;
+  postGainKnob.value2 = postGainModulatorAmount;
+  postGainKnob.noSegments = 1;
+  postGainKnob.drawKnob(xPos, yPos, knobSize, "Post-Gain", "Modify output gain.");
+  postGainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, .5) ? slider_automate( postGain = GAIN_RANGE * postGainKnob.value + GAIN_MIN );  
+  
+  /* Combobox to select envelope for gain modulator */
+  postGainModulatorSelect.combobox(xPos - 1.3*knobSize, yPos - 1.5*knobSize, comboModulatorXSize, comboModulatorYSize, .4, .4, .8, 1, nModulators, 1, 1, 1, COMBO_SMALL, MODULATOR_HELPSTRING );
+  postGainModulatorSelect.combobox_setcuritem(postGainModulator);
+  postGainModulatorSelect.value = postGainModulatorAmount;
+  postGainModulatorSelect.combomodulator_draw();
+  postGainModulatorSelect.combomodulator_processMouse(mouse_x, mouse_y, mouse_cap) ? (
+    postGainModulator       = postGainModulatorSelect.curItem;
+    postGainModulatorAmount = postGainModulatorSelect.value;
+  );
+  postGainModulatorSelect.combobox_draw_top();  
+  
+  yPos += yDist;    
   
   /* Filter 1 */    
   xPos = col1;
