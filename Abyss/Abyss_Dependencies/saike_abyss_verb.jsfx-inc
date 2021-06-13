@@ -1,0 +1,233 @@
+@init
+function init_allpass(buffer, buffer_size)
+instance(buffer)
+(
+  this.initBuffer(buffer, buffer + buffer_size);
+  buffer + buffer_size + 1
+);
+
+function eval_allpass(x)
+local(ap_sample, delayed_sample)
+instance(gain, offset)
+(
+  delayed_sample = this.readBuffer_fixed(offset);
+  ap_sample = x + gain * delayed_sample;
+  y = delayed_sample - gain * ap_sample;
+
+  this.writeBuffer(ap_sample);
+  
+  y
+);
+
+function eval_tpt_monopole(x)
+instance(s, coeff)
+global()
+local(y, v)
+(
+  v = coeff*(x - s);
+  y = v + s;
+  s = y + v;
+  y
+);
+  
+function init_tpt_monopole(cutoff)
+instance(coeff)
+global(srate)
+local(g)
+( 
+  g = tan($pi*cutoff/srate);
+  coeff = g/(1+g);
+);
+
+function init_reverb(buffer_position)
+global(srate)
+local(buffer_size)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right
+         decay_diffuser_left, decay_diffuser_right,
+         delay_left_1, delay_right_1,
+         delay_left_2, delay_right_2,
+         delay_right_2_offset, delay_left_2_offset, 
+         delay_left_1_offset, delay_right_1_offset, 
+         delay_left_2_offset, delay_right_2_offset,
+         srate_scaling,
+         out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left,
+         out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right)
+(
+  // Datorro Reverb (1997)
+  buffer_size = 8192;
+  srate_scaling = srate / 29761;
+  
+  buffer_position = diffuser1.init_allpass(buffer_position, buffer_size);
+  diffuser1.offset = 142 * srate_scaling;
+  buffer_position = diffuser2.init_allpass(buffer_position, buffer_size);
+  diffuser2.offset = 107 * srate_scaling;
+  buffer_position = diffuser3.init_allpass(buffer_position, buffer_size);
+  diffuser3.offset = 379 * srate_scaling;
+  buffer_position = diffuser4.init_allpass(buffer_position, buffer_size);
+  diffuser4.offset = 277 * srate_scaling;
+  
+  buffer_position = lfo_diffuser_left.init_allpass(buffer_position, buffer_size);
+  lfo_diffuser_left.offset = 672 * srate_scaling;
+  buffer_position = lfo_diffuser_right.init_allpass(buffer_position, buffer_size);
+  lfo_diffuser_right.offset = 908 * srate_scaling;
+  
+  buffer_position = decay_diffuser_left.init_allpass(buffer_position, buffer_size);
+  decay_diffuser_left.offset = 1800 * srate_scaling;
+  buffer_position = decay_diffuser_right.init_allpass(buffer_position, buffer_size);
+  decay_diffuser_right.offset = 2656 * srate_scaling;
+  
+  buffer_position = delay_left_1.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_right_1.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_left_2.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_right_2.init_allpass(buffer_position, buffer_size);
+  
+  delay_right_2_offset = 3163 * srate_scaling;
+  delay_left_2_offset = 3720 * srate_scaling;
+  delay_left_1_offset = 4453 * srate_scaling;
+  delay_right_1_offset = 4217 * srate_scaling;
+  
+  out_delay1_left = 266 * srate_scaling;
+  out_delay2_left = 2974 * srate_scaling;
+  out_delay3_left = 1913 * srate_scaling;
+  out_delay4_left = 1996 * srate_scaling;
+  out_delay5_left = 1990 * srate_scaling;
+  out_delay6_left = 187 * srate_scaling;
+  out_delay7_left = 1066 * srate_scaling;
+  
+  out_delay1_right = 353 * srate_scaling;
+  out_delay2_right = 3627 * srate_scaling;
+  out_delay3_right = 1228 * srate_scaling;
+  out_delay4_right = 2673 * srate_scaling;
+  out_delay5_right = 2111 * srate_scaling;
+  out_delay6_right = 335 * srate_scaling;
+  out_delay7_right = 121 * srate_scaling;  
+  
+  buffer_position
+);
+
+function update_reverb_settings(diffusion, decay, depth, freq, lowpass, highpass)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right,
+         decay_diffuser_left, decay_diffuser_right, fb,
+         mod_depth, mod_rate,
+         lp1, hp1, lp2, hp2,
+         
+         delay_left_1_offset, delay_left_2_offset, 
+         delay_right_1_offset, delay_right_2_offset,
+         srate_scaling,
+         mod_p
+         )
+local()
+global(srate, sample_clock, rs)
+(
+  diffuser1.gain = - 0.98684211 * diffusion; /* Decorrelate input signal */
+  diffuser2.gain = - 0.98684211 * diffusion; /* Decorrelate input signal */
+  diffuser3.gain = - 0.82236842 * diffusion; /* Decorrelate input signal */
+  diffuser4.gain = - 0.82236842 * diffusion; /* Decorrelate input signal */
+  lfo_diffuser_left.gain = 0.92105263 * diffusion;  /* Tail density */
+  lfo_diffuser_right.gain = 0.92105263 * diffusion;  /* Tail density */
+  decay_diffuser_left.gain = - 0.65789474 * diffusion;  /* Decorrelate tank signal */
+  decay_diffuser_right.gain = - 0.65789474 * diffusion;  /* Decorrelate tank signal */
+  fb = decay;
+  mod_depth = 128 * depth;
+  mod_rate = 2 * $pi * freq / srate;
+  
+  lp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - lowpass) * log(20/22050) ));
+  lp2.coeff = lp1.coeff;
+  hp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - highpass) * log(20/22050) ));
+  hp2.coeff = hp1.coeff;
+  
+  //rs = 440 / srate;  
+);
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  (2/(1+exp(-2*x)) - 1)
+);
+
+function eval_reverb(l, r)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right,
+         decay_diffuser_left, decay_diffuser_right,
+         delay_left_1, delay_right_1,
+         delay_left_2, delay_right_2,
+         delay_right_2_offset, delay_left_2_offset, 
+         delay_left_1_offset, delay_right_1_offset, 
+         delay_left_2_offset, delay_right_2_offset,
+         fb, out_left, out_right, srate_scaling,
+         out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left
+         out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right,
+         mod_rate, mod_depth, mod_p,
+         lp1, lp2, hp1, hp2)
+local(in, diffused, left_tank, right_tank, l_delay, r_delay, accumulator, rs)
+global(sample_clock, nonlinearity)
+(
+  in = 0.5 * (l + r);
+  
+  diffused = 
+    diffuser4.eval_allpass(
+      diffuser3.eval_allpass(
+        diffuser2.eval_allpass(
+          diffuser1.eval_allpass(
+            in
+          )
+        )
+      )
+    );
+  
+  left_tank = right_tank = diffused;
+  
+  // Flipped on purpose!
+  left_tank += fb * delay_right_2.readBuffer_fixed(delay_right_2_offset);
+  right_tank += fb * delay_left_2.readBuffer_fixed(delay_left_2_offset);
+  
+  mod_p += mod_rate;
+  lfo_diffuser_left.offset = (672 + mod_depth * sin(mod_p)) * srate_scaling;
+  lfo_diffuser_right.offset = (908 + mod_depth * sin(mod_p)) * srate_scaling;
+
+  delay_left_1.writeBuffer(lfo_diffuser_left.eval_allpass(left_tank));
+  delay_right_1.writeBuffer(lfo_diffuser_right.eval_allpass(right_tank));
+  
+  // Damping here
+  l_delay = lp1.eval_tpt_monopole(delay_left_1.readBuffer_fixed(delay_left_1_offset));
+  r_delay = lp2.eval_tpt_monopole(delay_right_1.readBuffer_fixed(delay_right_1_offset)) ;
+  
+  l_delay = decay_diffuser_left.eval_allpass(l_delay);
+  r_delay = decay_diffuser_right.eval_allpass(r_delay);
+  
+  nonlinearity ? (
+    l_delay = tanh(l_delay);
+    r_delay = tanh(l_delay);
+  );
+  
+  delay_left_2.writeBuffer(l_delay);
+  delay_right_2.writeBuffer(r_delay);
+  
+  l_delay = delay_left_2.readBuffer_fixed(delay_left_2_offset);
+  r_delay = delay_right_2.readBuffer_fixed(delay_right_2_offset);
+  
+  // Left output
+  accumulator = 0.6 * delay_right_1.readBuffer_fixed(out_delay1_left);
+  accumulator += 0.6 * delay_right_1.readBuffer_fixed(out_delay2_left);
+  accumulator -= 0.6 * decay_diffuser_right.readBuffer_fixed(out_delay3_left);
+  accumulator += 0.6 * delay_right_2.readBuffer_fixed(out_delay4_left);
+  accumulator -= 0.6 * delay_left_1.readBuffer_fixed(out_delay5_left);
+  accumulator -= 0.6 * decay_diffuser_left.readBuffer_fixed(out_delay6_left);
+  out_left = accumulator - 0.6 * delay_left_2.readBuffer_fixed(out_delay7_left);
+
+  accumulator = 0.6 * delay_left_1.readBuffer_fixed(out_delay1_right);
+  accumulator += 0.6 * delay_left_1.readBuffer_fixed(out_delay2_right);
+  accumulator -= 0.6 * decay_diffuser_left.readBuffer_fixed(out_delay3_right);
+  accumulator += 0.6 * delay_left_2.readBuffer_fixed(out_delay4_right);
+  accumulator -= 0.6 * delay_right_1.readBuffer_fixed(out_delay5_right);
+  accumulator -= 0.6 * decay_diffuser_right.readBuffer_fixed(out_delay6_right);
+  out_right = accumulator - 0.6 * delay_right_2.readBuffer_fixed(out_delay7_right);
+  
+  out_left = out_left - hp1.eval_tpt_monopole(out_left);
+  out_right = out_right - hp2.eval_tpt_monopole(out_right);
+);
+
