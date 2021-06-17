@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.68
+version: 0.69
 author: Joep Vanlier
-changelog: More smoothing for degrader and filter.
+changelog: Work around SSE JSFX performance issue with tan(pi/2).
 license: MIT
 provides:
   seqs_dependencies/*
@@ -712,10 +712,11 @@ local(y, v)
 function init_tpt_monopole(cutoff)
 instance(coeff)
 global(srate)
-local(g)
+local(omega, sin_omega)
 ( 
-  g = tan($pi*cutoff/srate);
-  coeff = g/(1+g);
+  omega = $pi * cutoff/srate;
+  sin_omega = sin(omega);
+  coeff = sin_omega / (sin_omega + cos(omega));
 );
 
 function init_reverb(buffer_position)
@@ -1589,8 +1590,8 @@ instance(verb_drymul, verb_wetmul)
 
 function process_karplus(current_karplus_pitch, ssl, ssr)
 instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain, l_karplus, r_karplus, kpl, kpr)
-local(g, lk, rk, v, y, omega, omega_fundamental, max_fb
-      midi_pitch, current_pitch)
+local(lk, rk, v, y, omega, omega_fundamental, max_fb, f0, sin_omega,
+      midi_pitch, current_pitch, )
 global(current_karplus_feedback, current_karplus_cutoff,
        current_karplus_wet, current_karplus_dry, log10d20_conversion,
        srate,
@@ -1608,8 +1609,10 @@ global(current_karplus_feedback, current_karplus_cutoff,
     karplus_offset = srate / current_pitch;
     cutoff_current = 0.98 * cutoff_current + 0.02 * current_karplus_cutoff;
     omega = .99999 * $pi * exp((1.0 - cutoff_current) * log(20/22050));
-    g = tan(0.5 * omega);
-    coeff = g / (1.0 + g);
+    
+    f0 = 0.5 * omega;
+    sin_omega = sin(f0);
+    coeff = sin_omega / (sin_omega + cos(f0));
 
     current_wet_gain = 0.9 * current_wet_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * current_karplus_wet) : 0);
     current_dry_gain = 0.9 * current_dry_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * current_karplus_dry) : 1);
@@ -1671,7 +1674,7 @@ global(ssl, ssr,
 instance(current_wet_gain, current_dry_gain, fb_current,
          cutoff_lp, cutoff_hp, coeff_lp, coeff_hp,
          lp_l, lp_r, hp_l, hp_r, smoothed_target)
-local(fb, max_fb, dl, dr, delay_offset, omega, g, v, y)
+local(fb, max_fb, dl, dr, delay_offset, omega, g, v, y, sin_omega)
 (
   bigger_update ? (
     smoothed_target = 0.9 * smoothed_target + 0.1 * delay_target;
@@ -1687,13 +1690,13 @@ local(fb, max_fb, dl, dr, delay_offset, omega, g, v, y)
     cutoff_lp = 0.98 * cutoff_lp + 0.02 * current_delay_cutoff_lp;
     cutoff_hp = 0.98 * cutoff_hp + 0.02 * current_delay_cutoff_hp;
     
-    omega = 0.99999 * $pi * exp((1.0 - cutoff_lp) * log(20/22050));
-    g = tan(0.5 * omega);
-    coeff_lp = g / (1.0 + g);
+    omega = 0.5 * 0.99999 * $pi * exp((1.0 - cutoff_lp) * log(20/22050));
+    sin_omega = sin(omega);
+    coeff_lp = sin_omega / (sin_omega + cos(omega));
     
-    omega = 0.99999 * $pi * exp((1.0 - cutoff_hp) * log(20/22050));
-    g = tan(0.5 * omega);
-    coeff_hp = g / (1.0 + g);
+    omega = 0.5 * 0.99999 * $pi * exp((1.0 - cutoff_hp) * log(20/22050));
+    sin_omega = sin(omega);
+    coeff_hp = sin_omega / (sin_omega + cos(omega));
     
     delay_offset = 0.98 * delay_offset + 0.02 * 4 * samples_per_beat * delay_time(current_delay_time) + 1;
   );
