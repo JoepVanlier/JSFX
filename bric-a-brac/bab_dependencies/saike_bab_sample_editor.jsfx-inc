@@ -1,0 +1,894 @@
+Micro Sample Editor Library
+author: Joep Vanlier
+license: MIT
+
+The following variables should be defined:
+  font_color_r, font_color_g, font_color_b, font_color_a : font colors
+  waveform_r, waveform_g, waveform_b, waveform_a : waveform colors
+  box_rect_color_r, box_rect_color_g, box_rect_color_b : waveform box colors
+  box_edge_color_(r,g,b) : waveform box edge colors
+  selection_color_(r,g,b) : selection colors
+  
+  BIG_FONT : font to use in the editor
+  TINY_FONT : tiny font
+  SAMPLE_FONT : sample font
+
+  last_mouse_x, last_mouse_y, mouse_dx, mouse_dy, last_click_time : mouse positions / changes
+  current_char : current character
+  last_cap : last capture mode
+  reset_zoom : should reset the zoom?
+  multi_out : output to multiple channels?
+  
+  ref_note : reference pitch used for imports
+  
+  SAMPLE_NAME_STR : string where to store sample name
+  SAMPLE_NAMES : sample names
+  N_SAMPLES : number of samples
+  MAX_SAMPLE_DURATION : maximum sample duration
+  SAMPLE_HEADER : size of the sample header
+  
+  samplelocs : memory locations of the samples (should be spaced out by MAX_SAMPLE_DURATION)
+  scratchloc : scratch memory location
+  copyloc : clipboard memory location
+  sample_name_copy_location : clipboard name origin
+  
+  captured : capture state of the mouse
+  updated_loop : you can listen to this one to determine that a loop has been changed. You should also set it to zero after handling it.
+
+  selected_sample, last_selected_sample : currently selected sample
+
+  blocked_samples, muted_samples, solod_samples : state
+
+In @init:
+  Do a function that declares fields similar to what the following function generates:
+    init_sample_data_defaults()
+
+  Set up memory the following way:
+    // Sample locations are recorded as [64 byte header (first is length), sampledata]
+    freemem = (samplelocs = freemem) + 128;
+    idx = 0;
+    loop(N_SAMPLES,
+      freemem = (samplelocs[idx] = freemem) + MAX_SAMPLE_DURATION;
+      idx += 1;
+    );
+    
+    freemem = (scratchloc = freemem) + MAX_SAMPLE_DURATION;
+    freemem = (copyloc = freemem) + MAX_SAMPLE_DURATION;
+
+  Set up the fonts as well:
+    SAMPLE_FONT = 5;
+    TINY_FONT = 6;
+    gfx_setfont(TINY_FONT, "Arial", 12);
+    BIG_FONT = 7;
+    gfx_setfont(BIG_FONT, "Arial", 18);
+
+In @serialize:
+  serialize_all_samples(file_avail(0) < 0)
+
+In @gfx:
+  At the start:
+    current_char = gfx_getchar();
+    
+  Followed by:
+    handle_gmem_imports()
+
+  handle_dropped_files()
+    Uses string 14 for handling file drop handle.
+    Uses global file_dropped for keeping track of the dropped file.
+  
+  handle_mouse_sample_handler()
+    Must be called at the end of gfx.
+    
+  sample_data_gfx_finalize()
+    resets the dropped file list and prints out critical
+    errors related to sample handling.
+
+@init
+// Constants
+DRAG_SAMPLE = 1;
+DRAG_LOOP_POINT_1 = 2;
+DRAG_LOOP_POINT_2 = 3;
+DRAG_PITCH = 4;
+DRAG_FINE = 5;
+
+function init_sample_data_defaults()
+(
+  SAMPLE_NAMES = 32;
+  ref_note == 0 ? ref_note = 69;
+  crossfade_samples = 128*2;
+  pi_inv_crossfade_samples = $pi / crossfade_samples;
+  SAMPLE_HEADER = 64;
+  MAX_SAMPLE_DURATION = 32768 * 16 - SAMPLE_HEADER;
+  N_SAMPLES = 36;
+  TOTAL_MEM = N_SAMPLES * MAX_SAMPLE_DURATION;
+  initialized = 1;
+);
+
+function sample_data_gfx_finalize()
+(
+  gfx_getdropfile(-1);
+
+  critical_error ? (
+    gfx_x = gfx_y = 0;
+    gfx_set(1, 1, 1, 1);
+    gfx_setfont(3, "Arial", 100);
+    gfx_printf("FATAL PRESET ERROR");
+  );
+);
+
+function handle_mouse_sample_handler()
+(
+  last_cap = mouse_cap;
+  reset_zoom = 0;
+  mouse_dx = mouse_x - last_mouse_x;
+  mouse_dy = mouse_y - last_mouse_y;
+  last_mouse_x = mouse_x;
+  last_mouse_y = mouse_y;
+  
+  ((selected_sample != last_selected_sample) && initialized) ? (
+    reset_zoom = 1;
+    last_selected_sample = selected_sample;
+  );
+);
+
+function serialize_sample(location, writing)
+local(sample_duration, validate)
+global(samplelocs, critical_error, SAMPLE_HEADER)
+(
+  sample_duration = location[];
+  file_var(0, sample_duration);
+  file_mem(0, location + 1, sample_duration + SAMPLE_HEADER - 1);
+  location[] = sample_duration;
+  
+  !writing ? (
+    file_var(0, validate);
+    critical_error = critical_error || (validate != 1337);
+  ) : (
+    file_var(0, 1337);
+  );
+);
+
+function serialize_all_samples(writing)
+global(N_SAMPLES, MAX_SAMPLE_DURATION, SAMPLE_HEADER, SAMPLE_NAMES, samplelocs, critical_error)
+local(swrite_idx)
+(
+  critical_error = 0;
+  file_var(0, N_SAMPLES);
+  swrite_idx = 0;
+  loop(N_SAMPLES,
+    (!writing) ? memset(samplelocs[swrite_idx], 0, MAX_SAMPLE_DURATION + SAMPLE_HEADER);
+    serialize_sample(samplelocs[swrite_idx], writing);
+    swrite_idx += 1;
+  );
+  
+  (!writing) ? (
+    swrite_idx = 0;
+    loop(N_SAMPLES,
+      sprintf(SAMPLE_NAMES + swrite_idx, "");
+      swrite_idx += 1;
+    );
+  );
+  
+  swrite_idx = 0;
+  loop(N_SAMPLES,
+    file_string(0, SAMPLE_NAMES + swrite_idx);
+    swrite_idx += 1;
+  );
+);
+
+function handle_dropped_files()
+(
+  /* Has the user dropped a file? */
+  DROPPED_FILE_STR = 14;
+  file_dropped = -1;
+  gfx_getdropfile(0, DROPPED_FILE_STR) ? file_dropped = 0;
+);
+
+function readstr_from_gmem(string_buffer, cidx)
+global(gmem)
+local(offset, buf) (
+  offset = 0;
+  buf = #;
+  while (
+    gmem[cidx] ? (
+      str_setchar(buf, offset, gmem[cidx]);
+      offset += 1;
+      cidx += 1;
+    ) : 0;
+  );
+  strcpy_substr(string_buffer, buf, 0, offset);
+);
+
+function handle_gmem_imports()
+global(gmem, samplelocs, selected_sample, ref_note,
+       MAX_SAMPLE_DURATION, SAMPLE_HEADER, SAMPLE_NAMES,
+       critical_error, reset_zoom)
+local(sample_gmem_length, sample_location, cidx, ptr, validate)
+(
+  sample_location = samplelocs;
+
+  /* Has the user run the sample dropping script? */
+  sample_gmem_length = gmem[];
+  (sample_gmem_length > 0) ? (
+    memset(sample_location[selected_sample], 0, MAX_SAMPLE_DURATION);
+    gmem[] = 0;
+    sample_location[selected_sample][0] = sample_gmem_length;
+    sample_location[selected_sample][1] = gmem[1];  // Sample rate
+    sample_location[selected_sample][2] = ref_note; // Reference pitch
+    sample_location[selected_sample][3] = -1;       // Loop start (in position; raw sample pos/2)
+    sample_location[selected_sample][4] = -1;       // Loop end (in position; raw sample pos/2)
+    sample_location[selected_sample][5] = 0;        // Bi-directional?
+    //memcpy(sample_location[selected_sample] + SAMPLE_HEADER, gmem + 1, sample_gmem_length);
+    ptr = sample_location[selected_sample] + SAMPLE_HEADER;
+    cidx = SAMPLE_HEADER;
+    loop(sample_gmem_length,
+      ptr[] = gmem[cidx];
+      ptr += 1;
+      cidx += 1;
+    );
+    validate = gmem[cidx];
+    critical_error = critical_error || (validate != 1337);
+    cidx += 1;
+    readstr_from_gmem(SAMPLE_NAMES + selected_sample, cidx);
+    
+    reset_zoom = 1;
+  );
+);
+
+function midi_pitch_to_note(pitch)
+local(p)
+global()
+(
+  p = pitch % 12;
+  (p == 0) ? ( "C" )
+  : (p == 1) ? ( "C#" )
+  : (p == 2) ? ( "D" )
+  : (p == 3) ? ( "D#" )
+  : (p == 4) ? ( "E" )
+  : (p == 5) ? ( "F" )
+  : (p == 6) ? ( "F#" )
+  : (p == 7) ? ( "G" )
+  : (p == 8) ? ( "G#" )
+  : (p == 9) ? ( "A" )
+  : (p == 10) ? ( "A#" )
+  : (p == 11) ? ( "B" )
+  : ( "Err" );
+);
+
+function midi_pitch_to_octave(pitch)
+(
+  floor(pitch / 12) - 1
+);
+
+DRAG_SAMPLE = 1;
+DRAG_LOOP_POINT_1 = 2;
+DRAG_LOOP_POINT_2 = 3;
+DRAG_PITCH = 4;
+DRAG_FINE = 5;
+
+function reverse(left, right)
+local(ptr_from, ptr_to)
+global(scratchloc)
+(
+  memcpy(scratchloc, left, right - left);
+  ptr_to = right;
+  ptr_from = scratchloc;
+  loop(0.5 * (right - left),
+    ptr_to[0] = ptr_from[0];
+    ptr_to[1] = ptr_from[1];
+    ptr_to -= 2;
+    ptr_from += 2;
+  );
+);
+
+function copy(sample_loc, left, right)
+local()
+global(copyloc, SAMPLE_HEADER)
+(
+  memset(copyloc, 0, SAMPLE_HEADER);
+  copyloc[] = right - left;
+  copyloc[1] = sample_loc[1];
+  copyloc[2] = sample_loc[2];
+  copyloc[3] = -1;
+  copyloc[4] = -1;
+  copyloc[5] = 0;
+  memcpy(copyloc + SAMPLE_HEADER, left, right - left);
+);
+
+function paste(target)
+local()
+global(copyloc, SAMPLE_HEADER)
+(
+  memcpy(target, copyloc, SAMPLE_HEADER + copyloc[]);
+);
+
+function fade(left, right, in_or_out)
+local(fade_len, ptr, dx, lvol, lv2)
+global()
+(
+  fade_len = 0.5 * (right - left);
+  ptr = left;
+  
+  in_or_out ? (
+    dx = 1.0 / (fade_len - 1);
+    lvol = 0;
+  ) : (
+    dx = -1.0 / (fade_len - 1);
+    lvol = 1;
+  );
+  
+  loop(fade_len,
+    lv2 = lvol * lvol;
+    
+    ptr[] *= lv2;
+    ptr[1] *= lv2;
+    
+    lvol += dx;
+    ptr += 2;
+  );
+  
+  lv2
+);
+
+function normalize(start, len)
+local(mx, ptr)
+global()
+(
+  ptr = start;
+  mx = 0;
+  loop(len,
+    mx = max(mx, abs(ptr[]));
+    ptr += 1;
+  );
+  ptr = start;
+  loop(len,
+    ptr[] /= mx;
+    ptr += 1;
+  );
+);
+
+function delete(selected_sample, left, right)
+global(samplelocs)
+instance(sample_len, sample_start, disp_range_start, disp_range_len, block_start, block_end)
+(
+  memcpy(left, right, sample_len - right + sample_start);
+  
+  memset(sample_start + sample_len - (right - left), 0, right - left);
+  samplelocs[selected_sample][] -= right - left;
+  sample_len = samplelocs[selected_sample][];
+  
+  // Clamp visible range to now
+  disp_range_len = min(disp_range_len, sample_len - (disp_range_start - sample_start));
+  
+  block_end = 0;
+  block_start = 0;
+);
+
+function control_rect(x, y, w, h, r, g, b, a, font, label)
+local(ww, hh)
+global(font_color_r, font_color_g, font_color_b, font_color_a, gfx_x, gfx_y,
+       mouse_x, mouse_y)
+(
+  gfx_set(r, g, b, a*.7);
+  gfx_rect(x, y, w, h);
+  gfx_set(r, g, b, a);
+  gfx_line(x, y, x + w, y);
+  
+  gfx_setfont(font);
+  gfx_measurestr(label, ww, hh);
+  gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+  gfx_x = x + 0.5 * (w - ww);
+  gfx_y = y + 0.5 * (h - hh);
+  gfx_printf(label);
+  
+  (mouse_x > x) && (mouse_x < (x+w)) && (mouse_y > y) && (mouse_y < (y+h))
+);
+
+function mouse_over(x, y, w, h)
+global(mouse_x, mouse_y)
+local()
+(
+  (mouse_x > x) && (mouse_x < (x+w)) && (mouse_y > y) && (mouse_y < (y+h))
+);
+
+function mouse_press(cap)
+global(mouse_cap, last_cap)
+local()
+(
+  ((mouse_cap & cap) == cap) && ((last_cap & cap) == 0)
+);
+
+function mouse_release(cap)
+global(mouse_cap, last_cap)
+local()
+(
+  ((mouse_cap & cap) == 0) && ((last_cap & cap) == cap)
+);
+
+function mouse_is_down(cap)
+global(mouse_cap)
+local()
+(
+  ((mouse_cap & cap) == cap)
+);
+
+function handle_loop_point(cx, cy, ww, hh, sample_start, disp_range_start, disp_range_len, loop_loc, capture_mode)
+local(loop_point, point_in_samples, mul, new_loopsize)
+global(captured, updated_loop,
+       mouse_dx, mouse_x, mouse_y, mouse_cap)
+(
+  loop_point = cx + ww * (2 * loop_loc[] - disp_range_start + sample_start) / disp_range_len;
+  gfx_rect(loop_point - 1, cy, 2, hh);
+  
+  mouse_over(loop_point-3, cy, 6, hh) ? (
+    gfx_rect(loop_point - 2, cy, 4, hh);
+    
+    ((!captured) && mouse_press(1)) ? (
+      captured = capture_mode;
+    );
+  );
+  
+  mul = 1;
+  (mouse_cap&4) ? mul = mul * 0.125; /* CTRL */
+  (mouse_cap&8) ? mul = mul * 0.125; /* SHIFT */
+  
+  (captured == capture_mode) ? (
+    new_loopsize = loop_loc[] + 0.5 * mul * disp_range_len * mouse_dx / ww;
+    loop_loc[] = max(0.5*(disp_range_start - sample_start), min(0.5*(disp_range_start + disp_range_len - sample_start), new_loopsize));
+    updated_loop = 1;
+    mouse_release(1) ? captured = 0;
+  );
+  
+  loop_point
+);
+
+function pitch_widget(cx, cy, ww, hh, sample_loc)
+local(button_width, button_height, frac, mul)
+global(BIG_FONT,
+       captured, mouse_cap, mouse_dy,
+       DRAG_FINE, DRAG_PITCH,
+       multi_out)
+instance(dy_sum)
+(
+  // Reference pitch
+  button_width = 50;
+  button_height = 30;
+  control_rect(cx + ww - button_width - 1, cy + 1, button_width, button_height, 0.07, 0.04, 0.03, 1.0, BIG_FONT, 
+  sprintf(8, "+%.2f", sample_loc[2] - floor(sample_loc[2]))) ? (
+    mouse_press(1) && !captured ? captured = DRAG_FINE;
+  );
+  
+  mul = 1;
+  (mouse_cap&4) ? mul = mul * 0.125; /* CTRL */
+  (mouse_cap&8) ? mul = mul * 0.125; /* SHIFT */
+  
+  ((captured == DRAG_FINE) && (mouse_is_down(1))) ? (
+    frac = sample_loc[2] - floor(sample_loc[2]) - 0.01 * mul * mouse_dy;
+    frac = max(0, min(0.9999999, frac + 0.01 * dy_sum));
+    sample_loc[2] = floor(sample_loc[2]) + frac;
+  );
+  
+  control_rect(cx + ww - 2 * button_width - 2 - 1, cy + 1, button_width, button_height, 0.07, 0.04, 0.03, 1.0, BIG_FONT, 
+  sprintf(8, "%s-%d", midi_pitch_to_note(sample_loc[2]), midi_pitch_to_octave(sample_loc[2]))) ? (
+    (mouse_press(1) && !captured) ? captured = DRAG_PITCH;
+  );
+  
+  ((captured == DRAG_PITCH) && (mouse_is_down(1))) ? (
+    dy_sum -= 0.1 * mul * mouse_dy;
+    
+    (dy_sum > 1) ? (
+      sample_loc[2] += floor(dy_sum);
+      dy_sum -= floor(dy_sum);
+    ) : (dy_sum < -1) ? (
+      sample_loc[2] += ceil(dy_sum);
+      dy_sum -= ceil(dy_sum);
+    );
+  );
+  
+  (control_rect(cx + ww - 4 * button_width - 4 - 1, cy + 1, 2 * button_width, button_height, 0.07 + .5 * multi_out, 0.04, 0.03, 1.0, BIG_FONT, "Multi - Out") && mouse_press(1)) ? (
+    multi_out = 1 - multi_out;
+  );
+  
+  ((captured == DRAG_FINE) || (captured == DRAG_PITCH)) ? (
+    (!mouse_is_down(1)) ? ( captured = 0; dy_sum = 0; );
+  );
+);
+
+function draw_box(x, y, w, h)
+(
+  gfx_set(box_rect_color_r, box_rect_color_g, box_rect_color_b, 1.0);
+  gfx_rect(x, y, w, h);
+  gfx_set(box_edge_color_r, box_edge_color_g, box_edge_color_b, 1);
+  gfx_line(x, y, x + w - 1, y);
+  gfx_line(x, y + h - 1, x + w, y + h - 1);
+  gfx_line(x, y, x, y + h - 1);
+  gfx_line(x + w - 1, y, x + w - 1, y + h - 1);
+);
+
+function draw_waveform(x, y, w, h, sample, length_in_samples)
+local(len, ptr, step, todo
+      xp, ym, ww, hh, minacc, maxacc)
+global(waveform_r, waveform_g, waveform_b, waveform_a)
+(
+  len = max(0, floor(length_in_samples * 0.5));
+  ptr = sample;
+  step = len / w;
+  
+  gfx_set(waveform_r, waveform_g, waveform_b, waveform_a);
+  xp = x;
+  ym = y + 0.5 * h;
+  hh = 0.35 * h;
+  
+  step > 1 ? (
+    todo = step;
+    loop(w,
+      maxacc = 0;
+      minacc = 0;
+      loop(todo,
+        maxacc = max(ptr[], maxacc);
+        minacc = min(ptr[], minacc);
+        ptr += 2;
+      );
+      todo += step - floor(todo);
+      maxacc = min(1.0, maxacc);
+      minacc = max(-1.0, minacc);
+      gfx_line(xp, ym + hh * minacc, xp, ym + hh * maxacc);
+      xp += 1;
+    );
+  ) : (
+    step = w / len;
+    gfx_line(xp, ym, xp + w, ym);
+    loop(length_in_samples * 0.5,
+      maxacc = ptr[];
+      gfx_line(xp, ym, xp, ym + hh * maxacc);
+      gfx_circle(xp, ym + hh * maxacc, 2, 1);
+      ptr += 2;
+      xp += step;
+    );
+  );
+  
+  length_in_samples
+);
+
+function draw_wavebox(x, y, w, h, idx, sample)
+global(SAMPLE_FONT, TINY_FONT, SAMPLE_HEADER, selected_sample,
+       gfx_x, gfx_y,
+       font_color_r, font_color_g, font_color_b, font_color_a,
+       selection_color_r, selection_color_g, selection_color_b, selection_color_a,
+       draw_box, draw_waveform,
+       SAMPLE_NAMES)
+local(length_in_samples, ptr, len, step, ww, hh, fine, SAMPLE_NAME_STR)
+(
+  draw_box(x, y, w, h);
+  
+  selected_sample == idx ? (
+    gfx_set(selection_color_r, selection_color_g, selection_color_b, selection_color_a);
+    gfx_rect(x, y, w, h);
+  );
+
+  gfx_set(0.1, 0.1, 0.1, 0.7);
+  gfx_setfont(SAMPLE_FONT, "Arial", h);
+  sprintf(16, "%02X", idx + 1);
+  gfx_measurestr(16, ww, hh);
+  
+  gfx_x = x - 0.5 * ww + 0.5 * w;
+  gfx_y = y;
+  gfx_printf(16);
+
+  length_in_samples = sample[];
+  draw_waveform(x, y, w, h, sample + SAMPLE_HEADER, length_in_samples);
+  
+  length_in_samples > 1 ? (
+    gfx_x = x + 2;
+    gfx_y = y + 2;
+    gfx_setfont(TINY_FONT);
+    gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+    gfx_printf("%d Hz", sample[1]);
+    
+    gfx_printf(", %s-%d", midi_pitch_to_note(sample[2]), midi_pitch_to_octave(sample[2]));
+    fine = sample[2] - floor(sample[2]);
+    fine > 0 ? (
+      gfx_printf(", +%.2f", sample[2] - floor(sample[2]));
+    );
+  );
+  
+  gfx_setfont(TINY_FONT);
+  gfx_set(font_color_r, font_color_g, font_color_b, font_color_a);
+  SAMPLE_NAME_STR = SAMPLE_NAMES + idx;
+  gfx_measurestr(SAMPLE_NAME_STR, ww, hh);
+  gfx_x = x + w - ww - 2;
+  gfx_y = y + h - hh;
+  gfx_printf(SAMPLE_NAME_STR);
+);
+
+function draw_sample_big(cx, cy, ww, hh, reset_zoom)
+instance(sample_start, sample_len,
+         disp_range_start, disp_range_len,
+         block_start, block_end)
+local(is_over, menu_selection, fractional_pos, center, loop_start, loop_stop, mouse_pos_in_samples, left, right)
+global(samplelocs, selected_sample, SAMPLE_NAMES, SAMPLE_HEADER, SAMPLE_DURATION, captured,
+       DRAG_SAMPLE, DRAG_LOOP_POINT_1, DRAG_LOOP_POINT_2,
+       updated_loop, current_char, last_click_time, sample_name_copy_location,
+       mouse_x, mouse_y, mouse_wheel, mouse_cap,
+       gfx_x, gfx_y, gfx_a)
+(
+  draw_box(cx, cy, ww, hh);
+  draw_waveform(cx, cy, ww, 0.5 * hh, disp_range_start, disp_range_len);
+  draw_waveform(cx, cy + 0.5 * hh, ww, 0.5 * hh, disp_range_start + 1, disp_range_len);
+  
+  // Loop points
+  (samplelocs[selected_sample][3] > -1) ? (
+    gfx_a = 0.5;
+    loop_start = handle_loop_point(cx, cy, ww, hh, sample_start, disp_range_start, disp_range_len, samplelocs[selected_sample] + 3, DRAG_LOOP_POINT_1);
+    loop_stop = handle_loop_point(cx, cy, ww, hh, sample_start, disp_range_start, disp_range_len, samplelocs[selected_sample] + 4, DRAG_LOOP_POINT_2);
+    gfx_a = 0.1;
+    gfx_rect(loop_start, cy, loop_stop - loop_start, hh);
+  );
+
+  this.pitch_widget(cx, cy, ww, hh, samplelocs[selected_sample]);
+  
+  is_over = mouse_over(cx, cy, ww, hh);
+  (is_over && mouse_press(1) && !captured) ? (
+    captured = DRAG_SAMPLE;
+    mouse_pos_in_samples = disp_range_start + disp_range_len * max(min((mouse_x - cx) / ww, 1), 0);
+    block_start = mouse_pos_in_samples;
+    block_end = mouse_pos_in_samples;
+    block_start = floor(block_start * 0.5) * 2;
+    block_end = floor(block_end * 0.5) * 2;
+    
+    ((time_precise() - last_click_time) < 0.2) ? (
+      block_start = sample_start;
+      block_end = sample_start + sample_len; 
+      captured = 0;
+    );
+    last_click_time = time_precise();
+  ) : ((captured == DRAG_SAMPLE) && mouse_is_down(1)) ? (
+    mouse_pos_in_samples = disp_range_start + disp_range_len * max(min((mouse_x - cx) / ww, 1), 0);
+    block_end = mouse_pos_in_samples;
+    block_end = floor(block_end * 0.5) * 2;
+    (abs(block_end - block_start) > 5) ? (
+      last_click_time = time_precise();
+    );
+  ) : ((captured == DRAG_SAMPLE) && mouse_release(1)) ? (
+    captured = 0;
+  );
+  
+  gfx_set(1, 1, 1, 0.1);
+  block_end > block_start ? (
+    gfx_rect(cx + ww * (block_start - disp_range_start) / disp_range_len, cy, ww * (block_end - block_start) / disp_range_len, hh);
+  ) : (
+    gfx_rect(cx + ww * (block_end - disp_range_start) / disp_range_len, cy, ww * (block_start - block_end) / disp_range_len, hh);
+  );
+  
+  // Delete
+  (current_char == 6579564) ? (
+    ( (block_start == 0) && (block_end == 0) ) ? (
+      memset(samplelocs[selected_sample], 0, SAMPLE_HEADER + SAMPLE_DURATION);
+      sprintf(SAMPLE_NAMES + selected_sample, "");
+
+      reset_zoom = 1;
+    ) : (
+      left = min(block_start, block_end);
+      right = max(block_start, block_end);
+      
+      this.delete(selected_sample, left, right);
+    );
+  );
+  
+  ((current_char == 3) && (mouse_cap == 4)) ? (
+    (abs(block_end - block_start) > 5) ? (
+      left = min(block_start, block_end);
+      right = max(block_start, block_end);
+      copy(samplelocs[selected_sample], left, right);
+      sample_name_copy_location = selected_sample;
+    ) : ( (block_start == 0) && (block_end == 0) ) ? (
+      copy(samplelocs[selected_sample], sample_start, sample_start + sample_len);
+      sample_name_copy_location = selected_sample;      
+    );
+  );
+  
+  ((current_char == 22) && (mouse_cap == 4)) ? (
+    paste(samplelocs[selected_sample]);
+    strcpy(SAMPLE_NAMES + selected_sample, SAMPLE_NAMES + sample_name_copy_location);
+    reset_zoom = 1;
+  );
+  
+  ((current_char == 18) && (mouse_cap == 4)) ? (
+    left = min(block_start, block_end);
+    right = max(block_start, block_end);
+    ((right - left) > 2) ? (
+      reverse(left, right);
+    );
+  );
+  
+  ((current_char == 24) && (mouse_cap == 4)) ? (
+    left = min(block_start, block_end);
+    right = max(block_start, block_end);
+    ((right - left) > 2) ? (
+      copy(samplelocs[selected_sample], left, right);
+      this.delete(selected_sample, left, right);
+    );
+  );
+  
+  (is_over && !captured && mouse_press(2)) ? (
+    gfx_x = mouse_x;
+    gfx_y = mouse_y;
+    left = min(block_start, block_end);
+    right = max(block_start, block_end);
+    (abs(block_end - block_start) < 5) ? (
+      menu_selection = gfx_showmenu("#Zoom|Reset Zoom||#Set loop|#Set loop (bidirectional)|Remove loop||#Reverse (Ctrl + R)||#Fade in|#Fade out||#Crop to selection||#Copy (Ctrl + C)|Paste (Ctrl + V)|#Cut (Ctrl + X)||Normalize");
+    ) : (
+      menu_selection = gfx_showmenu("Zoom|Reset Zoom||Set loop|Set loop (bidirectional)|Remove loop||Reverse (Ctrl + R)||Fade in|Fade out||Crop to selection||Copy (Ctrl + C)|Paste (Ctrl + V)|Cut (Ctrl + X)||Normalize");
+    );
+    (menu_selection == 1) ? (
+      disp_range_len = max(10, abs(block_end - block_start));
+      disp_range_start = min(block_start, block_end);
+    ) : (menu_selection == 2) ? (
+      reset_zoom = 1;
+    ) : ((menu_selection == 3) || (menu_selection == 4)) ? (
+      samplelocs[selected_sample][3] = floor(0.5 * (left - sample_start));    // Loop start
+      samplelocs[selected_sample][4] = floor(0.5 * (right - sample_start));   // Loop end
+      samplelocs[selected_sample][5] = (menu_selection == 3) ? 0 : 1;         // Bi-directional?
+      updated_loop = 1;
+    ) : (menu_selection == 5) ? (
+      samplelocs[selected_sample][3] = -1;
+    ) : (menu_selection == 6) ? (
+      reverse(left, right);
+    ) : ( ( menu_selection == 7 ) || ( menu_selection == 8 ) ) ? (
+      fade(left, right, menu_selection == 7);
+    ) : (menu_selection == 9) ? (
+      // Crop to selection
+      memcpy(sample_start, left, right - left);
+      memset(sample_start + sample_len - (right - left), 0, right - left);
+      samplelocs[selected_sample][] = right - left;
+      sample_len = samplelocs[selected_sample][];
+      disp_range_start = sample_start;
+      disp_range_len = sample_len;
+      
+      block_end = 0;
+      block_start = 0;
+    ) : (menu_selection == 10) ? (
+      copy(samplelocs[selected_sample], left, right);
+    ) : (menu_selection == 11) ? (
+      paste(samplelocs[selected_sample]);
+      reset_zoom = 1;
+    ) : (menu_selection == 12) ? (
+      copy(samplelocs[selected_sample], left, right);
+      this.delete(selected_sample, left, right);
+    ) : (menu_selection == 13) ? (
+      normalize(sample_start, sample_len);
+    );
+  );
+  
+  abs(mouse_wheel) > 0 ? (
+    fractional_pos = max(min((mouse_x - cx) / ww, 1), 0);
+    center = disp_range_start + disp_range_len * fractional_pos;
+    (mouse_wheel > 0) ? (
+      disp_range_start = max(sample_start, disp_range_start + disp_range_len * (1.0 - 0.75) * fractional_pos);
+      disp_range_len = max(10, 0.75 * disp_range_len);
+      disp_range_start = floor(disp_range_start * 0.5) * 2;
+    ) : (
+      disp_range_start = max(sample_start, disp_range_start + disp_range_len * (1.0 - 1.25) * fractional_pos);
+      disp_range_len = min(sample_len, 1.25 * disp_range_len);
+      disp_range_start = floor(disp_range_start * 0.5) * 2;
+    );
+    mouse_wheel = 0;
+  );
+  
+  reset_zoom ? (
+    sample_start = samplelocs[selected_sample] + SAMPLE_HEADER;
+    sample_len = samplelocs[selected_sample][];
+    disp_range_start = sample_start;
+    disp_range_len = sample_len;
+    block_start = 0;
+    block_end = 0;
+  );
+);
+
+function load_from_dropped(sample_location)
+local(file_handle, num_channels, samplerate, length, ptr)
+global(DROPPED_FILE_STR, MAX_SAMPLE_DURATION, SAMPLE_HEADER, ref_note)
+(
+  file_handle = file_open(DROPPED_FILE_STR);
+  file_handle >= 0 ? (
+    file_riff(file_handle, num_channels, samplerate);
+    memset(sample_location, 0, MAX_SAMPLE_DURATION);
+    (num_channels == 2) ? (
+      length = min(file_avail(file_handle), MAX_SAMPLE_DURATION - 4);
+      file_mem(file_handle, sample_location + SAMPLE_HEADER, length);
+    ) : (num_channels == 1) ? (
+      length = min(file_avail(file_handle), MAX_SAMPLE_DURATION - 4);
+      ptr = sample_location + SAMPLE_HEADER;
+      loop(length,
+        file_var(file_handle, ptr[]);
+        ptr[1] = ptr[];
+        ptr += 2;
+      );
+      length *= 2;
+    );
+    sample_location[] = length;       // Length
+    sample_location[1] = samplerate;  // Reference samplerate
+    sample_location[2] = ref_note;    // Reference pitch
+    sample_location[3] = -1;          // Loop start (in position; raw sample pos/2)
+    sample_location[4] = -1;          // Loop end (in position; raw sample pos/2)
+    sample_location[5] = 0;           // Bi-directional?
+    file_close(file_handle);
+  );
+);
+
+function update_mute_status()
+global(blocked_samples, muted_samples, solod_samples, N_SAMPLES)
+local(any_solo, idx)
+(
+  any_solo = 0;
+  idx = 0;
+  loop(N_SAMPLES,
+    solod_samples[idx] ? any_solo  = 1;
+    idx += 1;
+  );
+  
+  idx = 0;
+  any_solo ? (
+    loop(N_SAMPLES,
+      blocked_samples[idx] = ((solod_samples[idx] == 0) || (muted_samples[idx] == 1));
+      idx += 1;
+    );
+  ) : (
+    loop(N_SAMPLES,
+      blocked_samples[idx] = (muted_samples[idx] == 1);
+      idx += 1;
+    );
+  );
+);
+
+function process_pad(x, y, w, h, idx, sample_location)
+global(gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap, last_cap, captured,
+       file_dropped, SAMPLE_NAME_STR, SAMPLE_NAMES, DROPPED_FILE_STR, selected_sample,
+       reset_zoom)
+local(is_over, ww, hh)
+(
+  is_over = mouse_over(x, y, w, h);
+  
+  // File dropped zero means that the first file exists. Only the first
+  // one has to pass the check whether it is dropped on this pad. Any other
+  // file will be placed in subsequent positions.
+  (((file_dropped == 0) && is_over) || (file_dropped > 0)) ? (
+    (selected_sample == idx) ? reset_zoom = 1;
+    SAMPLE_NAME_STR = SAMPLE_NAMES + idx;
+    match("*\\%0-16{SAMPLE_NAME_STR}s*.*", DROPPED_FILE_STR);
+    load_from_dropped(sample_location);
+    file_dropped += 1;
+    file_dropped = gfx_getdropfile(file_dropped, DROPPED_FILE_STR) ? file_dropped : -1;
+  );
+  
+  ((last_cap & 1) == 0) && (mouse_cap & 1) && !captured && is_over ? (
+    selected_sample = idx;
+  );
+);
+
+function process_pad_mute(x, y, w, h, idx, sample_location)
+global(blocked_samples, muted_samples, solod_samples,
+       mouse_cap, last_cap, captured,
+       TINY_FONT)
+local(bh)
+(
+  blocked_samples[idx] == 1 ? (
+    gfx_set(0, 0, 0, .5);
+    gfx_rect(x, y, w, h);
+  );
+
+  bh = 14;
+  control_rect(x + w - 2 * bh - 1, y + 1, bh, bh, 0.04 + muted_samples[idx] * .8, 0.07, 0.03, 1.0, TINY_FONT, "M") ? (
+    ((last_cap & 1) == 0) && (mouse_cap & 1) && !captured ? (
+      muted_samples[idx] = 1 - muted_samples[idx];
+      update_mute_status();
+    );
+  );
+  
+  control_rect(x + w - bh - 1, y + 1, bh, bh, 0.04, 0.07 + solod_samples[idx] * .8, 0.03, 1.0, TINY_FONT, "S") ? (
+    ((last_cap & 1) == 0) && (mouse_cap & 1) && !captured ? (
+      solod_samples[idx] = 1 - solod_samples[idx];
+      update_mute_status();
+    );
+  );
+);

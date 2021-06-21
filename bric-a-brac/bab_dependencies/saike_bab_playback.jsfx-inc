@@ -1,0 +1,230 @@
+Sample playback handling.
+
+
+Initialize channels as follows:
+  !initialized ? (
+    preview_channel.chan_default(0)
+    chan1.chan_default(1);
+    chan2.chan_default(2);
+    chan3.chan_default(3);
+    chan4.chan_default(4);
+  );
+  
+  preview_channel.stop_sample();
+  chan1.stop_sample();
+  chan2.stop_sample();
+  chan3.stop_sample();
+  chan4.stop_sample();  
+  
+Start a sample:
+  chan1.start_sample(sample_idx);
+  
+Play a channel. This outputs to globals ssl and ssr.
+  chan1.play_channel();
+
+@init
+function set_pan(pan)
+local(p)
+global()
+instance(lpan, rpan)
+(
+  pan > 0.99 ? pan = 1;
+  p = 0.5 * $pi * pan;
+  lpan = cos(p);
+  rpan = sin(p);
+);
+
+function stop_playback()
+instance(x_fade_position)
+global(crossfade_samples)
+(
+  x_fade_position = - crossfade_samples;
+);
+
+function stop_sample()
+instance(current_playback)
+global()
+(
+  (current_playback == 1) ? (
+    this.play1.stop_playback();
+  ) : (
+    this.play0.stop_playback();
+  );
+);
+
+function chan_default(idx)
+instance(vol, chan)
+global()
+local()
+(
+  vol = 1;
+  chan = idx;
+  this.set_pan(0.5);
+);
+
+function start_playback(buffer_loc, playspeed, offset)
+instance(start_ptr, x_fade_position, playing, fade_start, position, speed,
+         loop_start, loop_stop, loop_type)
+global(crossfade_samples, SAMPLE_HEADER)
+(
+  fade_start = buffer_loc + buffer_loc[] + SAMPLE_HEADER - 2 * playspeed * crossfade_samples;
+  start_ptr = buffer_loc + SAMPLE_HEADER;
+  
+  loop_start = buffer_loc[3];
+  loop_stop = buffer_loc[4];
+  loop_type = buffer_loc[5];
+  
+  x_fade_position = crossfade_samples;
+  position = offset;
+  playing = 1;
+  speed = playspeed;
+);
+
+function update_loop_parameters(buffer_loc)
+instance(loop_start, loop_stop, loop_type)
+(
+  loop_start = buffer_loc[3];
+  loop_stop = buffer_loc[4];
+  loop_type = buffer_loc[5];
+);
+
+/* Sample play (each channel has two of these guys that alternate) */
+function play()
+instance(start_ptr, read_ptr, x_fade_position, fade_start,
+         outL, outR, playing, fade_level, position, speed,
+         loop_start, loop_stop, loop_type)
+global(crossfade_samples, pi_inv_crossfade_samples, eco, play_state)
+local(frac, ism1, is0, is1, is2, id0, id1, id2, id3)
+(
+  // Positive fade means fading in
+  (x_fade_position > 0.01) ? (
+    fade_level = 1.0 - sqrt(0.5 - 0.5 * cos(x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position -= 1;
+  // Negative fade means fading out
+  ) : (x_fade_position < -0.01) ? (
+    fade_level = sqrt(0.5 - 0.5 * cos(- x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position += 1;
+    (x_fade_position == 0) ? (
+      playing = 0; // Terminate playback
+    );
+  ) : (
+    // Fade out if we're approaching the end of the recorded sample
+    fade_level = 1;
+    (loop_start > 0) ? (
+      (loop_type == 0) ? (
+        (position > loop_stop) ? position -= (loop_stop - loop_start);
+      ) : (
+        (position > loop_stop) ? (
+          speed = - speed;
+        ) : ( position < loop_start ) ? (
+          speed = abs(speed);
+        );
+      );
+    ) : (
+      (read_ptr > fade_start) ? (
+        x_fade_position = - crossfade_samples;
+      );
+    );
+  );
+  
+  frac = position - floor(position);
+  
+  eco = 1;
+  eco ? (
+    read_ptr = start_ptr + 2 * floor(position) - 2;
+    outL = (read_ptr[] * (1.0 - frac) + frac * read_ptr[2]);
+    outR = (read_ptr[1] * (1.0 - frac) + frac * read_ptr[3]);
+  ) : (
+    read_ptr = start_ptr + 2 * floor(position) - 8;
+    ism1 = read_ptr[];
+    is0 = read_ptr[2];
+    is1 = read_ptr[4];
+    is2 = read_ptr[6];
+    
+    id0 = is0;
+    id1 = 0.5*(is1 - ism1);
+    id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+    id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+    outL = ((id3*frac+id2)*frac+id1)*frac+id0;
+    
+    ism1 = read_ptr[1];
+    is0 = read_ptr[3];
+    is1 = read_ptr[5];
+    is2 = read_ptr[7];
+    
+    id0 = is0;
+    id1 = 0.5*(is1 - ism1);
+    id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+    id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+    outR = ((id3*frac+id2)*frac+id1)*frac+id0;
+  );
+  
+  outL *= fade_level;
+  outR *= fade_level;
+  
+  position += speed;
+  
+  fade_level
+);
+
+/* Channel update loop */
+function channel_update_loop()
+instance(current_playback, sample_location)
+global()
+local()
+(
+  (current_playback == 0) ? (
+    this.play0.update_loop_parameters(sample_location);
+  ) : (
+    this.play1.update_loop_parameters(sample_location);
+  );
+);
+
+function play_channel(env)
+instance(vol, cleft, cright, lpan, rpan, next_backlog)
+global(ssl, ssr)
+local()
+(
+  cleft = 0.998 * cleft + 0.002 * lpan * vol;
+  cright = 0.998 * cright + 0.002 * rpan * vol;
+  
+  this.play0.playing ? (
+    this.play0.play();
+    ssl += this.play0.outL * cleft * env;
+    ssr += this.play0.outR * cright * env;
+  );
+  this.play1.playing ? (
+    this.play1.play();
+    ssl += this.play1.outL * cleft * env;
+    ssr += this.play1.outR * cright * env;
+  );
+);
+
+function pitch_to_speed(sample_location, pitch)
+local(fs, fnote, r_speed, speed)
+global(srate)
+(
+  fs = sample_location[1];
+  fnote = sample_location[2];
+  r_speed = 2^((pitch - fnote)/12);
+  speed = r_speed * (fs / srate);
+);
+
+function start_sample(sample_idx)
+local(sample_location, speed, pitch)
+global(samplelocs)
+instance(current_playback)
+(
+  sample_location = samplelocs[sample_idx];
+  pitch = 69;
+  speed = pitch_to_speed(sample_location, pitch);
+  
+  (current_playback == 1) ? (
+    this.play0.start_playback(sample_location, speed, 0);
+    this.play1.stop_playback();
+  ) : (
+    this.play1.start_playback(sample_location, speed, 0);
+    this.play0.stop_playback();
+  );
+);
+
