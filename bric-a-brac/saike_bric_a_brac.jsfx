@@ -1,19 +1,19 @@
 desc:bric-a-brac
 tags: texture adder
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: Added ballistic controls.
+changelog: Add gain slider.
 license: MIT
 provides:
   bab_dependencies/*
 
-slider1:atk1=0<0,1,0.0000001>Sample 1 Attack
-slider2:decay1=0.3<0,1,0.00000001>Sample 1 Decay
-slider3:hold_percent1=1<0,1,0.000001>Sample 1 Hold Level (%)
-slider4:hold_time1=0.3<0,1,0.000001>Sample 1 Hold Time
+slider1:atk1=0<0,1,0.0000001>-Sample 1 Attack
+slider2:decay1=0.3<0,1,0.00000001>-Sample 1 Decay
+slider3:hold_percent1=1<0,1,0.000001>-Sample 1 Hold Level (%)
+slider4:hold_time1=0.3<0,1,0.000001>-Sample 1 Hold Time
 slider5:min1=-36<-48,3,0.0001>-Sample 1 Minimum / Threshold
 slider6:max1=3<-48,3,0.0001>-Sample 1 Maximum
-slider7:gain1=0<-48,3,0.0001>-Sample 1 Output gain
+slider7:gain1=0<-48,3,0.0001>Sample 1 Output gain
 slider8:hpf1=0<0,1,1>-Sample 1 HPF
 slider9:lpf1=1<0,1,1>-Sample 1 LPF
 
@@ -88,6 +88,26 @@ chan1.chan_default(1);
 chan2.chan_default(2);
 chan3.chan_default(3);
 chan4.chan_default(4);
+
+log10d20_conversion  = 0.11512925464970228420089957273422;
+function update_target_gain()
+(
+  target_gain1 = exp(log10d20_conversion * gain1);
+  target_gain2 = exp(log10d20_conversion * gain2);
+  target_gain3 = exp(log10d20_conversion * gain3);
+  target_gain4 = exp(log10d20_conversion * gain4);
+);
+
+function update_gains()
+(
+  gain_atk = exp(-1.0/(0.001 * 30 * srate));
+  update_target_gain();
+  chan1.vol = target_gain1;
+  chan2.vol = target_gain2;
+  chan3.vol = target_gain3;
+  chan4.vol = target_gain4;
+);
+update_gains();
 
 init_sample_data_defaults();
 
@@ -259,7 +279,6 @@ global()
   state
 );
 
-
 function eval_follower(x)
 local()
 instance(env_mode, state, at, rt, env_attack_samples, sustain, 
@@ -332,6 +351,8 @@ file_var(0, env_mode2);
 file_var(0, env_mode3);
 file_var(0, env_mode4);
 
+update_gains();
+
 @block
 update_followers();
 
@@ -343,9 +364,14 @@ update_followers();
 );
 
 last_play_state = play_state;
-
+update_target_gain();
 
 @sample
+chan1.vol = gain_atk * chan1.vol + (1.0 - gain_atk) * target_gain1;
+chan2.vol = gain_atk * chan2.vol + (1.0 - gain_atk) * target_gain2;
+chan3.vol = gain_atk * chan3.vol + (1.0 - gain_atk) * target_gain3;
+chan4.vol = gain_atk * chan4.vol + (1.0 - gain_atk) * target_gain4;
+
 m_signal = max(abs(spl0), abs(spl1));
 cEnv = env_follower.simple_follower(m_signal);
 
@@ -448,8 +474,8 @@ global(mouse_x, mouse_y, mouse_cap,
        current_mod1, dragging)
 local(norm_current, current)
 (
-  value = slider(slider_idx);
-  (current == -1337) ? current = value;
+  (current == -1337) ? current = slider(slider_idx);
+  value = (slider(slider_idx) - min_value) / scale;
 
   this.drawKnob(cX + knobSize, cY + knobSize, knobSize, label, description, 1.0);
   
@@ -478,7 +504,7 @@ function draw_buttons(xs, ys, h)
 local(env)
 global(SLIDERS_PER_SAMPLE, selected_sample,
        env_mode1, env_mode2, env_mode3, env_mode4)
-instance(atk, decay, hold_percent, hold_time)
+instance(atk, decay, hold_percent, hold_time, gain)
 (
   env = ( selected_sample == 0 ) ? env_mode1 : ( selected_sample == 1 ) ? env_mode2 : ( selected_sample == 2 ) ? env_mode3 : ( selected_sample == 3 ) ? env_mode4;
 
@@ -496,6 +522,10 @@ instance(atk, decay, hold_percent, hold_time)
   
   hold_time.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 4, 0, 1, 0.3, env==2);
   hold_time.draw_and_process(xs, ys - 5, 0.5 * h, "Hold Time", "Hold time", -1337, 0);
+  xs += 1.25 * h;
+
+  gain.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 7, -48, 51, 0.00000001, 1);
+  gain.draw_and_process(xs, ys - 5, 0.5 * h, "Gain", "Gain", -1337, 0);
   xs += 1.25 * h;
 
 /*
