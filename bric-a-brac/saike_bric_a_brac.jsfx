@@ -1,8 +1,8 @@
 desc:bric-a-brac
 tags: texture adder
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Update play and loop state on dragging in new sample, on update loop etc.
+changelog: Add pitch control. Refresh on serialize.
 license: MIT
 provides:
   bab_dependencies/*
@@ -16,8 +16,8 @@ slider6:max1=3<-48,3,0.0001>-Sample 1 Maximum
 slider7:gain1=0<-48,3,0.0001>-Sample 1 Output gain
 slider8:hpf1=0<0,1,1>-Sample 1 HPF
 slider9:lpf1=1<0,1,1>-Sample 1 LPF
+slider10:pitch1=0<-24,24,0.0001>-Sample 1 Pitch
 
-slider10:dummy2=0<0,1,1>-Spacer 2
 slider11:dummy3=0<0,1,1>-Spacer 3
 slider12:dummy4=0<0,1,1>-Spacer 4
 slider13:dummy5=0<0,1,1>-Spacer 5
@@ -33,8 +33,8 @@ slider21:max2=3<-48,3,0.0001>-Sample 2 Maximum
 slider22:gain2=0<-48,3,0.0001>-Sample 2 Output gain
 slider23:hpf2=0<0,1,1>-Sample 2 HPF
 slider24:lpf2=1<0,1,1>-Sample 2 LPF
+slider25:pitch2=0<-24,24,0.0001>-Sample 2 Pitch
 
-slider25:dummy9=0<0,1,1>-Spacer 9
 slider26:dummy10=0<0,1,1>-Spacer 10
 slider27:dummy11=0<0,1,1>-Spacer 11
 slider28:dummy12=0<0,1,1>-Spacer 12
@@ -50,8 +50,8 @@ slider36:max3=3<-48,3,0.0001>-Sample 3 Maximum
 slider37:gain3=0<-48,3,0.0001>-Sample 3 Output gain
 slider38:hpf3=0<0,1,1>-Sample 3 HPF
 slider39:lpf3=1<0,1,1>-Sample 3 LPF
+slider40:pitch3=0<-24,24,0.0001>-Sample 3 Pitch
 
-slider40:dummy16=0<0,1,1>-Spacer 16
 slider41:dummy17=0<0,1,1>-Spacer 17
 slider42:dummy18=0<0,1,1>-Spacer 18
 slider43:dummy19=0<0,1,1>-Spacer 19
@@ -67,6 +67,7 @@ slider51:max4=3<-48,3,0.0001>-Sample 4 Maximum
 slider52:gain4=0<-48,3,0.0001>-Sample 4 Output gain
 slider53:hpf4=0<0,1,1>-Sample 4 HPF
 slider54:lpf4=1<0,1,1>-Sample 4 LPF
+slider55:pitch4=0<-24,24,0.0001>-Sample 4 Pitch
 
 slider64:c_palette=0<0,10,1>palette
 
@@ -337,10 +338,13 @@ loop(N_SAMPLES,
 freemem = (scratchloc = freemem) + MAX_SAMPLE_DURATION;
 freemem = (copyloc = freemem) + MAX_SAMPLE_DURATION;
 
-chan1.start_sample(0);
-chan2.start_sample(1);
-chan3.start_sample(2);
-chan4.start_sample(3);
+function start_samples()
+(
+  chan1.start_sample(0, pitch1);
+  chan2.start_sample(1, pitch2);
+  chan3.start_sample(2, pitch3);
+  chan4.start_sample(3, pitch4);
+);
 
 @slider
 update_palette();
@@ -349,7 +353,8 @@ update_followers();
 @serialize
 file_var(0, version);
 
-serialize_all_samples(file_avail(0) < 0);
+writing = file_avail(0) < 0;
+serialize_all_samples(writing);
 
 file_var(0, env_mode1);
 file_var(0, env_mode2);
@@ -358,18 +363,24 @@ file_var(0, env_mode4);
 
 update_gains();
 
+!writing ? (
+  updated_loop = loaded_sample = 1;
+);
+
 @block
 update_followers();
 
 ((play_state != last_play_state) && (play_state != 0)) ? (
-  chan1.start_sample(0);
-  chan2.start_sample(1);
-  chan3.start_sample(2);
-  chan4.start_sample(3);
+  start_samples();
 );
 
 last_play_state = play_state;
 update_target_gain();
+
+loaded_sample ? (
+  start_samples();
+  loaded_sample = 0;
+);
 
 @sample
 chan1.vol = gain_atk * chan1.vol + (1.0 - gain_atk) * target_gain1;
@@ -397,6 +408,11 @@ selected_sample == 0 ? (
 ) : ( selected_sample == 3 ) ? (
   current_envelope_buffer.update_buffer(20 * log10(env4));
 );
+
+chan1.update_pitch(pitch1);
+chan2.update_pitch(pitch2);
+chan3.update_pitch(pitch3);
+chan4.update_pitch(pitch4);
 
 ssl = ssr = 0;
 chan1.play_channel(env1);
@@ -509,7 +525,7 @@ function draw_buttons(xs, ys, h)
 local(env)
 global(SLIDERS_PER_SAMPLE, selected_sample,
        env_mode1, env_mode2, env_mode3, env_mode4)
-instance(atk, decay, hold_percent, hold_time, gain)
+instance(atk, decay, hold_percent, hold_time, gain, pitch)
 (
   env = ( selected_sample == 0 ) ? env_mode1 : ( selected_sample == 1 ) ? env_mode2 : ( selected_sample == 2 ) ? env_mode3 : ( selected_sample == 3 ) ? env_mode4;
 
@@ -533,6 +549,10 @@ instance(atk, decay, hold_percent, hold_time, gain)
   gain.draw_and_process(xs, ys - 5, 0.5 * h, "Gain", "Gain", -1337, 0);
   xs += 1.25 * h;
 
+  pitch.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 10, -24, 48, 0.00000001, 1);
+  pitch.draw_and_process(xs, ys - 5, 0.5 * h, "Pitch", "Pitch", -1337, 0);
+  xs += 1.25 * h;
+  
 /*
  slider7:gain1=0<-48,3,0.0001>-Sample 1 Output gain
  slider8:hpf1=0<0,1,1>-Sample 1 HPF
@@ -673,20 +693,12 @@ updated_loop ? (
   chan3.channel_update_loop();
   chan4.channel_update_loop();
   
-  (!chan1.play0.playing && !chan1.play1.playing) ? chan1.start_sample(0);
-  (!chan2.play0.playing && !chan2.play1.playing) ? chan2.start_sample(1);
-  (!chan3.play0.playing && !chan3.play1.playing) ? chan3.start_sample(2);
-  (!chan4.play0.playing && !chan4.play1.playing) ? chan4.start_sample(3);
-);
-
-loaded_sample ? (
-  chan1.start_sample(0);
-  chan2.start_sample(1);
-  chan3.start_sample(2);
-  chan4.start_sample(3);
+  (!chan1.play0.playing && !chan1.play1.playing) ? chan1.start_sample(0, pitch1);
+  (!chan2.play0.playing && !chan2.play1.playing) ? chan2.start_sample(1, pitch2);
+  (!chan3.play0.playing && !chan3.play1.playing) ? chan3.start_sample(2, pitch3);
+  (!chan4.play0.playing && !chan4.play1.playing) ? chan4.start_sample(3, pitch4);
 );
 
 handle_mouse_sample_handler();
 sample_data_gfx_finalize();
 updated_loop = 0;
-loaded_sample = 0;
