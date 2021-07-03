@@ -1,16 +1,16 @@
 desc:bric-a-brac
 tags: texture adder
-version: 0.06
+version: 0.07
 author: Joep Vanlier
-changelog: Add pitch control. Refresh on serialize.
+changelog: Implement triggered mode.
 license: MIT
 provides:
   bab_dependencies/*
 
 slider1:atk1=0<0,1,0.0000001>-Sample 1 Attack
 slider2:decay1=0.3<0,1,0.00000001>-Sample 1 Decay
-slider3:hold_percent1=1<0,1,0.000001>-Sample 1 Hold Level (%)
-slider4:hold_time1=0.3<0,1,0.000001>-Sample 1 Hold Time
+slider3:hold_percent1=100<0,100,0.000001>-Sample 1 Hold Level (%)
+slider4:hold_time1=0<0,1,0.000001>-Sample 1 Hold Time
 slider5:min1=-36<-48,3,0.0001>-Sample 1 Minimum / Threshold
 slider6:max1=3<-48,3,0.0001>-Sample 1 Maximum
 slider7:gain1=0<-48,3,0.0001>-Sample 1 Output gain
@@ -27,7 +27,7 @@ slider15:dummy7=0<0,1,1>-Spacer 7
 slider16:atk2=0<0,1,0.0000001>-Sample 2 Attack
 slider17:decay2=0.3<0,1,0.00000001>-Sample 2 Decay
 slider18:hold_percent2=100<0,100,0.000001>-Sample 2 Hold Level (%)
-slider19:hold_time2=100<0,1,0.000001>-Sample 2 Hold Time
+slider19:hold_time2=0<0,1,0.000001>-Sample 2 Hold Time
 slider20:min2=-36<-48,3,0.0001>-Sample 2 Minimum / Threshold
 slider21:max2=3<-48,3,0.0001>-Sample 2 Maximum
 slider22:gain2=0<-48,3,0.0001>-Sample 2 Output gain
@@ -44,7 +44,7 @@ slider30:dummy14=0<0,1,1>-Spacer 14
 slider31:atk3=0<0,1,0.0000001>-Sample 3 Attack
 slider32:decay3=0.3<0,1,0.00000001>-Sample 3 Decay
 slider33:hold_percent3=100<0,100,0.000001>-Sample 3 Hold Level (%)
-slider34:hold_time3=100<0,1,0.000001>-Sample 3 Hold Time
+slider34:hold_time3=0<0,1,0.000001>-Sample 3 Hold Time
 slider35:min3=-36<-48,3,0.0001>-Sample 3 Minimum / Threshold
 slider36:max3=3<-48,3,0.0001>-Sample 3 Maximum
 slider37:gain3=0<-48,3,0.0001>-Sample 3 Output gain
@@ -61,7 +61,7 @@ slider45:dummy21=0<0,1,1>-Spacer 21
 slider46:atk4=0<0,1,0.0000001>-Sample 4 Attack
 slider47:decay4=0.3<0,1,0.00000001>-Sample 4 Decay
 slider48:hold_percent4=100<0,100,0.000001>-Sample 4 Hold Level (%)
-slider49:hold_time4=100<0,1,0.000001>-Sample 4 Hold Time
+slider49:hold_time4=0<0,1,0.000001>-Sample 4 Hold Time
 slider50:min4=-36<-48,3,0.0001>-Sample 4 Minimum / Threshold
 slider51:max4=3<-48,3,0.0001>-Sample 4 Maximum
 slider52:gain4=0<-48,3,0.0001>-Sample 4 Output gain
@@ -242,7 +242,7 @@ global(srate)
 
 function init_follower(mode, atk, release, hold_percent, hold_time, min1, max1)
 local(time_factor, inverse_rise_time)
-instance(env_mode, at, rt, env_attack_samples, sustain, thresh_min, thresh_max)
+instance(env_mode, at, rt, hold_level, env_attack_samples, env_hold_samples, sustain, thresh_min, thresh_max, below_samples)
 global(srate)
 (
   env_mode = mode;
@@ -258,6 +258,12 @@ global(srate)
   // Decay: log(amax/min) = log(1000 / 10) = 4.605170185988092
   atk = exp(4.605170185988092 * atk);
   release = 10 * exp(4.605170185988092 * release);
+
+  env_attack_samples = 4 * 0.001 * atk * srate;
+  
+  hold_level = 0.0001 * hold_percent*hold_percent;
+  env_hold_samples = 0.001 * 10 * exp(4.605170185988092 * hold_time) * srate;
+  below_samples = 0.02 * srate;
   
   at = ( atk > 0 ) ? exp(-1.0/(.001*atk*srate)) : 0;
   rt = exp(-1/(.0005*release*srate));
@@ -283,8 +289,8 @@ global()
 function eval_follower(x)
 local()
 instance(env_mode, state, at, rt, env_attack_samples, sustain, 
-         thresh_min, thresh_max)
-global()
+         thresh_min, thresh_max, env_hold_samples, hold_level, ticks, below, above, below_samples)
+global(cEnv, cEnv1)
 (
   (env_mode == 0) ? (
     x = x < thresh_min ? 0 : x;
@@ -300,6 +306,41 @@ global()
     ) : (
       state = rt * state + ( 1.0 - rt ) * 0;
     );
+    state
+  ) : (env_mode == 2) ? (
+    (ticks < env_attack_samples) ? (
+      state = at * state + ( 1.0 - at );
+    ) : (
+      (ticks < env_hold_samples) ? (
+        state = rt * state + ( 1.0 - rt ) * hold_level;
+      ) : (
+        state = rt * state;
+        
+        (cEnv > thresh_min) ? (
+          // We've gone under the threshold for a while
+          (below > below_samples) ? (
+            // If we rise for a set number of samples, fire again!
+            (above > 15) ? (
+              ticks = 0;
+              below = 0;
+              above = 0;
+            ) : (
+              (cEnv1 > cEnv) ? (
+                above += 1;
+              ) : (
+                above = 0;
+              );
+            );
+          );
+        ) : (
+          // We are below the threshold, start waiting for a new peak.
+          below += 1;
+          above = 0;
+        );
+      );
+    );
+  
+    ticks += 1;
     state
   );
 );
@@ -389,6 +430,7 @@ chan3.vol = gain_atk * chan3.vol + (1.0 - gain_atk) * target_gain3;
 chan4.vol = gain_atk * chan4.vol + (1.0 - gain_atk) * target_gain4;
 
 m_signal = max(abs(spl0), abs(spl1));
+cEnv1 = cEnv;
 cEnv = env_follower.simple_follower(m_signal);
 
 env1 = env1_follower.eval_follower(m_signal);
@@ -537,11 +579,11 @@ instance(atk, decay, hold_percent, hold_time, gain, pitch)
   decay.draw_and_process(xs, ys - 5, 0.5 * h, "Decay", "Envelope decay", -1337, 0);
   xs += 1.25 * h;
   
-  hold_percent.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 3, 0, 1, 0.3, env==2);
+  hold_percent.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 3, 0, 100, 30, env==2);
   hold_percent.draw_and_process(xs, ys - 5, 0.5 * h, "Hold Level", "Hold percentage", -1337, 0);
   xs += 1.25 * h;
   
-  hold_time.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 4, 0, 1, 0.3, env==2);
+  hold_time.set_knob_properties(SLIDERS_PER_SAMPLE * selected_sample + 4, 0, 1, 0, env==2);
   hold_time.draw_and_process(xs, ys - 5, 0.5 * h, "Hold Time", "Hold time", -1337, 0);
   xs += 1.25 * h;
 
