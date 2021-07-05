@@ -59,25 +59,32 @@ local()
 (
   vol = 1;
   chan = idx;
+  this.play0.speed = 1;
+  this.play1.speed = 1;
   this.set_pan(0.5);
 );
 
 function start_playback(buffer_loc, playspeed, offset)
 instance(start_ptr, x_fade_position, playing, fade_start, position, speed,
          loop_start, loop_stop, loop_type)
+local(len)
 global(crossfade_samples, SAMPLE_HEADER)
 (
-  fade_start = buffer_loc + buffer_loc[] + SAMPLE_HEADER - 2 * playspeed * crossfade_samples;
-  start_ptr = buffer_loc + SAMPLE_HEADER;
-  
-  loop_start = buffer_loc[3];
-  loop_stop = buffer_loc[4];
-  loop_type = buffer_loc[5];
-  
-  x_fade_position = crossfade_samples;
-  position = offset;
-  playing = 1;
-  speed = playspeed;
+  len = buffer_loc[]; 
+  (len > 0) ? (
+    fade_start = buffer_loc + len + SAMPLE_HEADER - 2 * playspeed * crossfade_samples;
+    start_ptr = buffer_loc + SAMPLE_HEADER;
+    
+    loop_start = buffer_loc[3];
+    loop_stop = buffer_loc[4];
+    loop_type = buffer_loc[5];
+    
+    x_fade_position = crossfade_samples;
+    position = offset;
+    playing = 1;
+    speed = playspeed;
+    1
+  ) : 0
 );
 
 function update_loop_parameters(buffer_loc)
@@ -181,19 +188,23 @@ local()
 
 function play_channel(env, lpf_cutoff, hpf_cutoff)
 instance(vol, cleft, cright, lpan, rpan, next_backlog, filtered,
-         lpf, hpf)
+         lpf, hpf,
+         playing)
 global(ssl, ssr)
-local(l_signal, r_signal)
+local(l_signal, r_signal, playing0, playing1)
 (
   cleft = 0.998 * cleft + 0.002 * lpan * vol;
   cright = 0.998 * cright + 0.002 * rpan * vol;
   
-  this.play0.playing ? (
+  playing0 = this.play0.playing;
+  playing1 = this.play1.playing;
+  
+  playing0 ? (
     this.play0.play();
     l_signal = this.play0.outL * cleft * env;
     r_signal = this.play0.outR * cright * env;
   );
-  this.play1.playing ? (
+  playing1 ? (
     this.play1.play();
     l_signal = this.play1.outL * cleft * env;
     r_signal = this.play1.outR * cright * env;
@@ -206,6 +217,8 @@ local(l_signal, r_signal)
     l_signal = hpf.eval_linear_hpf_left(lpf.eval_linear_lpf_left(l_signal));
     r_signal = hpf.eval_linear_hpf_right(lpf.eval_linear_lpf_right(r_signal));
   );
+  
+  playing = playing0 || playing1;
   
   ssl += l_signal;
   ssr += r_signal;
@@ -227,16 +240,17 @@ instance(sample_location, sampling_ratio)
 function start_sample(sample_idx, pitch)
 local(speed, pitch)
 global(samplelocs)
-instance(sample_location, current_playback)
+instance(sample_location, current_playback, playing)
 (
   sample_location = samplelocs[sample_idx];
   speed = this.pitch_to_speed(pitch);
-  
+
+  playing = 0;
   (current_playback == 1) ? (
-    this.play0.start_playback(sample_location, speed, 0);
+    playing = playing || this.play0.start_playback(sample_location, speed, 0);
     this.play1.stop_playback();
   ) : (
-    this.play1.start_playback(sample_location, speed, 0);
+    playing = playing || this.play1.start_playback(sample_location, speed, 0);
     this.play0.stop_playback();
   );
 );
