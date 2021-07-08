@@ -48,12 +48,12 @@ In @init:
     freemem = (samplelocs = freemem) + 128;
     idx = 0;
     loop(N_SAMPLES,
-      freemem = (samplelocs[idx] = freemem) + MAX_SAMPLE_DURATION;
+      freemem = (samplelocs[idx] = freemem) + SAMPLE_SIZE;
       idx += 1;
     );
     
-    freemem = (scratchloc = freemem) + MAX_SAMPLE_DURATION;
-    freemem = (copyloc = freemem) + MAX_SAMPLE_DURATION;
+    freemem = (scratchloc = freemem) + SAMPLE_SIZE;
+    freemem = (copyloc = freemem) + SAMPLE_SIZE;
 
   Set up the fonts as well:
     SAMPLE_FONT = 5;
@@ -98,7 +98,8 @@ function init_sample_data_defaults()
   crossfade_samples = 128*2;
   pi_inv_crossfade_samples = $pi / crossfade_samples;
   SAMPLE_HEADER = 64;
-  MAX_SAMPLE_DURATION = 32768 * 16 - SAMPLE_HEADER;
+  SAMPLE_SIZE = 32768 * 16;
+  MAX_SAMPLE_DURATION = SAMPLE_SIZE - SAMPLE_HEADER;
   N_SAMPLES = 36;
   TOTAL_MEM = N_SAMPLES * MAX_SAMPLE_DURATION;
   initialized = 1;
@@ -149,14 +150,14 @@ global(samplelocs, critical_error, SAMPLE_HEADER)
 );
 
 function serialize_all_samples(writing)
-global(N_SAMPLES, MAX_SAMPLE_DURATION, SAMPLE_HEADER, SAMPLE_NAMES, samplelocs, critical_error)
+global(N_SAMPLES, SAMPLE_SIZE, SAMPLE_NAMES, samplelocs, critical_error)
 local(swrite_idx)
 (
   critical_error = 0;
   file_var(0, N_SAMPLES);
   swrite_idx = 0;
   loop(N_SAMPLES,
-    (!writing) ? memset(samplelocs[swrite_idx], 0, MAX_SAMPLE_DURATION + SAMPLE_HEADER);
+    (!writing) ? memset(samplelocs[swrite_idx], 0, SAMPLE_SIZE);
     serialize_sample(samplelocs[swrite_idx], writing);
     swrite_idx += 1;
   );
@@ -201,8 +202,8 @@ local(offset, buf) (
 
 function handle_gmem_imports()
 global(gmem, samplelocs, selected_sample, ref_note,
-       MAX_SAMPLE_DURATION, SAMPLE_HEADER, SAMPLE_NAMES,
-       critical_error, reset_zoom, loaded_sample)
+       MAX_SAMPLE_DURATION, SAMPLE_SIZE, SAMPLE_HEADER, SAMPLE_NAMES,
+       critical_error, reset_zoom, tst)
 local(sample_gmem_length, sample_location, cidx, ptr, validate)
 (
   sample_location = samplelocs;
@@ -210,9 +211,9 @@ local(sample_gmem_length, sample_location, cidx, ptr, validate)
   /* Has the user run the sample dropping script? */
   sample_gmem_length = gmem[];
   (sample_gmem_length > 0) ? (
-    memset(sample_location[selected_sample], 0, MAX_SAMPLE_DURATION);
+    memset(sample_location[selected_sample], 0, SAMPLE_SIZE);
     gmem[] = 0;
-    sample_location[selected_sample][0] = sample_gmem_length;
+    sample_location[selected_sample][0] = min(sample_gmem_length, MAX_SAMPLE_DURATION);
     sample_location[selected_sample][1] = gmem[1];  // Sample rate
     sample_location[selected_sample][2] = ref_note; // Reference pitch
     sample_location[selected_sample][3] = -1;       // Loop start (in position; raw sample pos/2)
@@ -221,8 +222,10 @@ local(sample_gmem_length, sample_location, cidx, ptr, validate)
     //memcpy(sample_location[selected_sample] + SAMPLE_HEADER, gmem + 1, sample_gmem_length);
     ptr = sample_location[selected_sample] + SAMPLE_HEADER;
     cidx = SAMPLE_HEADER;
-    loop(sample_gmem_length,
-      ptr[] = gmem[cidx];
+    tst = sample_gmem_length;
+    while((gmem[cidx] != 1337) && (cidx < (4 * sample_gmem_length)))
+    (
+      (cidx < MAX_SAMPLE_DURATION) ? ptr[] = gmem[cidx];
       ptr += 1;
       cidx += 1;
     );
@@ -232,7 +235,6 @@ local(sample_gmem_length, sample_location, cidx, ptr, validate)
     readstr_from_gmem(SAMPLE_NAMES + selected_sample, cidx);
     
     reset_zoom = 1;
-    loaded_sample = 1;
   );
 );
 
@@ -794,17 +796,17 @@ global(samplelocs, selected_sample, SAMPLE_NAMES, SAMPLE_HEADER, SAMPLE_DURATION
 
 function load_from_dropped(sample_location)
 local(file_handle, num_channels, samplerate, length, ptr)
-global(DROPPED_FILE_STR, MAX_SAMPLE_DURATION, SAMPLE_HEADER, ref_note, loaded_sample)
+global(DROPPED_FILE_STR, MAX_SAMPLE_DURATION, SAMPLE_HEADER, SAMPLE_SIZE, ref_note, loaded_sample)
 (
   file_handle = file_open(DROPPED_FILE_STR);
   file_handle >= 0 ? (
     file_riff(file_handle, num_channels, samplerate);
-    memset(sample_location, 0, MAX_SAMPLE_DURATION);
+    memset(sample_location, 0, SAMPLE_SIZE);
     (num_channels == 2) ? (
       length = min(file_avail(file_handle), MAX_SAMPLE_DURATION - 4);
       file_mem(file_handle, sample_location + SAMPLE_HEADER, length);
     ) : (num_channels == 1) ? (
-      length = min(file_avail(file_handle), MAX_SAMPLE_DURATION - 4);
+      length = min(file_avail(file_handle), floor(0.5 * MAX_SAMPLE_DURATION) - 4);
       ptr = sample_location + SAMPLE_HEADER;
       loop(length,
         file_var(file_handle, ptr[]);
