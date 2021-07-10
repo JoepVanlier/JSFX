@@ -1,8 +1,8 @@
 desc:bric-a-brac
 tags: texture adder
-version: 0.17
+version: 0.18
 author: Joep Vanlier
-changelog: Small fixup to the ugly fix!
+changelog: Allow temporal offsets.
 license: MIT
 provides:
   bab_dependencies/*
@@ -118,6 +118,41 @@ function update_gains()
   chan4.vol = target_gain4;
 );
 update_gains();
+
+function update_time_offset()
+local(time_offset1, time_offset2, time_offset3, time_offset4, ms_to_sample)
+global(settings1.time_offset, settings2.time_offset, settings3.time_offset, settings4.time_offset,
+       envdelay1.set_offset, envdelay2.set_offset, envdelay3.set_offset, envdelay4.set_offset,
+       envdelayout.set_offset, audio_delay.set_offset,
+       minimum_offset, delay1, delay2, delay3, delay4,
+       srate, pdc_bot_ch, pdc_top_ch, pdc_delay)
+(
+  time_offset1 = settings1.time_offset;
+  time_offset2 = settings2.time_offset;
+  time_offset3 = settings3.time_offset;
+  time_offset4 = settings4.time_offset;
+  
+  ms_to_sample = 0.001 * srate;
+  
+  // Get the minimum delay so we know the amount of pdc we need.
+  minimum_offset = floor(ms_to_sample * (min(time_offset4, min(time_offset3, min(time_offset1, time_offset2)))));
+  
+  pdc_bot_ch = 0;
+  pdc_top_ch = 2;
+  pdc_delay = - minimum_offset;
+  
+  delay1 = floor(ms_to_sample * time_offset1) - minimum_offset;
+  delay2 = floor(ms_to_sample * time_offset2) - minimum_offset;
+  delay3 = floor(ms_to_sample * time_offset3) - minimum_offset;
+  delay4 = floor(ms_to_sample * time_offset4) - minimum_offset;
+  
+  envdelay1.set_offset(delay1);
+  envdelay2.set_offset(delay2);
+  envdelay3.set_offset(delay3);
+  envdelay4.set_offset(delay4);
+  envdelayout.set_offset(abs(minimum_offset));
+  audio_delay.set_offset(2 * abs(minimum_offset));
+);
 
 init_sample_data_defaults();
 
@@ -388,6 +423,20 @@ loop(N_SAMPLES,
 freemem = (scratchloc = freemem) + SAMPLE_SIZE;
 freemem = (copyloc = freemem) + SAMPLE_SIZE;
 
+freemem = (delay_buffer = freemem) + BUFFER_SIZE;
+envdelay1.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
+freemem = (delay_buffer = freemem) + BUFFER_SIZE;
+envdelay2.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
+freemem = (delay_buffer = freemem) + BUFFER_SIZE;
+envdelay3.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
+freemem = (delay_buffer = freemem) + BUFFER_SIZE;
+envdelay4.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
+freemem = (delay_buffer = freemem) + BUFFER_SIZE;
+audio_delay.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
+freemem = (delay_buffer = freemem) + BUFFER_SIZE;
+envdelayout.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
+
+
 function start_samples()
 (
   (!chan1.playing) ? chan1.start_sample(0, pitch1);
@@ -395,6 +444,8 @@ function start_samples()
   (!chan3.playing) ? chan3.start_sample(2, pitch3);
   (!chan4.playing) ? chan4.start_sample(3, pitch4);
 );
+
+update_time_offset();
 
 @slider
 update_palette();
@@ -412,6 +463,7 @@ settings3.serialize_non_sliders();
 settings4.serialize_non_sliders();
 
 update_gains();
+update_time_offset();
 
 !writing ? (
   updated_loop = loaded_sample = 1;
@@ -433,6 +485,8 @@ loaded_sample ? (
   loaded_sample = 0;
 );
 
+update_time_offset();
+
 @sample
 function clamp01(x)
 (
@@ -453,15 +507,19 @@ chan3.vol = gain_atk * chan3.vol + (1.0 - gain_atk) * target_gain3;
 chan4.vol = gain_atk * chan4.vol + (1.0 - gain_atk) * target_gain4;
 
 m_signal = max(abs(spl0), abs(spl1));
+
+spl0 = audio_delay.simple_delay(spl0);
+spl1 = audio_delay.simple_delay(spl1);
+
 cEnv1 = cEnv;
 cEnv = env_follower.simple_follower(m_signal);
 
-env1 = env1_follower.eval_follower(m_signal);
-env2 = env2_follower.eval_follower(m_signal);
-env3 = env3_follower.eval_follower(m_signal);
-env4 = env4_follower.eval_follower(m_signal);
+env1 = envdelay1.simple_delay(env1_follower.eval_follower(m_signal));
+env2 = envdelay2.simple_delay(env2_follower.eval_follower(m_signal));
+env3 = envdelay3.simple_delay(env3_follower.eval_follower(m_signal));
+env4 = envdelay4.simple_delay(env4_follower.eval_follower(m_signal));
 
-input_buffer.update_buffer(20 * log10(cEnv));
+input_buffer.update_buffer(envdelayout.simple_delay(20 * log10(cEnv)));
 envelope_buffer.update_buffer(20 * log10(cEnv));
 
 selected_sample == 0 ? (
