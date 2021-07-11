@@ -1,8 +1,8 @@
 desc:bric-a-brac
 tags: texture adder
-version: 0.18
+version: 0.19
 author: Joep Vanlier
-changelog: Allow temporal offsets.
+changelog: Allow triggering sample playback rather than continuous playback. Restructure loop handling.
 license: MIT
 provides:
   bab_dependencies/*
@@ -346,9 +346,9 @@ global(cEnv, cEnv1)
     min(state, thresh_max)
   ) : (env_mode == 1) ? (
     x > thresh_min ? (
-      state = at * state + ( 1.0 - at ) * 1;
+      state = at * state + ( 1.0 - at );
     ) : (
-      state = rt * state + ( 1.0 - rt ) * 0;
+      state = rt * state;
     );
     state
   ) : (env_mode == 2) ? (
@@ -439,13 +439,24 @@ envdelayout.init_buffer_no_reset(delay_buffer, delay_buffer + BUFFER_SIZE - 1);
 
 function start_samples()
 (
-  (!chan1.playing) ? chan1.start_sample(0, pitch1);
-  (!chan2.playing) ? chan2.start_sample(1, pitch2);
-  (!chan3.playing) ? chan3.start_sample(2, pitch3);
-  (!chan4.playing) ? chan4.start_sample(3, pitch4);
+  (!settings1.retrigger) ? chan1.start_sample(0, pitch1);
+  (!settings2.retrigger) ? chan2.start_sample(1, pitch2);
+  (!settings3.retrigger) ? chan3.start_sample(2, pitch3);
+  (!settings4.retrigger) ? chan4.start_sample(3, pitch4);
+);
+
+function toggle_trig(triggered, sample, pitch)
+instance(playing)
+(
+  triggered ? (
+    this.playing ? this.stop_sample();
+  ) : (
+    this.start_sample(sample, pitch);
+  );
 );
 
 update_time_offset();
+start_samples();
 
 @slider
 update_palette();
@@ -473,9 +484,9 @@ update_time_offset();
 @block
 update_followers();
 
-((play_state != last_play_state) && (play_state != 0)) ? (
+/*((play_state != last_play_state) && (play_state != 0)) ? (
   start_samples();
-);
+);*/
 
 last_play_state = play_state;
 update_target_gain();
@@ -612,15 +623,24 @@ global(thresh_r, thresh_g, thresh_b, qqt,
   );
 );
 
+function quick_toggle(xs, ys, button_width, button_height, label, value)
+local()
+global(TINY_FONT, captured, c_palette)
+(
+  control_rect(xs - button_width - 1, ys + 1, button_width, button_height, palette(c_palette, value*2, 0), palette(c_palette, value*2, 1), palette(c_palette, value*2, 2), 1.0, TINY_FONT, label) ? (
+    (mouse_press(1) && !captured) ? 1
+  );
+);
+
 function draw_ui()
 local(x_fraction, y_fraction,
       dynamic_fraction, waveform_fraction, knob_fraction, sample_area_width_fraction,
       num_samples, num_samples_x, num_samples_y,
       sample_hs, sample_ws,
       spacing_x, spacing_y,
-      cidx,
       xs, ys, ws, hs,
-      meter_space)
+      meter_space,
+      button_width, button_height)
 global(samplelocs,
        gfx_w, gfx_h,
        input_buffer.draw_buffer_db,
@@ -643,7 +663,16 @@ global(samplelocs,
        settings1.draw_buttons,
        settings2.draw_buttons,
        settings3.draw_buttons,
-       settings4.draw_buttons)
+       settings4.draw_buttons,
+       settings1.retrigger,
+       settings2.retrigger,
+       settings3.retrigger,
+       settings4.retrigger,
+       pitch1, pitch2, pitch3, pitch4,
+       chan1.toggle_trig, chan2.toggle_trig, chan3.toggle_trig, chan4.toggle_trig,
+       quick_toggle,
+       c_palette
+       )
 (
   x_fraction = 0.01;
   y_fraction = 0.025;
@@ -701,20 +730,32 @@ global(samplelocs,
     settings4.draw_buttons(xs + 0.2 * knob_fraction * gfx_h, (dynamic_fraction + 2 * y_fraction) * gfx_h, knob_fraction * gfx_h);
   );
   
+  button_width = 36;
+  button_height = 14;
+  
   // Sample area
   ys = floor((dynamic_fraction + 3 * y_fraction + knob_fraction) * gfx_h);
   
-  cidx = 0;
-  loop(num_samples_y,
-    xs = floor(x_fraction * gfx_w);
-    loop(num_samples_x,
-      draw_wavebox(xs, ys, sample_ws, sample_hs, cidx, samplelocs[cidx]);
-      process_pad(xs, ys, sample_ws, sample_hs, cidx, samplelocs[cidx]);
-      cidx += 1;
-      xs += sample_ws;
-    );
-    ys += sample_hs
-  );
+  xs = floor(x_fraction * gfx_w);
+  draw_wavebox(xs, ys, sample_ws, sample_hs, 0, samplelocs[0]);
+  process_pad(xs, ys, sample_ws, sample_hs, 0, samplelocs[0]);
+  quick_toggle(xs + sample_ws, ys + 1, button_width, button_height, "Trigger", settings1.retrigger) ? ( settings1.retrigger = 1 - settings1.retrigger; chan1.toggle_trig(settings1.retrigger, 0, pitch1); );
+
+  xs += sample_ws;
+  draw_wavebox(xs, ys, sample_ws, sample_hs, 1, samplelocs[1]);
+  process_pad(xs, ys, sample_ws, sample_hs, 1, samplelocs[1]);
+  quick_toggle(xs + sample_ws, ys + 1, button_width, button_height, "Trigger", settings2.retrigger) ? ( settings2.retrigger = 1 - settings2.retrigger; chan2.toggle_trig(settings2.retrigger, 1, pitch2); );
+  
+  xs = floor(x_fraction * gfx_w);
+  ys += sample_hs;
+  draw_wavebox(xs, ys, sample_ws, sample_hs, 2, samplelocs[2]);
+  process_pad(xs, ys, sample_ws, sample_hs, 2, samplelocs[2]);
+  quick_toggle(xs + sample_ws, ys + 1, button_width, button_height, "Trigger", settings3.retrigger) ? ( settings3.retrigger = 1 - settings3.retrigger; chan3.toggle_trig(settings3.retrigger, 2, pitch3); );
+  
+  xs += sample_ws;  
+  draw_wavebox(xs, ys, sample_ws, sample_hs, 3, samplelocs[3]);
+  process_pad(xs, ys, sample_ws, sample_hs, 3, samplelocs[3]);
+  quick_toggle(xs + sample_ws, ys + 1, button_width, button_height, "Trigger", settings4.retrigger) ? ( settings4.retrigger = 1 - settings4.retrigger; chan4.toggle_trig(settings4.retrigger, 3, pitch4); );
   
   /* Big waveform area */
   ys = floor((dynamic_fraction + 3 * y_fraction + knob_fraction) * gfx_h);
@@ -732,10 +773,9 @@ updated_loop ? (
   chan2.channel_update_loop();
   chan3.channel_update_loop();
   chan4.channel_update_loop();
-  
-  start_samples();
 );
 
 handle_mouse_sample_handler();
 sample_data_gfx_finalize();
 updated_loop = 0;
+
