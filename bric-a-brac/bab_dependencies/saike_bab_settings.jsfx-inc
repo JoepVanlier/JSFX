@@ -13,7 +13,7 @@ function serialize_non_sliders()
 global()
 local()
 instance(env, time_offset, retrigger,
-         lpf, hpf, pitch)
+         lpf, hpf, lfo_enabled, lfo_amount, lfo_freq, pitch, lfo_type)
 (
   file_var(0, env);
   file_var(0, lpf.mod1);
@@ -21,10 +21,18 @@ instance(env, time_offset, retrigger,
   file_var(0, pitch.mod1);
   file_var(0, time_offset);
   file_var(0, retrigger);
+  file_var(0, lfo_type);
+  file_var(0, lfo_amount.mod1);
+  file_var(0, lfo_freq.mod1);
+  file_var(0, lfo_enabled);
+  
+  file_var(0, lpf.mod2);
+  file_var(0, hpf.mod2);
+  file_var(0, pitch.mod2);
   
   /* Memory to expand into when features are added */
-  memset(0, 0, 76);
-  file_mem(0, 0, 76); /* Reduce this by one when you want to add features */
+  memset(0, 0, 69);
+  file_mem(0, 0, 69); /* Reduce this by one when you want to add features */
 );
 
 function set_knob_properties(slider_id, minimum, sc, def, _active)
@@ -40,7 +48,7 @@ global()
 );
 
 function draw_and_process(cX, cY, knobSize, label, description, current, modifier)
-instance(mod1, default, scale, value, min_value, slider_idx, newValue, curmod)
+instance(mod1, mod2, default, scale, value, min_value, slider_idx, newValue, curmod)
 global(mouse_x, mouse_y, mouse_cap,
        dial_animation, bipolar, activeModifier,
        dial_position_color_r, dial_position_color_g, dial_position_color_b
@@ -59,8 +67,11 @@ local(norm_current)
   );
   
   modifier ? this.knob_draw_modifier(mod1, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  (modifier == 2) ? this.knob_draw_modifier(mod2, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 2);
 
-  ( activeModifier == 1 ) ? (
+  ( activeModifier == 2 ) ? (
+    this.knob_modifier_processMouse(0, mod2) ? ( mod2 = newValue; dragging = 1; );
+  ) : ( activeModifier == 1 ) ? (
     this.knob_modifier_processMouse(0, mod1) ? ( mod1 = newValue; dragging = 1; );
   ) : (
     this.knob_processMouse(mouse_x, mouse_y, mouse_cap, (default - min_value) / scale ) ? (
@@ -107,8 +118,12 @@ instance(env)
 activeModifier = 0;
 function draw_buttons(xs, ys, h)
 local()
-global(SLIDERS_PER_SAMPLE)
-instance(env, atk, decay, hold_percent, hold_time, gain, pitch, hpf, lpf, me, time_offset, time_offset_knob)
+global(SLIDERS_PER_SAMPLE,
+       waveform_r, waveform_g, waveform_b, waveform_a,
+       mouse_x, mouse_y, mouse_cap,
+       max_lfo_types)
+instance(env, atk, decay, hold_percent, hold_time, gain, pitch, hpf, lpf, me, time_offset, time_offset_knob,
+         lfo_time, lfo_amount, lfo_freq, lfo_type, lfo_enabled, lfo_toggle)
 (
   xs = this.draw_mode_selectors(xs, ys);
 
@@ -136,18 +151,40 @@ instance(env, atk, decay, hold_percent, hold_time, gain, pitch, hpf, lpf, me, ti
   xs += 1.25 * h;
 
   pitch.set_knob_properties(SLIDERS_PER_SAMPLE * me + 8, -24, 48, 0.00000001, 1);
-  pitch.draw_and_process(xs, ys - 5, 0.5 * h, "Pitch", "Pitch", -1337, 1);
+  pitch.draw_and_process(xs, ys - 5, 0.5 * h, "Pitch", "Pitch", -1337, 2);
   xs += 1.25 * h;
   
   hpf.set_knob_properties(SLIDERS_PER_SAMPLE * me + 9, 0, 1, 0, 1);
-  hpf.draw_and_process(xs, ys - 5, 0.5 * h, "Highpass", "High pass filter cutoff frequency", -1337, 1);
+  hpf.draw_and_process(xs, ys - 5, 0.5 * h, "Highpass", "High pass filter cutoff frequency", -1337, 2);
   xs += 1.25 * h;
   
   lpf.set_knob_properties(SLIDERS_PER_SAMPLE * me + 10, 0, 1, 1, 1);
-  lpf.draw_and_process(xs, ys - 5, 0.5 * h, "Lowpass", "Low pass filter cutoff frequency", -1337, 1);
+  lpf.draw_and_process(xs, ys - 5, 0.5 * h, "Lowpass", "Low pass filter cutoff frequency", -1337, 2);
+  xs += 1.25 * h;
+  
+  lfo_amount.set_knob_properties(SLIDERS_PER_SAMPLE * me + 11, 0, 1, 1, lfo_enabled);
+  lfo_amount.draw_and_process(xs, ys - 5, 0.5 * h, "LFO Amnt", "LFO Amount", -1337, 1);
+  
+  gfx_set(waveform_r, waveform_g, waveform_b, waveform_a);
+  draw_lfo(xs + 0.3 * h, ys + 0.3 * h - 5, 0.4 * h, 0.4 * h, lfo_type, 0, lfo_time);  // c_lfo_center_phase, c_lfo_time
+  
+  mouse_press(2) ? (
+    lfo_amount.knob_over(mouse_x, mouse_y) ? (
+      lfo_type += 1;
+      lfo_type > max_lfo_types ? lfo_type = 0;
+    );
+  );
+  
+  lfo_toggle.drawToggle(xs - 0.05 * h, ys - 0.1 * h, .08*h, .08*h, lfo_enabled, waveform_r, waveform_g, waveform_b, waveform_a, waveform_r, waveform_g, waveform_b, waveform_a, "Enable LFO.");
+  lfo_enabled = lfo_toggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  xs += 1.25 * h;
+  
+  lfo_freq.set_knob_properties(SLIDERS_PER_SAMPLE * me + 12, 0, 10, 1, lfo_enabled);
+  lfo_freq.draw_and_process(xs, ys - 5, 0.5 * h, "LFO Freq", "LFO Frequency", -1337, 1);
   xs += 1.25 * h;
   
   handleModifier("Env Mod", xs, ys + .15 * h, h, 0.5 * h, 1);
-  //handleModifier("Mod", xs, ys + .75 * h, h, 0.5 * h, 2);
+  handleModifier("Mod", xs, ys + .75 * h, h, 0.5 * h, 2);
 );
 
