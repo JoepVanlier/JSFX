@@ -76,6 +76,19 @@ Features:
 - Stereo widening effect.
 - Distortion module.
 
+## Bric-a-brac - Texture machine
+
+Bric-a-brac is intended to add textures to existing sounds. It can for example be used to brighten up beats by loading a noise sample in a sample slot. Or add some organic textures by adding a creaking sound that plays before the attack of a synth.
+
+![bric_a_brac](https://user-images.githubusercontent.com/19836026/126071183-81e95f48-9e15-45e0-890b-23fb3f48ae0b.gif)
+
+Features:
+- 4 sample slots that can be triggered or looped to add textures to existing sounds.
+- For each sample choose whether it should act as envelope follower, thresholded or triggered envelopes.
+- One LFO modulator per sample.
+- A lowpass/highpass filter per sample that can be modulated by the envelope and/or an LFO modulator.
+- Variable pre-delay per sample.
+
 ## SEQS - Effects Sequencer
 
 SEQS: A small GUI-based effect sequencer for stutters, slowdowns and various audio effects.
