@@ -66,12 +66,13 @@ local()
 
 function start_playback(buffer_loc, playspeed, offset)
 instance(start_ptr, x_fade_position, playing, fade_start, position, speed,
-         loop_start, loop_stop, loop_type)
+         loop_start, loop_stop, loop_type, stop_position)
 local(len)
 global(crossfade_samples, SAMPLE_HEADER)
 (
-  len = buffer_loc[]; 
+  len = buffer_loc[];
   (len > 0) ? (
+    stop_position = len / 2 - 2;
     fade_start = buffer_loc + len + SAMPLE_HEADER - 2 * playspeed * crossfade_samples;
     start_ptr = buffer_loc + SAMPLE_HEADER;
     
@@ -88,7 +89,7 @@ global(crossfade_samples, SAMPLE_HEADER)
 );
 
 function update_loop_parameters(buffer_loc)
-instance(loop_start, loop_stop, loop_type, position)
+instance(loop_start, loop_stop, loop_type, position, speed)
 local()
 global()
 (
@@ -96,8 +97,16 @@ global()
   loop_stop = buffer_loc[4];
   loop_type = buffer_loc[5];
   
-  (loop_type == 0) ? (
+  (loop_start > -1) ? (
     ((position > loop_stop) || (position < loop_start)) ? position = loop_start;
+  );
+  
+  // If we are not looping or looping forward, make sure we're not going back
+  // in time (which could happen if we were coming from a bidi loop and would
+  // result in a loud click if we move past the start of the sample (it has
+  // the length there).
+  (loop_type < 1) ? (
+    speed = abs(speed);
   );
   
   position
@@ -107,7 +116,7 @@ global()
 function play()
 instance(start_ptr, read_ptr, x_fade_position, fade_start,
          outL, outR, playing, fade_level, position, speed,
-         loop_start, loop_stop, loop_type)
+         loop_start, loop_stop, loop_type, stop_position)
 global(crossfade_samples, pi_inv_crossfade_samples, eco, play_state)
 local(frac, ism1, is0, is1, is2, id0, id1, id2, id3)
 (
@@ -119,7 +128,7 @@ local(frac, ism1, is0, is1, is2, id0, id1, id2, id3)
   ) : (x_fade_position < -0.01) ? (
     fade_level = sqrt(0.5 - 0.5 * cos(- x_fade_position * pi_inv_crossfade_samples));
     x_fade_position += 1;
-    (x_fade_position == 0) ? (
+    ((x_fade_position == 0) || (position > stop_position)) ? (
       playing = 0; // Terminate playback
     );
   ) : (
