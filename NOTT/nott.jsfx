@@ -1,8 +1,8 @@
-desc:Saike Not OTT (BETA)
+desc:Saike Not OTT (ALPHA)
 tags: multiband compression
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Fix frequency scaling. Show thresholds.
+changelog: Add gain controls. Add automute when plugin has no input. Fine tune click range. Tweak weirdness with fft plot showing stuff when input is zero.
 about:
   # Multiband Compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
@@ -13,6 +13,7 @@ in_pin:left input
 in_pin:right input
 out_pin:left output 1
 out_pin:right output 1
+options:no_meter
 
 slider1:Cuts=2<0,4,1>-Cuts
 slider2:Freq1=0.213<0,1,.0001>-Frequency 1
@@ -20,13 +21,13 @@ slider3:Freq2=0.609<0,1,.0001>-Frequency 2
 slider4:Freq3=0.5<0,1,.0001>-Frequency 3
 slider5:Freq4=0.5<0,1,.0001>-Frequency 4
 
-slider6:Drive1=0<-40,60,.1>-Drive 1 (dB)
-slider7:Drive2=0<-40,60,.1>-Drive 2 (dB)
-slider8:Drive3=0<-40,60,.1>-Drive 3 (dB)
-slider9:Drive4=0<-40,60,.1>-Drive 4 (dB)
-slider10:Drive5=0<-40,60,.1>-Drive 5 (dB)
+slider6:Attack1=0<0,2,.1>-Attack 1
+slider7:Attack2=0<0,2,.1>-Attack 2
+slider8:Attack3=0<0,2,.1>-Attack 3
+slider9:Attack4=0<0,2,.1>-Attack 4
+slider10:Attack5=0<0,2,.1>-Attack 5
 
-slider11:Release1=0.747<0,1,.0001>Release 1
+slider11:Release1=0.747<0,1,.0001>-Release 1
 slider12:Release2=0.9203<0,1,.0001>-Release 2
 slider13:Release3=0.9203<0,1,.0001>-Release 3
 slider14:Release4=0.9203<0,1,.0001>-Release 4
@@ -56,14 +57,20 @@ slider33:ThreshHigh3=-33.8<-96,0,.0001>-Upper Threshold 3
 slider34:ThreshHigh4=-33.8<-96,0,.0001>-Upper Threshold 4
 slider35:ThreshHigh5=-33.8<-96,0,.0001>-Upper Threshold 5
 
-slider36:coupled=1<0,1,{False,True}>-Couple L/R?
-slider37:fixdc=1<0,1,1>-DC offset filter
-slider38:input_gain=0<-32,32,.001>Input gain
-slider40:output_gain=0<-32,32,.001>Output gain
-slider41:output_squash=0<0,3,1{None,Clip,Soft,ClipAA}>-Output limiting
-slider42:active_threshold=-280<0,-340,.0001>Gate level [dB]
-slider61:FIR=0<0,1,1>-FIR mode
+slider36:Gain1=0<-48,48,0.00001>-Gain 1
+slider37:Gain2=0<-48,48,0.00001>-Gain 2
+slider38:Gain3=0<-48,48,0.00001>-Gain 3
+slider39:Gain4=0<-48,48,0.00001>-Gain 4
+slider40:Gain5=0<-48,48,0.00001>-Gain 5
 
+slider41:coupled=1<0,1,{False,True}>-Couple L/R?
+slider42:fixdc=0<0,1,1>-DC offset filter
+slider43:input_gain=0<-32,32,.001>Input gain
+slider44:output_gain=0<-32,32,.001>Output gain
+slider45:output_squash=0<0,3,1{None,Clip,Soft,ClipAA}>-Output limiting
+slider46:active_threshold=-280<0,-340,.0001>-Gate level [dB]
+slider61:FIR=0<0,1,1>-FIR mode
+slider62:advanced<0,1,1>-Advanced
 
 @init
 
@@ -72,10 +79,16 @@ slider61:FIR=0<0,1,1>-FIR mode
 //  1
 //);
 
-/*function fft_real(x, x)
+function update_gain_now()
 (
- 0
-);*/
+  cGain1 = Gain1;
+  cGain2 = Gain2;
+  cGain3 = Gain3;
+  cGain4 = Gain4;
+  cGain5 = Gain5;
+);
+update_gain_now();
+
   driveInitialized = 0;
   current_input_gain = input_gain;
   g_factor = exp(.11512925464970228420089957273422 * current_input_gain);
@@ -257,6 +270,50 @@ function drawHint_draw()
     ly = mouse_y;
   );    
 
+/*-------------*/
+/* SIMPLE KNOB */  
+/*-------------*/
+function simpleKnob(x1, y1, rin, slider_idx_in, slidermax_in, label)
+  local(dx, cr, hh, ww, arc)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB, gfx_x, gfx_y, scaling)
+  instance(hl, x, y, r, over, slider_idx, slider_max, gfx_mode)
+  (
+    x = x1;
+    y = y1;
+    r = rin;
+    slider_idx = slider_idx_in;
+    slider_max = slidermax_in;
+    arc = slider(slider_idx) / slider_max;
+    
+    gfx_set(0, 0, 0, 0.9);
+    gfx_circle(x, y, r, 1, 1);
+    
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, 1);
+    dx = 0.5;
+    cr = 0.8 * r;
+    loop(5,
+      gfx_arc(x, y, cr, -0.82 * $pi, 0.82 * $pi);
+      cr += dx;
+    );
+    
+    dx = 0.5;
+    cr = 0.8 * r;
+    gfx_set(1, 0.8, 0.5, 1);
+    loop(5,
+      gfx_arc(x, y, cr, 0, 0.82 * $pi * arc);
+      cr += dx;
+    );
+    
+    gfx_set(1, 1, 1, .9);
+    gfx_setfont(2, "Arial", 14 * (1 + scaling));
+    gfx_measurestr(label, ww, hh);
+    gfx_x = x - 0.5 * ww;
+    gfx_y = y - 0.5 * hh;
+    gfx_printf(label);
+    
+    over = 0;
+  );
+
 /*-----------*/
 /* CIRCLE    */  
 /*-----------*/
@@ -267,7 +324,7 @@ function fancyCircle(x1, y1, rin, mute, solo, bypass)
   (
     x = x1;
     y = y1;
-    rin == 0 ? r = 10 : r = rin;
+    rin == 0 ? r = 12 : r = rin;
     
     over ? (
       hl = abs(sin(2*globalTime));
@@ -471,6 +528,8 @@ threshLowIdx = 26;
 threshHighIdx = 31;
 ratioHighIdx = 21;
 ratioLowIdx = 16;
+bandGainMax = 48;
+bandGainIdx = 36;
 
 filterBank.initBands();
 M = 4;
@@ -636,7 +695,7 @@ function calcFFT()
     yshift  = slope*log(1.0+.5*fftSize);
     loop(fftSize*0.5,   
       ty      = sqr(buf3[0])+sqr(buf3[1]);
-      ty      = to_dB * log(ty) + 2 * $pi;
+      ty      = to_dB * log(ty + .00000000000000000001) + 2 * $pi;
       ty      = ty + slope*log(1.0+i) - yshift;
       yOut[]  = ty;
       yOut    += 1;
@@ -778,7 +837,40 @@ function drawLine(x1, y1, x2, y2)
   );
 
 bandClickRange = 10;
-overRange = 10;
+
+function clamp(value, mini, maxi)
+  local()
+  global()
+  (
+    max(min(value,maxi),mini)
+  );
+
+function handleBandKnob(left, double, default)
+  instance(x, y, r, slider_idx)
+  local(dx, dy)
+  global(mouse_x, mouse_y,
+         dragging, cap)
+  (
+    (left || double) ? (
+      dx = (mouse_x - x);
+      dy = (mouse_y - y);
+      
+      ((dx * dx + dy * dy) < (r * r)) ? (
+        double ? (
+          slider(slider_idx) = default;
+        ) : (
+          dragging = slider_idx; cap = 8;
+        );
+      );
+    );
+  );
+
+function handleCappedBandKnob(dy, mini, maxi)
+instance()
+global(dragging)
+(
+  slider(dragging) = clamp(slider(dragging) - dy, mini, maxi);
+);
 
 function isOver(mx, my)
   instance(x, y, w, h)
@@ -787,12 +879,13 @@ function isOver(mx, my)
   (
     ( ( mx >= (x-overRange) ) && ( mx <= (x+w+overRange) ) && ( my >= (y-overRange) ) && ( my <= (y+h+overRange) ) ) ? 1 : 0;
   );
-
-function clamp(value, mini, maxi)
+  
+function isOverCircle(mx, my)
+  instance(x, y, w, h)
+  global(overRangeCircle)
   local()
-  global()
   (
-    max(min(value,maxi),mini)
+    ( ( mx >= (x-overRangeCircle) ) && ( mx <= (x+w+overRangeCircle) ) && ( my >= (y-overRangeCircle) ) && ( my <= (y+h+overRangeCircle) ) ) ? 1 : 0;
   );
 
 function overRect(x, y, w, h, mx, my)
@@ -852,6 +945,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
            h1, h2, h3, h4, h5, 
            h6, h7, h8, h9, h10,
            c1, c2, c3, c4, c5,
+           gk1, gk2, gk3, gk4, gk5,
            F1hz, F2hz, F3hz, F4hz )
   global(cap, lcap, dragging,
          dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI, fftSize,
@@ -865,7 +959,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          selectedBand, gfx_x, gfx_y, srate,
          threshRange,
          threshHighIdx, threshLowIdx,
-         ratioHighIdx, ratioLowIdx)
+         ratioHighIdx, ratioLowIdx,
+         bandGainMax)
   local(dx, dy, over, dys,
         F1, F2, F3, F4,
         leftClick, rightClick, doubleClick,
@@ -923,6 +1018,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       dy = mouse_y - ly;
       dys = 2*dy/h;
       slider(ratioLowIdx + selectedBand) = clamp(slider(ratioLowIdx + selectedBand) - dys, 0, 2);
+    ) : ( cap == 8 && mouse_cap & 1 == 1 ) ? (
+      handleCappedBandKnob(.2 * (mouse_y - ly), -bandGainMax, bandGainMax);
     ) : ( cap == 2 && mouse_cap & 1 == 1 ) ? (
       // Dragging a band frequency
       dx = mouse_x - lx;
@@ -962,35 +1059,35 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       cap = 0;
       
       /* Toggle mute/solo */
-      ( c1.isOver(mouse_x, mouse_y) == 1 ) ? (
+      ( c1.isOverCircle(mouse_x, mouse_y) == 1 ) ? (
         c1.over = 1;
         hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
         leftClick  ? ( ctrl ? ( bypassBand1 = 1 - bypassBand1) : (
                        mute1 = 1-mute1; solo1 ? (mute1 = 1; solo1 = 0; selectedBand = 0; ); ); );
         rightClick ? ( solo1 = 1-solo1; selectedBand = 0; 
                        ((solo1 == 1) && (shift==0)) ? (solo2=solo3=solo4=solo5=0;); );
-      ) : ( c2.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
+      ) : ( c2.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
         hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
         c2.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand2 = 1 - bypassBand2) : (
                        mute2 = 1-mute2; solo2 ? (mute2 = 1; solo2 = 0; selectedBand = 1;); ); );
         rightClick ? ( solo2 = 1-solo2; selectedBand = 1;
                        ((solo2 == 1) && (shift==0)) ? (solo1=solo3=solo4=solo5=0;); );
-      ) : ( c3.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 1 ) ? (
+      ) : ( c3.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 1 ) ? (
         hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
         c3.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand3 = 1 - bypassBand3) : (
                        mute3 = 1-mute3; solo3 ? (mute3 = 1; solo3 = 0; selectedBand = 2; ); ); );
         rightClick ? ( solo3 = 1-solo3; selectedBand = 2;
                        ((solo3 == 1) && (shift==0)) ? (solo1=solo2=solo4=solo5=0;); );
-      ) : ( c4.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 2 ) ? (
+      ) : ( c4.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 2 ) ? (
         hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
         c4.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand4 = 1 - bypassBand4) : (
                         mute4 = 1-mute4; solo4 ? (mute4 = 1; solo4 = 0; selectedBand = 3; ); ); );
         rightClick ? ( solo4 = 1-solo4; selectedBand = 3;
                        ((solo4 == 1) && (shift==0)) ? (solo1=solo2=solo3=solo5=0;); );
-      ) : ( c5.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 3 ) ? (
+      ) : ( c5.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 3 ) ? (
         hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
         c5.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand5 = 1 - bypassBand5) : (
@@ -1033,6 +1130,12 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         v5.over = 1;
         leftClick ? ( cap = 2; dragging = 5; );
         rightClick ? ( remBand(4); );
+      
+      ) : (gk1.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
+      ) : (gk2.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
+      ) : (gk3.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
+      ) : (gk4.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
+      ) : (gk5.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
       
       /* Drag threshold */
       ) : ( h1.handleThresh(0, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
@@ -1443,59 +1546,29 @@ global(threshRange, lineR, lineG, lineB, lineA)
 );
   
 function drawBands()
-  global(Cuts, stest,
+  global(Cuts, scaling,
            mute1, mute2, mute3, mute4, mute5,
            solo1, solo2, solo3, solo4, solo5,
            bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5,
            selectedBand
            threshRange, threshMax
            threshLowIdx, threshHighIdx,
-           ratioHighIdx, ratioLowIdx)
+           ratioHighIdx, ratioLowIdx,
+           bandGainIdx, bandGainMax)
   instance(xc, dx, x, y, w, h, 
            x1, x2, x3, x4, x5,  // Band frequency screen positions
            v1, v2, v3, v4, v5,  // Frequency handles
            h1, h2, h3, h4, h5,  // Threshold handles
            h6, h7, h8, h9, h10, // Threshold handles
            c1, c2, c3, c4, c5,  // Circle handles
+           gk1, gk2, gk3, gk4, gk5 // Gain knob handles
            F1hz, F2hz, F3hz, F4hz, F5hz, // Frequencies
            x_over)
-  local(iRange, dmax
+  local(iRange, dmax, bwidth, gain_y, hz_label_height_frac,
         y1, y2, y3, y4, y5, y6, y7, y8, y9, y10)
   (
     xc = x;
     dx = 5;
-    while(xc<x+w) (
-      gfx_set(0,0,0,1);
-      gfx_line(xc, y+.6*h+1, xc+dx, y+.6*h+1);
-      gfx_line(xc, y+.6*h-1, xc+dx, y+.6*h-1);
-      gfx_set(0.6,0.6,0.6,1);
-      gfx_line(xc, y+.6*h, xc+dx, y+.6*h);
-      xc = xc + 2*dx;
-    );
-    
-    xc = x;
-    dx = 5;
- 
-    (Cuts > 0) ? (
-      gfx_set(1,1,1,1); v1.fancyLineV(x1, y, x1, y+h);
-      v1.hzLabel(.8, F1hz);
-    );
-    (Cuts > 1) ? (
-      gfx_set(1,1,1,1); v2.fancyLineV(x2, y, x2, y+h);
-      v2.hzLabel(.8, F2hz);
-    );
-    (Cuts > 2) ? (
-      gfx_set(1,1,1,1); v3.fancyLineV(x3, y, x3, y+h);
-      v3.hzLabel(.8, F3hz);
-    );
-    (Cuts > 3) ? (
-      gfx_set(1,1,1,1); v4.fancyLineV(x4, y, x4, y+h);
-      v4.hzLabel(.8, F4hz);
-    );
-    (Cuts > 4) ? (
-      gfx_set(1,1,1,1); v5.fancyLineV(x5, y, x5, y+h);
-      v5.hzLabel(.8, F5hz);
-    );
     
     iRange = 1 / threshRange;
     dmax = iRange * threshMax;
@@ -1511,6 +1584,8 @@ function drawBands()
     y9 = y+h*(dmax-iRange*(slider(threshLowIdx + 3)));
     y10 = y+h*(dmax-iRange*(slider(threshLowIdx + 4)));
     
+    bwidth = 35 * (1 + scaling);
+    gain_y = h - bwidth - 5;
     gfx_rect(x_over-3, y, 5, h);
     ( Cuts == 0 ) ? (
        h1.fancyLineH(x, y1, x+w-2, y1);
@@ -1518,6 +1593,8 @@ function drawBands()
        h1.drawRatio(h, ratioHighIdx + 0, 0);
        h6.drawRatio(h, ratioLowIdx + 0, 1);
        c1.fancyCircle(x + .5*w, y1, 0, mute1, solo1, bypassBand1);
+       
+       gk1.simpleKnob(x + .5*w, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
     ) : ( Cuts == 1 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x+w-2, y2);
@@ -1529,6 +1606,9 @@ function drawBands()
        h7.drawRatio(h, ratioLowIdx + 1, 1);
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
        c2.fancyCircle(x1 + .5*(w-x1), y2, 0, mute2, solo2, bypassBand2);
+       
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
+       gk2.simpleKnob(x1 + .5*(w-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
     ) : ( Cuts == 2 ) ? (
        gfx_set(1, 1, 1, 1);
        h1.fancyLineH(x,  y1, x1-2, y1);
@@ -1546,6 +1626,10 @@ function drawBands()
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
        c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
        c3.fancyCircle(x2 + .5*(w-x2), y3, 0, mute3, solo3, bypassBand3);
+       
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
+       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
+       gk3.simpleKnob(x2 + .5*(w-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+2)));
     ) : ( Cuts == 3 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x2-2, y2);
@@ -1567,6 +1651,11 @@ function drawBands()
        c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
        c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3, bypassBand3);
        c4.fancyCircle(x3 + .5*(w-x3), y4, 0, mute4, solo4, bypassBand4);
+       
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
+       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
+       gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+2)));
+       gk4.simpleKnob(x3 + .5*(w-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+3)));
     ) : ( Cuts == 4 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x2-2, y2);
@@ -1593,6 +1682,34 @@ function drawBands()
        c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3, bypassBand3);
        c4.fancyCircle(x3 + .5*(x4-x3), y4, 0, mute4, solo4, bypassBand4);
        c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5, bypassBand5);
+       
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
+       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
+       gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+2)));
+       gk4.simpleKnob(x3 + .5*(x4-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+3)));
+       gk5.simpleKnob(x4 + .5*(w-x4), gain_y, bwidth, bandGainIdx+4, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+4)));
+    );
+    
+    hz_label_height_frac = 0.05;
+    (Cuts > 0) ? (
+      gfx_set(1,1,1,1); v1.fancyLineV(x1, y, x1, y+h);
+      v1.hzLabel(hz_label_height_frac, F1hz);
+    );
+    (Cuts > 1) ? (
+      gfx_set(1,1,1,1); v2.fancyLineV(x2, y, x2, y+h);
+      v2.hzLabel(hz_label_height_frac, F2hz);
+    );
+    (Cuts > 2) ? (
+      gfx_set(1,1,1,1); v3.fancyLineV(x3, y, x3, y+h);
+      v3.hzLabel(hz_label_height_frac, F3hz);
+    );
+    (Cuts > 3) ? (
+      gfx_set(1,1,1,1); v4.fancyLineV(x4, y, x4, y+h);
+      v4.hzLabel(hz_label_height_frac, F4hz);
+    );
+    (Cuts > 4) ? (
+      gfx_set(1,1,1,1); v5.fancyLineV(x5, y, x5, y+h);
+      v5.hzLabel(hz_label_height_frac, F5hz);
     );
     
     selectedBand == 0 ? gfx_muladdrect( h1.x, y, h1.w, h, 1, 1, 1, .6, .05, .05, .105 );
@@ -1600,7 +1717,6 @@ function drawBands()
     selectedBand == 2 ? gfx_muladdrect( h3.x, y, h3.w, h, 1, 1, 1, .6, .05, .05, .105 );
     selectedBand == 3 ? gfx_muladdrect( h4.x, y, h4.w, h, 1, 1, 1, .6, .05, .05, .105 );
     selectedBand == 4 ? gfx_muladdrect( h5.x, y, h5.w, h, 1, 1, 1, .6, .05, .05, .105 );
-
   );  
   
 function initSpectrum(memoryOffset, fftSize, srate)
@@ -1635,10 +1751,9 @@ function initSpectrum(memoryOffset, fftSize, srate)
   
   function processBands()
   local(BW2)
-  global( Drive1,    Drive2,    Drive3,     Drive4,     Drive5
-          play1,     play2,     play3,      play4,      play5, coupled,
+  global( play1,     play2,     play3,      play4,      play5, coupled,
           bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5,
-          makeup, Thresh,MakeupGain, smoothing_const, driveInitialized)
+          Thresh, smoothing_const, driveInitialized)
   instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5,
            cDrive1, cDrive2, cDrive3, cDrive4, cDrive5,
            rg1, rg2, rg3, rg4, rg5,
@@ -1662,22 +1777,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
     b1.l = b2.l = b3.l = b4.l = b5.l = 0;
     b1.r = b2.r = b3.r = b4.r = b5.r = 0;
     
-    MakeupGain = makeup ? Thresh : 0;
-    
-    driveInitialized == 0 ? (
-      driveInitialized = 1;
-      cDrive1 = Drive1;
-      cDrive2 = Drive2;
-      cDrive3 = Drive3;
-      cDrive4 = Drive4;
-      cDrive5 = Drive5;
-    );
-    
-    cDrive1 += smoothing_const * (Drive1 - MakeupGain - 200 * (1 - play1) - cDrive1);
-    cDrive2 += smoothing_const * (Drive2 - MakeupGain - 200 * (1 - play2) - cDrive2);
-    cDrive3 += smoothing_const * (Drive3 - MakeupGain - 200 * (1 - play3) - cDrive3);
-    cDrive4 += smoothing_const * (Drive4 - MakeupGain - 200 * (1 - play4) - cDrive4);
-    cDrive5 += smoothing_const * (Drive5 - MakeupGain - 200 * (1 - play5) - cDrive5);
+    cDrive1 += smoothing_const * (- 200 * (1 - play1) - cDrive1);
+    cDrive2 += smoothing_const * (- 200 * (1 - play2) - cDrive2);
+    cDrive3 += smoothing_const * (- 200 * (1 - play3) - cDrive3);
+    cDrive4 += smoothing_const * (- 200 * (1 - play4) - cDrive4);
+    cDrive5 += smoothing_const * (- 200 * (1 - play5) - cDrive5);
     
     coupled ? (
       cDrive1 > -120 ? (
@@ -1845,6 +1949,8 @@ file_var(0, solo4);
 file_var(0, solo5);
 
 file_var(0, FIR);
+
+update_gain_now();
 
 @slider
 filterBank.setCompOptions();
@@ -2463,27 +2569,6 @@ solo5 ? play5 = 1;
     filterBank.processBands();
   );
   
-  (current_input_gain != input_gain) ? (
-    current_input_gain += smoothing_const * (input_gain - current_input_gain);
-    g_factor = exp(.11512925464970228420089957273422 * current_input_gain);
-  );
-
-  gate = max(max(spl0, spl1), .999 * gate);
-  spl0 *= g_factor;
-  spl1 *= g_factor;
-    
-  FIR ? (
-    specBuffer.updateBuffer(.5*(spl0+spl1));
-    specBuffer.setOffset(newPDC+2);
-    cSpec = specBuffer.readBuffer();
-    spectrumIn.feedSample(cSpec);
-  ) : (
-    spectrumIn.feedSample(.5*(spl0+spl1));
-  );
-
-  // Split signal into bands
-  filterBank.updateCoeffs();
-  
   // Add a tiny delay to catch bad clicks and pops
   function tiny_delay(x)
   instance(d1, d2, d3, d4, d5, d6)
@@ -2497,46 +2582,83 @@ solo5 ? play5 = 1;
     d6
   );
   
-  inL = left.tiny_delay(spl0);
-  inR = right.tiny_delay(spl1);
+  (current_input_gain != input_gain) ? (
+    current_input_gain += smoothing_const * (input_gain - current_input_gain);
+    g_factor = exp(.11512925464970228420089957273422 * current_input_gain);
+  );
+
+  gate = max(max(spl0, spl1), .999 * gate);
   
-  processSample();
+  // Don't eat CPU when plugin doesn't have any input.
+  (gate_level > 0) ? (
+    spl0 *= g_factor;
+    spl1 *= g_factor;
+      
+    FIR ? (
+      specBuffer.updateBuffer(.5*(spl0+spl1));
+      specBuffer.setOffset(newPDC+2);
+      cSpec = specBuffer.readBuffer();
+      spectrumIn.feedSample(cSpec);
+    ) : (
+      spectrumIn.feedSample(.5*(spl0+spl1));
+    );
   
-  spl0 = filterBank.b1.l;
-  spl1 = filterBank.b1.r;
-  ( cuts > 0 ) ? (
-    spl0 += filterBank.b2.l;
-    spl1 += filterBank.b2.r;
-    ( cuts > 1 ) ? (
-      spl0 += filterBank.b3.l;
-      spl1 += filterBank.b3.r;
-      ( cuts > 2 ) ? (
-        spl0 += filterBank.b4.l;
-        spl1 += filterBank.b4.r;
-        ( cuts > 3 ) ? (
-          spl0 += filterBank.b5.l;
-          spl1 += filterBank.b5.r;
+    // Split signal into bands
+    filterBank.updateCoeffs();
+    
+    inL = left.tiny_delay(spl0);
+    inR = right.tiny_delay(spl1);
+    
+    processSample();
+    
+    cGain1 += smoothing_const * (Gain1 - cGain1);
+    g1 = exp(.11512925464970228420089957273422 * cGain1);
+    spl0 = filterBank.b1.l * g1;
+    spl1 = filterBank.b1.r * g1;
+    ( cuts > 0 ) ? (
+      cGain2 += smoothing_const * (Gain2 - cGain2);
+      g2 = exp(.11512925464970228420089957273422 * cGain2);
+      spl0 += filterBank.b2.l * g2;
+      spl1 += filterBank.b2.r * g2;
+      ( cuts > 1 ) ? (
+        cGain3 += smoothing_const * (Gain3 - cGain3);
+        g3 = exp(.11512925464970228420089957273422 * cGain3);
+        spl0 += filterBank.b3.l * g3;
+        spl1 += filterBank.b3.r * g3;
+        ( cuts > 2 ) ? (
+          cGain4 += smoothing_const * (Gain4 - cGain4);
+          g4 = exp(.11512925464970228420089957273422 * cGain4);
+          spl0 += filterBank.b4.l * g4;
+          spl1 += filterBank.b4.r * g4;
+          ( cuts > 3 ) ? (
+            cGain5 += smoothing_const * (Gain5 - cGain5);        
+            g5 = exp(.11512925464970228420089957273422 * cGain5);
+            spl0 += filterBank.b5.l * g5;
+            spl1 += filterBank.b5.r * g5;
+          );
         );
       );
     );
-  );
-  
-  fixdc ? (
-    spl0 = dcl.eval_HP6(spl0);
-    spl1 = dcr.eval_HP6(spl1);
-  );
-  
-  output_squash ? (
-    output_squash == 1 ? (
-      spl0 = clip(spl0);
-      spl1 = clip(spl1);
-    ) : ( output_squash == 2 ) ? (
-      spl0 = tanh(spl0);
-      spl1 = tanh(spl1);
-    ) : ( output_squash == 3 ) ? (
-      spl0 = l.clip_linear_aa(spl0);
-      spl1 = r.clip_linear_aa(spl1);
+    
+    fixdc ? (
+      spl0 = dcl.eval_HP6(spl0);
+      spl1 = dcr.eval_HP6(spl1);
     );
+    
+    /*
+    output_squash ? (
+      output_squash == 1 ? (
+        spl0 = clip(spl0);
+        spl1 = clip(spl1);
+      ) : ( output_squash == 2 ) ? (
+        spl0 = tanh(spl0);
+        spl1 = tanh(spl1);
+      ) : ( output_squash == 3 ) ? (
+        spl0 = l.clip_linear_aa(spl0);
+        spl1 = r.clip_linear_aa(spl1);
+      );
+    );
+    */
   );
   
   gate < lbnd ? (
@@ -2559,13 +2681,16 @@ solo5 ? play5 = 1;
   curSample += 1;
   
 @gfx 1080 400
+  overRange = 2 * (1+scaling);
+  overRangeCircle = 10;
+  
   function createGUI(stripStart)
   (
     scaling   = gfx_ext_retina - 1;
     spectrumX = 0;
     spectrumY = 0;
-    spectrumW = gfx_w - 200*0;
-    spectrumH = gfx_h - 25 * ( 1 + modVisible ) * (1+scaling);
+    spectrumW = gfx_w;
+    spectrumH = gfx_h - 25 * (1+scaling);
     
     fontface = "Arial";
     gfx_setfont(GRID_FONT,      fontface, 14*(1+scaling));
@@ -2700,7 +2825,7 @@ solo5 ? play5 = 1;
   spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);  
 
   tFIR.label = "FIR";  
-  tFIR.drawToggle(20, 60, 10, 10, FIR, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Linear phase FIR mode.\n\nLinear phase filters preserve the phase relations between this\nand other tracks but introduce a higher CPU cost and latency.\nEnable only when needed for its linear phase properties.\n\nNote: Modulation of the frequency when in FIR mode can cause crackles.");
+  tFIR.drawToggle(20, y_base, 10, 10, FIR, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Linear phase FIR mode.\n\nLinear phase filters preserve the phase relations between this\nand other tracks but introduce a higher CPU cost and latency.\nEnable only when needed for its linear phase properties.\n\nNote: Modulation of the frequency when in FIR mode can cause crackles.");
   FIR = tFIR.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   toggle_size = 10 * (1 + scaling);
@@ -2709,18 +2834,25 @@ solo5 ? play5 = 1;
   x_dist = 45 * (1 + scaling);
   y_dist = 20 * (1 + scaling);
 
-  tCouple.label = "Coupled L/R";  
-  tCouple.drawToggle(x_base, y_base + 3 * y_dist, toggle_size, toggle_size, coupled, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
-  coupled = tCouple.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  advanced ? (
+    tCouple.label = "Coupled L/R";  
+    tCouple.drawToggle(x_base, y_base + 2 * y_dist, toggle_size, toggle_size, coupled, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
+    coupled = tCouple.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
-  tDC.label = "Filter DC";  
-  tDC.drawToggle(x_base, y_base + y_dist, toggle_size, toggle_size, fixdc, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Filters DC by applying a high pass on the output.");
-  fixdc = tDC.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    tDC.label = "Filter DC";  
+    tDC.drawToggle(x_base, y_base + 3 * y_dist, toggle_size, toggle_size, fixdc, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Filters DC by applying a high pass on the output.");
+    fixdc = tDC.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  );
+  
+  advancedToggle.label = "Advanced";
+  advancedToggle.drawToggle(x_base, y_base + y_dist, toggle_size, toggle_size, advanced, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
+  advanced = advancedToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   //tMakeUp.label = "Compensate threshold";  
   //tMakeUp.drawToggle(20, 60, 10, 10, makeup, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Compensate threshold gain.");
   //makeup = tMakeUp.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
+  /*
   tFree.label = "Free";
   tFree.drawToggle(x_base, y_base, toggle_size, toggle_size, output_squash == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Don't limit output.");
   tFree.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? output_squash = 0;
@@ -2736,9 +2868,10 @@ solo5 ? play5 = 1;
   aaClip.label = "Clip (AA)";  
   aaClip.drawToggle(x_base + x_dist * 3, y_base, toggle_size, toggle_size, output_squash == 3, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Hard clip the output with anti aliasing (may exceed bounds!)");
   aaClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? output_squash = 3;
-   
+  */
+  
   gfx_x = gfx_y = 30;
-  gfx_setfont(1,"ARIAL",30);
+  gfx_setfont(1, "ARIAL", 14);
   gfx_set(1,0,0,1);
   gfx_x = 30;
   gfx_y = 60;
@@ -2750,19 +2883,32 @@ solo5 ? play5 = 1;
   hinter.drawHint_draw();
   
   
-  writeX = gfx_w - 200;
-  writeY = 20;
+  writeX = gfx_w - 120;
+  writeY = 10;
   function draw_text(writeX, writeY)
   (
     gfx_x = writeX;
     gfx_y = writeY;
-    gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio_upper);
+    ( selectedBand == 0 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio_upper)
+    ) : ( selectedBand == 1 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l2.ratio_upper);
+    ) : ( selectedBand == 2 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l3.ratio_upper);
+    ) : ( selectedBand == 3 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l4.ratio_upper);
+    ) : ( selectedBand == 4 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l5.ratio_upper)
+    );
     gfx_x = writeX;
-    gfx_y += 24;
+    gfx_y += 16;
+    ( selectedBand == 0 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio_lower)
+    ) : ( selectedBand == 1 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l2.ratio_lower);
+    ) : ( selectedBand == 2 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l3.ratio_lower);
+    ) : ( selectedBand == 3 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l4.ratio_lower);
+    ) : ( selectedBand == 4 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l5.ratio_lower)
+    );
+    gfx_x = writeX;
+    gfx_y += 16;
     gfx_printf("Decay: %.3g ms", filterBank.comp_l1.release);
   );
 
-  gfx_setfont(1, "Arial", 30);
+  gfx_setfont(1, "Arial", 16);
   
   gfx_set(0, 0, 0, 1);  
   draw_text(writeX-2, writeY-2);
