@@ -1,8 +1,8 @@
 desc:Saike Not OTT (ALPHA)
 tags: multiband compression
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: Add gain controls. Add automute when plugin has no input. Fine tune click range. Tweak weirdness with fft plot showing stuff when input is zero.
+changelog: Add epsilon for initial click protection. Create side knobs for tweaking ballistics.
 about:
   # Multiband Compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
@@ -21,11 +21,11 @@ slider3:Freq2=0.609<0,1,.0001>-Frequency 2
 slider4:Freq3=0.5<0,1,.0001>-Frequency 3
 slider5:Freq4=0.5<0,1,.0001>-Frequency 4
 
-slider6:Attack1=0<0,2,.1>-Attack 1
-slider7:Attack2=0<0,2,.1>-Attack 2
-slider8:Attack3=0<0,2,.1>-Attack 3
-slider9:Attack4=0<0,2,.1>-Attack 4
-slider10:Attack5=0<0,2,.1>-Attack 5
+slider6:Attack1=0.5672<0,1,.0001>-Attack 1
+slider7:Attack2=0.6619<0,1,.0001>-Attack 2
+slider8:Attack3=0.8111<0,1,.0001>-Attack 3
+slider9:Attack4=0<0,1,.0001>-Attack 4
+slider10:Attack5=0<0,1,.0001>-Attack 5
 
 slider11:Release1=0.747<0,1,.0001>-Release 1
 slider12:Release2=0.9203<0,1,.0001>-Release 2
@@ -69,11 +69,12 @@ slider43:input_gain=0<-32,32,.001>Input gain
 slider44:output_gain=0<-32,32,.001>Output gain
 slider45:output_squash=0<0,3,1{None,Clip,Soft,ClipAA}>-Output limiting
 slider46:active_threshold=-280<0,-340,.0001>-Gate level [dB]
+slider60:epsilon=-4<-10,-2,.0001>-Epsilon
 slider61:FIR=0<0,1,1>-FIR mode
 slider62:advanced<0,1,1>-Advanced
 
 @init
-
+eps = 10^(epsilon);
 //function fft_real(x, y)
 //(
 //  1
@@ -144,9 +145,11 @@ update_gain_now();
     global(eps)
     local(xL, yG, xG)
     (
-      xG  = 20 * log10(abs(x) + eps); /* Peak */
-     
-      /* Calculate the gain curve */
+      (abs(x) > 10 * eps) ? (
+        xG  = 20 * log10(abs(x) + eps); /* Peak */
+      );
+      
+       /* Calculate the gain curve */
       yG = this.calcGain(xG);
       xL  = xG - yG;
      
@@ -270,21 +273,26 @@ function drawHint_draw()
     ly = mouse_y;
   );    
 
+
 /*-------------*/
 /* SIMPLE KNOB */  
 /*-------------*/
-function simpleKnob(x1, y1, rin, slider_idx_in, slidermax_in, label)
-  local(dx, cr, hh, ww, arc)
-  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB, gfx_x, gfx_y, scaling)
-  instance(hl, x, y, r, over, slider_idx, slider_max, gfx_mode)
+function simpleKnob(x1, y1, rin, slider_idx_in, slidermax_in, slidermin_in, label, x_offset, y_offset)
+  local(dx, cr, hh, ww, arc, boost, i)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB, gfx_x, gfx_y, scaling,
+         dialFgR, dialFgG, dialFgB)
+  instance(hl, x, y, r, over, slider_idx, slider_max, slider_min, gfx_mode)
   (
     x = x1;
     y = y1;
     r = rin;
     slider_idx = slider_idx_in;
     slider_max = slidermax_in;
-    arc = slider(slider_idx) / slider_max;
+    slider_min = slidermin_in;
+    arc = (slider(slider_idx) - slider_min) / slider_max;
     
+    boost = over ? 0.2 * abs(sin(2.0 * time_precise())) : 0;
+
     gfx_set(0, 0, 0, 0.9);
     gfx_circle(x, y, r, 1, 1);
     
@@ -296,9 +304,16 @@ function simpleKnob(x1, y1, rin, slider_idx_in, slidermax_in, label)
       cr += dx;
     );
     
+    cr = 0.9 * r; i = over ? .5 * abs(sin(2.0 * time_precise())) : 0;
+    loop(2,
+      gfx_set(dialFgR * i, dialFgG * i, dialFgB * i, 1);
+      gfx_arc(x, y, cr, 0, 2*$pi);
+      cr += 0.5; i *= .8;
+    );
+    
     dx = 0.5;
     cr = 0.8 * r;
-    gfx_set(1, 0.8, 0.5, 1);
+    gfx_set(dialFgR + boost, dialFgG + boost, dialFgB + boost, 1);
     loop(5,
       gfx_arc(x, y, cr, 0, 0.82 * $pi * arc);
       cr += dx;
@@ -307,12 +322,88 @@ function simpleKnob(x1, y1, rin, slider_idx_in, slidermax_in, label)
     gfx_set(1, 1, 1, .9);
     gfx_setfont(2, "Arial", 14 * (1 + scaling));
     gfx_measurestr(label, ww, hh);
-    gfx_x = x - 0.5 * ww;
-    gfx_y = y - 0.5 * hh;
+    gfx_x = x - 0.5 * ww - x_offset;
+    gfx_y = y - 0.5 * hh - y_offset;
     gfx_printf(label);
     
     over = 0;
   );
+
+dialFgR = 1.0;
+dialFgG = 0.8;
+dialFgB = 0.5;
+atkFgR = 1.0;
+atkFgG = 0.2;
+atkFgB = 0.2;
+relFgR = 0.2;
+relFgG = 0.6;
+relFgB = 1.0;
+
+function drawExtraArc(x1, y1, r_in, slider_idx_in, slider_max_in, slider_min_in, r_bg, g_bg, b_bg, r_fg, g_fg, b_fg, label, side, x_offset, y_offset)
+instance(hl, x, y, r, over, slider_idx, slider_max, slider_min, over, xmin, xmax, ymin, ymax)
+local(cr, val, amin, amax, i, r_draw, ww, hh, boost)
+global(gfx_mode, scaling, gfx_x, gfx_y)
+(
+  r_draw = r_in * 1.05;
+  r = r_in * 1.2;
+  x = floor(x1);
+  y = floor(y1);
+  slider_idx = slider_idx_in;
+  slider_max = slider_max_in;
+  slider_min = slider_min_in;
+
+  ymin = y - r_in;
+  ymax = y + r_in;
+  (side < 0) ? (
+    xmin = x - r;
+    xmax = x;
+  ) : (
+    xmin = x;
+    xmax = x + r;
+  );
+  
+  amin = 0.22 * $pi;
+  amax = 0.78 * $pi;
+  cr = r_draw; i = over ? 1 * abs(sin(2.0 * time_precise())) : 0;
+  loop(6,
+    gfx_set(r_fg * i, g_fg * i, b_fg * i, 1);
+    gfx_arc(x, y, cr, side * amin, side * amax);
+    cr += 0.5;
+  );
+  
+  loop(3,
+    gfx_set(r_fg * i, g_fg * i, b_fg * i, 1);
+    gfx_arc(x, y, cr, side * amin, side * amax);
+    cr += 0.5;
+    i *= .5;
+  );
+   
+  gfx_set(r_bg, g_bg, b_bg, 1.0);
+  cr = r_draw;
+  val = 1 - (slider(slider_idx) - slider_min) / slider_max;
+  
+  amin = 0.21 * $pi;
+  amax = 0.79 * $pi;
+  loop(5,
+    gfx_arc(x, y, cr, side * amin, side * amax); cr += 0.5;
+  );
+  
+  boost = over ? 0.2 * abs(sin(2.0 * time_precise())) : 0;
+  gfx_set(r_fg + boost, g_fg + boost, b_fg + boost, 1);
+  cr = r_draw;
+  loop(5,
+    gfx_arc(x, y, cr, side * (amin + (amax-amin) * val), side * amax); cr += 0.5;
+  );
+  
+ // gfx_set(1, 1, 1, .9);
+  gfx_setfont(2, "Arial", 14 * (1 + scaling));
+  gfx_measurestr(label, ww, hh);
+  gfx_x = x - 0.5 * ww - x_offset;
+  gfx_y = y - 0.5 * hh - y_offset;
+  gfx_printf(label);
+  
+  over = 0;
+);
 
 /*-----------*/
 /* CIRCLE    */  
@@ -530,6 +621,12 @@ ratioHighIdx = 21;
 ratioLowIdx = 16;
 bandGainMax = 48;
 bandGainIdx = 36;
+attackIdx = 6;
+releaseIdx = 11;
+attackSliderMin = 0;
+attackSliderMax = 1;
+releaseSliderMin = 0;
+releaseSliderMax = 1;
 
 filterBank.initBands();
 M = 4;
@@ -845,31 +942,48 @@ function clamp(value, mini, maxi)
     max(min(value,maxi),mini)
   );
 
-function handleBandKnob(left, double, default)
-  instance(x, y, r, slider_idx)
+function handleBandKnob(left, double, default, ncap)
+  instance(x, y, r, slider_idx, over, xmin, xmax, ymin, ymax)
   local(dx, dy)
   global(mouse_x, mouse_y,
          dragging, cap)
   (
+    dx = (mouse_x - x);
+    dy = (mouse_y - y);
+    over = ((dx * dx + dy * dy) < (r * r));
+    
+    // Do we have bnd constraints?
+    (xmin > 0) ? (
+      over &= ((mouse_x > xmin) && (mouse_x < xmax) && (mouse_y > ymin) && (mouse_y < ymax))
+    );
+    
     (left || double) ? (
-      dx = (mouse_x - x);
-      dy = (mouse_y - y);
-      
-      ((dx * dx + dy * dy) < (r * r)) ? (
+      over ? (
         double ? (
           slider(slider_idx) = default;
         ) : (
-          dragging = slider_idx; cap = 8;
+          dragging = slider_idx; cap = ncap;
         );
       );
     );
+    
+    over
   );
 
-function handleCappedBandKnob(dy, mini, maxi)
+function handleCappedBandKnob(dy, mini, maxi, all)
 instance()
 global(dragging)
+local(ix)
 (
-  slider(dragging) = clamp(slider(dragging) - dy, mini, maxi);
+  (all > 0) ? (
+    ix = 0;
+    loop(5,
+      slider(all + ix) = clamp(slider(all + ix) - dy, mini, maxi);
+      ix += 1;
+    );
+  ) : (
+    slider(dragging) = clamp(slider(dragging) - dy, mini, maxi);
+  );
 );
 
 function isOver(mx, my)
@@ -946,6 +1060,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
            h6, h7, h8, h9, h10,
            c1, c2, c3, c4, c5,
            gk1, gk2, gk3, gk4, gk5,
+           ak1, ak2, ak3, ak4, ak5,
+           rk1, rk2, rk3, rk4, rk5,
            F1hz, F2hz, F3hz, F4hz )
   global(cap, lcap, dragging,
          dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI, fftSize,
@@ -960,11 +1076,15 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          threshRange,
          threshHighIdx, threshLowIdx,
          ratioHighIdx, ratioLowIdx,
-         bandGainMax)
+         attackIdx, releaseIdx,
+         bandgainIdx, bandGainMax,
+         attackSliderMin, attackSliderMax,
+         releaseSliderMin, releaseSliderMax)
   local(dx, dy, over, dys,
         F1, F2, F3, F4,
         leftClick, rightClick, doubleClick,
-        cTime, mpos, shift, ctrl, lb)
+        cTime, mpos, shift, ctrl, lb,
+        mouse_diff)
   (
     over = mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h);
     leftClick   = ( mouse_cap & 1 == 1 && lcap & 1 == 0 );
@@ -993,33 +1113,39 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     F2hz = .5*f_trafo(F2)*srate;
     F3hz = .5*f_trafo(F3)*srate;
     F4hz = .5*f_trafo(F4)*srate;
-        
+    
+    mouse_diff = mouse_y - ly;
+    ((mouse_cap & 4) > 0) ? mouse_diff *= 0.1;
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
-      dy = mouse_y - ly;
+      dy = mouse_diff;
       dys = threshRange*dy/h;
       slider(threshHighIdx + dragging - 1) = clamp(slider(threshHighIdx + dragging - 1) - dys, slider(threshLowIdx + dragging - 1), threshMax);
     ) : ( cap == 4 && mouse_cap & 1 == 1 ) ? (
-      dy = mouse_y - ly;
+      dy = mouse_diff;
       dys = threshRange*dy/h;
       slider(threshLowIdx + dragging - 1) = clamp(slider(threshLowIdx + dragging - 1) - dys, threshMin, slider(threshHighIdx + dragging - 1));
     ) : ( cap == 5 && mouse_cap & 1 == 1 ) ? (
       // Ratio top
-      dy = mouse_y - ly;
+      dy = mouse_diff;
       dys = -2*dy/h;
       slider(ratioHighIdx + selectedBand) = clamp(slider(ratioHighIdx + selectedBand) - dys, 0, 2);
     ) : ( cap == 6 && mouse_cap & 1 == 1 ) ? (
       // Both thresholds
-      dy = mouse_y - ly;
+      dy = mouse_diff;
       dys = threshRange*dy/h;
       slider(threshHighIdx + selectedBand) = clamp(slider(threshHighIdx + selectedBand) - dys, threshMin, threshMax);
       slider(threshLowIdx + selectedBand) = clamp(slider(threshLowIdx + selectedBand) - dys, threshMin, threshMax);
     ) : ( cap == 7 && mouse_cap & 1 == 1 ) ? (
       // Ratio bottom
-      dy = mouse_y - ly;
+      dy = mouse_diff;
       dys = 2*dy/h;
       slider(ratioLowIdx + selectedBand) = clamp(slider(ratioLowIdx + selectedBand) - dys, 0, 2);
     ) : ( cap == 8 && mouse_cap & 1 == 1 ) ? (
-      handleCappedBandKnob(.2 * (mouse_y - ly), -bandGainMax, bandGainMax);
+      handleCappedBandKnob(.2 * mouse_diff, -bandGainMax, bandGainMax, shift ? bandgainIdx : 0 );
+    ) : ( cap == 9 && mouse_cap & 1 == 1 ) ? (
+      handleCappedBandKnob(.005 * mouse_diff, attackSliderMin, attackSliderMax, shift ? attackIdx : 0);
+    ) : ( cap == 10 && mouse_cap & 1 == 1 ) ? (
+      handleCappedBandKnob(.005 * mouse_diff, releaseSliderMin, releaseSliderMax, shift ? releaseIdx : 0);
     ) : ( cap == 2 && mouse_cap & 1 == 1 ) ? (
       // Dragging a band frequency
       dx = mouse_x - lx;
@@ -1131,11 +1257,23 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         leftClick ? ( cap = 2; dragging = 5; );
         rightClick ? ( remBand(4); );
       
-      ) : (gk1.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
-      ) : (gk2.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
-      ) : (gk3.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
-      ) : (gk4.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
-      ) : (gk5.handleBandKnob(leftClick, doubleClick, 0)) ? ( 1
+      ) : (gk1.handleBandKnob(leftClick, doubleClick, 0, 8)) ? ( hinter.updateHintTime("LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default")
+      ) : (gk2.handleBandKnob(leftClick, doubleClick, 0, 8)) ? ( hinter.updateHintTime("LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default")
+      ) : (gk3.handleBandKnob(leftClick, doubleClick, 0, 8)) ? ( hinter.updateHintTime("LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default")
+      ) : (gk4.handleBandKnob(leftClick, doubleClick, 0, 8)) ? ( hinter.updateHintTime("LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default")
+      ) : (gk5.handleBandKnob(leftClick, doubleClick, 0, 8)) ? ( hinter.updateHintTime("LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default")
+      
+      ) : (ak1.handleBandKnob(leftClick, doubleClick, 0, 9)) ? ( hinter.updateHintTime("LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times")
+      ) : (ak2.handleBandKnob(leftClick, doubleClick, 0, 9)) ? ( hinter.updateHintTime("LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times")
+      ) : (ak3.handleBandKnob(leftClick, doubleClick, 0, 9)) ? ( hinter.updateHintTime("LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times")
+      ) : (ak4.handleBandKnob(leftClick, doubleClick, 0, 9)) ? ( hinter.updateHintTime("LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times")
+      ) : (ak5.handleBandKnob(leftClick, doubleClick, 0, 9)) ? ( hinter.updateHintTime("LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times")
+      
+      ) : (rk1.handleBandKnob(leftClick, doubleClick, 0.92, 10)) ? ( hinter.updateHintTime("LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times")
+      ) : (rk2.handleBandKnob(leftClick, doubleClick, 0.92, 10)) ? ( hinter.updateHintTime("LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times")
+      ) : (rk3.handleBandKnob(leftClick, doubleClick, 0.92, 10)) ? ( hinter.updateHintTime("LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times")
+      ) : (rk4.handleBandKnob(leftClick, doubleClick, 0.92, 10)) ? ( hinter.updateHintTime("LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times")
+      ) : (rk5.handleBandKnob(leftClick, doubleClick, 0.92, 10)) ? ( hinter.updateHintTime("LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times")
       
       /* Drag threshold */
       ) : ( h1.handleThresh(0, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
@@ -1544,7 +1682,8 @@ global(threshRange, lineR, lineG, lineB, lineA)
     down ? gfx_rect(x, y, w, hh) : gfx_rect(x, y - hh, w, hh);
   );
 );
-  
+
+
 function drawBands()
   global(Cuts, scaling,
            mute1, mute2, mute3, mute4, mute5,
@@ -1554,18 +1693,32 @@ function drawBands()
            threshRange, threshMax
            threshLowIdx, threshHighIdx,
            ratioHighIdx, ratioLowIdx,
-           bandGainIdx, bandGainMax)
+           bandGainIdx, bandGainMax,
+           attackIdx, releaseIdx,
+           attackSliderMin, attackSliderMax,
+           releaseSliderMin, releaseSliderMax
+           atkFgR, atkFgG, atkFgB,
+           relFgR, relFgG, relFgB,
+           filterBank.comp_l1.attack, filterBank.comp_l1.release
+           filterBank.comp_l2.attack, filterBank.comp_l2.release
+           filterBank.comp_l3.attack, filterBank.comp_l3.release
+           filterBank.comp_l4.attack, filterBank.comp_l4.release
+           filterBank.comp_l5.attack, filterBank.comp_l5.release
+           )
   instance(xc, dx, x, y, w, h, 
            x1, x2, x3, x4, x5,  // Band frequency screen positions
            v1, v2, v3, v4, v5,  // Frequency handles
            h1, h2, h3, h4, h5,  // Threshold handles
            h6, h7, h8, h9, h10, // Threshold handles
            c1, c2, c3, c4, c5,  // Circle handles
-           gk1, gk2, gk3, gk4, gk5 // Gain knob handles
+           gk1, gk2, gk3, gk4, gk5, // Gain knob handles
+           ak1, ak2, ak3, ak4, ak5, // Attack arcs
+           rk1, rk2, rk3, rk4, rk5, // Release arcs
            F1hz, F2hz, F3hz, F4hz, F5hz, // Frequencies
            x_over)
   local(iRange, dmax, bwidth, gain_y, hz_label_height_frac,
-        y1, y2, y3, y4, y5, y6, y7, y8, y9, y10)
+        y1, y2, y3, y4, y5, y6, y7, y8, y9, y10,
+        db_y, atk_x, rel_x, dyn_y)
   (
     xc = x;
     dx = 5;
@@ -1584,6 +1737,10 @@ function drawBands()
     y9 = y+h*(dmax-iRange*(slider(threshLowIdx + 3)));
     y10 = y+h*(dmax-iRange*(slider(threshLowIdx + 4)));
     
+    db_y = 8;
+    atk_x = 12;
+    rel_x = -12;
+    dyn_y = -11;
     bwidth = 35 * (1 + scaling);
     gain_y = h - bwidth - 5;
     gfx_rect(x_over-3, y, 5, h);
@@ -1594,7 +1751,10 @@ function drawBands()
        h6.drawRatio(h, ratioLowIdx + 0, 1);
        c1.fancyCircle(x + .5*w, y1, 0, mute1, solo1, bypassBand1);
        
-       gk1.simpleKnob(x + .5*w, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
+       gk1.simpleKnob(x + .5*w, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       
+       ak1.drawExtraArc(x + .5*w, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(x + .5*w, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
     ) : ( Cuts == 1 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x+w-2, y2);
@@ -1607,8 +1767,13 @@ function drawBands()
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
        c2.fancyCircle(x1 + .5*(w-x1), y2, 0, mute2, solo2, bypassBand2);
        
-       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
-       gk2.simpleKnob(x1 + .5*(w-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       gk2.simpleKnob(x1 + .5*(w-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+       
+       ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+       ak2.drawExtraArc(x1 + .5*(w-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+       rk2.drawExtraArc(x1 + .5*(w-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
     ) : ( Cuts == 2 ) ? (
        gfx_set(1, 1, 1, 1);
        h1.fancyLineH(x,  y1, x1-2, y1);
@@ -1627,9 +1792,16 @@ function drawBands()
        c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
        c3.fancyCircle(x2 + .5*(w-x2), y3, 0, mute3, solo3, bypassBand3);
        
-       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
-       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
-       gk3.simpleKnob(x2 + .5*(w-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+2)));
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+       gk3.simpleKnob(x2 + .5*(w-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
+       
+       ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+       ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+       rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+       ak3.drawExtraArc(x2 + .5*(w-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
+       rk3.drawExtraArc(x2 + .5*(w-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
     ) : ( Cuts == 3 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x2-2, y2);
@@ -1652,10 +1824,19 @@ function drawBands()
        c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3, bypassBand3);
        c4.fancyCircle(x3 + .5*(w-x3), y4, 0, mute4, solo4, bypassBand4);
        
-       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
-       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
-       gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+2)));
-       gk4.simpleKnob(x3 + .5*(w-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+3)));
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+       gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
+       gk4.simpleKnob(x3 + .5*(w-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+3)), 0, db_y);
+       
+       ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+       ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+       rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+       ak3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
+       rk3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
+       ak4.drawExtraArc(x3 + .5*(w-x3), gain_y, bwidth, attackIdx + 3, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l4.attack), -1, atk_x, dyn_y);
+       rk4.drawExtraArc(x3 + .5*(w-x3), gain_y, bwidth, releaseIdx + 3, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l4.release), 1, rel_x, dyn_y);
     ) : ( Cuts == 4 ) ? (
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x2-2, y2);
@@ -1683,11 +1864,22 @@ function drawBands()
        c4.fancyCircle(x3 + .5*(x4-x3), y4, 0, mute4, solo4, bypassBand4);
        c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5, bypassBand5);
        
-       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+0)));
-       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+1)));
-       gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+2)));
-       gk4.simpleKnob(x3 + .5*(x4-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+3)));
-       gk5.simpleKnob(x4 + .5*(w-x4), gain_y, bwidth, bandGainIdx+4, bandGainMax, sprintf(8, "%d dB", slider(bandGainIdx+4)));
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+       gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
+       gk4.simpleKnob(x3 + .5*(x4-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+3)), 0, db_y);
+       gk5.simpleKnob(x4 + .5*(w-x4), gain_y, bwidth, bandGainIdx+4, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+4)), 0, db_y);
+       
+       ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+       ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+       rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+       ak3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
+       rk3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
+       ak4.drawExtraArc(x3 + .5*(x4-x3), gain_y, bwidth, attackIdx + 3, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l4.attack), -1, atk_x, dyn_y);
+       rk4.drawExtraArc(x3 + .5*(x4-x3), gain_y, bwidth, releaseIdx + 3, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l4.release), 1, rel_x, dyn_y);
+       ak5.drawExtraArc(x4 + .5*(w-x4), gain_y, bwidth, attackIdx + 4, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l5.attack), -1, atk_x, dyn_y);
+       rk5.drawExtraArc(x4 + .5*(w-x4), gain_y, bwidth, releaseIdx + 4, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l5.release), 1, rel_x, dyn_y);
     );
     
     hz_label_height_frac = 0.05;
@@ -1923,16 +2115,16 @@ instance(comp_l1, comp_r1,
          comp_l4, comp_r4,
          comp_l5, comp_r5)
 (
-  comp_l1.setCompressorOptions(ThreshLow1, ThreshHigh1, RatioLow1, RatioHigh1, 0, Release1, 0, 120, 5, 400);
-  comp_l2.setCompressorOptions(ThreshLow2, ThreshHigh2, RatioLow2, RatioHigh2, 0, Release2, 0, 120, 5, 400);
-  comp_l3.setCompressorOptions(ThreshLow3, ThreshHigh3, RatioLow3, RatioHigh3, 0, Release3, 0, 120, 5, 400);
-  comp_l4.setCompressorOptions(ThreshLow4, ThreshHigh4, RatioLow4, RatioHigh4, 0, Release4, 0, 120, 5, 400);
-  comp_l5.setCompressorOptions(ThreshLow5, ThreshHigh5, RatioLow5, RatioHigh5, 0, Release5, 0, 120, 5, 400);
-  comp_r1.setCompressorOptions(ThreshLow1, ThreshHigh1, RatioLow1, RatioHigh1, 0, Release1, 0, 120, 5, 400);
-  comp_r2.setCompressorOptions(ThreshLow2, ThreshHigh2, RatioLow2, RatioHigh2, 0, Release2, 0, 120, 5, 400);
-  comp_r3.setCompressorOptions(ThreshLow3, ThreshHigh3, RatioLow3, RatioHigh3, 0, Release3, 0, 120, 5, 400);
-  comp_r4.setCompressorOptions(ThreshLow4, ThreshHigh4, RatioLow4, RatioHigh4, 0, Release4, 0, 120, 5, 400);
-  comp_r5.setCompressorOptions(ThreshLow5, ThreshHigh5, RatioLow5, RatioHigh5, 0, Release5, 0, 120, 5, 400);
+  comp_l1.setCompressorOptions(ThreshLow1, ThreshHigh1, RatioLow1, RatioHigh1, Attack1, Release1, 0, 120, 5, 400);
+  comp_l2.setCompressorOptions(ThreshLow2, ThreshHigh2, RatioLow2, RatioHigh2, Attack2, Release2, 0, 120, 5, 400);
+  comp_l3.setCompressorOptions(ThreshLow3, ThreshHigh3, RatioLow3, RatioHigh3, Attack3, Release3, 0, 120, 5, 400);
+  comp_l4.setCompressorOptions(ThreshLow4, ThreshHigh4, RatioLow4, RatioHigh4, Attack4, Release4, 0, 120, 5, 400);
+  comp_l5.setCompressorOptions(ThreshLow5, ThreshHigh5, RatioLow5, RatioHigh5, Attack5, Release5, 0, 120, 5, 400);
+  comp_r1.setCompressorOptions(ThreshLow1, ThreshHigh1, RatioLow1, RatioHigh1, Attack1, Release1, 0, 120, 5, 400);
+  comp_r2.setCompressorOptions(ThreshLow2, ThreshHigh2, RatioLow2, RatioHigh2, Attack2, Release2, 0, 120, 5, 400);
+  comp_r3.setCompressorOptions(ThreshLow3, ThreshHigh3, RatioLow3, RatioHigh3, Attack3, Release3, 0, 120, 5, 400);
+  comp_r4.setCompressorOptions(ThreshLow4, ThreshHigh4, RatioLow4, RatioHigh4, Attack4, Release4, 0, 120, 5, 400);
+  comp_r5.setCompressorOptions(ThreshLow5, ThreshHigh5, RatioLow5, RatioHigh5, Attack5, Release5, 0, 120, 5, 400);
 );
 
 @serialize
@@ -1951,6 +2143,7 @@ file_var(0, solo5);
 file_var(0, FIR);
 
 update_gain_now();
+eps = 10^(epsilon);
 
 @slider
 filterBank.setCompOptions();
@@ -1959,7 +2152,7 @@ filterBank.setCompOptions();
 lbnd = active_threshold > -319.0 ? 10^(active_threshold/20) : 0;
 
 gate_speed = srate / 5;  // 5 Hz gate
-eps = 0.000000000001;
+eps = 10^(epsilon);
 
 smoothing_const = 20/srate;
 filterBank.setCompOptions();
@@ -2645,7 +2838,6 @@ solo5 ? play5 = 1;
       spl1 = dcr.eval_HP6(spl1);
     );
     
-    /*
     output_squash ? (
       output_squash == 1 ? (
         spl0 = clip(spl0);
@@ -2658,7 +2850,6 @@ solo5 ? play5 = 1;
         spl1 = r.clip_linear_aa(spl1);
       );
     );
-    */
   );
   
   gate < lbnd ? (
@@ -2881,40 +3072,4 @@ solo5 ? play5 = 1;
   gfx_mode = 4;
   
   hinter.drawHint_draw();
-  
-  
-  writeX = gfx_w - 120;
-  writeY = 10;
-  function draw_text(writeX, writeY)
-  (
-    gfx_x = writeX;
-    gfx_y = writeY;
-    ( selectedBand == 0 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio_upper)
-    ) : ( selectedBand == 1 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l2.ratio_upper);
-    ) : ( selectedBand == 2 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l3.ratio_upper);
-    ) : ( selectedBand == 3 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l4.ratio_upper);
-    ) : ( selectedBand == 4 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l5.ratio_upper)
-    );
-    gfx_x = writeX;
-    gfx_y += 16;
-    ( selectedBand == 0 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l1.ratio_lower)
-    ) : ( selectedBand == 1 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l2.ratio_lower);
-    ) : ( selectedBand == 2 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l3.ratio_lower);
-    ) : ( selectedBand == 3 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l4.ratio_lower);
-    ) : ( selectedBand == 4 ) ? ( gfx_printf("Ratio: %.3g", filterBank.comp_l5.ratio_lower)
-    );
-    gfx_x = writeX;
-    gfx_y += 16;
-    gfx_printf("Decay: %.3g ms", filterBank.comp_l1.release);
-  );
 
-  gfx_setfont(1, "Arial", 16);
-  
-  gfx_set(0, 0, 0, 1);  
-  draw_text(writeX-2, writeY-2);
-  gfx_set(0, 0, 0, 1);  
-  draw_text(writeX+2, writeY+2);
-
-  gfx_set(1, .4, .2, 1);  
-  draw_text(writeX, writeY);
-  
