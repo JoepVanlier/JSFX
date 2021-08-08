@@ -1,8 +1,8 @@
 desc:Saike Not OTT (ALPHA)
 tags: multiband compression
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Draw gain control corresponding to active band last.
+changelog: Allow changing threshold and gain simultaneously. Change steps on the grid to 6 dB. Bugfix weird focus behaviour. Tweak grid visibility.
 about:
   # Multiband Compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design—A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
@@ -362,8 +362,16 @@ global(gfx_mode, scaling, gfx_x, gfx_y)
     xmax = x + r;
   );
   
-  amin = 0.22 * $pi;
-  amax = 0.78 * $pi;
+  amin = 0.20 * $pi;
+  amax = 0.8 * $pi;
+  cr = r_in; i = over ? .2 * abs(sin(2.0 * time_precise())) : 0;
+  loop(6,
+    gfx_set(r_fg * i, g_fg * i, b_fg * i, 1);
+    gfx_arc(x, y, cr, side * amin, side * amax);
+    cr += 0.5;
+    i *= 2;
+  );
+  
   cr = r_draw; i = over ? 1 * abs(sin(2.0 * time_precise())) : 0;
   loop(6,
     gfx_set(r_fg * i, g_fg * i, b_fg * i, 1);
@@ -818,13 +826,13 @@ function setWindowLocation(_x, _y, _w, _h)
 function drawBackface()
   instance(x, y, w, h)
   global(backface_color_r, backface_color_g, backface_color_b, backface_color_a,
-         grid_color_r, grid_color_g, grid_color_b, grid_color_a )
+         grid_color_r, grid_color_g, grid_color_b, grid_color_a)
   local()
   (
-    gfx_set( backface_color_r, backface_color_g, backface_color_b, backface_color_a );
+    gfx_set(backface_color_r, backface_color_g, backface_color_b, backface_color_a);
     gfx_rect(x, y, w, h);
     
-    gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
+    gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_color_a);
     gfx_line(x, y, x+w, y);
     gfx_line(x, y+h, x+w, y+h);
     gfx_line(x, y, x, y+h);
@@ -833,10 +841,9 @@ function drawBackface()
 
 // Draws the FFT Grid, frequency axis and dB axis
 function drawGrid()
-  global( fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT,
-             )
-  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset,
-           grid_color_r, grid_color_g, grid_color_b, grid_color_a )
+  global(fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT,
+         grid_color_r, grid_color_g, grid_color_b, grid_color_a)
+  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset,)
   local(xx, i, wsc, N, xl)
   (    
     this.drawBackface();
@@ -849,7 +856,7 @@ function drawGrid()
     gfx_setfont(GRID_FONT);
     loop(16,
       xx = x + log(i*fftSize/srate-hzoffset)*wsc;
-      gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
+      gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_color_a);
       gfx_line(xx, y, xx, y+h);
       
       ( (xx - xl) > 30 ) ? (
@@ -864,7 +871,7 @@ function drawGrid()
         xl = xx;
       );
       
-      gfx_set( .2, .2, .2, grid_alpha );
+      gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_alpha);
       gfx_line(xx, y, xx, y+h);
       
       ( i < 100 ) ? (i += 20) :
@@ -874,7 +881,7 @@ function drawGrid()
     );
     
     gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
-    N = 8;
+    N = 10;
     xx = y;
     i = 0;
     gfx_measurestr("8", wsc, xl);
@@ -884,7 +891,7 @@ function drawGrid()
       gfx_y = xx-.5*xl;
       i > 0 ? gfx_printf("-%d", i*floorLevel/N);
       
-      gfx_set( .2, .2, .2, grid_alpha );
+      gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_alpha );
       gfx_line(x, xx+1, x+w, xx+1);
       
       xx += h/N;
@@ -945,8 +952,7 @@ function clamp(value, mini, maxi)
 function handleBandKnob(left, double, default, ncap)
   instance(x, y, r, slider_idx, over, xmin, xmax, ymin, ymax)
   local(dx, dy)
-  global(mouse_x, mouse_y,
-         dragging, cap)
+  global(mouse_x, mouse_y, dragging, cap)
   (
     dx = (mouse_x - x);
     dy = (mouse_y - y);
@@ -1029,7 +1035,7 @@ global(cap, dragging, selectedBand, mouse_x, mouse_y,
   over = this.isOver(mouse_x, mouse_y);
   
   over ? (
-    hinter.updateHintTime("LMB + Drag - Modify threshold\nDouble LMB - Reset threshold to default\nShift + LMB + Drag - Modify threshold while increasing gain");
+    hinter.updateHintTime("LMB + Drag - Modify threshold\nDouble LMB - Reset threshold to default\nAlt / Option + Drag - Modify threshold while increasing gain\nShift + Drag - Modify threshold of all bands simultaneously");
     this.over = 1;
     leftClick ? ( cap = new_cap; dragging = band_index + 1; selectedBand = band_index; );
     doubleClick ? ( slider(sliderBaseIdx + band_index) = default; selectedBand = band_index; );
@@ -1052,42 +1058,59 @@ local()
 );
 
 function handle_ctrls(leftClick, doubleClick, no_focus)
-instance(gk1, gk2, gk3, gk4, gk5,
-       ak1, ak2, ak3, ak4, ak5,
-       rk1, rk2, rk3, rk4, rk5)
-global(selectedBand, hinter.updateHintTime)
-local(gain_string, attack_string, release_string)
+instance(gk1, gk2, gk3, gk4, gk5, 
+         ak1, ak2, ak3, ak4, ak5,
+         rk1, rk2, rk3, rk4, rk5)
+global(selectedBand, hinter.updateHintTime, over00)
+local(gain_string, attack_string, release_string, focus_grabbed)
 (
   gain_string = "LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default";
   attack_string = "LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times";
   release_string = "LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times";
   
-  ((selectedBand == 0) || no_focus) ? (
-    gk1.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
-    ) : ak1.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
-    ) : rk1.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
-    ) : 0
-  ) : ((selectedBand == 1) || no_focus) ? (
-    gk2.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
-    ) : ak2.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
-    ) : rk2.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
-    ) : 0
-  ) : ((selectedBand == 2) || no_focus) ? (  
-    gk3.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
-    ) : ak3.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
-    ) : rk3.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
-    ) : 0
-  ) : ((selectedBand == 3) || no_focus) ? (
-    gk4.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
-    ) : ak4.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
-    ) : rk4.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
-    ) : 0
-  ) : ((selectedBand == 4) || no_focus) ? (
-    gk5.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
-    ) : ak5.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
-    ) : rk5.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
-    ) : 0
-  ) : 0
+  // We do two passes through this. The first is for the priority one (the one belonging 
+  // to the selected band (no_focus = 0). If this one wants the focus it should have priority.
+  // After this pass, we iterate through the entire list. There, the first one who wants the
+  // focus gets it. Once the focus has been grabbed we out.
+  // Returning 1 means that a focus was achieved and no other widget is allowed to have focus.
+  focus_grabbed = 0;
+  (((selectedBand == 0) || no_focus) && (!focus_grabbed)) ? (
+    focus_grabbed = 
+      gk1.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak1.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk1.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 1) || no_focus) && (!focus_grabbed)) ? (
+    focus_grabbed = 
+      gk2.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak2.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk2.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 2) || no_focus) && (!focus_grabbed)) ? ( 
+    focus_grabbed = 
+      gk3.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak3.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk3.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 3) || no_focus) && (!focus_grabbed)) ? ( 
+    focus_grabbed = 
+      gk4.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak4.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk4.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 4) || no_focus) && (!focus_grabbed)) ? ( 
+    focus_grabbed = 
+      gk5.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak5.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk5.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  over00 = focus_grabbed;
+  focus_grabbed
 );
 
 
@@ -1117,11 +1140,11 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          bandgainIdx, bandGainMax,
          attackSliderMin, attackSliderMax,
          releaseSliderMin, releaseSliderMax)
-  local(dx, dy, over, dys,
+  local(dx, dy, over, dys, alt,
         F1, F2, F3, F4,
         leftClick, rightClick, doubleClick,
         cTime, mpos, shift, ctrl, lb,
-        mouse_diff)
+        mouse_diff, idx)
   (
     over = mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h);
     leftClick   = ( mouse_cap & 1 == 1 && lcap & 1 == 0 );
@@ -1129,6 +1152,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     doubleClick = 0;
     shift       = ( mouse_cap & 8 );
     ctrl        = ( mouse_cap & 4 );
+    alt         = ( mouse_cap & 16 );
     
     leftClick ? (
        time_precise(cTime);
@@ -1156,27 +1180,76 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_diff;
       dys = threshRange*dy/h;
-      slider(threshHighIdx + dragging - 1) = clamp(slider(threshHighIdx + dragging - 1) - dys, slider(threshLowIdx + dragging - 1), threshMax);
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(threshHighIdx + idx) = clamp(slider(threshHighIdx + idx) - dys, slider(threshLowIdx + idx), threshMax);
+          alt ? slider(bandGainIdx + idx) = clamp(slider(bandGainIdx + idx) + dys, -bandGainMax, bandGainMax);
+          idx += 1;
+        );
+      ) : (
+        slider(threshHighIdx + dragging - 1) = clamp(slider(threshHighIdx + dragging - 1) - dys, slider(threshLowIdx + dragging - 1), threshMax);
+        alt ? slider(bandGainIdx + dragging - 1) = clamp(slider(bandGainIdx + dragging - 1) + dys, -bandGainMax, bandGainMax);
+      );
     ) : ( cap == 4 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_diff;
       dys = threshRange*dy/h;
-      slider(threshLowIdx + dragging - 1) = clamp(slider(threshLowIdx + dragging - 1) - dys, threshMin, slider(threshHighIdx + dragging - 1));
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(threshLowIdx + idx) = clamp(slider(threshLowIdx + idx) - dys, threshMin, slider(threshHighIdx + idx));
+          alt ? slider(bandGainIdx + idx) = clamp(slider(bandGainIdx + idx) + dys, -bandGainMax, bandGainMax);
+          idx += 1;
+        );
+      ) : (
+        slider(threshLowIdx + dragging - 1) = clamp(slider(threshLowIdx + dragging - 1) - dys, threshMin, slider(threshHighIdx + dragging - 1));
+        alt ? slider(bandGainIdx + dragging - 1) = clamp(slider(bandGainIdx + dragging - 1) + dys, -bandGainMax, bandGainMax);
+      );
     ) : ( cap == 5 && mouse_cap & 1 == 1 ) ? (
       // Ratio top
       dy = mouse_diff;
       dys = -2*dy/h;
-      slider(ratioHighIdx + selectedBand) = clamp(slider(ratioHighIdx + selectedBand) - dys, 0, 2);
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(ratioHighIdx + idx) = clamp(slider(ratioHighIdx + idx) - dys, 0, 2);
+          idx += 1;
+        );
+      ) : (
+        slider(ratioHighIdx + selectedBand) = clamp(slider(ratioHighIdx + selectedBand) - dys, 0, 2);      
+      );
     ) : ( cap == 6 && mouse_cap & 1 == 1 ) ? (
       // Both thresholds
       dy = mouse_diff;
       dys = threshRange*dy/h;
-      slider(threshHighIdx + selectedBand) = clamp(slider(threshHighIdx + selectedBand) - dys, threshMin, threshMax);
-      slider(threshLowIdx + selectedBand) = clamp(slider(threshLowIdx + selectedBand) - dys, threshMin, threshMax);
+      
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(threshHighIdx + idx) = clamp(slider(threshHighIdx + idx) - dys, threshMin, threshMax);
+          slider(threshLowIdx + idx) = clamp(slider(threshLowIdx + idx) - dys, threshMin, threshMax);
+          
+          alt ? slider(bandGainIdx + idx) = clamp(slider(bandGainIdx + idx) + dys, -bandGainMax, bandGainMax);
+          idx += 1;
+        );
+      ) : (
+        slider(threshHighIdx + selectedBand) = clamp(slider(threshHighIdx + selectedBand) - dys, threshMin, threshMax);
+        slider(threshLowIdx + selectedBand) = clamp(slider(threshLowIdx + selectedBand) - dys, threshMin, threshMax);
+        alt ? slider(bandGainIdx + selectedBand) = clamp(slider(bandGainIdx + selectedBand) + dys, -bandGainMax, bandGainMax);        
+      );
     ) : ( cap == 7 && mouse_cap & 1 == 1 ) ? (
       // Ratio bottom
       dy = mouse_diff;
       dys = 2*dy/h;
-      slider(ratioLowIdx + selectedBand) = clamp(slider(ratioLowIdx + selectedBand) - dys, 0, 2);
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(ratioLowIdx + idx) = clamp(slider(ratioLowIdx + idx) - dys, 0, 2);
+          idx += 1;
+        );
+      ) : (
+        slider(ratioLowIdx + selectedBand) = clamp(slider(ratioLowIdx + selectedBand) - dys, 0, 2);
+      );
     ) : ( cap == 8 && mouse_cap & 1 == 1 ) ? (
       handleCappedBandKnob(.2 * mouse_diff, -bandGainMax, bandGainMax, shift ? bandgainIdx : 0 );
     ) : ( cap == 9 && mouse_cap & 1 == 1 ) ? (
@@ -1227,34 +1300,34 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       /* Toggle mute/solo */
       ) : ( c1.isOverCircle(mouse_x, mouse_y) == 1 ) ? (
         c1.over = 1;
-        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
         leftClick  ? ( ctrl ? ( bypassBand1 = 1 - bypassBand1) : (
                        mute1 = 1-mute1; solo1 ? (mute1 = 1; solo1 = 0; selectedBand = 0; ); ); );
         rightClick ? ( solo1 = 1-solo1; selectedBand = 0; 
                        ((solo1 == 1) && (shift==0)) ? (solo2=solo3=solo4=solo5=0;); );
       ) : ( c2.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
-        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
         c2.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand2 = 1 - bypassBand2) : (
                        mute2 = 1-mute2; solo2 ? (mute2 = 1; solo2 = 0; selectedBand = 1;); ); );
         rightClick ? ( solo2 = 1-solo2; selectedBand = 1;
                        ((solo2 == 1) && (shift==0)) ? (solo1=solo3=solo4=solo5=0;); );
       ) : ( c3.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 1 ) ? (
-        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
         c3.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand3 = 1 - bypassBand3) : (
                        mute3 = 1-mute3; solo3 ? (mute3 = 1; solo3 = 0; selectedBand = 2; ); ); );
         rightClick ? ( solo3 = 1-solo3; selectedBand = 2;
                        ((solo3 == 1) && (shift==0)) ? (solo1=solo2=solo4=solo5=0;); );
       ) : ( c4.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 2 ) ? (
-        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
         c4.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand4 = 1 - bypassBand4) : (
                         mute4 = 1-mute4; solo4 ? (mute4 = 1; solo4 = 0; selectedBand = 3; ); ); );
         rightClick ? ( solo4 = 1-solo4; selectedBand = 3;
                        ((solo4 == 1) && (shift==0)) ? (solo1=solo2=solo3=solo5=0;); );
       ) : ( c5.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 3 ) ? (
-        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass waveshaper");
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
         c5.over = 1;
         leftClick  ? ( ctrl ? ( bypassBand5 = 1 - bypassBand5) : (
                        mute5 = 1-mute5; solo5 ? (mute5 = 1; solo5 = 0; selectedBand = 4; ); ); );
@@ -1697,12 +1770,19 @@ global(threshRange, lineR, lineG, lineB, lineA)
 (
   gfx_set(lineR, lineG, lineB, .1 * lineA);
   v = slider(sliderIdx);
-  frac = 7;
+  frac = 6;
   loop(4,
     hh = frac * th / threshRange / exp(1.1 * v * v);
-    frac += 7;
+    frac += 6;
     down ? gfx_rect(x, y, w, hh) : gfx_rect(x, y - hh, w, hh);
   );
+);
+
+
+function shouldRenderNow(topLayer, idx)
+global(selectedBand)
+(
+  (topLayer && (selectedBand == idx)) || (!topLayer && (selectedBand != idx))
 );
 
 
@@ -1843,17 +1923,17 @@ function drawBands()
        c3.fancyCircle(x2 + .5*(w-x2), y3, 0, mute3, solo3, bypassBand3);
        
        loop(2,
-         ((topLayer && (selectedBand == 0)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 0) ? (
            gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
            ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
            rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 1)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 1) ? (
            gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
            ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
            rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 2)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 2) ? (
            gk3.simpleKnob(x2 + .5*(w-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
            ak3.drawExtraArc(x2 + .5*(w-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
            rk3.drawExtraArc(x2 + .5*(w-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
@@ -1883,22 +1963,22 @@ function drawBands()
        c4.fancyCircle(x3 + .5*(w-x3), y4, 0, mute4, solo4, bypassBand4);
        
        loop(2,
-         ((topLayer && (selectedBand == 0)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 0) ? (
            gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
            ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
            rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 1)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 1) ? (
            gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
            ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
            rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 2)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 2) ? (
            gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
            ak3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
            rk3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 3)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 3) ? (
            gk4.simpleKnob(x3 + .5*(w-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+3)), 0, db_y);
            ak4.drawExtraArc(x3 + .5*(w-x3), gain_y, bwidth, attackIdx + 3, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l4.attack), -1, atk_x, dyn_y);
            rk4.drawExtraArc(x3 + .5*(w-x3), gain_y, bwidth, releaseIdx + 3, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l4.release), 1, rel_x, dyn_y);
@@ -1933,27 +2013,27 @@ function drawBands()
        c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5, bypassBand5);
 
        loop(2,
-         ((topLayer && (selectedBand == 0)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 0) ? (
            gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
            ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
            rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 1)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 1) ? (
            gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
            ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
            rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 2)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 2) ? (
            gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
            ak3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
            rk3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 3)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 3) ? (
            gk4.simpleKnob(x3 + .5*(x4-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+3)), 0, db_y);
            ak4.drawExtraArc(x3 + .5*(x4-x3), gain_y, bwidth, attackIdx + 3, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l4.attack), -1, atk_x, dyn_y);
            rk4.drawExtraArc(x3 + .5*(x4-x3), gain_y, bwidth, releaseIdx + 3, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l4.release), 1, rel_x, dyn_y);
          );
-         ((topLayer && (selectedBand == 4)) || !topLayer) ? (
+         shouldRenderNow(topLayer, 4) ? (
            gk5.simpleKnob(x4 + .5*(w-x4), gain_y, bwidth, bandGainIdx+4, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+4)), 0, db_y);
            ak5.drawExtraArc(x4 + .5*(w-x4), gain_y, bwidth, attackIdx + 4, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l5.attack), -1, atk_x, dyn_y);
            rk5.drawExtraArc(x4 + .5*(w-x4), gain_y, bwidth, releaseIdx + 4, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l5.release), 1, rel_x, dyn_y);
@@ -2991,11 +3071,11 @@ solo5 ? play5 = 1;
   fft_in_g = .13;
   fft_in_b = .23;
   fft_in_a = .6;
-  grid_color_r = .73;
-  grid_color_g = .73;
-  grid_color_b = .76;
+  grid_color_r = 0.273;
+  grid_color_g = 0.053;
+  grid_color_b = 0.096;
   grid_color_a = .2;
-  grid_alpha = .1 * (1+.5*abs(sin(2*time_precise())));
+  grid_alpha = 0.2 * (1+1*abs(sin(2*time_precise())));
   backface_color_r = .2;
   backface_color_g = .2;
   backface_color_b = .3;
