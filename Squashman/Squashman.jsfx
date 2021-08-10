@@ -1,8 +1,8 @@
 desc:Squashman (beta)
 tags: multiband saturation plugin
-version: 0.72
+version: 0.73
 author: Joep Vanlier
-changelog: Workaround for SSE branch issue with tan(pi/2).
+changelog: Minor performance optimizations. Reset modulators on @init for reproducible behaviour.
 provides: Squashman_Dependencies/*
 about:
   # Squashman
@@ -106,6 +106,11 @@ slider63:Oversampling=1<1,4,1>-Oversampling
 slider64:fixDC=1<0,2,1>-Fix DC options
 
 @init
+  modulator1.t = 0;
+  modulator2.t = 0;
+  modulator3.t = 0;
+  modulator4.t = 0;
+
   logten        = log(10);
   logten005     = 0.05 * log(10);
   COMBO_SMALL   = 16;
@@ -2375,6 +2380,21 @@ function initSpectrum(memoryOffset, fftSize, srate)
     (2/(1+exp(-2*x)))-1
   );
   
+  function qtanh(x)
+  local(a, b, x2)
+  global()
+  instance()
+  (
+    (abs(x) > 4.97) ? (
+      sign(x)
+    ) : (
+      x2 = x * x;
+      a = x * (135135.0 + x2 * (17325.0 + x2 * (378.0 + x2)));
+      b = 135135.0 + x2 * (62370.0 + x2 * (3150.0 + x2 * 28.0));
+      a / b
+    );
+  );
+  
   function antialiased_tanh_rect(x)
   local(eps, em2x, F0_xn)
   global(slider4)
@@ -2495,7 +2515,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
   /* TO DO: Merge crossovers with control */
   function processBand(drive, pan, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
-  instance(l, r, inL, inR, in, pre, post, t, panl, panr, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin, lside)
+  instance(l, r, inL, inR, in, pre, post, t, panl, panr, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin)
   local(inv_ceiling, factor, depth, idepth, 
         tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
   (
@@ -2511,17 +2531,18 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = (tc - r)*.5;
       );
       
-      ( ldrive != drive ) ? (
+      (ldrive != drive) ? (
         preampl = exp(logten005*drive);
         preampr = exp(logten005*drive);
         ldrive = drive;
       );
       
-      ( lpan != pan || side != lside ) ? (
-        panl = cos($pi*(pan*.5+.5)/2)*sqrt(2);
-        panr = sin($pi*(pan*.5+.5)/2)*sqrt(2);
+      (lpan!=pan) ? (
+        //panl = cos($pi*(pan*.5+.5)/2)*1.4142135623730950488016887242097;
+        //panr = sin($pi*(pan*.5+.5)/2)*1.4142135623730950488016887242097;
+        panl = cos($pi*(pan*.25+.25))*1.4142135623730950488016887242097;
+        panr = sin($pi*(pan*.25+.25))*1.4142135623730950488016887242097;
         lpan = pan;
-        lside = side;
       );
       
       l = l * preampl * panl;
@@ -2868,6 +2889,10 @@ function initSpectrum(memoryOffset, fftSize, srate)
         /* Warm hug */
         l = tanh(l - modifier*tanh(6*l+modifier) + tanh(4*modifier*l-modifier));
         r = tanh(r - modifier*tanh(6*r+(1-side)*modifier) + tanh(4*modifier*r-(1-side)*modifier));
+        
+        // Flattened:
+//        l = -1 + 2/(exp(-2*l + 2*modifier*(-1 + 2/(exp(-12*l - 2*modifier) + 1)) + 2 - 4/(exp(-8*l*modifier + 2*modifier) + 1)) + 1);
+//        r = -1 + 2/(exp(2*modifier*(-1 + 2/(exp(-2*modifier*(1 - side) - 12*r) + 1)) - 2*r + 2 - 4/(exp(-8*modifier*r + 2*modifier*(1 - side)) + 1)) + 1);
       ) : ( mode == 26 ) ? (
         tl = l;
         tr = r;
@@ -2994,7 +3019,8 @@ function initSpectrum(memoryOffset, fftSize, srate)
           Feedback1, Feedback2, Feedback3,  Feedback4,  Feedback5,
           Modifier1, Modifier2, Modifier3,  Modifier4,  Modifier5,
           fbToggle1, fbToggle2, fbToggle3,  fbToggle4,  fbToggle5,
-          logten005 )
+          logten005,
+          cuts )
   instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5, 
            bufferL1, bufferL2, bufferL3, bufferL4, bufferL5, 
            bufferR1, bufferR2, bufferR3, bufferR4, bufferR5,
@@ -3005,38 +3031,36 @@ function initSpectrum(memoryOffset, fftSize, srate)
   (
     fbToggle1 ? ( fbL1 = Feedback1 * bufferL1.readBuffer();
                   fbR1 = Feedback1 * bufferR1.readBuffer(); ) : ( fbL1 = fbR1 = 0; );
-    fbToggle2 ? ( fbL2 = Feedback2 * bufferL2.readBuffer();
-                  fbR2 = Feedback2 * bufferR2.readBuffer(); ) : ( fbL2 = fbR2 = 0; );
-    fbToggle3 ? ( fbL3 = Feedback3 * bufferL3.readBuffer();
-                  fbR3 = Feedback3 * bufferR3.readBuffer(); ) : ( fbL3 = fbR3 = 0; );
-    fbToggle4 ? ( fbL4 = Feedback4 * bufferL4.readBuffer();
-                  fbR4 = Feedback4 * bufferR4.readBuffer(); ) : ( fbL4 = fbR4 = 0; );
-    fbToggle5 ? ( fbL5 = Feedback5 * bufferL5.readBuffer();
-                  fbR5 = Feedback5 * bufferR5.readBuffer(); ) : ( fbL5 = fbR5 = 0; );
-    
     b1.processBand(Drive1, DrivePan1, play1, Mode1, Modifier1, fbL1, fbR1);
-    b2.processBand(Drive2, DrivePan2, play2, Mode2, Modifier2, fbL2, fbR2);
-    b3.processBand(Drive3, DrivePan3, play3, Mode3, Modifier3, fbL3, fbR3);
-    b4.processBand(Drive4, DrivePan4, play4, Mode4, Modifier4, fbL4, fbR4);
-    b5.processBand(Drive5, DrivePan5, play5, Mode5, Modifier5, fbL5, fbR5);
-    
-    fbToggle1 ? ( bufferL1.updateBuffer(b1.l);
-                  bufferR1.updateBuffer(b1.r); );
-    fbToggle2 ? ( bufferL2.updateBuffer(b2.l);
-                  bufferR2.updateBuffer(b2.r); );
-    fbToggle3 ? ( bufferL3.updateBuffer(b3.l);
-                  bufferR3.updateBuffer(b3.r); );
-    fbToggle4 ? ( bufferL4.updateBuffer(b4.l);
-                  bufferR4.updateBuffer(b4.r); );
-    fbToggle5 ? ( bufferL5.updateBuffer(b5.l);
-                  bufferR5.updateBuffer(b5.r); );
+    fbToggle1 ? ( bufferL1.updateBuffer(b1.l); bufferR1.updateBuffer(b1.r); );
 
-    /* lg GO HERE */
-    /*( lg1 != Gain1 ) ? ( g1 = (10^(0.05*Gain1)); lg1 = Gain1; );
-    ( lg2 != Gain2 ) ? ( g2 = (10^(0.05*Gain2)); lg2 = Gain2; );
-    ( lg3 != Gain3 ) ? ( g3 = (10^(0.05*Gain3)); lg3 = Gain3; );
-    ( lg4 != Gain4 ) ? ( g4 = (10^(0.05*Gain4)); lg4 = Gain4; );
-    ( lg5 != Gain5 ) ? ( g5 = (10^(0.05*Gain5)); lg5 = Gain5; );*/
+    (cuts) ? (
+      fbToggle2 ? ( fbL2 = Feedback2 * bufferL2.readBuffer();
+                    fbR2 = Feedback2 * bufferR2.readBuffer(); ) : ( fbL2 = fbR2 = 0; );
+      b2.processBand(Drive2, DrivePan2, play2, Mode2, Modifier2, fbL2, fbR2);
+      fbToggle2 ? ( bufferL2.updateBuffer(b2.l); bufferR2.updateBuffer(b2.r); );
+      
+      (cuts > 1) ? (
+        fbToggle3 ? ( fbL3 = Feedback3 * bufferL3.readBuffer();
+                      fbR3 = Feedback3 * bufferR3.readBuffer(); ) : ( fbL3 = fbR3 = 0; );
+        b3.processBand(Drive3, DrivePan3, play3, Mode3, Modifier3, fbL3, fbR3);
+        fbToggle3 ? ( bufferL3.updateBuffer(b3.l); bufferR3.updateBuffer(b3.r); );
+        
+        (cuts > 2) ? (
+          fbToggle4 ? ( fbL4 = Feedback4 * bufferL4.readBuffer();
+                        fbR4 = Feedback4 * bufferR4.readBuffer(); ) : ( fbL4 = fbR4 = 0; );
+          b4.processBand(Drive4, DrivePan4, play4, Mode4, Modifier4, fbL4, fbR4);
+          fbToggle4 ? ( bufferL4.updateBuffer(b4.l); bufferR4.updateBuffer(b4.r); );
+    
+          (cuts > 3) ? (
+            fbToggle5 ? ( fbL5 = Feedback5 * bufferL5.readBuffer();
+                          fbR5 = Feedback5 * bufferR5.readBuffer(); ) : ( fbL5 = fbR5 = 0; );
+            b5.processBand(Drive5, DrivePan5, play5, Mode5, Modifier5, fbL5, fbR5);
+            fbToggle5 ? ( bufferL5.updateBuffer(b5.l); bufferR5.updateBuffer(b5.r); );
+          );
+        );
+      );
+    );
     
     ( lg1 != Gain1 ) ? ( g1 = exp(logten005*Gain1); lg1 = Gain1; );
     ( lg2 != Gain2 ) ? ( g2 = exp(logten005*Gain2); lg2 = Gain2; );
@@ -3064,30 +3088,6 @@ function initSpectrum(memoryOffset, fftSize, srate)
       b5.l = g5*b5.l*DryWet5 + b5.inL*(1-DryWet5);
       b5.r = g5*b5.r*DryWet5 + b5.inR*(1-DryWet5);
     );
-    
-    /* Post Gain affects wet and dry
-    play1 ? (
-      b1.l = g1*(b1.l*DryWet1+b1.preamp*b1.inL*(1-DryWet1));
-      b1.r = g1*(b1.r*DryWet1+b1.preamp*b1.inR*(1-DryWet1));
-    );
-    play2 ? (
-      b2.l = g2*(b2.l*DryWet2+b2.preamp*b2.inL*(1-DryWet2));
-      b2.r = g2*(b2.r*DryWet2+b2.preamp*b2.inR*(1-DryWet2));
-    );
-    play3 ? (
-      b3.l = g3*(b3.l*DryWet3+b3.preamp*b3.inL*(1-DryWet3));
-      b3.r = g3*(b3.r*DryWet3+b3.preamp*b3.inR*(1-DryWet3));
-    );
-    play4 ? (
-      b4.l = g4*(b4.l*DryWet4+b4.preamp*b4.inL*(1-DryWet4));
-      b4.r = g4*(b4.r*DryWet4+b4.preamp*b4.inR*(1-DryWet4));
-    );
-    play5 ? (
-      b5.l = g5*(b5.l*DryWet5+b5.preamp*b5.inL*(1-DryWet5));
-      b5.r = g5*(b5.r*DryWet5+b5.preamp*b5.inR*(1-DryWet5));
-    );
-    */
-    
   );
   
   function resetMeters()
@@ -3693,20 +3693,22 @@ fbMod1Value4       = fbMod1Value[4];
     );
   );
 
+
   /* LFO Modulators */
   function fetchModulationAmount(ref, type, value)
-  local()
+  local(m_value)
   global(m1_value, m2_value, m3_value, m4_value, m5_value, m6_value, m7_value, m8_value)
   instance()
   (
-    (type == 1) ? ( ref += value * m1_value; )
-    : (type == 2) ? ( ref += value * m2_value; )
-    : (type == 3) ? ( ref += value * m3_value; )
-    : (type == 4) ? ( ref += value * m4_value; )
-    : (type == 5) ? ( ref += value * m5_value; )
-    : (type == 6) ? ( ref += value * m6_value; )
-    : (type == 7) ? ( ref += value * m7_value; )
-    : (type == 8) ? ( ref += value * m8_value; );
+    m_value = (type == 1) ? m1_value
+    : (type == 2) ? m2_value
+    : (type == 3) ? m3_value
+    : (type == 4) ? m4_value
+    : (type == 5) ? m5_value
+    : (type == 6) ? m6_value
+    : (type == 7) ? m7_value
+    : (type == 8) ? m8_value;
+    ref += value * m_value;
 
     ( ref > 1 ) ? ( ref = 1 )
     : ( ref < 0 ) ? ( ref = 0 );
@@ -3715,20 +3717,21 @@ fbMod1Value4       = fbMod1Value[4];
   );
  
   function fetchModulationAmountMinMax(ref, type, value, mini, maxi)
-  local(range)
+  local(range, m_value)
   global(m1_value, m2_value, m3_value, m4_value, m5_value, m6_value, m7_value, m8_value)
   instance()
   (
+    m_value = (type == 1) ? m1_value
+    : (type == 2) ? m2_value
+    : (type == 3) ? m3_value
+    : (type == 4) ? m4_value
+    : (type == 5) ? m5_value
+    : (type == 6) ? m6_value
+    : (type == 7) ? m7_value
+    : (type == 8) ? m8_value;
+    
     range = maxi - mini;
-  
-    (type == 1)   ? ( ref += value * m1_value * range; )
-    : (type == 2) ? ( ref += value * m2_value * range; )
-    : (type == 3) ? ( ref += value * m3_value * range; )
-    : (type == 4) ? ( ref += value * m4_value * range; )
-    : (type == 5) ? ( ref += value * m5_value * range; )
-    : (type == 6) ? ( ref += value * m6_value * range; )
-    : (type == 7) ? ( ref += value * m7_value * range; )
-    : (type == 8) ? ( ref += value * m8_value * range; );
+    ref += value * m_value * range;
 
     ( ref > maxi ) ? ( ref = maxi )
     : ( ref < mini ) ? ( ref = mini );
@@ -3789,10 +3792,10 @@ fbMod1Value4       = fbMod1Value[4];
   lfoAModType2 ? LFO_amount3 = fetchLFOModulationAmount(LFO_amount3, lfoAModType2, lfoAModValue2);
   lfoAModType3 ? LFO_amount4 = fetchLFOModulationAmount(LFO_amount4, lfoAModType3, lfoAModValue3);
 
-  m1_value = LFO_amount1 * modulator1.updateModulator(.7);
-  m2_value = LFO_amount2 * modulator2.updateModulator(.7);
-  m3_value = LFO_amount3 * modulator3.updateModulator(.7);
-  m4_value = LFO_amount4 * modulator4.updateModulator(.7);   
+  modulator1.modrate ? ( m1_value = LFO_amount1 * modulator1.updateModulator(.7) );
+  modulator2.modrate ? ( m2_value = LFO_amount2 * modulator2.updateModulator(.7) );
+  modulator3.modrate ? ( m3_value = LFO_amount3 * modulator3.updateModulator(.7) );
+  modulator4.modrate ? ( m4_value = LFO_amount4 * modulator4.updateModulator(.7) );
 
   LFO_F1 = LFO_freq1;
   LFO_F2 = LFO_freq2;
@@ -3812,7 +3815,7 @@ fbMod1Value4       = fbMod1Value[4];
   modulator1.updateModRate(LFO_F1);
   modulator2.updateModRate(LFO_F2);
   modulator3.updateModRate(LFO_F3);
-  modulator4.updateModRate(LFO_F4);  
+  modulator4.updateModRate(LFO_F4);
 
   Modifier1 = modifierLerp1.lerpSample();
   shapeMod1Type0 ? Modifier1 = fetchModulationAmount(Modifier1, shapeMod1Type0, shapeMod1Value0);
@@ -4127,22 +4130,11 @@ fbMod1Value4       = fbMod1Value[4];
            bufferR1,  bufferR2,   bufferR3,   bufferR4,   bufferR5 )
   (
     scale = 0.04*srate*overSampling;
-    d1 = scale * (exp(Delay1)-1);
-    d2 = scale * (exp(Delay2)-1);
-    d3 = scale * (exp(Delay3)-1);
-    d4 = scale * (exp(Delay4)-1);
-    d5 = scale * (exp(Delay5)-1);
-    
-    fbToggle1 ? ( bufferL1.setOffset(d1+2);
-                  bufferR1.setOffset(d1+2) );
-    fbToggle2 ? ( bufferL2.setOffset(d2+2);
-                  bufferR2.setOffset(d2+2) );
-    fbToggle3 ? ( bufferL3.setOffset(d3+2);
-                  bufferR3.setOffset(d3+2) );
-    fbToggle4 ? ( bufferL4.setOffset(d4+2);
-                  bufferR4.setOffset(d4+2) );
-    fbToggle5 ? ( bufferL5.setOffset(d5+2);
-                  bufferR5.setOffset(d5+2) );
+    fbToggle1 ? ( d1 = scale * (exp(Delay1)-1) + 2; bufferL1.setOffset(d1); bufferR1.setOffset(d1) );
+    fbToggle2 ? ( d2 = scale * (exp(Delay2)-1) + 2; bufferL2.setOffset(d2); bufferR2.setOffset(d2) );
+    fbToggle3 ? ( d3 = scale * (exp(Delay3)-1) + 2; bufferL3.setOffset(d3); bufferR3.setOffset(d3) );
+    fbToggle4 ? ( d4 = scale * (exp(Delay4)-1) + 2; bufferL4.setOffset(d4); bufferR4.setOffset(d4) );
+    fbToggle5 ? ( d5 = scale * (exp(Delay5)-1) + 2; bufferL5.setOffset(d5); bufferR5.setOffset(d5) );
   );
   
   function resetBands()
@@ -4244,13 +4236,20 @@ fbMod1Value4       = fbMod1Value[4];
       b4.inR   = RF4.lp;
       b5.inR   = RF4.hp;
     );
-  );  
+  );
   
   function processSample()
   (
     filterBank.splitBands(inL, inR);
     filterBank.processBands();
-    filterBank.updateDelays();
+    
+    // Delays need less frequent updating
+    (update_delays > 7) ? (
+      filterBank.updateDelays();
+      update_delays = 0;
+    ) : (
+      update_delays += 1;
+    );
     
     outL = filterBank.b1.l + filterBank.b2.l + filterBank.b3.l + filterBank.b4.l + filterBank.b5.l;
     outR = filterBank.b1.r + filterBank.b2.r + filterBank.b3.r + filterBank.b4.r + filterBank.b5.r;
@@ -4308,6 +4307,7 @@ fbMod1Value4       = fbMod1Value[4];
   curSample += 1;
   
 @gfx 1080 800
+
   function createGUI(stripStart)
   (
     scaling   = gfx_ext_retina-1;
@@ -4660,7 +4660,7 @@ fbMod1Value4       = fbMod1Value[4];
   panSlider.drawSimpleSlider(currentPos-45*(1+scaling), bottomRow + 150*(1+scaling)-20*(1+scaling), 90*(1+scaling), 20*(1+scaling), .4, .4, .8, 1, "Drive pan");
   panSlider.simpleSlider_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? setPan(selectedBand, 2*panSlider.value - 1);
   
-  msToggle.drawToggle(currentPos + 2.45*miniknobWidth + miniknobPadX, spectrumH + 118*(1+scaling), buttonSize, buttonSize, side, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Mid/Side mode?");
+  msToggle.drawToggle(currentPos + 2.45*miniknobWidth + miniknobPadX, bottomRow + 150*(1+scaling)-122*(1+scaling), buttonSize, buttonSize, side, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Mid/Side mode?");
   side = msToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   
