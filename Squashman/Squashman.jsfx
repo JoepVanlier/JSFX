@@ -1,8 +1,8 @@
 desc:Squashman (beta)
 tags: multiband saturation plugin
-version: 0.73
+version: 0.74
 author: Joep Vanlier
-changelog: Minor performance optimizations. Reset modulators on @init for reproducible behaviour.
+changelog: Add inflator.
 provides: Squashman_Dependencies/*
 about:
   # Squashman
@@ -1055,7 +1055,7 @@ function remBand(idx)
     cuts = cuts - 1;
   );  
   
-nShapers = 32;
+nShapers = 34;
 nModulators = 9;
 
 function hasShapeMod(curitem)
@@ -1095,6 +1095,8 @@ function hasShapeMod(curitem)
     : ( curitem == 29 ) ? ( 1 ) /* Weird overdrive */
     : ( curitem == 30 ) ? ( 1 ) /* Phase rotater */
     : ( curitem == 31 ) ? ( 1 ) /* Power */
+    : ( curitem == 32 ) ? ( 1 ) /* Inflator clip */
+    : ( curitem == 33 ) ? ( 1 ) /* Inflator 6 dB */
   );
 
 /* Feed sample to FFT */
@@ -2512,6 +2514,41 @@ function initSpectrum(memoryOffset, fftSize, srate)
     .5 * ( exp(x) + 1/ex )
   );
   
+  function inflator_clip(in, modifier)
+  local(s0, s0_2, s0_3, a, b, c, d)
+  global()
+  (
+    a = modifier + 1.0;
+    b = 1.0 - modifier - modifier;
+    c = modifier - 1.0;
+    d = 0.25 * modifier * modifier - 0.5 * modifier + 0.25;
+  
+    s0 = abs(in);
+    s0 = s0 > 1.0 ? 1.0 : s0;
+    s0_2 = s0 * s0;
+    s0_3 = s0_2 * s0;
+    s0 = a * s0 + b * s0_2 + c * s0_3 - d * (s0_2 - 2.0 * s0_3 + s0_2 * s0_2);
+    s0 *= sign(in);
+    s0
+  );
+  
+  function inflator_6db(in, modifier)
+  local(s0, s0_2, s0_3, a, b, c, d)
+  global()
+  (
+    a = modifier + 1.0;
+    b = 1.0 - modifier - modifier;
+    c = modifier - 1.0;
+    d = 0.25 * modifier * modifier - 0.5 * modifier + 0.25;
+  
+    s0 = abs(in);
+    s0_2 = s0 * s0;
+    s0_3 = s0_2 * s0;
+    s0 = (s0 >= 2.0) ? (0.0) : (s0 > 1.0) ? (2.0 * s0 - s0_2) : (a * s0 + b * s0_2 + c * s0_3 - d * (s0_2 - 2.0 * s0_3 + s0_2 * s0_2));
+    s0 *= sign(in);
+    s0
+  );
+  
   /* TO DO: Merge crossovers with control */
   function processBand(drive, pan, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
@@ -2990,6 +3027,14 @@ function initSpectrum(memoryOffset, fftSize, srate)
         
         l = (2*lastl+intl);
         r = (2*lastr+intr);
+      ) : ( mode == 32 ) ? (
+        // Clipped inflator
+        l = inflator_clip(l, modifier);
+        r = inflator_clip(r, modifier);
+      ) : ( mode == 33 ) ? (
+        // Non-clipped inflator
+        l = inflator_6db(l, modifier);
+        r = inflator_6db(r, modifier);
       ) : (
         l = 0;
         r = 0;
@@ -5126,7 +5171,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 7 0 [Beta]");
+  gfx_printf("S Q U A S H M A N  v  0 . 7 4 [Beta]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
