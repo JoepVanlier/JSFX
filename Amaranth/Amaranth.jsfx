@@ -1,8 +1,8 @@
 desc:Amaranth (BETA)
 tags: amaranth granular synth graintable grains
-version: 0.21
+version: 0.22
 author: Joep Vanlier
-changelog: Work around tan(pi/2) issue on JSFX SSE branch.
+changelog: Added experimental polyphony (alpha feature for now!)
 provides: Amaranth_Dependencies/*
 license: MIT
 
@@ -505,6 +505,7 @@ function drawBuffer(x, y, w, h, fill)
   envWindow2.resetEnvelope(1, 1);
   
   note_mem = 5*bufSize;
+  activeNoteMem = 5*bufSize + 0.5 * bufSize;
   
   // Temporary storage for cropping
   temporaryBuf = 6*bufSize;
@@ -615,9 +616,10 @@ function drawBuffer(x, y, w, h, fill)
   envWindow1.loopEnd = max(env1_loop_end, env1_loop_start);
 
   curSample += 1;
+  inFrequent = (curSample % 8) == 0;
   
   amp = envelope_enabled ? (
-    (curSample % 8) ? (
+    inFrequent ? (
       c_sustain == 0 ? c_sustain = amp_sustain;
       c_sustain = 0.97 * c_sustain + 0.03 * amp_sustain;
       amp_env.calc_times(amp_atk, amp_decay, c_sustain, amp_release);
@@ -645,9 +647,28 @@ function drawBuffer(x, y, w, h, fill)
         lastNote = notePtr[];
         
         updatePitch();
+        
+        // Add note to list of active notes
+        activeNoteMem[notesOn - 1] = lastNote;
       ) : (notePtr[] == -1) ? ( // note-off
         notesOn = notesOn - 1;
         notesOn = max(0, notesOn);
+        
+        i = -1;
+        while(
+          i += 1;
+          activeNoteMem[i] != note && i < 30
+        );
+        // Memcpy is undefined for overlapping buffers :/
+        loop(MAX_NOTES,
+          activeNoteMem[i] = activeNoteMem[i+1];
+          i += 1;
+        );
+        notesOn > 0 ? (
+          lastNote != activeNoteMem[notesOn-1] ? (
+            lastNote = activeNoteMem[notesOn-1];
+          );
+        );
       ) : (notePtr[] == -2) ? ( // CC
         notePtr += 1;
         // msg3
@@ -722,15 +743,21 @@ function drawBuffer(x, y, w, h, fill)
   readBufMin = outBuffer.scopebuffer;
   readBufMax = outBuffer.scopebuffermax;
   readBufCur = (1-LoopStart) + (LoopStart-LoopEnd)*curPos;
-  spd = cSpeed;
   
   inL = spl0;
   inR = spl1;
   
-  Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
-  pitchFollow ? (
-    spd = spd * noteFollowFactor;
-  ); 
+  inFrequent ? (
+    spd = cSpeed;
+    Octaver ? ( spd = spd * 2^(floor(octaveMin) + floor((floor(octaveMax) - floor(octaveMin) + 1)*rand())); );
+    pitchFollow ? (
+      (notesOn > 0) ? (
+        lastNote = activeNoteMem[rand() * notesOn];
+        noteFollowFactor = 2^((lastNote-(floor(RefNote)+60))/12);
+      );
+      spd = spd * noteFollowFactor;
+    );
+  );
   grains.granulator_update(cGrainSize, useAbsoluteVar, grainVariance, useAbsoluteDist, grainOverlap, spd, spdSpread, panSpread, reverseProb, 1, readBufCur, readBufMin, readBufMax, outBuffer.scopeptr, curPos, pitchTimeInvariance, updateBuffer);
   
   updateBuffer ? ( 
@@ -756,12 +783,12 @@ function drawBuffer(x, y, w, h, fill)
   spLeft  = grains.L * cPreGain;
   spRight = grains.R * cPreGain;
   
-  filter1.updateFilter( F1_type, cCutoff1, cReso1 );
+  inFrequent ? filter1.updateFilter( F1_type, cCutoff1, cReso1 );
   filter1.evalSample( spLeft, spRight );
   spLeft  = filter1.outL;
   spRight = filter1.outR;
   
-  filter2.updateFilter( F2_type, cCutoff2, cReso2 );
+  inFrequent ? filter2.updateFilter( F2_type, cCutoff2, cReso2 );
   filter2.evalSample( spLeft, spRight );
   spLeft  = filter2.outL;
   spRight = filter2.outR;
