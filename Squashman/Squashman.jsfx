@@ -1,8 +1,8 @@
 desc:Squashman (beta)
 tags: multiband saturation plugin
-version: 0.77
+version: 0.78
 author: Joep Vanlier
-changelog: Revert changes in clip mode.
+changelog: Increase number of ticks. Fix slight misalignment of ticks at lower frequencies. Add frequency labels to vertical bars. Add decibels to Drive knob.
 provides: Squashman_Dependencies/*
 about:
   # Squashman
@@ -127,6 +127,14 @@ slider64:fixDC=1<0,2,1>-Fix DC options
   SLIDER_FONT   = 7;
   BUTTON_FONT   = 6;
   gfx_ext_retina = 1;
+
+  function f_trafo(freq)
+  local()
+  global()
+  instance()
+  (
+    exp( (1-freq) * log(20/22050) )
+  );
 
   envWindow1.resetEnvelope(1,1);
   envWindow2.resetEnvelope(1,1);
@@ -1234,12 +1242,12 @@ function drawGrid()
     gfx_y = y+h+2;
     
     gfx_setfont(GRID_FONT);
-    loop(16,
-      xx = x + log(1+i*fftSize/srate-hzoffset)*wsc;
+    loop(32,
+      xx = x + log(i*fftSize/srate-hzoffset)*wsc;
       gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(xx, y, xx, y+h);
       
-      ( (xx - xl) > 30 ) ? (
+      ( (xx - xl) > 40 ) ? (
         gfx_set( 1, 1, 1, 1 );
         gfx_x = xx+2;
         gfx_line(xx, y+h, xx, y+h+7);
@@ -1254,10 +1262,11 @@ function drawGrid()
       gfx_set( .2, .2, .2, grid_alpha );
       gfx_line(xx, y, xx, y+h);
       
-      ( i < 100 ) ? (i += 20) :
+      ( i < 100 ) ? (i += 10) :
+      ( i < 500 ) ? (i += 100) :
       ( i < 1000 ) ? (i += 200) :
-      ( i < 10000 ) ? (i += 2000) :
-      ( i < 100000 ) ? (i += 20000);
+      ( i < 10000 ) ? (i += 1000) :
+      ( i < 100000 ) ? (i += 10000);
     );
     
     gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
@@ -1364,7 +1373,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
            v1, v2, v3, v4, v5,
            h1, h2, h3, h4, h5, 
            c1, c2, c3, c4, c5,
-           i1, i2, i3, i4, i5 )
+           i1, i2, i3, i4, i5,
+           F1hz, F2hz, F3hz, F4hz)
   global(dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI, fftSize,
          bandClickRange, cuts,
          Freq1, Freq2, Freq3, Freq4,
@@ -1375,7 +1385,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          solo1, solo2, solo3, solo4, solo5,
          driveMin, driveMax, maxCuts,
          gainMin, gainMax, hinter.updateHintTime,
-         selectedBand, gfx_x, gfx_y )
+         selectedBand, gfx_x, gfx_y, srate )
   local(dx, dy, over, dys,
         F1, F2, F3, F4,
         leftClick, rightClick, doubleClick,
@@ -1404,6 +1414,16 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     gfx_set(1,1,1,1);
     gfx_printf("%g", this.pixelToWindowRatio(mouse_x));*/
     
+    F1 = Freq1;
+    F2 = Freq1  + Freq2 * (1 - Freq1);
+    F3 = F2     + Freq3 * (1 - F2);
+    F4 = F3     + Freq4 * (1 - F3);
+    
+    F1hz = 0.5 * f_trafo(F1) * srate;
+    F2hz = 0.5 * f_trafo(F2) * srate;
+    F3hz = 0.5 * f_trafo(F3) * srate;
+    F4hz = 0.5 * f_trafo(F4) * srate;
+    
     ( cap == 4 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_y - ly;
           
@@ -1426,11 +1446,6 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     ) : ( cap == 2 && mouse_cap & 1 == 1 ) ? (
       // Dragging a band frequency
       dx = mouse_x - lx;
-      
-      F1 = Freq1;
-      F2 = Freq1  + Freq2 * (1 - Freq1);
-      F3 = F2     + Freq3 * (1 - F2);
-      F4 = F3     + Freq4 * (1 - F3);
       
       dragging == 1 ? ( 
         F1 = this.pixelToWindowRatio(x1 - x + dx);
@@ -1739,14 +1754,6 @@ function drawLineFFT(peakLocation)
     tx = floor(x + log(1.0+base-hzoffset)*wsc);
     drawLine(tx, y, tx, y+h);
   );
-  
-function f_trafo(freq)
-  local()
-  global()
-  instance()
-  (
-    exp( (1-freq) * log(20/22050) )
-  );  
   
 function updateBands()
   global(Freq1,   Freq2,   Freq3,   Freq4,
@@ -2201,7 +2208,37 @@ function modLine(yref, x1, ymod, x2)
     gfx_rect(x1, ymod, x2-x1, yref-ymod);
   );
 );
-  
+
+function hzLabel(dy, label)
+  local(lww, lhh, cy, dy2)
+  global(gfx_x, gfx_y, hzLabelW, hzLabelH, lineR, lineG, lineB, lineA)
+  instance(x, y, w, h, over)
+  (
+    cy = y + dy*h;
+    
+    gfx_measurestr("888888", hzLabelW, hzLabelH);
+
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, lineA);    
+    dy2 = 3; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+    gfx_set(.7*lineR, .7*lineG, .7*lineB, lineA);
+    dy2 = 2; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+    gfx_set(lineR, lineG, lineB, lineA);
+    dy2 = 1; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+
+    gfx_set( 1, 1, 1, .8 );
+    gfx_rect(x-.5*hzLabelW-1, cy-1, hzLabelW+2, hzLabelH+2);
+    
+    gfx_set( 0, 0, 0, 1 );
+    gfx_rect(x-.5*hzLabelW, cy, hzLabelW, hzLabelH);
+
+    sprintf(19, "%d", label);
+    gfx_measurestr(19, lww, lhh);
+    gfx_set( 1, 1, 1, 1 );    
+    gfx_x = x - .5 *lww;
+    gfx_y = y + dy*h;
+    gfx_printf(19, label);
+  );
+
 function drawBands()
   global(Cuts, stest,
            mute1, mute2, mute3, mute4, mute5,
@@ -2219,8 +2256,9 @@ function drawBands()
            i1, i2, i3, i4, i5, // Gain handles
            y1m, y2m, y3m, y4m, y5m, /* Drives post-mod      */
            g1m, g2m, g3m, g4m, g5m  /* Post gains post-mod  */
+           F1Hz, F2Hz, F3Hz, F4Hz, F5Hz,
            x_over)
-  local()
+  local(hz_label_height_frac)
   (
     xc = x;
     dx = 5;
@@ -2239,24 +2277,30 @@ function drawBands()
     gfx_line(x, y+.3*h, x+w, y+.3*h);
     gfx_line(x, y+.3*h+2, x+w, y+.3*h+2);
  
+    hz_label_height_frac = 0.95;
     (Cuts > 0) ? (
       gfx_set(1,1,1,1); v1.fancyLineV(x1, y, x1, y+h);
+      v1.hzLabel(hz_label_height_frac, F1hz);
       g1.vGainMeter(x, y1, h, dbDiff(filterBank.getBandPre(0), filterBank.getBandPost(0)));
     );
     (Cuts > 1) ? (
       gfx_set(1,1,1,1); v2.fancyLineV(x2, y, x2, y+h);
+      v2.hzLabel(hz_label_height_frac, F2hz);
       g2.vGainMeter(x1, y2, h, dbDiff(filterBank.getBandPre(1), filterBank.getBandPost(1)));
     );
     (Cuts > 2) ? (
       gfx_set(1,1,1,1); v3.fancyLineV(x3, y, x3, y+h);
+      v3.hzLabel(hz_label_height_frac, F3hz);
       g3.vGainMeter(x2, y3, h, dbDiff(filterBank.getBandPre(2), filterBank.getBandPost(2)));
     );
     (Cuts > 3) ? (
       gfx_set(1,1,1,1); v4.fancyLineV(x4, y, x4, y+h);
+      v4.hzLabel(hz_label_height_frac, F4hz);
       g4.vGainMeter(x3, y4, h, dbDiff(filterBank.getBandPre(3), filterBank.getBandPost(3)));
     );
     (Cuts > 4) ? (
       gfx_set(1,1,1,1); v5.fancyLineV(x5, y, x5, y+h);
+      v5.hzLabel(hz_label_height_frac, F5hz);
       g5.vGainMeter(x4, y5, h, dbDiff(filterBank.getBandPre(4), filterBank.getBandPost(4)));
     );
     
@@ -4700,6 +4744,7 @@ fbMod1Value4       = fbMod1Value[4];
   driveKnob.value = (slider(driveLocation+selectedBand) - driveMin)*iDriveRange;
   driveKnob.value2 = driveModulator1.value;
   driveKnob.value3 = driveModulator2.value;
+  driveKnob.label = sprintf(19, "%d dB", slider(driveLocation+selectedBand));
   driveKnob.drawKnob(currentPos, bottomRow + 75*(1+scaling), 30*(1+scaling), "Drive", "Modify band drive.");
   driveKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.4) ? slider_automate( slider(driveLocation+selectedBand) = driveKnob.value * driveRange + driveMin );  
   
@@ -5173,7 +5218,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 7 7 [Beta]");
+  gfx_printf("S Q U A S H M A N  v  0 . 7 8 [Beta]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
