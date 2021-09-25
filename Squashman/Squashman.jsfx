@@ -1,8 +1,8 @@
 desc:Squashman (beta)
 tags: multiband saturation plugin
-version: 0.78
+version: 0.79
 author: Joep Vanlier
-changelog: Increase number of ticks. Fix slight misalignment of ticks at lower frequencies. Add frequency labels to vertical bars. Add decibels to Drive knob.
+changelog: Add optional automatic gain correction based on 0.3 second k-weighted RMS window (beta functionality).
 provides: Squashman_Dependencies/*
 about:
   # Squashman
@@ -25,6 +25,7 @@ license: MIT
 import squashman_upsamplers.jsfx-inc
 import widgets.jsfx-inc
 import envelopes.jsfx-inc
+import squashman_agc.jsfx-inc
 
 in_pin:left input
 in_pin:right input
@@ -91,6 +92,8 @@ slider47:Verb2=0<0,1,1>-Verb 2
 slider48:Verb3=0<0,1,1>-Verb 3
 slider49:Verb4=0<0,1,1>-Verb 4
 slider50:Verb5=0<0,1,1>-Verb 5
+
+slider51:AGC=0<0,1,1>-Gain compensation
 
 slider53:LFO_amnt1=1<0,1,1>-LFO1 Amount
 slider54:LFO_amnt2=1<0,1,1>-LFO2 Amount
@@ -3412,11 +3415,17 @@ ma_dc1.init_blocker(blockerMem, blockerMem+blockerStep, blockerMem+2*blockerStep
 
 filterBank.initDelays();
 
+freemem = 27 * 65536;
+freemem = in_level.level_estimator(freemem, 0.3);
+freemem = out_level.level_estimator(freemem, 0.3);
+
 // INITIALIZATION
 spectrumIn.initSpectrum(audioBufIn, fftSize, srate);
 spectrumOut.initSpectrum(audioBufOut, fftSize, srate);
 
 @serialize
+writing = file_avail(0) < 0;
+
 envWindow1.setEnvMemory(17*65536, 18*65536);
 envWindow2.setEnvMemory(19*65536, 20*65536);
 
@@ -3514,6 +3523,10 @@ file_var(0,envInputGain);
 
 file_mem(0,drivePanning,16);
 file_var(0,side);
+
+// Force initialization if not writing
+!writing ? ( agc_gain_reduction = 0; );
+file_var(0, agc_gain_reduction);
 
 f1Attack = max(attackMin,min(attackMax,f1Attack));
 f1Decay = max(releaseMin,min(releaseMax,f1Decay));
@@ -4379,11 +4392,6 @@ fbMod1Value4       = fbMod1Value[4];
       );
     );
   );
-  
-  gBoost = exp(logten005*masterGainSlider);
-  
-  spl0 *= gBoost;
-  spl1 *= gBoost;
    
   ( fixDC == 2 ) ? (
     spl0 = dc0.eval_HP6(spl0);
@@ -4393,8 +4401,32 @@ fbMod1Value4       = fbMod1Value[4];
     spl1 = ma_dc1.fix_dc_strong(spl1);
   );
   
-  spectrumOut.feedSample(.5*(spl0+spl1));
+  // Only update RMS when audio is playing
+  AGC ? (
+    pklvl = 0.999 * pklvl + 0.001 * max(abs(inL), abs(inR));
+    (pklvl > 0.001) ? (
+      in_level.eval_gain(inL, inR);
+      out_level.eval_gain(spl0, spl1);
+    );
     
+    in_level.got_full_buf ? (
+      out_total = out_level.sum_l + out_level.sum_r;
+      correction = (out_total > 0.0001) ? sqrt((in_level.sum_l + in_level.sum_r) / out_total) : 1;
+    );
+    
+    spl0 *= correction;
+    spl1 *= correction;
+  ) : agc_gain_reduction ? (
+    spl0 *= agc_gain_reduction;
+    spl1 *= agc_gain_reduction;
+  );
+  
+  gBoost = exp(logten005*masterGainSlider);
+  spl0 *= gBoost;
+  spl1 *= gBoost;
+  
+  spectrumOut.feedSample(.5*(spl0+spl1));
+  
   curSample += 1;
   
 @gfx 1080 800
@@ -5191,6 +5223,20 @@ fbMod1Value4       = fbMod1Value[4];
   dcToggle.drawToggle(masterLoc + 3.5*miniknobWidth + miniknobPadX, groupTop + buttonPad, buttonSize, buttonSize, fixDC, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Fix DC");
   fixDC = dcToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
+  agcToggle.drawToggle(masterLoc + 1.3 * miniknobPadX, groupTop + buttonPad, buttonSize, buttonSize, agc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Automatic Gain Compensation (BETA)\n\nLMB toggles AGC.\nRMB stores and fixes AGC gain\nreduction (indicated by yellow light).\n\nNote: Re-enabling after fixing loses the fixed setting.");
+  agc = agcToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  (agc == 1) ? ( agc_gain_reduction = 0; );
+  
+  agcToggle.right_clicked ? (
+    (agc > 0) ? (
+      agc_gain_reduction = correction;
+      agc = 0;
+    );
+  );
+  ((agc_gain_reduction > 0) && (agc == 0)) ? (
+    dummy.drawToggle(masterLoc + 1.3 * miniknobPadX, groupTop + buttonPad, buttonSize, buttonSize, 1, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_r, toggle_b, toggle_a, "Automatic Gain Compensation (BETA)\n\nLMB activates it.\nLMB deactivates and loses setting.\nRMB stores and fixes AGC gain reduction.");
+  );
+
   /* Oversampling control */
   oversamplingKnob.active = 1;
   ( mouse_cap & 1 == 0 ) ? oversamplingKnob.value = (Oversampling - overSamplingMin) * iOverSamplingRange;
@@ -5218,7 +5264,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 7 8 [Beta]");
+  gfx_printf("S Q U A S H M A N  v  0 . 7 9 [Beta]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);

@@ -1,0 +1,129 @@
+@init
+function rbj_shelf(f0, db, S)
+local(ia0, a0, w0, A, cw, sqterm)
+instance(a1, a2, b0, b1, b2)
+global(srate)
+(
+    w0 = 2.0 * $pi * f0 / srate;
+    A = 10^(db/40);
+    cw = cos(w0);
+    sqterm = sin(w0) * sqrt((A*A + 1)*(1/S - 1) + 2*A);
+
+    a0 =       (A+1) - (A-1)*cw + sqterm;
+    b0 =    A*((A+1) + (A-1)*cw + sqterm);
+    b1 = -2*A*((A-1) + (A+1)*cw);
+    b2 =    A*((A+1) + (A-1)*cw - sqterm);
+    a1 =    2*((A-1) - (A+1)*cw);
+    a2 =       (A+1) - (A-1)*cw - sqterm;
+    
+    ia0 = 1 / a0;
+    b0 *= ia0;
+    b1 *= ia0;
+    b2 *= ia0;
+    a1 *= ia0;
+    a2 *= ia0;
+);
+
+function rbj_hpf(f0,  Q, amp)
+local(w0, cw, alpha, a0, ia0)
+instance(b0, b1, b2, a1, a2)
+global(srate)
+(
+    w0 = 2.0 * $pi * f0 / srate;
+    cw = cos(w0);
+    alpha = sin(w0) / (2 * Q);
+
+    b0 =  (1.0 + cw) * 0.5;
+    b1 = -(1.0 + cw);
+    b2 = (1.0 + cw) * 0.5;
+    a0 = 1.0 + alpha;
+    a1 = -2.0 * cw;
+    a2 = 1.0 - alpha;
+    
+    ia0 = 1.0 / a0;
+    b0 *= ia0 * amp;
+    b1 *= ia0 * amp;
+    b2 *= ia0 * amp;
+    a1 *= ia0;
+    a2 *= ia0;
+);
+
+// K-Weighting
+function init_k_weighting()
+global()
+instance(shelf, hpf)
+local()
+(
+  // Filters based on ITU-R BS.1770-4
+  shelf.rbj_shelf(1500.5120, 3.99979529, 1.000575);
+  hpf.rbj_hpf(38.13547088, 0.50032704, 1.0049949);
+);
+
+function eval_rbj(x)
+instance(
+  a1, a2,
+  b0, b1, b2,
+  s1, s2)
+local(y)
+global()
+(
+  y = b0 * x + s1;
+  s1 = b1 * x - a1 * y + s2;
+  s2 = b2 * x - a2 * y;
+  
+  y
+);
+
+function eval_k_weighting(x)
+local()
+global()
+instance(shelf, hpf)
+(
+  hpf.eval_rbj(shelf.eval_rbj(x))
+);
+
+function level_estimator(mem_loc, duration)
+instance(left_k, right_k,
+         buffer_start, buffer_end,
+         buffer_ptr, got_full_buf,
+         sum_l, sum_r)
+local()
+global(srate)
+(
+  left_k.init_k_weighting();
+  right_k.init_k_weighting();
+ 
+  buffer_start = mem_loc;
+  buffer_end = buffer_start + 2 * srate * duration;
+  buffer_ptr < buffer_start ? (
+    buffer_ptr = buffer_start;
+    got_full_buf = 0;
+    sum_l = 0;
+    sum_r = 0;
+  );
+  
+  buffer_end + 10
+);
+
+function eval_gain(l, r)
+instance(left_k, right_k,
+         buffer_start, buffer_end, buffer_ptr, rec,
+         gain_left, gain_right, got_full_buf,
+         ll, lr, sum_l, sum_r)
+local()
+global()
+(
+  l = left_k.eval_k_weighting(l);
+  r = right_k.eval_k_weighting(r);
+  ll = buffer_ptr[]; buffer_ptr[] = l; buffer_ptr += 1;
+  lr = buffer_ptr[]; buffer_ptr[] = r; buffer_ptr += 1;
+  
+  sum_l += l*l - ll*ll;
+  sum_r += r*r - lr*lr;
+  
+  buffer_ptr > buffer_end ? (
+    buffer_ptr = buffer_start;
+    got_full_buf = 1;
+  );
+);
+
