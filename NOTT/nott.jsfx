@@ -1,11 +1,12 @@
 desc:Saike Not OTT (ALPHA)
 tags: multiband compression
-version: 0.11
+version: 0.12
 author: Joep Vanlier
-changelog: Switch to a more classical dry/wet control (new default).
+changelog: Fix bug resulting in mono dry signal when using DC correction. Make sure DC correction does not affect phase in FIR mode (by combining it into the FIR response). Add higher quality modes for the FIR filter, for low freq bands.
 about:
   # Multiband Compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design - A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
+  Filters are basic Linkwitz Riley filters using phase matching to maintain phase coherence for unfiltered bands.
   
 license: MIT
 
@@ -73,6 +74,7 @@ slider47:active_threshold=-280<0,-340,.0001>-Gate level [dB]
 slider60:epsilon=-4<-10,-2,.0001>-Epsilon
 slider61:FIR=0<0,1,1>-FIR mode
 slider62:advanced<0,1,1>-Advanced
+slider63:FIR_quality=0<0,2,{Normal,High,Ultra}>-FIR Quality
 
 @init
 eps = 10^(epsilon);
@@ -188,6 +190,12 @@ update_gain_now();
       a2_3 = g*a1_3;
     );
 
+  function reset_HP6()
+  instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq)
+  (
+    ic1eq = ic2eq = ic3eq = ic4eq = ic5eq = ic6eq = 0;
+  );
+  
   function eval_HP6(v0)
     global()
     local(v1, v2, hp)
@@ -224,6 +232,7 @@ update_gain_now();
   
   dcl.init_HP6(20/srate);
   dcr.init_HP6(20/srate);
+  dc_fir.init_HP6(20/srate);
 
 /*-----------*/
 /* HINTS     */  
@@ -634,9 +643,6 @@ releaseSliderMin = 0;
 releaseSliderMax = 1;
 
 filterBank.initBands();
-M = 4;
-firSize = 512*M;
-fftCalcSize = 1024*M;
 
 // Precompute some things
 gainRange = ( gainMax - gainMin );
@@ -2326,8 +2332,8 @@ solo5 ? play5 = 1;
 );
 
 (pdc_delay != newPDC) ? (
-  pdc_top_ch = 10;
   pdc_bot_ch = 0;
+  pdc_top_ch = 2;
   pdc_delay = newPDC;
 );
 
@@ -2634,11 +2640,24 @@ solo5 ? play5 = 1;
     
   );
   
+  function dc_correct_response(ptr, firSize)
+  global(
+    dc_fir.reset_HP6,
+    dc_fir.eval_HP6,
+  )
+  (
+    dc_fir.reset_HP6();
+    loop(firSize,
+      ptr[] = dc_fir.eval_HP6(ptr[]); ptr += 2;
+    );
+  );
+  
   function updateCoeffs()
-  local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i)
+  local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i, M)
   global(Cuts, Freq1, Freq2, Freq3, Freq4, FIR,
          FIR1, FIR2, FIR3, FIR4, FIR5, bufferDist,
-         firSize, fftCalcSize )
+         firSize, fftCalcSize, FIR_quality,
+         fixdc, lfixdc)
   instance( F1,  F2,  F3,  F4
             LF1, LF2, LF3, LF4            /* Lowpass left */
             LA_F2,                        /* Allpass frequency 2 left */
@@ -2648,9 +2667,10 @@ solo5 ? play5 = 1;
             RA_F2,                        /* Allpass frequency 2 right */
             RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
             RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
-            lcuts, lFIR, 
+            lcuts, lFIR,
+            lFIR_quality,
             lF1, lF2, lF3, lF4,
-            updateRequired
+            updateRequired,
             )
   (
       updateRequired = 0;
@@ -2660,7 +2680,10 @@ solo5 ? play5 = 1;
         ( lF3 != Freq3 ) ||
         ( lF4 != Freq4 ) ||
         ( cuts != lcuts ) ||
-        ( FIR != lFIR ) );
+        ( FIR != lFIR ) ||
+        ( fixDC != lfixDC ) ||
+        ( lFIR_quality != FIR_quality )
+        );
 
       updateRequired ? (        
         lF1 = Freq1;
@@ -2669,6 +2692,8 @@ solo5 ? play5 = 1;
         lF4 = Freq4;
         lFIR = FIR;
         lcuts = cuts;
+        lfixdc = fixdc;
+        lFIR_quality = FIR_quality;
       
         F1 = Freq1;
         F2 = Freq1  + Freq2 * (1 - Freq1);
@@ -2773,6 +2798,12 @@ solo5 ? play5 = 1;
         
         /* Are we dealing with a FIR filter? */
         FIR ? (
+          M = 4;
+          (FIR_quality > 0) ? M *= 2;
+          (FIR_quality > 1) ? M *= 2;
+          firSize = 512*M;
+          fftCalcSize = 1024*M;
+        
           // CalcFIR
           memset(FIR1, 0, bufferDist);
           memset(FIR2, 0, bufferDist);
@@ -2800,7 +2831,15 @@ solo5 ? play5 = 1;
           
             this.splitBands(0, 0);
           );
-                    
+          
+          fixdc ? (
+            dc_correct_response(FIR1, firSize);
+            dc_correct_response(FIR2, firSize);
+            dc_correct_response(FIR3, firSize);
+            dc_correct_response(FIR4, firSize);
+            dc_correct_response(FIR5, firSize);
+          );
+        
           /* Transform impulse responses */
           fft(FIR1, fftCalcSize);
           fft(FIR2, fftCalcSize);
@@ -2813,6 +2852,11 @@ solo5 ? play5 = 1;
           fft_permute(FIR3, fftCalcSize);
           fft_permute(FIR4, fftCalcSize);
           fft_permute(FIR5, fftCalcSize);
+          
+          (fixdc && (FIR_quality == 0)) ? (
+            FIR1[] = FIR2[] = FIR3[] = FIR4[] = FIR5[] = 0;
+            FIR1[1] = FIR2[1] = FIR3[1] = FIR4[1] = FIR5[1] = 0;
+          );
           
           /* Remove phase information (converts to linear phase) */
           linearPhase(FIR1, fftCalcSize);
@@ -2992,9 +3036,9 @@ solo5 ? play5 = 1;
       );
     );
     
-    fixdc ? (
+    (fixdc && !FIR) ? (
       spl0 = dcl.eval_HP6(spl0) * wet + spl0 * dry;
-      spl1 = dcr.eval_HP6(spl1) * wet + spl0 * dry;
+      spl1 = dcr.eval_HP6(spl1) * wet + spl1 * dry;
     );
     
     output_squash ? (
@@ -3177,6 +3221,19 @@ solo5 ? play5 = 1;
   tFIR.label = "FIR";  
   tFIR.drawToggle(x_base, y_base, toggle_size, toggle_size, FIR, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Linear phase FIR mode.\n\nLinear phase filters preserve the phase relations between this\nand other tracks but introduce a higher CPU cost and latency.\nEnable only when needed for its linear phase properties.\n\nNote: Modulation of the frequency when in FIR mode can cause crackles.");
   FIR = tFIR.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  FIR ? (
+    FIR_NQ.drawToggle(60, 20, 10, 10, FIR_quality == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Normal quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
+    FIR_NQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 0;  
+    FIR_HQ.drawToggle(75, 20, 10, 10, FIR_quality == 1, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "High quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
+    FIR_HQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 1;
+    FIR_UQ.label =
+      FIR_quality == 0 ? "Normal"
+      : FIR_quality == 1 ? "High"
+      : FIR_quality == 2 ? "Ultra";
+    FIR_UQ.drawToggle(90, 20, 10, 10, FIR_quality == 2, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Ultra quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
+    FIR_UQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 2;
+  );
 
   advanced ? (
     tCouple.label = "Coupled L/R";  
