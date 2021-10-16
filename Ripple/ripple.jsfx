@@ -1,12 +1,12 @@
 desc:Ripple
 tags: Ripple (work in progress | not ready for use!)
-version: 0.02
+version: 0.04
 author: Joep Vanlier
-changelog: Bugfix note playback
+changelog: Fix bug with ripple widgets (some renaming was required to prevent file shadowing). Add run length encoding to pattern data.
 provides: Ripple_dependencies/*
 license: MIT
 
-import widgets.jsfx-inc
+import ripple_widgets.jsfx-inc
 
 @init
 seq_position = 0;
@@ -154,11 +154,14 @@ loaded == 0 ? (
   note = 20; 
   n_notes = 16;
   n_steps = 16;
-  n_patterns = 16;
-  version = 0;
+  n_patterns = 32;
+  version = 1;
   speed = 2;
 );
-  
+
+// Allow 64 patterns (slack)
+freemem = NOTE_DATA + NOTE_BLOCKSIZE * n_patterns;
+
 function rebuild_scale()
   (
     gen_scale(SCALE_ADDRESS, scale);
@@ -167,29 +170,90 @@ function rebuild_scale()
   );
   
 @serialize
+function serialize_rle(mem, len, writing)
+local(ptr, end_ptr, count, value, validate)
+global(critical_error)
+(
+  ptr = mem;
+  (!writing) ?
+  (
+    end_ptr = mem + len - 1;
+    while(ptr < end_ptr)
+    (
+      file_var(0, value);
+      (value == 1337) ? (validate = ptr - mem);
+       
+      // We only apply RLE to zeros
+      (value == 0) ? (
+        file_var(0, count);
+        memset(ptr, 0, count);
+        ptr += count;
+      ) : (
+        ptr[] = value;
+        ptr += 1;
+      );
+    );
+    
+    file_var(0, validate);
+    critical_error = validate == 1337 ? 0 : 1;
+  ) : (
+    count = 0;
+    loop(len - 1,
+      value = ptr[];
+      
+      (value == 0) ? (
+        count += 1;
+      ) : ( 
+        (count > 0) ? (
+          file_var(0, 0);
+          file_var(0, count);
+          count = 0;
+        );
+        
+        file_var(0, value);      
+      );
+      
+      ptr += 1;
+    );
+    
+    // Eww :(
+    (count > 0) ? (
+      file_var(0, 0);
+      file_var(0, count);
+    );
+    
+    file_var(0, 1337);
+  );
+);
+
+writing = file_avail(0) < 0;
+
 file_var( 0, version );
-( version == 0 ) ? (
-  loaded = 1;
-  file_var( 0, origin );
-  file_var( 0, offset );
-  file_var( 0, scale );
-  file_var( 0, chord );
-  file_var( 0, n_notes );
-  file_var( 0, n_steps );
-  file_var( 0, n_patterns );
-  file_var( 0, current_pattern );
-  file_var( 0, speed );
+loaded = 1;
+file_var( 0, origin );
+file_var( 0, offset );
+file_var( 0, scale );
+file_var( 0, chord );
+file_var( 0, n_notes );
+file_var( 0, n_steps );
+file_var( 0, n_patterns );
+file_var( 0, current_pattern );
+file_var( 0, speed );
   
-  /* Memory to expand into when features are added */
-  file_mem( 0, 0, 99 );
-  
-  idx = 0;
+/* Memory to expand into when features are added */
+file_mem( 0, 0, 99 );
+
+idx = 0;
+(version == 0) ? (
   loop(n_patterns,
     file_mem(0, NOTE_DATA + (idx-1) * NOTE_BLOCKSIZE, 1024);
     idx += 1;
   ); 
+) : (
+  serialize_rle(NOTE_DATA, NOTE_BLOCKSIZE * n_patterns, writing);
 );
 
+version = 1;
 rebuild_scale();
 
 @slider 
