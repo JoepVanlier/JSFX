@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.70
+version: 0.72
 author: Joep Vanlier
-changelog: Fix bug that erroneously allowed negative indices into buffer when idle for a long time.
+changelog: Add semitone mode for slowdown (now the default for new presets). Add dry/wet slider for playhead effects.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -92,7 +92,7 @@ import saike_seqs_pitchlib.jsfx-inc
 
 @init
 gfx_ext_retina = 1;
-CURRENT_VERSION = 4;
+CURRENT_VERSION = 5;
 version = CURRENT_VERSION;
 DRAG_STRING = 50;
 DRAG_BLOCK = 1;
@@ -440,6 +440,10 @@ function update_current_levels()
   current_verb_highpass = verbHighPassKnob.getCurrentValue();
   current_verb_dry = verbDry.getCurrentValue();
   current_verb_wet = verbWet.getCurrentValue();
+  
+  current_playhead_dry = playheadDry.getCurrentValue();
+  current_playhead_wet = playheadWet.getCurrentValue();
+  
   current_verb_gate_atk = verbGateAttackKnob.getCurrentValue();
   current_verb_gate_decay = verbGateDecayKnob.getCurrentValue();
   current_verb_gate_sustain = verbGateSustainKnob.getCurrentValue();
@@ -521,6 +525,10 @@ function init_controls()
   verbHighPassKnob.init_knob(1, 0, 0, 0.3);
   verbDry.init_knob(64, -64, 0, 0);
   verbWet.init_knob(64, -64, 0, -8);
+  
+  playheadDry.init_knob(64, -64, 0, -64);
+  playheadWet.init_knob(64, -64, 0, 0);
+  
   verbGateAttackKnob.init_knob(1, 0, 0, 0.06);
   verbGateDecayKnob.init_knob(1, 0, 0, 0.6);
   verbGateSustainKnob.init_knob(1, 0, 0, 0.2);
@@ -1326,6 +1334,15 @@ version > 3 ? (
 
 do_not_store_samples = 1 - has_samples;
 
+((!writing) && (last_read_version < 5)) ? (
+  slowdown_scaling = 1;
+) : (
+  file_var(0, slowdown_scaling);
+);
+
+playheadWet.serialize_knob();
+playheadDry.serialize_knob();
+
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
 
@@ -2062,11 +2079,15 @@ jump_schedule.eval_jump();
     speed = abs(speed_values[sequencer_index]);
     
     // Fractional speed
-    speed = (speed == 0) ? 1.0
-    : (speed == 1) ? 0.75
-    : (speed == 2) ? 0.66
-    : (speed == 3) ? 0.5
-    : (speed == 4) ? 0.25
+    (slowdown_scaling == 1) ? (
+      speed = (speed == 0) ? 1.0
+      : (speed == 1) ? 0.75
+      : (speed == 2) ? 0.66
+      : (speed == 3) ? 0.5
+      : (speed == 4) ? 0.25
+    ) : (
+      speed = 2^(-speed/12);
+    );
   ) : ( speed = 1 );
   
   // Reverse it?
@@ -2137,6 +2158,8 @@ jump_schedule.eval_jump();
   modulator1_target = modulator1_values[sequencer_index];
   modulator2_target = modulator2_values[sequencer_index];
   
+  time_effect_active = (speed != 0) || tapestop_target || (retrig && retrigger_enabled);
+  
   update_current_levels();
 );
 
@@ -2198,6 +2221,19 @@ x_fade_position > 0 ? (
     ssl = l_buffer.readBuffer(playhead_0);
     ssr = r_buffer.readBuffer(playhead_0);
   );
+);
+
+current_playhead_level = 0.9992 * current_playhead_level + 0.0008 * time_effect_active;
+
+current_playhead_level > .000000001 ? (
+  playhead_drymul = current_playhead_dry > -64 ? exp(log10d20_conversion*current_playhead_dry) : 0;
+  playhead_wetmul = exp(log10d20_conversion*current_playhead_wet);
+
+  tmpl = playhead_wetmul * ssl + playhead_drymul * l_buffer.readBuffer(256);
+  tmpr = playhead_wetmul * ssr + playhead_drymul * r_buffer.readBuffer(256);
+  
+  ssl = current_playhead_level * tmpl + (1.0 - current_playhead_level) * ssl;
+  ssr = current_playhead_level * tmpr + (1.0 - current_playhead_level) * ssr;
 );
 
 function do_effect(effect_idx)
@@ -2399,6 +2435,9 @@ function setup_theme()
     s_DELAY = sprintf(75, "DELAY");
     s_CHORUS = sprintf(76, "CHORUS");
     s_SAMPLE = sprintf(77, "SAMPLE");
+    s_SLOWDOWN = sprintf(78, "SLOWDOWN");
+    s_RETRIGGER = sprintf(79, "RETRIGGER");
+    s_REVERSE = sprintf(80, "REVERSE");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2413,6 +2452,9 @@ function setup_theme()
     s_DELAY = sprintf(75, "Delay");
     s_CHORUS = sprintf(76, "Chorus");
     s_SAMPLE = sprintf(77, "Sample");
+    s_SLOWDOWN = sprintf(78, "Slowdown");
+    s_RETRIGGER = sprintf(79, "Retrigger");
+    s_REVERSE = sprintf(80, "Reverse");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2426,7 +2468,10 @@ function setup_theme()
     s_MODFX = sprintf(74, "Modulation Effects");
     s_DELAY = sprintf(75, "Delay");
     s_CHORUS = sprintf(76, "Chorus");
-    s_SAMPLE = sprintf(77, "Sample");    
+    s_SAMPLE = sprintf(77, "Sample");
+    s_SLOWDOWN = sprintf(78, "Slowdown");
+    s_RETRIGGER = sprintf(79, "Retrigger");
+    s_REVERSE = sprintf(80, "Reverse");
   );
 
   style == 0 ? (
@@ -3201,7 +3246,7 @@ gfx_x = x_current;
 gfx_y = y_current - block_width;
 gfx_printf(" BETA");
 y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.\n\nNote that the first block cannot be removed.");
-y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", 4, 11, "Slow down playback.");
+y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", slowdown_scaling == 0 ? 24 : 4, 11, "Slow down playback.");
 y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19, "Tape stop effect.");
 y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", 6, 13, "Retrigger last block N times.");
 y_current = process_effect_row(4, 5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
@@ -3494,6 +3539,42 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   storeSamplesToggle.label = " Don't save";
   storeSamplesToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.8 * knobSize, 0.15*knobSize, 0.15*knobSize, do_not_store_samples, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Don't store samples with preset.");
   do_not_store_samples = storeSamplesToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+) : (selected_details == 2 ) ? (
+  nextPanel = drawPanel(s_SLOWDOWN, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, slowdown_enabled);
+  cX += 2 * knobSpacing;
+  gfx_setfont(KNOB_FONT);
+  slowdownModeToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, 1.0 - slowdown_scaling, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Step in semitones.\n\nWhen activated, slowdown will go in\nsteps of a single semitone.\nWhen disabled, it'll go ratio-metrically.");
+  slowdown_scaling = 1.0 - slowdownModeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  playheadDry.knob_set_display(DB_SLIDER, slowdown_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, slowdown_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
+) : ( selected_details == 4 ) ? (
+  nextPanel = drawPanel(s_RETRIGGER, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, retrigger_enabled);
+  cX += 2 * knobSpacing;
+  gfx_setfont(KNOB_FONT);
+  playheadDry.knob_set_display(DB_SLIDER, retrigger_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, retrigger_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
+) : ( selected_details == 5 ) ? (
+  nextPanel = drawPanel(s_REVERSE, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, reverse_enabled);
+  cX += 2 * knobSpacing;
+  gfx_setfont(KNOB_FONT);
+  playheadDry.knob_set_display(DB_SLIDER, reverse_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, reverse_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
 ) : (selected_details == 21) ? (
   // Filter 2
   nextPanel = drawPanel(s_FILTER2, cX, cY - 1.5 * knobSize, 26.5*knobSpacing, panelHeight, filter2_enabled);
@@ -3739,11 +3820,20 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
 ) : ( selected_details == 10 ) ? (
   // Tape stop
   min_degrade = 3;
-  nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 4*knobSpacing, panelHeight, tapestop_enabled);
+  nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 11.5*knobSpacing, panelHeight, tapestop_enabled);
   
   cX += knobSize * 1.35;
   tapestopSpeedKnob.knob_set_display(DECAY_SLIDER, tapestop_enabled);
   tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", current_tapestop_decay, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  playheadDry.knob_set_display(DB_SLIDER, tapestop_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, tapestop_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
 ) : ( selected_details == 11 ) ? (
   // Tonal delay
   min_degrade = 3;
