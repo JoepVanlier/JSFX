@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.76
+version: 0.77
 author: Joep Vanlier
-changelog: Allow learning power buttons and various other controls. Allow randomizing modulator A and B.
+changelog: Make advanced tapestop mode the default. Add a few more tapestop shapes. Rename tape stop knob. Add mode to control tapestop shape on the timeline instead.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -102,6 +102,7 @@ DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
 DRAG_MODSIZE = 6;
 loaded_pattern = -1;
+TAPESTOP_MAX = 10;
 
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
@@ -159,25 +160,33 @@ function to_order_mem()
   order_mem[9] = effect10;
 );
 
-function time_func(t)
+function time_func(func, t)
 global(current_tapestop_depth, current_tapestop_shape)
-local(func)
+local(cc)
 (
-  func = 6 * current_tapestop_shape;
   (func < 1) ? (
     t * (1.0 - exp(-5 * pow(t, .5 + 5 * current_tapestop_depth)))
   ) : (func < 2) ? (
     (1 + 2 * current_tapestop_depth * exp(-4 * t)) * t * (1.0 - exp(-15 * t))
   ) : (func < 3) ? (
-    (4 * current_tapestop_depth * exp(-4 * t)) * t * (1.0 - exp(-13 * t))
+    t - t * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t)) * exp(-3 * t)
   ) : (func < 4) ? (
     t * (1.0 - exp(-4 * t) * cos(8 * current_tapestop_depth * $pi * t))
   ) : (func < 5) ? (
-    (4 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-13 * t)) * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t))
+    (4 * current_tapestop_depth * exp(-4 * t)) * t * (1.0 - exp(-13 * t))
   ) : (func < 6) ? (
-    (8 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-13 * t)) * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t))
+    (4 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-13 * t)) * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t))
   ) : (func < 7) ? (
-    t - t * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t)) * exp(-3 * t)
+    (8 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-13 * t)) * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t))
+  ) : (func < 8) ? (
+    (45 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-1 * t)) * (0.5 + 0.5 * cos(16 * current_tapestop_depth * $pi * t))
+  ) : (func < 9) ? (
+    t * (8*current_tapestop_depth*t - floor(8*current_tapestop_depth*t)) / (0.4 + 3*current_tapestop_depth*t)
+  ) : (func < 10) ? (
+    1.5 * exp(-2 * t) * (t - t * (0.5 + 0.5 * cos($pi * (exp(4 * current_tapestop_depth * t) - 1))))
+  ) : (func < 11) ? (
+    cc = 2 * t - 0.5;
+    2 * t * abs(cc - floor(cc) - 0.5) * exp(-(1.0 - current_tapestop_depth) * t);
   );
 );
 
@@ -590,7 +599,7 @@ function init_controls()
   tapestopSpeedKnob.init_knob(1, 0, 0, 0.6);
   
   tapestopDepthKnob.init_knob(1, 0, 0, 1.0);
-  tapestopShapeKnob.init_knob(1, 0, 0, 1.0);
+  tapestopShapeKnob.init_knob(TAPESTOP_MAX, 0, 0, 1.0);
   
   karplusPitchKnob.init_knob(1, 0, 0, 0.5);
   karplusFeedback.init_knob(1, 0, 0, 0.15);
@@ -1141,6 +1150,7 @@ writing = file_avail(0) < 0;
 loaded = 1;
 file_var(0, version);
 !writing ? last_read_version = version;
+
 (version < 3) ? (
   file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
 ) : (
@@ -1397,10 +1407,11 @@ tapestopDepthKnob.serialize_knob();
 tapestopShapeKnob.serialize_knob();
 
 ((!writing) && (last_read_version < 6)) ? (
-  advanced_tapestop = 1;
+  legacy_tapestop = 1;
 ) : (
-  file_var(0, advanced_tapestop);
+  file_var(0, legacy_tapestop);
 );
+advanced_tapestop = 1 - legacy_tapestop;
 
 ((!writing) && (last_read_version < 7)) ? (
   randomizing_modulator_a = 0;
@@ -1408,6 +1419,12 @@ tapestopShapeKnob.serialize_knob();
 ) : (
   file_var(0, randomizing_modulator_a);
   file_var(0, randomizing_modulator_b);
+);
+
+((!writing) && (last_read_version < 7)) ? (
+  timeline_tapestop = 0;
+) : (
+  file_var(0, timeline_tapestop);
 );
 
 update_current_levels();
@@ -2212,7 +2229,7 @@ jump_schedule.eval_jump();
   degrade_target = abs(degrade_values[sequencer_index]);
   
   tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
-  tapestop_target == 1 ? (
+  (tapestop_target > 0) ? (
     tapestop_envelope.calc_times_universal(current_tapestop_decay, current_tapestop_decay, 0);
     stop_factor = 1;
     t_stop = 0;
@@ -2251,7 +2268,7 @@ tapestop_target ? (
       dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
     );
   ) : (
-    dyn_speed = speed + time_func(t_stop) / t_stop;
+    dyn_speed = speed + time_func(timeline_tapestop ? tapestop_target : current_tapestop_shape, t_stop) / t_stop;
     t_stop += tapestop_envelope.delta_time;
   );
 );
@@ -3338,7 +3355,7 @@ gfx_y = y_current - block_width;
 gfx_printf(" BETA");
 y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.\n\nNote that the first block cannot be removed.");
 y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", slowdown_scaling == 0 ? 24 : 4, 11, "Slow down playback.");
-y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", 1, 19, "Tape stop effect.");
+y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", timeline_tapestop ? TAPESTOP_MAX : 1, 19, "Tape stop effect.");
 y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", 6, 13, "Retrigger last block N times.");
 y_current = process_effect_row(4, 5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
 
@@ -3574,7 +3591,7 @@ global()
 dragging = 0;
 set_row_color(selected_row);
   
-function time_func_draw(x, y, w, h)
+function time_func_draw(func, x, y, w, h)
 global(dial_position_color_r, dial_position_color_g, dial_position_color_b,
        gfx_x, gfx_y)
 local(s, ds, cx, cy, ly, ww, hh, v)
@@ -3596,7 +3613,7 @@ local(s, ds, cx, cy, ly, ww, hh, v)
 
   ly = y;
   loop(w,
-    v = time_func(s) / (2*s);
+    v = time_func(func, s) / (2*s);
     cy = y + h * v;
 //    cy = min(y + h, max(y, cy));
     s += ds;
@@ -3979,15 +3996,26 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   tapeStopToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, advanced_tapestop, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Curve controls for tape stop.");
   advanced_tapestop = tapeStopToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
-  tapestopShapeKnob.knob_set_display(NORMALIZED_SLIDER, tapestop_enabled && advanced_tapestop);
-  tapestopShapeKnob.drawAndProcess(cX, cY, knobSize, "Shape", "Tapestop modulation shape.", current_tapestop_shape, 1, 1, 1);
+  sprintf(CUSTOM_SLIDER, "%d", tapestopShapeKnob.value * tapestopShapeKnob.scale + 1);
+  timeline_tapestop ? (
+    tapestopShapeKnob.mod1 = 0;
+    tapestopShapeKnob.mod2 = 0;
+    tapestopShapeKnob.knob_set_display(CUSTOM_SLIDER, tapestop_enabled && advanced_tapestop);
+    tapestopShapeKnob.drawAndProcess(cX, cY, knobSize, "Shape", "Tapestop modulation shape.", current_tapestop_shape, 0, 0, 0);
+  ) : (
+    tapestopShapeKnob.knob_set_display(CUSTOM_SLIDER, tapestop_enabled && advanced_tapestop);
+    tapestopShapeKnob.drawAndProcess(cX, cY, knobSize, "Shape", "Tapestop modulation shape.", current_tapestop_shape, 1, 1, 1);
+  );
+
+  tapeStopTimeline.drawToggle(cX + knobSize - 1, cY - knobSize, 0.15*knobSize, 0.15*knobSize, timeline_tapestop, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Set shape on the timeline.");
+  timeline_tapestop = tapeStopTimeline.processMouseToggle(mouse_x, mouse_y, mouse_cap);
        
   cX += 2.5*knobSize;
   tapestopDepthKnob.knob_set_display(NORMALIZED_SLIDER, tapestop_enabled && advanced_tapestop);
-  tapestopDepthKnob.drawAndProcess(cX, cY, knobSize, "Depth", "Modulation depth.", current_tapestop_depth, 1, 1, 1);
+  tapestopDepthKnob.drawAndProcess(cX, cY, knobSize, "Strength", "Modulation depth.", current_tapestop_depth, 1, 1, 1);
 
   cX += 1.5*knobSize;  
-  time_func_draw(cX, cY - 0.75 * knobSize, knobSize * 3.25, knobSize * 2);
+  time_func_draw(tapestopShapeKnob.value * tapestopShapeKnob.scale, cX, cY - 0.75 * knobSize, knobSize * 3.25, knobSize * 2);
 ) : ( selected_details == 11 ) ? (
   // Tonal delay
   min_degrade = 3;
