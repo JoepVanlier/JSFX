@@ -1,0 +1,3286 @@
+import reajs_compatibility.jsfx-inc
+noindex: truedesc:Saike Not OTT (ALPHA) [ReaJS-Compatibility]
+tags: multiband compression
+version: 0.12
+author: Joep Vanlier
+changelog: Fix bug resulting in mono dry signal when using DC correction. Make sure DC correction does not affect phase in FIR mode (by combining it into the FIR response). Add higher quality modes for the FIR filter, for low freq bands.
+about:
+  # Multiband Compressor.
+  Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design - A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
+  Filters are basic Linkwitz Riley filters using phase matching to maintain phase coherence for unfiltered bands.
+  
+license: MIT
+
+in_pin:left input
+in_pin:right input
+out_pin:left output 1
+out_pin:right output 1
+options:no_meter
+
+slider1:Cuts=2<0,4,1>-Cuts
+slider2:Freq1=0.213<0,1,.0001>-Frequency 1
+slider3:Freq2=0.609<0,1,.0001>-Frequency 2
+slider4:Freq3=0.5<0,1,.0001>-Frequency 3
+slider5:Freq4=0.5<0,1,.0001>-Frequency 4
+
+slider6:Attack1=0.5672<0,1,.0001>-Attack 1
+slider7:Attack2=0.6619<0,1,.0001>-Attack 2
+slider8:Attack3=0.8111<0,1,.0001>-Attack 3
+slider9:Attack4=0<0,1,.0001>-Attack 4
+slider10:Attack5=0<0,1,.0001>-Attack 5
+
+slider11:Release1=0.747<0,1,.0001>-Release 1
+slider12:Release2=0.9203<0,1,.0001>-Release 2
+slider13:Release3=0.9203<0,1,.0001>-Release 3
+slider14:Release4=0.9203<0,1,.0001>-Release 4
+slider15:Release5=0.9203<0,1,.0001>-Release 5
+
+slider16:RatioLow1=2<0,2,.0001>-Lower Ratio 1
+slider17:RatioLow2=1.1396<0,2,.0001>-Lower Ratio 2
+slider18:RatioLow3=1.1396<0,2,.0001>-Lower Ratio 3
+slider19:RatioLow4=1.1396<0,2,.0001>-Lower Ratio 4
+slider20:RatioLow5=1.1396<0,2,.0001>-Lower Ratio 5
+
+slider21:RatioHigh1=2<0,2,.0001>-Upper Ratio 1
+slider22:RatioHigh2=1.9543<0,2,.0001>-Upper Ratio 2
+slider23:RatioHigh3=1.9543<0,2,.0001>-Upper Ratio 3
+slider24:RatioHigh4=1.9543<0,2,.0001>-Upper Ratio 4
+slider25:RatioHigh5=1.9543<0,2,.0001>-Upper Ratio 5
+
+slider26:ThreshLow1=-40.8<-96,0,.0001>-Lower Threshold 1
+slider27:ThreshLow2=-41.8<-96,0,.0001>-Lower Threshold 2
+slider28:ThreshLow3=-40.8<-96,0,.0001>-Lower Threshold 3
+slider29:ThreshLow4=-40.8<-96,0,.0001>-Lower Threshold 4
+slider30:ThreshLow5=-40.8<-96,0,.0001>-Lower Threshold 5
+
+slider31:ThreshHigh1=-35.5<-96,0,.0001>-Upper Threshold 1
+slider32:ThreshHigh2=-30.2<-96,0,.0001>-Upper Threshold 2
+slider33:ThreshHigh3=-33.8<-96,0,.0001>-Upper Threshold 3
+slider34:ThreshHigh4=-33.8<-96,0,.0001>-Upper Threshold 4
+slider35:ThreshHigh5=-33.8<-96,0,.0001>-Upper Threshold 5
+
+slider36:Gain1=0<-48,48,0.00001>-Gain 1
+slider37:Gain2=0<-48,48,0.00001>-Gain 2
+slider38:Gain3=0<-48,48,0.00001>-Gain 3
+slider39:Gain4=0<-48,48,0.00001>-Gain 4
+slider40:Gain5=0<-48,48,0.00001>-Gain 5
+
+slider41:coupled=1<0,1,{False,True}>-Couple L/R?
+slider42:fixdc=0<0,1,1>-DC offset filter
+slider43:input_gain=0<-32,32,.001>Input gain
+slider44:output_gain=0<-32,32,.001>Output gain
+slider45:drywet=1<-1,1,.00001>Dry/Wet
+slider46:output_squash=0<0,3,1{None,Clip,Soft,ClipAA}>-Output limiting
+slider47:active_threshold=-280<0,-340,.0001>-Gate level [dB]
+slider60:epsilon=-4<-10,-2,.0001>-Epsilon
+slider61:FIR=0<0,1,1>-FIR mode
+slider62:advanced<0,1,1>-Advanced
+slider63:FIR_quality=0<0,2,{Normal,High,Ultra}>-FIR Quality
+
+@init
+eps = 10^(epsilon);
+
+function update_gain_now()
+(
+  cGain1 = Gain1;
+  cGain2 = Gain2;
+  cGain3 = Gain3;
+  cGain4 = Gain4;
+  cGain5 = Gain5;
+);
+update_gain_now();
+
+  driveInitialized = 0;
+  current_input_gain = input_gain;
+  g_factor = exp(.11512925464970228420089957273422 * current_input_gain);
+  
+  current_output_gain = output_gain;
+  gout_factor = exp(.11512925464970228420089957273422 * current_output_gain);
+  
+  smoothing_const = 20/srate;
+
+  /* Gain computer */
+  function calcGain(xG)
+  instance(thresh_lower, thresh_upper, iratio_lower, iratio_upper, ratio_upper)
+  local(diff, tmp)
+  global()
+  (
+    ( xG < thresh_lower ) ? (
+      diff = xG - thresh_lower;
+      thresh_lower + diff * iratio_lower
+    ) : ( xG > thresh_upper ) ? (
+      diff = xG - thresh_upper;
+      thresh_upper + diff * iratio_upper
+    ) : xG;
+  );
+
+  function setCompressorOptions(thrlow, thrhigh, ratlow, rathigh, s_atk, s_rel, min_attack, max_attack, min_decay, max_decay)
+    instance(rt, at, thresh_upper, thresh_lower, ratio_upper, ratio_lower, iratio_upper, iratio_lower, attack, release)
+    global(srate)
+    local(csrate, alpha, beta, atk)
+    (
+      beta          = log(min_attack);
+      alpha         = log(max_attack)-beta;
+      attack        = exp(alpha * s_atk + beta) - 1;
+      beta          = log(min_decay);
+      alpha         = log(max_decay)-beta;
+      release       = exp(alpha * s_rel + beta);
+    
+      csrate        = srate;
+      thresh_lower  = thrlow;
+      thresh_upper  = thrhigh;
+      ratio_lower   = ratlow == 2.0 ? 1000000 : exp(1.1 * ratlow*ratlow);
+      ratio_upper   = rathigh == 2.0 ? 1000000 : exp(1.1 * rathigh*rathigh);
+      iratio_lower  = 1.0 / ratio_lower;
+      iratio_upper  = 1.0 / ratio_upper;
+      at            = exp(-1/(.5*.001*attack*csrate));
+      rt            = exp(-1/(.5*.001*release*csrate));
+    );
+  
+  // Topology 3:
+  /* Level detection log domain */
+  function compressor_gain(x)
+    instance( rt, at, yL, 
+              ya, outGain )
+    global(eps)
+    local(xL, yG, xG)
+    (
+      (abs(x) > 10 * eps) ? (
+        xG  = 20 * log10(abs(x) + eps); /* Peak */
+      );
+      
+       /* Calculate the gain curve */
+      yG = this.calcGain(xG);
+      xL  = xG - yG;
+     
+      // Update smooth peak detector (peak)
+      xL > yL ? (
+        yL = at * yL + (1.0-at) * xL;
+      ) : (
+        ya = max( xL, rt * ya + (1.0-rt) * xL );
+        yL = at * yL + (1.0-at) * ya;
+      );
+     
+      // Return gain correction
+      yL
+    );
+    
+  /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
+  function init_HP6(freq)
+    global(srate)
+    local(res)
+    instance(g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      g = tan( $pi * freq );
+      
+      k1  = 1.93185165257814; // sqrt(2+sqrt(3))
+      a1_1 = 1/(1+g*(g+k1));
+      
+      k2 = 1.41421356474619; // sqrt(2)
+      a1_2 = 1/(1+g*(g+k2));
+      
+      k3 = 0.517638090205042; // sqrt(2-sqrt(3))
+      a1_3 = 1/(1+g*(g+k3));
+      
+      a2_1 = g*a1_1;
+      a2_2 = g*a1_2;
+      a2_3 = g*a1_3;
+    );
+
+  function reset_HP6()
+  instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq)
+  (
+    ic1eq = ic2eq = ic3eq = ic4eq = ic5eq = ic6eq = 0;
+  );
+  
+  function eval_HP6(v0)
+    global()
+    local(v1, v2, hp)
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq,
+             g, a1_1, a1_2, a1_3, a2_1, a2_2, a2_3, k1, k2, k3)
+    (
+      v1 = a1_1 * ic1eq + a2_1*(v0-ic2eq);
+      v2 = ic2eq + g*v1;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;
+      hp    = v0 - k1*v1 - v2;
+      
+      v1 = a1_2 * ic3eq + a2_2*(hp-ic4eq);
+      v2 = ic4eq + g*v1;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      hp    = hp - k2*v1 - v2;
+      
+      v1 = a1_3 * ic5eq + a2_3*(hp-ic6eq);
+      v2 = ic6eq + g*v1;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;
+      
+      hp    = hp - k3*v1 - v2;
+    );
+    
+  function tanh(x)
+  local()
+  global()
+  instance()
+  (
+    (2/(1+exp(-2*x)))-1.0
+  );
+  
+  dcl.init_HP6(20/srate);
+  dcr.init_HP6(20/srate);
+  dc_fir.init_HP6(20/srate);
+
+/*-----------*/
+/* HINTS     */  
+/*-----------*/ 
+function updateHintTime(hint)
+  global(gfx_x, gfx_y)
+  local()
+  instance(hintTime, currentHint, delta_time)
+  (
+    (hint != 0) ? (
+      currentHint = hint;
+      hintTime = hintTime + delta_time;
+      hintTime = min(1, hintTime);
+    ) : (
+      0
+    );
+  );   
+  
+function drawHint_draw()
+  global(scaling, gfx_x, gfx_y, gfx_w, gfx_h, mouse_x, mouse_y, fontface, HINT_FONT)
+  local(w, h, globalTime)
+  instance(hintTime, currentHint, lastGlobalTime, delta_time, lx, ly)
+  (
+    globalTime = time_precise();
+    delta_time = globalTime - lastGlobalTime;
+    lastGlobalTime = globalTime;
+  
+    ( ( abs( lx - mouse_x ) + abs( ly - mouse_y ) ) > 0 ) ? (
+      hintTime = 0;
+    );
+  
+    ( hintTime > .99 ) ? (
+      gfx_setfont(HINT_FONT);
+      gfx_measurestr(currentHint,w,h);
+      
+      gfx_x = mouse_x+15;
+      gfx_y = mouse_y+15;
+      ( gfx_x > 0.5*gfx_w ) ? gfx_x = mouse_x - w - 8;
+      ( gfx_y > 0.5*gfx_h ) ? gfx_y = mouse_y - h - 8;
+
+      gfx_set( 0.05, 0.05, 0.1, .8 );
+      gfx_rect(gfx_x-2, gfx_y-2, w+4, h+4);
+      gfx_set( .7, .7, .7, 1 );      
+      gfx_printf(currentHint);
+    );
+    
+    lx = mouse_x;
+    ly = mouse_y;
+  );    
+
+
+/*-------------*/
+/* SIMPLE KNOB */  
+/*-------------*/
+function simpleKnob(x1, y1, rin, slider_idx_in, slidermax_in, slidermin_in, label, x_offset, y_offset)
+  local(dx, cr, hh, ww, arc, boost, i)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB, gfx_x, gfx_y, scaling,
+         dialFgR, dialFgG, dialFgB)
+  instance(hl, x, y, r, over, slider_idx, slider_max, slider_min, gfx_mode)
+  (
+    x = x1;
+    y = y1;
+    r = rin;
+    slider_idx = slider_idx_in;
+    slider_max = slidermax_in;
+    slider_min = slidermin_in;
+    arc = (slider(slider_idx) - slider_min) / slider_max;
+    
+    boost = over ? 0.2 * abs(sin(2.0 * time_precise())) : 0;
+
+    gfx_set(0, 0, 0, 0.9);
+    gfx_circle(x, y, r, 1, 1);
+    
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, 1);
+    dx = 0.5;
+    cr = 0.8 * r;
+    loop(5,
+      gfx_arc(x, y, cr, -0.82 * $pi, 0.82 * $pi);
+      cr += dx;
+    );
+    
+    cr = 0.9 * r; i = over ? .5 * abs(sin(2.0 * time_precise())) : 0;
+    loop(2,
+      gfx_set(dialFgR * i, dialFgG * i, dialFgB * i, 1);
+      gfx_arc(x, y, cr, 0, 2*$pi);
+      cr += 0.5; i *= .8;
+    );
+    
+    dx = 0.5;
+    cr = 0.8 * r;
+    gfx_set(dialFgR + boost, dialFgG + boost, dialFgB + boost, 1);
+    loop(5,
+      gfx_arc(x, y, cr, 0, 0.82 * $pi * arc);
+      cr += dx;
+    );
+    
+    gfx_set(1, 1, 1, .9);
+    gfx_setfont(2, "Arial", 14 * (1 + scaling));
+    gfx_measurestr(label, ww, hh);
+    gfx_x = x - 0.5 * ww - x_offset * (1 + scaling);
+    gfx_y = y - 0.5 * hh - y_offset * (1 + scaling);
+    gfx_printf(label);
+    
+    over = 0;
+  );
+
+dialFgR = 1.0;
+dialFgG = 0.8;
+dialFgB = 0.5;
+atkFgR = 1.0;
+atkFgG = 0.2;
+atkFgB = 0.2;
+relFgR = 0.2;
+relFgG = 0.6;
+relFgB = 1.0;
+
+function drawExtraArc(x1, y1, r_in, slider_idx_in, slider_max_in, slider_min_in, r_bg, g_bg, b_bg, r_fg, g_fg, b_fg, label, side, x_offset, y_offset)
+instance(hl, x, y, r, over, slider_idx, slider_max, slider_min, over, xmin, xmax, ymin, ymax)
+local(cr, val, amin, amax, i, r_draw, ww, hh, boost, base_size)
+global(gfx_mode, scaling, gfx_x, gfx_y)
+(
+  r_draw = r_in * 1.05;
+  r = r_in * 1.4;
+  x = floor(x1);
+  y = floor(y1);
+  slider_idx = slider_idx_in;
+  slider_max = slider_max_in;
+  slider_min = slider_min_in;
+
+  ymin = y - r_in;
+  ymax = y + r_in;
+  (side < 0) ? (
+    xmin = x - r;
+    xmax = x;
+  ) : (
+    xmin = x;
+    xmax = x + r;
+  );
+  
+  base_size = 13 * (1 + scaling);
+  
+  amin = 0.20 * $pi;
+  amax = 0.80 * $pi;
+  cr = r_in; i = over ? .2 * abs(sin(2.0 * time_precise())) : 0;
+  
+  cr = r_draw; i = over ? 1 * abs(sin(2.0 * time_precise())) : 0;
+  loop(base_size + 1 * (1 + scaling),
+    gfx_set(r_fg * i, g_fg * i, b_fg * i, 1);
+    gfx_arc(x, y, cr, side * amin, side * amax);
+    cr += 0.5;
+  );
+  
+  loop(3 * (1+scaling),
+    gfx_set(r_fg * i, g_fg * i, b_fg * i, 1);
+    gfx_arc(x, y, cr, side * amin, side * amax);
+    cr += 0.5;
+    i *= .5;
+  );
+  
+  gfx_set(r_bg, g_bg, b_bg, 1.0);
+  cr = r_draw;
+  val = 1 - (slider(slider_idx) - slider_min) / slider_max;
+  
+  amin = 0.21 * $pi;
+  amax = 0.79 * $pi;
+  loop(base_size,
+    gfx_arc(x, y, cr, side * amin, side * amax); cr += 0.5;
+  );
+  
+  boost = over ? 0.2 * abs(sin(2.0 * time_precise())) : 0;
+  gfx_set(r_fg + boost, g_fg + boost, b_fg + boost, 1);
+  cr = r_draw;
+  loop(base_size,
+    gfx_arc(x, y, cr, side * (amin + (amax-amin) * val), side * amax); cr += 0.5;
+  );
+  
+ // gfx_set(1, 1, 1, .9);
+  gfx_setfont(2, "Arial", 14 * (1 + scaling));
+  gfx_measurestr(label, ww, hh);
+  gfx_x = x - 0.5 * ww - x_offset * (1 + scaling);
+  gfx_y = y - 0.5 * hh - y_offset * (1 + scaling);
+  gfx_printf(label);
+  
+  over = 0;
+);
+
+/*-----------*/
+/* CIRCLE    */  
+/*-----------*/
+function fancyCircle(x1, y1, rin, mute, solo, bypass)
+  local(dx)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB)
+  instance(hl, x, y, r, over, gfx_mode)
+  (
+    x = x1;
+    y = y1;
+    rin == 0 ? r = 12 : r = rin;
+    
+    over ? (
+      hl = abs(sin(2*globalTime));
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .1*hl);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .1*hl);
+      gfx_circle(x, y, 1.5*r, 1, 1);
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .05*hl);
+      gfx_circle(x, y, 1.9*r, 1, 1);
+      gfx_set(lineHighlightR, lineHighlightG, lineHighlightB, .03*hl);
+      gfx_circle(x, y, 4*r, 1, 1);
+    ); 
+    
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, 1);
+    gfx_circle(x, y, r, 1, 1);
+    
+    gfx_set(lineR, lineG, lineB, lineA);    
+    gfx_circle(x, y, .92*r, 1, 1);
+    
+    gfx_set(.8*lineR, .8*lineG, .8*lineB, lineA);
+    gfx_circle(x, y, .8*r, 1, 1);
+    
+    gfx_set(.6*lineR, .6*lineG, .6*lineB, lineA);
+    gfx_circle(x, y, .75*r, 1, 1);
+    
+    gfx_set(.4*lineR, .4*lineG, .4*lineB, lineA);
+    gfx_circle(x, y, .7*r, 1, 1);
+    
+    ( solo == 1 ) ? (
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, .8*r, 1, 1);
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, .9*r, 1, 1);
+      gfx_set(.2, 1, .2, .5);
+      gfx_circle(x, y, r, 1, 1);
+      gfx_set(.2, 1, .2, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);    
+      
+      gfx_set(.7, 1, .7, .3);
+      gfx_circle(x, y, .7*r, 1, 1);
+      
+      gfx_set(.2, 1, .5, .08);
+      gfx_circle(x, y, 1.1*r, 1, 0);
+      gfx_set(.2, 1, .5, .08);
+      gfx_circle(x, y, 1.2*r, 1, 0);
+      gfx_set(.2, 1, .5, .08);
+      gfx_circle(x, y, 1.4*r, 1, 0);
+     ) : ( mute == 1 ) ? (
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, .8*r, 1, 1);
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, .9*r, 1, 1);
+      gfx_set(1, .2, .2, .5);
+      gfx_circle(x, y, r, 1, 1);
+      gfx_set(1, .2, .2, .2);
+      gfx_circle(x, y, 1.2*r, 1, 1);
+      
+      gfx_set(1, .55, .55, 1);
+      gfx_circle(x, y, 1*r, 0, 1);
+      
+      gfx_set(1, .7, .7, .1);
+      gfx_circle(x, y, .7*r, 1, 1);
+      
+      gfx_set(1, .5, .5, .1);
+      gfx_circle(x, y, 1.1*r, 1, 0);
+      gfx_set(1, .5, .5, .1);
+      gfx_circle(x, y, 1.2*r, 1, 0);
+      gfx_set(1, .5, .5, .1);
+      gfx_circle(x, y, 1.4*r, 1, 0);
+    );    
+    
+    ( bypass == 1 ) ? (
+      gfx_set(1-mute, .2, .2, 1);
+      dx = .5*r;
+      gfx_line(x-dx, y-dx-1, x+dx, y+dx-1);
+      gfx_line(x-dx, y-dx+1, x+dx, y+dx+1);
+      gfx_line(x+dx, y-dx-1, x-dx, y+dx-1);
+      gfx_line(x+dx, y-dx+1, x-dx, y+dx+1);    
+      gfx_line(x+dx, y-dx,   x-dx, y+dx);
+      gfx_line(x-dx, y-dx,   x+dx, y+dx);
+    );
+    
+    over ? ( 
+      gfx_set(1,1,1,.4*hl);
+      gfx_circle(x, y, .6*r, 1, 1);
+      gfx_circle(x, y, 1.4*r, 0, 1);
+      gfx_circle(x, y, 1.5*r, 0, 1);
+    );
+    
+    over = 0;
+  );
+
+/*-----------*/
+/* TOGGLE    */  
+/*-----------*/ 
+function processMouseToggle(mx, my, mousecap)
+  instance(x, y, w, h, on, lastleft, str)
+  local(left, slack, over)
+  global(hinter.updateHintTime, comboboxOpen)
+  (
+    !comboboxOpen ? (
+      slack = 5;
+      left = mousecap & 1;
+      
+      over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
+      
+      over ? (
+        ( (left == 1) && (lastleft == 0) ) ?  (
+          on = 1 - on;
+        );
+        hinter.updateHintTime(str);
+      );
+      
+      lastleft = left;
+    );
+    
+    on
+  );
+ 
+function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
+  local(ww, hh)
+  instance(x, y, w, h, str, on, invert, label)
+  global(gfx_x, gfx_y, gfx_a, gfx_mode, 
+         TOGGLE_FONT, knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    on = _on;
+    str = _str;
+
+    gfx_set(0, 0, 0, 0);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(r, g, b, a*.2);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(wr, wg, wb, wa);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+
+    ( label ) ? (
+      gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
+      gfx_setfont(TOGGLE_FONT);
+      gfx_measurestr(label, ww, hh);
+      gfx_x = floor(x+1.5*w);
+      gfx_y = floor(y-.5*hh+.5*h);
+      gfx_printf(label);
+    );
+    
+    ( (on && !invert) || (!on && invert) ) ? (
+      gfx_set(r, g, b, a);
+      gfx_rect(x, y, w, h);
+      gfx_a *= .6;
+      gfx_rect(x-1, y-1, w+2, h+2);
+      gfx_a *= .6;
+      gfx_rect(x-2, y-2, w+4, h+4);
+      gfx_a *= .6;
+      gfx_rect(x-3, y-3, w+6, h+6);
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 2*max(w,h), 2*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 3*max(w,h), 3*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 4*max(w,h), 4*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 5*max(w,h), 5*max(w,h));
+    );
+  );
+
+
+  GRID_FONT     = 15;
+  HINT_FONT     = 14;
+  TOGGLE_FONT   = 15;
+  gfx_ext_retina = 1;
+
+  function f_trafo(freq)
+  local()
+  global()
+  instance()
+  (
+    exp( (1-freq) * log(20/22050) )
+  );  
+
+  function initBands()
+  local()
+  global()
+  instance(b1, b2, b3, b4, b5)
+  (
+    b1.initialized = b2.initialized = b3.initialized = b4.initialized = b5.initialized = 0;
+  );
+
+maxCuts = 4;
+threshMin = -60;
+threshMax = 0;
+threshRange = threshMax - threshMin;
+threshLowIdx = 26;
+threshHighIdx = 31;
+ratioHighIdx = 21;
+ratioLowIdx = 16;
+bandGainMax = 48;
+bandGainIdx = 36;
+attackIdx = 6;
+releaseIdx = 11;
+attackSliderMin = 0;
+attackSliderMax = 1;
+releaseSliderMin = 0;
+releaseSliderMax = 1;
+
+filterBank.initBands();
+
+// Precompute some things
+gainRange = ( gainMax - gainMin );
+iGainRange = 1.0 / gainRange;
+iThreshRange = threshMax - threshMin;
+
+///////////////////
+/* SLIDER LAYOUT */
+///////////////////
+/* Keep these updated with the slider locations */
+frequencyLocation = 2;
+driveLocation     = 6;
+
+/* Shift slider data right (for different bands) */
+function shiftRight(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc + numElements;
+    loop(numElements-fromIdx,
+      slider(midx) = slider(midx-1);
+      midx = midx - 1;
+    );
+  );
+
+/* Shift slider data left  (for different bands) */
+function shiftLeft(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc+fromIdx;
+    loop(numElements-fromIdx,
+      slider(midx) = slider(midx+1);
+      midx = midx + 1;
+    );
+  );
+  
+/* Shift slider data right (for different bands) */
+function shiftRightMem(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc + numElements;
+    loop(numElements-fromIdx,
+      midx[] = midx[-1];
+      midx -= 1;
+    );
+  );
+
+/* Shift slider data left  (for different bands) */
+function shiftLeftMem(loc, fromIdx, numElements)
+  local(midx)
+  global()
+  (
+    midx = loc+fromIdx;
+    loop(numElements-fromIdx,
+      midx[] = midx[1];
+      midx += 1;
+    );
+  );  
+
+/* Make room for a new band in the slider data */
+function addBand(idx)
+  local(midx)
+  instance()
+  (
+    shiftRight( driveLocation,     idx, maxCuts );
+    shiftRight( frequencyLocation, idx, maxCuts-1 );
+    
+    cuts = cuts + 1;
+  );
+  
+/* Remove a band and move other slider data accordingly */  
+function remBand(idx)
+  local(midx)
+  instance()
+  (
+    shiftLeft( driveLocation,     idx, maxCuts );
+    shiftLeft( frequencyLocation, idx, maxCuts-1 );
+    
+    cuts = cuts - 1;
+  );  
+
+/* Feed sample to FFT */
+function feedSample(sample)
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc)
+  local()
+  (
+    recPtr[] = sample;
+    recPtr = (recPtr+1) >= rEnd ? rStart : recPtr + 1;
+  );
+
+/* Initialize FFT windowing function */
+function initWindow(windowtype)
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc)
+  local(i, pwr, dwindowpos, windowpos)
+  (
+    windowpos = 0;
+    dwindowpos = $pi*2/fftSize;
+    i = 0; pwr = 0;
+    loop(fftSize*.5+1,
+       pwr += (window[i] = (
+         windowtype==1 ? ( 0.53836 - cos(windowpos)*0.46164 ) :
+         windowtype==2 ? ( 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) ) :
+         windowtype==3 ? ( 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) ) :
+         windowtype==4 ? ( 1.0 ) :
+         ( .21557895 - 0.41663158 * cos(windowpos) + 0.277263158 * cos(2*windowpos) - 0.083578947 * cos(3*windowpos) + 0.006947368 * cos(4*windowpos) )
+         ) );
+       i+=1;
+       windowpos+=dwindowpos;
+    );
+    pwr=.5/(pwr*2-window[i-1]);
+    loop(fftsize*.5+1,window[i-=1]*=pwr);
+ );
+  
+function setToFFTLoc()
+ global(fftSize)
+ instance(recPtr, rStart)
+ local()
+ ( 
+    recPtr = rStart + fftSize;
+ ); 
+
+/* Calculate current spectrum */
+function calcFFT()
+  global(fftSize)
+  instance(recPtr, window, rStart, rEnd, fftLoc, slope, yshift)
+  local(buf1, buf2, buf3, yOut, i, ty, to_dB)
+  (
+    buf1=recPtr-fftSize;
+    buf1<rStart ? buf1+=(rEnd-rStart);
+    buf2=window;
+    buf3=fftLoc;
+    loop(fftSize*.5 + 1,
+      buf3[] = buf1[]*buf2[];
+      buf3+=1;
+    
+      buf2+=1;
+      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
+    );
+    buf2-=1;
+    loop(fftSize*.5 - 1,
+      buf3[] = buf1[]*(buf2-=1)[];
+      buf3+=1;
+      (buf1+=1) >= rEnd ? buf1 -= (rEnd-rStart);
+    );
+    
+    fft_real(fftLoc,fftSize);
+    fft_permute(fftLoc,fftSize/2);
+    
+    to_dB   = 10 / log(10);
+    buf3    = fftLoc;
+    yOut    = fftLoc;  
+    i       = 0;
+    slope   = .5*log(2)*slope;
+    yshift  = slope*log(1.0+.5*fftSize);
+    loop(fftSize*0.5,   
+      ty      = sqr(buf3[0])+sqr(buf3[1]);
+      ty      = to_dB * log(ty + .00000000000000000001) + 2 * $pi;
+      ty      = ty + slope*log(1.0+i) - yshift;
+      yOut[]  = ty;
+      yOut    += 1;
+      buf3    += 2;    
+      
+      i += 1;
+    );
+  );  
+
+/* Set location of a window */
+function setWindowLocation(_x, _y, _w, _h)
+  global()
+  instance(x, y, w, h, cap)
+  local()
+  ( 
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+  );
+
+// Draws the basic box for the FFT
+function drawBackface()
+  instance(x, y, w, h)
+  global(backface_color_r, backface_color_g, backface_color_b, backface_color_a,
+         grid_color_r, grid_color_g, grid_color_b, grid_color_a)
+  local()
+  (
+    gfx_set(backface_color_r, backface_color_g, backface_color_b, backface_color_a);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_color_a);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y+h, x+w, y+h);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+  );
+
+// Draws the FFT Grid, frequency axis and dB axis
+function drawGrid()
+  global(fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT,
+         grid_color_r, grid_color_g, grid_color_b, grid_color_a)
+  instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset,)
+  local(xx, i, wsc, N, xl)
+  (    
+    this.drawBackface();
+    
+    i = 0;
+    wsc = w/log(1+fftSize*0.5-hzoffset);
+    xl = x;
+    gfx_y = y+h+2;
+    
+    gfx_setfont(GRID_FONT);
+    loop(16,
+      xx = x + log(i*fftSize/srate-hzoffset)*wsc;
+      gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_color_a);
+      gfx_line(xx, y, xx, y+h);
+      
+      ( (xx - xl) > 30 ) ? (
+        gfx_set( 1, 1, 1, 1 );
+        gfx_x = xx+2;
+        gfx_line(xx, y+h, xx, y+h+7);
+        (i>999) ? (
+          gfx_printf("%dk", .001*i);
+        ) : (
+          gfx_printf("%d", i);
+        );
+        xl = xx;
+      );
+      
+      gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_alpha);
+      gfx_line(xx, y, xx, y+h);
+      
+      ( i < 100 ) ? (i += 20) :
+      ( i < 1000 ) ? (i += 200) :
+      ( i < 10000 ) ? (i += 2000) :
+      ( i < 100000 ) ? (i += 20000);
+    );
+    
+    gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
+    N = 10;
+    xx = y;
+    i = 0;
+    gfx_measurestr("8", wsc, xl);
+    loop(N,
+      gfx_set( 1, 1, 1, 1 );
+      gfx_x = x+w-20;
+      gfx_y = xx-.5*xl;
+      i > 0 ? gfx_printf("-%d", i*floorLevel/N);
+      
+      gfx_set(grid_color_r, grid_color_g, grid_color_b, grid_alpha );
+      gfx_line(x, xx+1, x+w, xx+1);
+      
+      xx += h/N;
+      gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
+      gfx_line(x, xx, x+w, xx);
+      i += 1;
+    );
+  );
+  
+function drawLine(x1, y1, x2, y2)
+  local(dx, dy, x, smooth)
+  global(gfx_x, gfx_y)
+  instance()
+  (
+    smooth = 1;
+    x1 = floor(x1);
+    x2 = floor(x2);
+    gfx_x=x1;
+    gfx_y=y1;
+    x2 = floor(x2);
+    y2 = floor(y2);
+    
+    smooth ? (
+      (x2 - x1) > 4 ? (
+        dx = 1.0/(x2-x1);
+        dy = (y2 - y1)*6*dx;
+        x = 0;
+        loop(x2-x1,
+          x2 = x1 + 1;
+          y2 = y1 + dy * ( x - x*x );
+
+          gfx_line(x1-1, y1-1, x2-1, y2-1, 1);          
+          gfx_line(x1, y1-1, x2, y2-1, 1);
+          gfx_lineto(x2,y2,1);
+          x1 = x2;
+          y1 = y2;
+          x = x + dx;
+        );
+      ) : (
+        gfx_line(x1, y1-1, x2, y2-1, 1);
+        gfx_lineto(x2,y2,1);
+      );
+    ) : (
+      gfx_line(x1, y1-1, x2, y2-1, 1);
+      gfx_lineto(x2,y2,1); 
+    );
+  );
+
+bandClickRange = 10;
+
+function clamp(value, mini, maxi)
+  local()
+  global()
+  (
+    max(min(value,maxi),mini)
+  );
+
+function handleBandKnob(left, double, default, ncap)
+  instance(x, y, r, slider_idx, over, xmin, xmax, ymin, ymax)
+  local(dx, dy)
+  global(mouse_x, mouse_y, dragging, cap)
+  (
+    dx = (mouse_x - x);
+    dy = (mouse_y - y);
+    over = ((dx * dx + dy * dy) < (r * r));
+    
+    // Do we have bnd constraints?
+    (xmin > 0) ? (
+      over &= ((mouse_x > xmin) && (mouse_x < xmax) && (mouse_y > ymin) && (mouse_y < ymax))
+    );
+    
+    (left || double) ? (
+      over ? (
+        double ? (
+          slider(slider_idx) = default;
+        ) : (
+          dragging = slider_idx; cap = ncap;
+        );
+      );
+    );
+    
+    over
+  );
+
+function handleCappedBandKnob(dy, mini, maxi, all)
+instance()
+global(dragging)
+local(ix)
+(
+  (all > 0) ? (
+    ix = 0;
+    loop(5,
+      slider(all + ix) = clamp(slider(all + ix) - dy, mini, maxi);
+      ix += 1;
+    );
+  ) : (
+    slider(dragging) = clamp(slider(dragging) - dy, mini, maxi);
+  );
+);
+
+function isOver(mx, my)
+  instance(x, y, w, h)
+  global(overRange)
+  local()
+  (
+    ( ( mx >= (x-overRange) ) && ( mx <= (x+w+overRange) ) && ( my >= (y-overRange) ) && ( my <= (y+h+overRange) ) ) ? 1 : 0;
+  );
+  
+function isOverCircle(mx, my)
+  instance(x, y, w, h)
+  global(overRangeCircle)
+  local()
+  (
+    ( ( mx >= (x-overRangeCircle) ) && ( mx <= (x+w+overRangeCircle) ) && ( my >= (y-overRangeCircle) ) && ( my <= (y+h+overRangeCircle) ) ) ? 1 : 0;
+  );
+
+function overRect(x, y, w, h, mx, my)
+  local()
+  global()
+  (
+    ( (mx > x) && (mx < (x+w) ) && (my > y) && (my < (y+h) ) )
+  );
+
+function pixelToWindowRatio(x_loc)
+  instance(x, y, w, h, hzoffset)
+  global(fftSize)
+  local(lmin, wsc, hfft)
+  (
+    hfft  = 0.5*fftSize;
+    lmin  = log(20/22050);
+    wsc   = w/log(1+fftSize*0.5-hzoffset);
+    
+    1-log( (exp((x_loc)/wsc) + hzoffset)/hfft )/lmin
+  );
+  
+function handleThresh(band_index, new_cap, leftClick, rightClick, doubleClick, sliderBaseIdx, default)
+local(over)
+global(cap, dragging, selectedBand, mouse_x, mouse_y,
+       hinter.updateHintTime)
+(
+  over = this.isOver(mouse_x, mouse_y);
+  
+  over ? (
+    hinter.updateHintTime("LMB + Drag - Modify threshold\nDouble LMB - Reset threshold to default\nAlt / Option + Drag - Modify threshold while increasing gain\nShift + Drag - Modify threshold of all bands simultaneously");
+    this.over = 1;
+    leftClick ? ( cap = new_cap; dragging = band_index + 1; selectedBand = band_index; );
+    doubleClick ? ( slider(sliderBaseIdx + band_index) = default; selectedBand = band_index; );
+  );
+  
+  over
+);
+
+function bandcap(y1, y2)
+global(cap, mouse_y)
+local()
+(
+  (mouse_y < y1) ? (
+    cap = 5;
+  ) : (mouse_y > y2) ? (
+    cap = 7;
+  ) : (
+    cap = 6;
+  );
+);
+
+function handle_ctrls(leftClick, doubleClick, no_focus)
+instance(gk1, gk2, gk3, gk4, gk5, 
+         ak1, ak2, ak3, ak4, ak5,
+         rk1, rk2, rk3, rk4, rk5)
+global(selectedBand, hinter.updateHintTime, over00)
+local(gain_string, attack_string, release_string, focus_grabbed)
+(
+  gain_string = "LMB + Drag - Modify Band Gain\nDouble LMB - Reset threshold to default";
+  attack_string = "LMB + Drag - Modify attack time\nDouble LMB - Reset attack time to 0\nShift + Drag - Modify all band attack times";
+  release_string = "LMB + Drag - Modify release time\nDouble LMB - Reset release time to default\nShift + Drag - Modify all band release times";
+  
+  // We do two passes through this. The first is for the priority one (the one belonging 
+  // to the selected band (no_focus = 0). If this one wants the focus it should have priority.
+  // After this pass, we iterate through the entire list. There, the first one who wants the
+  // focus gets it. Once the focus has been grabbed we out.
+  // Returning 1 means that a focus was achieved and no other widget is allowed to have focus.
+  focus_grabbed = 0;
+  (((selectedBand == 0) || no_focus) && (!focus_grabbed)) ? (
+    focus_grabbed = 
+      gk1.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak1.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk1.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 1) || no_focus) && (!focus_grabbed)) ? (
+    focus_grabbed = 
+      gk2.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak2.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk2.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 2) || no_focus) && (!focus_grabbed)) ? ( 
+    focus_grabbed = 
+      gk3.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak3.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk3.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 3) || no_focus) && (!focus_grabbed)) ? ( 
+    focus_grabbed = 
+      gk4.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak4.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk4.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  (((selectedBand == 4) || no_focus) && (!focus_grabbed)) ? ( 
+    focus_grabbed = 
+      gk5.handleBandKnob(leftClick, doubleClick, 0, 8) ? ( hinter.updateHintTime(gain_string); 1
+      ) : ak5.handleBandKnob(leftClick, doubleClick, 0, 9) ? ( hinter.updateHintTime(attack_string); 1
+      ) : rk5.handleBandKnob(leftClick, doubleClick, 0.92, 10) ? ( hinter.updateHintTime(release_string); 1
+      ) : 0
+  );
+  over00 = focus_grabbed;
+  focus_grabbed
+);
+
+
+function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
+  instance(x, y, w, h, lx, ly, thisUI, htime, hint,
+           x_over, lastLeftClick
+           x1, x2, x3, x4, x5,
+           v1, v2, v3, v4, v5,
+           h1, h2, h3, h4, h5, 
+           h6, h7, h8, h9, h10,
+           c1, c2, c3, c4, c5,
+           F1hz, F2hz, F3hz, F4hz )
+  global(cap, lcap, dragging,
+         dnoisefloor_freq, dsteps_fft, mouse_wheel, lastUI, fftSize,
+         bandClickRange, cuts,
+         Freq1, Freq2, Freq3, Freq4,
+         bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5,
+         mute1, mute2, mute3, mute4, mute5,
+         solo1, solo2, solo3, solo4, solo5,
+         threshMin, threshMax, maxCuts,
+         hinter.updateHintTime,
+         selectedBand, gfx_x, gfx_y, srate,
+         threshRange,
+         threshHighIdx, threshLowIdx,
+         ratioHighIdx, ratioLowIdx,
+         attackIdx, releaseIdx,
+         bandgainIdx, bandGainMax,
+         attackSliderMin, attackSliderMax,
+         releaseSliderMin, releaseSliderMax)
+  local(dx, dy, over, dys, alt,
+        F1, F2, F3, F4,
+        leftClick, rightClick, doubleClick,
+        cTime, mpos, shift, ctrl, lb,
+        mouse_diff, idx)
+  (
+    over = mouse_x > x && mouse_y > y && mouse_x < (x+w) && mouse_y < (y+h);
+    leftClick   = ( mouse_cap & 1 == 1 && lcap & 1 == 0 );
+    rightClick  = ( mouse_cap & 2 == 2 && lcap & 2 == 0 );
+    doubleClick = 0;
+    shift       = ( mouse_cap & 8 );
+    ctrl        = ( mouse_cap & 4 );
+    alt         = ( mouse_cap & 16 );
+    
+    leftClick ? (
+       time_precise(cTime);
+       ( ( cTime - lastLeftClick ) < .25 ) ? (
+          leftClick = 0;
+          doubleClick = 1;
+       );
+       lastLeftClick = cTime;
+    );
+    
+    x_over = -1;
+    
+    F1 = Freq1;
+    F2 = Freq1  + Freq2 * (1 - Freq1);
+    F3 = F2     + Freq3 * (1 - F2);
+    F4 = F3     + Freq4 * (1 - F3);
+
+    F1hz = .5*f_trafo(F1)*srate;
+    F2hz = .5*f_trafo(F2)*srate;
+    F3hz = .5*f_trafo(F3)*srate;
+    F4hz = .5*f_trafo(F4)*srate;
+    
+    mouse_diff = mouse_y - ly;
+    ((mouse_cap & 4) > 0) ? mouse_diff *= 0.1;
+    ( cap == 3 && mouse_cap & 1 == 1 ) ? (
+      dy = mouse_diff;
+      dys = threshRange*dy/h;
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(threshHighIdx + idx) = clamp(slider(threshHighIdx + idx) - dys, slider(threshLowIdx + idx), threshMax);
+          alt ? slider(bandGainIdx + idx) = clamp(slider(bandGainIdx + idx) + dys, -bandGainMax, bandGainMax);
+          idx += 1;
+        );
+      ) : (
+        slider(threshHighIdx + dragging - 1) = clamp(slider(threshHighIdx + dragging - 1) - dys, slider(threshLowIdx + dragging - 1), threshMax);
+        alt ? slider(bandGainIdx + dragging - 1) = clamp(slider(bandGainIdx + dragging - 1) + dys, -bandGainMax, bandGainMax);
+      );
+    ) : ( cap == 4 && mouse_cap & 1 == 1 ) ? (
+      dy = mouse_diff;
+      dys = threshRange*dy/h;
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(threshLowIdx + idx) = clamp(slider(threshLowIdx + idx) - dys, threshMin, slider(threshHighIdx + idx));
+          alt ? slider(bandGainIdx + idx) = clamp(slider(bandGainIdx + idx) + dys, -bandGainMax, bandGainMax);
+          idx += 1;
+        );
+      ) : (
+        slider(threshLowIdx + dragging - 1) = clamp(slider(threshLowIdx + dragging - 1) - dys, threshMin, slider(threshHighIdx + dragging - 1));
+        alt ? slider(bandGainIdx + dragging - 1) = clamp(slider(bandGainIdx + dragging - 1) + dys, -bandGainMax, bandGainMax);
+      );
+    ) : ( cap == 5 && mouse_cap & 1 == 1 ) ? (
+      // Ratio top
+      dy = mouse_diff;
+      dys = -2*dy/h;
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(ratioHighIdx + idx) = clamp(slider(ratioHighIdx + idx) - dys, 0, 2);
+          idx += 1;
+        );
+      ) : (
+        slider(ratioHighIdx + selectedBand) = clamp(slider(ratioHighIdx + selectedBand) - dys, 0, 2);      
+      );
+    ) : ( cap == 6 && mouse_cap & 1 == 1 ) ? (
+      // Both thresholds
+      dy = mouse_diff;
+      dys = threshRange*dy/h;
+      
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(threshHighIdx + idx) = clamp(slider(threshHighIdx + idx) - dys, threshMin, threshMax);
+          slider(threshLowIdx + idx) = clamp(slider(threshLowIdx + idx) - dys, threshMin, threshMax);
+          
+          alt ? slider(bandGainIdx + idx) = clamp(slider(bandGainIdx + idx) + dys, -bandGainMax, bandGainMax);
+          idx += 1;
+        );
+      ) : (
+        slider(threshHighIdx + selectedBand) = clamp(slider(threshHighIdx + selectedBand) - dys, threshMin, threshMax);
+        slider(threshLowIdx + selectedBand) = clamp(slider(threshLowIdx + selectedBand) - dys, threshMin, threshMax);
+        alt ? slider(bandGainIdx + selectedBand) = clamp(slider(bandGainIdx + selectedBand) + dys, -bandGainMax, bandGainMax);        
+      );
+    ) : ( cap == 7 && mouse_cap & 1 == 1 ) ? (
+      // Ratio bottom
+      dy = mouse_diff;
+      dys = 2*dy/h;
+      shift ? (
+        idx = 0;
+        loop(5,
+          slider(ratioLowIdx + idx) = clamp(slider(ratioLowIdx + idx) - dys, 0, 2);
+          idx += 1;
+        );
+      ) : (
+        slider(ratioLowIdx + selectedBand) = clamp(slider(ratioLowIdx + selectedBand) - dys, 0, 2);
+      );
+    ) : ( cap == 8 && mouse_cap & 1 == 1 ) ? (
+      handleCappedBandKnob(.2 * mouse_diff, -bandGainMax, bandGainMax, shift ? bandgainIdx : 0 );
+    ) : ( cap == 9 && mouse_cap & 1 == 1 ) ? (
+      handleCappedBandKnob(.005 * mouse_diff, attackSliderMin, attackSliderMax, shift ? attackIdx : 0);
+    ) : ( cap == 10 && mouse_cap & 1 == 1 ) ? (
+      handleCappedBandKnob(.005 * mouse_diff, releaseSliderMin, releaseSliderMax, shift ? releaseIdx : 0);
+    ) : ( cap == 2 && mouse_cap & 1 == 1 ) ? (
+      // Dragging a band frequency
+      dx = mouse_x - lx;
+      
+      shift ? dx *= .5;
+      ctrl ? dx *= .01;
+      
+      lb = .02;
+      dragging == 1 ? ( 
+        F1 = this.pixelToWindowRatio(x1 - x + dx);
+        slider_automate( Freq1 = clamp( F1, lb, 1 ) );
+        slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-F1), 0, 1 ) );
+      );
+      dragging == 2 ? ( 
+        F2 = this.pixelToWindowRatio(x2 - x + dx);
+        slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-Freq1), 0, 1 ) );
+        F2 = Freq1  + Freq2 * (1 - Freq1);
+        slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1) );
+      );
+      dragging == 3 ? ( 
+        F3 = this.pixelToWindowRatio(x3 - x + dx);
+        slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1 ) );
+        F3 = F2     + Freq3 * (1 - F2);
+        slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
+      );
+      dragging == 4 ? ( 
+        F4 = this.pixelToWindowRatio(x4 - x + dx);
+        slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
+      );
+
+    ) : ( cap == 1 && mouse_cap & 1 == 1 ) ? (
+      dnoisefloor_freq -= .5*(mouse_y-ly);
+      dnoisefloor_freq > 35 ? dnoisefloor_freq = 35;
+      dnoisefloor_freq < -15 ? dnoisefloor_freq = -15;
+    ) : ( 
+      // Not already capped
+      cap = 0;
+      
+      /* Handle the gain controls */
+      ( this.handle_ctrls(leftClick, doubleClick, 0) ) ? ( 1
+      ) : ( this.handle_ctrls(leftClick, doubleClick, 1) ) ? ( 1
+      /* Toggle mute/solo */
+      ) : ( c1.isOverCircle(mouse_x, mouse_y) == 1 ) ? (
+        c1.over = 1;
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
+        leftClick  ? ( ctrl ? ( bypassBand1 = 1 - bypassBand1) : (
+                       mute1 = 1-mute1; solo1 ? (mute1 = 1; solo1 = 0; selectedBand = 0; ); ); );
+        rightClick ? ( solo1 = 1-solo1; selectedBand = 0; 
+                       ((solo1 == 1) && (shift==0)) ? (solo2=solo3=solo4=solo5=0;); );
+      ) : ( c2.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
+        c2.over = 1;
+        leftClick  ? ( ctrl ? ( bypassBand2 = 1 - bypassBand2) : (
+                       mute2 = 1-mute2; solo2 ? (mute2 = 1; solo2 = 0; selectedBand = 1;); ); );
+        rightClick ? ( solo2 = 1-solo2; selectedBand = 1;
+                       ((solo2 == 1) && (shift==0)) ? (solo1=solo3=solo4=solo5=0;); );
+      ) : ( c3.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 1 ) ? (
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
+        c3.over = 1;
+        leftClick  ? ( ctrl ? ( bypassBand3 = 1 - bypassBand3) : (
+                       mute3 = 1-mute3; solo3 ? (mute3 = 1; solo3 = 0; selectedBand = 2; ); ); );
+        rightClick ? ( solo3 = 1-solo3; selectedBand = 2;
+                       ((solo3 == 1) && (shift==0)) ? (solo1=solo2=solo4=solo5=0;); );
+      ) : ( c4.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 2 ) ? (
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
+        c4.over = 1;
+        leftClick  ? ( ctrl ? ( bypassBand4 = 1 - bypassBand4) : (
+                        mute4 = 1-mute4; solo4 ? (mute4 = 1; solo4 = 0; selectedBand = 3; ); ); );
+        rightClick ? ( solo4 = 1-solo4; selectedBand = 3;
+                       ((solo4 == 1) && (shift==0)) ? (solo1=solo2=solo3=solo5=0;); );
+      ) : ( c5.isOverCircle(mouse_x, mouse_y) == 1 ) && ( cuts > 3 ) ? (
+        hinter.updateHintTime("LMB - Toggle mute\nRMB - Toggle solo\nShift + RMB - Select multiple solo bands\nCTRL + LMB - Toggle bypass");
+        c5.over = 1;
+        leftClick  ? ( ctrl ? ( bypassBand5 = 1 - bypassBand5) : (
+                       mute5 = 1-mute5; solo5 ? (mute5 = 1; solo5 = 0; selectedBand = 4; ); ); );
+        rightClick ? ( solo5 = 1-solo5; selectedBand = 4;
+                       ((solo5 == 1) && (shift==0)) ? (solo1=solo2=solo3=solo4=0;); );
+        
+      /* Drag frequency */
+      ) : ( v1.isOver(mouse_x, mouse_y) == 1 ) && ( cuts > 0 ) ? (
+        hinter.updateHintTime("LMB + Drag - Modify crossover frequency\nRMB - Remove frequency cut\nRMB anywhere else - Add frequency cut");
+        v1.over = 1;
+        leftClick ? ( cap = 2; dragging = 1; );
+        rightClick ? ( 
+          Freq2 = ( Freq2 * ( 1 - Freq1 ) + ( Freq1 - 0 ) ) / ( 1 - 0 );
+          remBand(0);
+        );
+      ) : ( v2.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
+        hinter.updateHintTime("LMB + Drag - Modify crossover frequency\nRMB - Remove frequency cut\nRMB anywhere else - Add frequency cut");
+        v2.over = 1;
+        leftClick ? ( cap = 2; dragging = 2; );
+        rightClick ? ( 
+          Freq3 = ( Freq3 * ( 1 - Freq2 ) + ( Freq2 - 0 ) ) / ( 1 - 0 );
+          remBand(1);
+        );
+      ) : ( v3.isOver(mouse_x, mouse_y) ) && ( cuts > 2 ) ? (
+        hinter.updateHintTime("LMB + Drag - Modify crossover frequency\nRMB - Remove frequency cut\nRMB anywhere else - Add frequency cut");    
+        v3.over = 1;
+        leftClick ? ( cap = 2; dragging = 3; );
+        rightClick ? ( 
+          Freq4 = ( Freq4 * ( 1 - Freq3 ) + ( Freq3 - 0 ) ) / ( 1 - 0 );
+          remBand(2);
+        );
+      ) : ( v4.isOver(mouse_x, mouse_y) ) && ( cuts > 3 ) ? (
+        hinter.updateHintTime("LMB + Drag - Modify crossover frequency\nRMB - Remove frequency cut\nRMB anywhere else - Add frequency cut");
+        v4.over = 1;
+        leftClick ? ( cap = 2; dragging = 4; );
+        rightClick ? ( remBand(3); );
+      ) : ( v5.isOver(mouse_x, mouse_y) ) && ( cuts > 4 ) ? (
+        hinter.updateHintTime("LMB + Drag - Modify crossover frequency\nRMB - Remove frequency cut\nRMB anywhere else - Add frequency cut");     
+        v5.over = 1;
+        leftClick ? ( cap = 2; dragging = 5; );
+        rightClick ? ( remBand(4); );
+      
+      /* Drag threshold */
+      ) : ( h1.handleThresh(0, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
+      ) : ( h2.handleThresh(1, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
+      ) : ( h3.handleThresh(2, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
+      ) : ( h4.handleThresh(3, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
+      ) : ( h5.handleThresh(4, 3, leftClick, rightClick, doubleClick, threshHighIdx, -16) ) ? ( 1
+      ) : ( h6.handleThresh(0, 4, leftClick, rightClick, doubleClick, threshLowIdx, -32) ) ? ( 1
+      ) : ( h7.handleThresh(1, 4, leftClick, rightClick, doubleClick, threshLowIdx, -32) ) ? ( 1
+      ) : ( h8.handleThresh(2, 4, leftClick, rightClick, doubleClick, threshLowIdx, -32) ) ? ( 1
+      ) : ( h9.handleThresh(3, 4, leftClick, rightClick, doubleClick, threshLowIdx, -32) ) ? ( 1
+      ) : ( h10.handleThresh(4, 4, leftClick, rightClick, doubleClick, threshLowIdx, -32) ) ? ( 1
+        
+      /* Handle clicks within the bands (creating a new band or selecting a band) */
+      ) : ( overRect( h1.x, y, h1.w, h, mouse_x, mouse_y ) ) ? (
+        leftClick ? ( selectedBand = 0; bandcap(h1.y, h6.y); );
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(0);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          Freq2 = ( Freq2 * (1-0) + 0 - mpos ) / ( 1 - mpos );
+          Freq1 = mpos;
+        );
+      ) : ( overRect( h2.x, y, h2.w, h, mouse_x, mouse_y ) && ( cuts > 0 )  ) ? (
+        leftClick ? ( selectedBand = 1; bandcap(h2.y, h7.y); );
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(1);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          Freq3 = ( Freq3 * (1-Freq1) + Freq1 - mpos ) / ( 1 - mpos );
+          Freq2 = ( mpos - Freq1 ) / ( 1 - Freq1 );
+        );
+      ) : ( overRect( h3.x, y, h3.w, h, mouse_x, mouse_y ) && ( cuts > 1 ) ) ? (
+        leftClick ? ( selectedBand = 2; bandcap(h3.y, h8.y); );
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(2);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          F2 = Freq1  + Freq2 * (1 - Freq1);
+          Freq4 = ( Freq4 * (1-F2) + F2 - mpos ) / ( 1 - mpos );
+          Freq3 = ( mpos - F2 ) / ( 1 - F2 );
+        );
+      ) : ( overRect( h4.x, y, h4.w, h, mouse_x, mouse_y ) && ( cuts > 2 ) ) ? (
+        leftClick ? ( selectedBand = 3; bandcap(h4.y, h9.y); );
+        rightClick && (cuts < maxCuts) ? ( 
+          addBand(3);
+          mpos = this.pixelToWindowRatio(mouse_x);
+          F2 = Freq1  + Freq2 * (1 - Freq1);
+          F3 = F2     + Freq3 * (1 - F2);
+          Freq4 = ( mpos - F3 ) / ( 1 - F3 );
+        );
+      ) : ( overRect( h5.x, y, h5.w, h, mouse_x, mouse_y ) && ( cuts > 3 ) ) ? (
+        leftClick ? ( selectedBand = 4; bandcap(h5.y, h10.y); );
+      ) : (
+        cap = 0;
+        ( mouse_cap & 1 == 1 && lcap & 1 == 0 && over ) ? (
+          cap = 1;
+        );
+      );
+    );
+    
+    mouse_wheel > 0 && over ? lastUI = thisUI;
+    
+    abs(floor(mouse_wheel/240)) > 0 && over ?
+    (
+      dsteps_fft += floor(mouse_wheel/240);
+      dsteps_fft > 8 ? dsteps_fft = 8;
+      dsteps_fft < -4 ? dsteps_fft = -4;
+      mouse_wheel = 0;
+    );
+    
+    lx = mouse_x;
+    ly = mouse_y;
+    lcap = mouse_cap;
+    
+    over
+  );
+
+function drawFFT(fill, r, g, b, a)
+  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft, FIR1, Thresh)
+  instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
+  local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
+  (
+    this.calcFFT();
+ 
+    cum = -10000000;
+    cumelem = 0;
+    i = 0;
+    ixsc = 0;
+    wsc = w/log(1+fftsize*0.5-hzoffset);
+    fill_slmin = y;
+
+    buf = fftLoc + fftsize*0.5 - 2;
+    stepsize = floor((4+dsteps_fft)*(1+scaling));
+    copyval = buf[];
+    loop( stepsize*200,
+      (buf+=1)[] = copyval;
+    );
+     
+    gfx_r = r;
+    gfx_g = g;
+    gfx_b = b;
+    gfx_a = a;
+
+    hstep = .5 * stepsize;
+    buf = fftLoc+2;
+    txl = x;
+    lx = x;
+    ly = y - max(buf[], -floorLevel)*h / floorLevel;
+    buf += 1;
+    loop(fftsize*0.5+stepsize*200,
+      tx = floor(x + log(1.0+ixsc-hzoffset)*wsc);
+      cum = max(cum, buf[]);
+      cumelem += 1;
+      
+      ( (tx != txl) && (tx-txl > stepsize) && tx > x && i && ( tx < (x+w+stepsize) ) ) ? // 
+      ( 
+        ty = y - max(cum, -floorLevel)*h / floorLevel;
+        txl = floor(tx);
+        
+        tx = min(tx, x+w);
+        (fill) ? 
+        (
+          tx0=tx|0;
+          lx0=lx|0;
+          tx0>lx0 ? 
+          (
+            gfx_triangle(lx0-hstep,max(y+h,ly),lx0-hstep,ly,tx0-1-hstep,ty,tx0-1-hstep,max(y+h,ty));
+          ) : (
+            tx0 > fill_slast ? 
+            (
+              fill_slast < h ? gfx_line(fill_slast,h,fill_slast,fill_slmin);
+              fill_slmin=h;
+            ) : (
+              fill_slmin=min(fill_slmin,ty);
+            );
+          );
+          
+          fill_slast=tx0;        
+        );
+        
+        (fill==0) ? (
+          drawLine(lx-hstep, ly, tx-hstep, ty);
+        );
+        
+        lx=tx; ly=ty; ly2=ty2; cum = -1000000; cumelem = 0;
+      );
+      
+      buf+=1; i+=1; ixsc+=1;
+    );
+    
+    /*gfx_set(1, 1, 1, 1);
+    gfx_line(0, y - max(Thresh, -floorLevel)*h / floorLevel, w, y - max(Thresh, -floorLevel)*h / floorLevel);*/
+  );
+  
+function drawLineFFT(peakLocation)
+  global(fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate)
+  instance(x, y, w, h, hzoffset)
+  local(wsc, tx, base, i)
+  (
+    wsc = w/log(1+fftSize*0.5-hzoffset);
+    base = fftSize*peakLocation;
+    tx = floor(x + log(1.0+base-hzoffset)*wsc);
+    drawLine(tx, y, tx, y+h);
+  );  
+  
+function updateBands()
+  global(Freq1,   Freq2,   Freq3,   Freq4,
+         ThreshLow1, ThreshLow2, ThreshLow3, ThreshLow4, ThreshLow5,
+         ThreshHigh1, ThreshHigh2, ThreshHigh3, ThreshHigh4, ThreshHigh5,
+         fftSize, threshRange, threshMax)
+  instance(x, w, hzoffset,
+           x1,  x2,  x3,  x4,  x5,  /* Frequencies          */
+           )
+  local(F1, F2, F3, F4, F5, wsc, hfft, lmin, irange)
+  (
+    F1 = Freq1;
+    F2 = Freq1  + Freq2 * (1 - Freq1);
+    F3 = F2     + Freq3 * (1 - F2);
+    F4 = F3     + Freq4 * (1 - F3);
+    
+    hfft = 0.5*fftSize;
+    lmin = log(20/22050);
+    
+    wsc = w/log(1+fftSize*0.5-hzoffset);
+    x1 = ( x + log( hfft * exp( (1-F1) * lmin ) - hzoffset ) * wsc );
+    x2 = ( x + log( hfft * exp( (1-F2) * lmin ) - hzoffset ) * wsc );
+    x3 = ( x + log( hfft * exp( (1-F3) * lmin ) - hzoffset ) * wsc );
+    x4 = ( x + log( hfft * exp( (1-F4) * lmin ) - hzoffset ) * wsc );
+    x5 = ( x + log( hfft * exp( lmin ) - hzoffset ) * wsc );
+  );
+
+lineR = 1;
+lineG = .2;
+lineB = .1;
+lineA = 0.7;
+lineHighlightR = 1;
+lineHighlightG = .2;
+lineHighlightB = .1;
+  
+function drawGroupRect(x, y, w, h, r, g, b, a)  
+  local()
+  instance()
+  global()
+  (
+    gfx_set(r, g, b, a);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+    
+    gfx_set(r, g, b, a*.5);
+    gfx_line(x, y+h+1, x+w, y+h+1);
+    gfx_line(x+w+1, y, x+w+1, y+h);
+  );  
+  
+function initBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer 
+    ) : ( scopeptr > scopebuffermax ) ? scopeptr = scopebuffer    
+  );
+  
+function setOffset(offset)
+  local()
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac)
+  (
+    readptr   = scopeptr;
+    frac      = offset - floor(offset);
+    readptr  -= floor(offset);
+    readptr < scopebuffer ? readptr += (scopebuffermax-scopebuffer+1);
+  );
+  
+function readBuffer()
+  local(c1, c2)
+  global()
+  instance(readptr, scopebuffermax, scopebuffer, frac)
+  (
+    c1 = readptr[];
+    readptr += 1;
+    readptr > scopebuffermax ? readptr = scopebuffer;
+    
+    c2 = readptr[];
+    c2 * (1.0-frac) + c1 * frac
+  );
+  
+function updateBuffer(M)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    scopeptr[] = M;
+    scopeptr += 1;
+    scopeptr > scopebuffermax ? scopeptr = scopebuffer;
+    
+    M
+  );  
+  
+function clearBuffer()
+  local()
+  global(MAXBUFFERSIZE)
+  instance(scopeptr, scopebuffermax, scopebuffer)
+  (
+    memset( scopebuffer, 0, MAXBUFFERSIZE );
+    scopeptr = scopebuffer;
+  );   
+  
+function fancyLineV(x1, y1, x2, y2)
+  local(dx)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB)
+  instance(x, y, w, h, over)
+  (
+    dx = 5;
+    
+    x = x1 - .5*dx;
+    y = y1;
+    w = dx;
+    h = y2-y1;
+  
+    over ? ( 
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.1);
+      gfx_rect(x-2, y, w+5, h);
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.1);
+      gfx_rect(x-4, y, w+9, h);
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.05);
+      gfx_rect(x-7, y, w+15, h);
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.03);
+      gfx_rect(x-10, y, w+20, h);
+    );
+  
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, lineA);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, .2*lineA);
+    dx = 8; gfx_rect(x1 - .5*dx, y1, dx, y2-y1);
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, .2*lineA);
+    dx = 12; gfx_rect(x1 - .5*dx, y1, dx, y2-y1);
+    
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, lineA);
+    dx = 3; gfx_rect(x1 - .5*dx, y1, dx, y2-y1);
+    gfx_set(.7*lineR, .7*lineG, .7*lineB, lineA);
+    dx = 2; gfx_rect(x1 - .5*dx, y1, dx, y2-y1);
+    gfx_set(lineR, lineG, lineB, lineA);
+    dx = 1; gfx_rect(x1 - .5*dx, y1, dx, y2-y1);
+    
+    over ? ( 
+      gfx_set(1,.3,0,.4*abs(sin(2*globalTime)));
+      gfx_rect(x, y, w, h);
+    );
+    
+    over = 0;
+  );
+
+function fancyLineH(x1, y1, x2, y2)
+  local(dy)
+  global(globalTime, lineR, lineG, lineB, lineA, lineHighlightR, lineHighlightG, lineHighlightB)
+  instance(x, y, w, h, over)
+  (
+    dy = 5;    
+    
+    x = x1;
+    y = y1 - .5*dy;
+    w = x2-x1;
+    h = dy;
+  
+    over ? (
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.1);
+      gfx_rect(x, y-2, w, h+5);
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.1);
+      gfx_rect(x, y-4, w, h+9);
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.05);
+      gfx_rect(x, y-7, w, h+15);
+      gfx_set(lineHighlightR,lineHighlightG,lineHighlightB,.03);
+      gfx_rect(x, y-10, w, h+20);
+    );  
+  
+    gfx_set(.2*lineR, .2*lineG, .2*lineB, lineA);
+    gfx_rect(x, y, w, h);
+
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, .2*lineA);
+    dy = 12; gfx_rect(x1, y1 - .5*dy, x2-x1, dy );
+    
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, .2*lineA);    
+    dy = 8; gfx_rect(x1, y1 - .5*dy, x2-x1, dy );
+    
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, lineA);    
+    dy = 3; gfx_rect(x1, y1 - .5*dy, x2-x1, dy );
+    gfx_set(.7*lineR, .7*lineG, .7*lineB, lineA);
+    dy = 2; gfx_rect(x1, y1 - .5*dy, x2-x1, dy );
+    gfx_set(lineR, lineG, lineB, lineA);
+    dy = 1; gfx_rect(x1, y1 - .5*dy, x2-x1, dy );
+    
+    over ? ( 
+      gfx_set(1,.3,0,.4*abs(sin(2*globalTime)));
+      gfx_rect(x, y, w, h);
+    );
+    
+    over = 0;    
+  ); 
+
+function hzLabel(dy, label)
+  local(lww, lhh, cy, dy2)
+  global(gfx_x, gfx_y, hzLabelW, hzLabelH, lineR, lineG, lineB, lineA)
+  instance(x, y, w, h, over)
+  (
+    cy = y + dy*h;
+    
+    gfx_measurestr("888888", hzLabelW, hzLabelH);
+
+    gfx_set(.5*lineR, .5*lineG, .5*lineB, lineA);    
+    dy2 = 3; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+    gfx_set(.7*lineR, .7*lineG, .7*lineB, lineA);
+    dy2 = 2; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+    gfx_set(lineR, lineG, lineB, lineA);
+    dy2 = 1; gfx_rect(x-.5*hzLabelW-.5*dy2, cy-.5*dy2, hzLabelW+dy2, hzLabelH+dy2);
+
+    gfx_set( 1, 1, 1, .8 );
+    gfx_rect(x-.5*hzLabelW-1, cy-1, hzLabelW+2, hzLabelH+2);
+    
+    gfx_set( 0, 0, 0, 1 );
+    gfx_rect(x-.5*hzLabelW, cy, hzLabelW, hzLabelH);
+
+    sprintf(19, "%d", label);
+    gfx_measurestr(19, lww, lhh);
+    gfx_set( 1, 1, 1, 1 );    
+    gfx_x = x - .5 *lww;
+    gfx_y = y + dy*h;
+    gfx_printf(19, label);
+  );
+  
+function drawRatio(th, sliderIdx, down)
+instance(x, y, w, h)
+local(hh, v, frac)
+global(threshRange, lineR, lineG, lineB, lineA)
+(
+  gfx_set(lineR, lineG, lineB, .1 * lineA);
+  v = slider(sliderIdx);
+  frac = 6;
+  loop(4,
+    hh = frac * th / threshRange / exp(1.1 * v * v);
+    frac += 6;
+    down ? gfx_rect(x, y, w, hh) : gfx_rect(x, y - hh, w, hh);
+  );
+);
+
+
+function shouldRenderNow(topLayer, idx)
+global(selectedBand)
+(
+  (topLayer && (selectedBand == idx)) || (!topLayer && (selectedBand != idx))
+);
+
+
+function drawBands()
+  global(Cuts, scaling,
+           mute1, mute2, mute3, mute4, mute5,
+           solo1, solo2, solo3, solo4, solo5,
+           bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5,
+           selectedBand
+           threshRange, threshMax
+           threshLowIdx, threshHighIdx,
+           ratioHighIdx, ratioLowIdx,
+           bandGainIdx, bandGainMax,
+           attackIdx, releaseIdx,
+           attackSliderMin, attackSliderMax,
+           releaseSliderMin, releaseSliderMax
+           atkFgR, atkFgG, atkFgB,
+           relFgR, relFgG, relFgB,
+           filterBank.comp_l1.attack, filterBank.comp_l1.release
+           filterBank.comp_l2.attack, filterBank.comp_l2.release
+           filterBank.comp_l3.attack, filterBank.comp_l3.release
+           filterBank.comp_l4.attack, filterBank.comp_l4.release
+           filterBank.comp_l5.attack, filterBank.comp_l5.release
+           )
+  instance(xc, dx, x, y, w, h, 
+           x1, x2, x3, x4, x5,  // Band frequency screen positions
+           v1, v2, v3, v4, v5,  // Frequency handles
+           h1, h2, h3, h4, h5,  // Threshold handles
+           h6, h7, h8, h9, h10, // Threshold handles
+           c1, c2, c3, c4, c5,  // Circle handles
+           gk1, gk2, gk3, gk4, gk5, // Gain knob handles
+           ak1, ak2, ak3, ak4, ak5, // Attack arcs
+           rk1, rk2, rk3, rk4, rk5, // Release arcs
+           F1hz, F2hz, F3hz, F4hz, F5hz, // Frequencies
+           x_over)
+  local(iRange, dmax, bwidth, gain_y, hz_label_height_frac,
+        y1, y2, y3, y4, y5, y6, y7, y8, y9, y10,
+        db_y, atk_x, rel_x, dyn_y, topLayer)
+  (
+    xc = x;
+    dx = 5;
+    
+    iRange = 1 / threshRange;
+    dmax = iRange * threshMax;
+    
+    y1 = y+h*(dmax-iRange*(slider(threshHighIdx + 0)));
+    y2 = y+h*(dmax-iRange*(slider(threshHighIdx + 1)));
+    y3 = y+h*(dmax-iRange*(slider(threshHighIdx + 2)));
+    y4 = y+h*(dmax-iRange*(slider(threshHighIdx + 3)));
+    y5 = y+h*(dmax-iRange*(slider(threshHighIdx + 4)));
+    y6 = y+h*(dmax-iRange*(slider(threshLowIdx + 0)));
+    y7 = y+h*(dmax-iRange*(slider(threshLowIdx + 1)));
+    y8 = y+h*(dmax-iRange*(slider(threshLowIdx + 2)));
+    y9 = y+h*(dmax-iRange*(slider(threshLowIdx + 3)));
+    y10 = y+h*(dmax-iRange*(slider(threshLowIdx + 4)));
+    
+    hz_label_height_frac = 0.05;
+    (Cuts > 0) ? (
+      gfx_set(1,1,1,1); v1.fancyLineV(x1, y, x1, y+h);
+      v1.hzLabel(hz_label_height_frac, F1hz);
+    );
+    (Cuts > 1) ? (
+      gfx_set(1,1,1,1); v2.fancyLineV(x2, y, x2, y+h);
+      v2.hzLabel(hz_label_height_frac, F2hz);
+    );
+    (Cuts > 2) ? (
+      gfx_set(1,1,1,1); v3.fancyLineV(x3, y, x3, y+h);
+      v3.hzLabel(hz_label_height_frac, F3hz);
+    );
+    (Cuts > 3) ? (
+      gfx_set(1,1,1,1); v4.fancyLineV(x4, y, x4, y+h);
+      v4.hzLabel(hz_label_height_frac, F4hz);
+    );
+    (Cuts > 4) ? (
+      gfx_set(1,1,1,1); v5.fancyLineV(x5, y, x5, y+h);
+      v5.hzLabel(hz_label_height_frac, F5hz);
+    );
+    
+    selectedBand == 0 ? gfx_muladdrect( h1.x, y, h1.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 1 ? gfx_muladdrect( h2.x, y, h2.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 2 ? gfx_muladdrect( h3.x, y, h3.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 3 ? gfx_muladdrect( h4.x, y, h4.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    selectedBand == 4 ? gfx_muladdrect( h5.x, y, h5.w, h, 1, 1, 1, .6, .05, .05, .105 );
+    
+    db_y = 8;
+    atk_x = 12;
+    rel_x = -12;
+    dyn_y = -11;
+    bwidth = 35 * (1 + scaling);
+    gain_y = h - bwidth - 5;
+    gfx_rect(x_over-3, y, 5, h);
+    topLayer = 0; // Make sure selected band ends up on top.
+    ( Cuts == 0 ) ? (
+       h1.fancyLineH(x, y1, x+w-2, y1);
+       h6.fancyLineH(x, y6, x+w-2, y6);
+       h1.drawRatio(h, ratioHighIdx + 0, 0);
+       h6.drawRatio(h, ratioLowIdx + 0, 1);
+       c1.fancyCircle(x + .5*w, y1, 0, mute1, solo1, bypassBand1);
+       
+       gk1.simpleKnob(x + .5*w, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       ak1.drawExtraArc(x + .5*w, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(x + .5*w, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+    ) : ( Cuts == 1 ) ? (
+       h1.fancyLineH(x,  y1, x1-2, y1);
+       h2.fancyLineH(x1, y2, x+w-2, y2);
+       h6.fancyLineH(x,  y6, x1-2, y6);
+       h7.fancyLineH(x1, y7, x+w-2, y7);
+       h1.drawRatio(h, ratioHighIdx + 0, 0);
+       h2.drawRatio(h, ratioHighIdx + 1, 0);
+       h6.drawRatio(h, ratioLowIdx + 0, 1);
+       h7.drawRatio(h, ratioLowIdx + 1, 1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
+       c2.fancyCircle(x1 + .5*(w-x1), y2, 0, mute2, solo2, bypassBand2);
+       
+       gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+       ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+       rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+
+       gk2.simpleKnob(x1 + .5*(w-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+       ak2.drawExtraArc(x1 + .5*(w-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+       rk2.drawExtraArc(x1 + .5*(w-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+    ) : ( Cuts == 2 ) ? (
+       gfx_set(1, 1, 1, 1);
+       h1.fancyLineH(x,  y1, x1-2, y1);
+       h2.fancyLineH(x1, y2, x2-2, y2);
+       h3.fancyLineH(x2, y3, x+w-2, y3);
+       h6.fancyLineH(x,  y6, x1-2, y6);
+       h7.fancyLineH(x1, y7, x2-2, y7);
+       h8.fancyLineH(x2, y8, x+w-2, y8);
+       h1.drawRatio(h, ratioHighIdx + 0, 0);
+       h2.drawRatio(h, ratioHighIdx + 1, 0);
+       h3.drawRatio(h, ratioHighIdx + 2, 0);
+       h6.drawRatio(h, ratioLowIdx + 0, 1);
+       h7.drawRatio(h, ratioLowIdx + 1, 1);
+       h8.drawRatio(h, ratioLowIdx + 2, 1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
+       c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
+       c3.fancyCircle(x2 + .5*(w-x2), y3, 0, mute3, solo3, bypassBand3);
+       
+       loop(2,
+         shouldRenderNow(topLayer, 0) ? (
+           gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+           ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+           rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 1) ? (
+           gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+           ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+           rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 2) ? (
+           gk3.simpleKnob(x2 + .5*(w-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
+           ak3.drawExtraArc(x2 + .5*(w-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
+           rk3.drawExtraArc(x2 + .5*(w-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
+         );
+         topLayer = 1;
+       );
+    ) : ( Cuts == 3 ) ? (
+       h1.fancyLineH(x,  y1, x1-2, y1);
+       h2.fancyLineH(x1, y2, x2-2, y2);
+       h3.fancyLineH(x2, y3, x3-2, y3);
+       h4.fancyLineH(x3, y4, x+w-2, y4);
+       h6.fancyLineH(x,  y6, x1-2, y6);
+       h7.fancyLineH(x1, y7, x2-2, y7);
+       h8.fancyLineH(x2, y8, x3-2, y8);
+       h9.fancyLineH(x3, y9, x+w-2, y9);
+       h1.drawRatio(h, ratioHighIdx + 0, 0);
+       h2.drawRatio(h, ratioHighIdx + 1, 0);
+       h3.drawRatio(h, ratioHighIdx + 2, 0);
+       h4.drawRatio(h, ratioHighIdx + 3, 0);
+       h6.drawRatio(h, ratioLowIdx + 0, 1);
+       h7.drawRatio(h, ratioLowIdx + 1, 1);
+       h8.drawRatio(h, ratioLowIdx + 2, 1);
+       h9.drawRatio(h, ratioLowIdx + 3, 1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
+       c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
+       c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3, bypassBand3);
+       c4.fancyCircle(x3 + .5*(w-x3), y4, 0, mute4, solo4, bypassBand4);
+       
+       loop(2,
+         shouldRenderNow(topLayer, 0) ? (
+           gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+           ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+           rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 1) ? (
+           gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+           ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+           rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 2) ? (
+           gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
+           ak3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
+           rk3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 3) ? (
+           gk4.simpleKnob(x3 + .5*(w-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+3)), 0, db_y);
+           ak4.drawExtraArc(x3 + .5*(w-x3), gain_y, bwidth, attackIdx + 3, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l4.attack), -1, atk_x, dyn_y);
+           rk4.drawExtraArc(x3 + .5*(w-x3), gain_y, bwidth, releaseIdx + 3, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l4.release), 1, rel_x, dyn_y);
+         );
+         topLayer = 1;
+       );
+    ) : ( Cuts == 4 ) ? (
+       h1.fancyLineH(x,  y1, x1-2, y1);
+       h2.fancyLineH(x1, y2, x2-2, y2);
+       h3.fancyLineH(x2, y3, x3-2, y3);
+       h4.fancyLineH(x3, y4, x4-2, y4);
+       h5.fancyLineH(x4, y5, x+w-2, y5);
+       h6.fancyLineH(x,  y6, x1-2, y6);
+       h7.fancyLineH(x1, y7, x2-2, y7);
+       h8.fancyLineH(x2, y8, x3-2, y8);
+       h9.fancyLineH(x3, y9, x4-2, y9);
+       h10.fancyLineH(x4, y10, x+w-2, y10);
+       h1.drawRatio(h, ratioHighIdx + 0, 0);
+       h2.drawRatio(h, ratioHighIdx + 1, 0);
+       h3.drawRatio(h, ratioHighIdx + 2, 0);
+       h4.drawRatio(h, ratioHighIdx + 3, 0);
+       h5.drawRatio(h, ratioHighIdx + 4, 0);
+       h6.drawRatio(h, ratioLowIdx + 0, 1);
+       h7.drawRatio(h, ratioLowIdx + 1, 1);
+       h8.drawRatio(h, ratioLowIdx + 2, 1);
+       h9.drawRatio(h, ratioLowIdx + 3, 1);
+       h10.drawRatio(h, ratioLowIdx + 4, 1);
+       c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
+       c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
+       c3.fancyCircle(x2 + .5*(x3-x2), y3, 0, mute3, solo3, bypassBand3);
+       c4.fancyCircle(x3 + .5*(x4-x3), y4, 0, mute4, solo4, bypassBand4);
+       c5.fancyCircle(x4 + .5*(w-x4), y5, 0, mute5, solo5, bypassBand5);
+
+       loop(2,
+         shouldRenderNow(topLayer, 0) ? (
+           gk1.simpleKnob(.5*x + .5*x1, gain_y, bwidth, bandGainIdx+0, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+0)), 0, db_y);
+           ak1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, attackIdx + 0, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l1.attack), -1, atk_x, dyn_y);
+           rk1.drawExtraArc(.5*x + .5*x1, gain_y, bwidth, releaseIdx + 0, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l1.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 1) ? (
+           gk2.simpleKnob(x1 + .5*(x2-x1), gain_y, bwidth, bandGainIdx+1, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+1)), 0, db_y);
+           ak2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, attackIdx + 1, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l2.attack), -1, atk_x, dyn_y);
+           rk2.drawExtraArc(x1 + .5*(x2-x1), gain_y, bwidth, releaseIdx + 1, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l2.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 2) ? (
+           gk3.simpleKnob(x2 + .5*(x3-x2), gain_y, bwidth, bandGainIdx+2, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+2)), 0, db_y);
+           ak3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, attackIdx + 2, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l3.attack), -1, atk_x, dyn_y);
+           rk3.drawExtraArc(x2 + .5*(x3-x2), gain_y, bwidth, releaseIdx + 2, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l3.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 3) ? (
+           gk4.simpleKnob(x3 + .5*(x4-x3), gain_y, bwidth, bandGainIdx+3, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+3)), 0, db_y);
+           ak4.drawExtraArc(x3 + .5*(x4-x3), gain_y, bwidth, attackIdx + 3, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l4.attack), -1, atk_x, dyn_y);
+           rk4.drawExtraArc(x3 + .5*(x4-x3), gain_y, bwidth, releaseIdx + 3, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l4.release), 1, rel_x, dyn_y);
+         );
+         shouldRenderNow(topLayer, 4) ? (
+           gk5.simpleKnob(x4 + .5*(w-x4), gain_y, bwidth, bandGainIdx+4, bandGainMax, 0, sprintf(8, "%.1f dB", slider(bandGainIdx+4)), 0, db_y);
+           ak5.drawExtraArc(x4 + .5*(w-x4), gain_y, bwidth, attackIdx + 4, attackSliderMax, attackSliderMin, 0.2, 0.2, 0.2, atkFgR, atkFgG, atkFgB, sprintf(6, "%d", filterBank.comp_l5.attack), -1, atk_x, dyn_y);
+           rk5.drawExtraArc(x4 + .5*(w-x4), gain_y, bwidth, releaseIdx + 4, releaseSliderMax, releaseSliderMin, 0.2, 0.2, 0.2, relFgR, relFgG, relFgB, sprintf(6, "%d", filterBank.comp_l5.release), 1, rel_x, dyn_y);
+         );
+         topLayer = 1;
+       );
+    );
+  );  
+  
+function initSpectrum(memoryOffset, fftSize, srate)
+  global(newUI)
+  instance(recPtr, window, rStart, rEnd, fftLoc, hzoffset, thisUI, slope)
+  local()
+  (
+    slope     = 3;
+  
+    hzoffset  = 20*fftSize/srate;
+    window    = memoryOffset + fftSize + (fftSize*0.5 - 1);
+  
+    // Start and end of the buffer
+    rStart    = memoryOffset;                              // rpos
+    rEnd      = window;                                      // hsize
+    
+    fftLoc    = window + (fftSize*0.5 + 1); // fftw
+    
+    recPtr    = rStart;
+    thisUI    = newUI+=1;
+    
+    this.initWindow(3)
+  );
+  
+  function resetBandMeter()
+  local()
+  global()
+  instance(in, pre, post)
+  (
+    in = pre = post = 0;
+  );
+  
+  function processBands()
+  local(BW2)
+  global( play1,     play2,     play3,      play4,      play5, coupled,
+          bypassBand1, bypassBand2, bypassBand3, bypassBand4, bypassBand5,
+          Thresh, smoothing_const, driveInitialized)
+  instance(b1, b2, b3, b4, b5, F1, F2, F3, F4, F5,
+           cDrive1, cDrive2, cDrive3, cDrive4, cDrive5,
+           rg1, rg2, rg3, rg4, rg5,
+           lg1, lg2, lg3, lg4, lg5,
+           comp_l1.compressor_gain,
+           comp_l2.compressor_gain,
+           comp_l3.compressor_gain,
+           comp_l4.compressor_gain,
+           comp_l5.compressor_gain,
+           comp_r1.compressor_gain,
+           comp_r2.compressor_gain,
+           comp_r3.compressor_gain,
+           comp_r4.compressor_gain,
+           comp_r5.compressor_gain,
+           l1_state, r1_state,
+           l2_state, r2_state,
+           l3_state, r3_state,
+           l4_state, r4_state,
+           l5_state, r5_state)
+  (
+    b1.l = b2.l = b3.l = b4.l = b5.l = 0;
+    b1.r = b2.r = b3.r = b4.r = b5.r = 0;
+    
+    cDrive1 += smoothing_const * (- 200 * (1 - play1) - cDrive1);
+    cDrive2 += smoothing_const * (- 200 * (1 - play2) - cDrive2);
+    cDrive3 += smoothing_const * (- 200 * (1 - play3) - cDrive3);
+    cDrive4 += smoothing_const * (- 200 * (1 - play4) - cDrive4);
+    cDrive5 += smoothing_const * (- 200 * (1 - play5) - cDrive5);
+    
+    coupled ? (
+      cDrive1 > -120 ? (
+        l1_state = bypassBand1 ? 0 : comp_l1.compressor_gain(max(abs(b1.inL), abs(b1.inR)));
+        lg1 = exp(.11512925464970228420089957273422 * (cDrive1 - l1_state));
+        b1.l = lg1 * b1.inL;
+        b1.r = lg1 * b1.inR;
+      );
+      cDrive2 > -120 ? (
+        l2_state = bypassBand2 ? 0 : comp_l2.compressor_gain(max(abs(b2.inL), abs(b2.inR)));
+        lg2 = exp(.11512925464970228420089957273422 * (cDrive2 - l2_state));
+        b2.l = lg2 * b2.inL;
+        b2.r = lg2 * b2.inR;
+      );
+      cDrive3 > -120 ? (
+        l3_state = bypassBand3 ? 0 : comp_l3.compressor_gain(max(abs(b3.inL), abs(b3.inR)));
+        lg3 = exp(.11512925464970228420089957273422 * (cDrive3 - l3_state));
+        b3.l = lg3 * b3.inL;
+        b3.r = lg3 * b3.inR;
+      );
+      cDrive4 > -120 ? (
+        l4_state = bypassBand4 ? 0 : comp_l4.compressor_gain(max(abs(b4.inL), abs(b4.inR)));
+        lg4 = exp(.11512925464970228420089957273422 * (cDrive4 - l4_state));
+        b4.l = lg4 * b4.inL;
+        b4.r = lg4 * b4.inR;
+      );
+      cDrive5 > -120 ? (
+        l5_state = bypassBand5 ? 0 : comp_l5.compressor_gain(max(abs(b5.inL), abs(b5.inR)));
+        lg5 = exp(.11512925464970228420089957273422 * (cDrive5 - l5_state));
+        b5.l = lg5 * b5.inL;
+        b5.r = lg5 * b5.inR;
+      );
+    ) : (
+      cDrive1 > -120 ? (
+        bypassBand1 ? (
+          l1_state = r1_state = 0;
+        ) : (
+          l1_state = comp_l1.compressor_gain(b1.inL);
+          r1_state = comp_r1.compressor_gain(b1.inR);
+        );
+        lg1 = exp(.11512925464970228420089957273422 * (cDrive1 - l1_state));
+        rg1 = exp(.11512925464970228420089957273422 * (cDrive1 - r1_state));
+      
+        b1.l = lg1 * b1.inL;
+        b1.r = rg1 * b1.inR;
+      );
+      cDrive2 > -120 ? (
+        bypassBand2 ? (
+          l2_state = r2_state = 0;
+        ) : (
+          l2_state = comp_l2.compressor_gain(b2.inL);
+          r2_state = comp_r2.compressor_gain(b2.inR);
+        );
+        lg2 = exp(.11512925464970228420089957273422 * (cDrive2 - l2_state));
+        rg2 = exp(.11512925464970228420089957273422 * (cDrive2 - r2_state));
+        
+        b2.l = lg2*b2.inL;
+        b2.r = rg2*b2.inR;
+      );
+      cDrive3 > -120 ? (
+        bypassBand3 ? (
+          l3_state = r3_state = 0;
+        ) : (
+          l3_state = comp_l3.compressor_gain(b3.inL);
+          r3_state = comp_r3.compressor_gain(b3.inR);
+        );
+        lg3 = exp(.11512925464970228420089957273422 * (cDrive3 - l3_state));
+        rg3 = exp(.11512925464970228420089957273422 * (cDrive3 - r3_state));
+      
+        b3.l = lg3*b3.inL;
+        b3.r = rg3*b3.inR;
+      );
+      cDrive4 > -120 ? (
+        bypassBand4 ? (
+          l4_state = r4_state = 0;
+        ) : (
+          l4_state = comp_l4.compressor_gain(b4.inL);
+          r4_state = comp_r4.compressor_gain(b4.inR);
+        );
+        lg4 = exp(.11512925464970228420089957273422 * (cDrive4 - l4_state));
+        rg4 = exp(.11512925464970228420089957273422 * (cDrive4 - r4_state));
+        
+        b4.l = lg4*b4.inL;
+        b4.r = rg4*b4.inR;
+      );
+      cDrive5 > -120 ? (
+        bypassBand5 ? (
+          l5_state = r5_state = 0;
+        ) : (
+          l5_state = comp_l5.compressor_gain(b5.inL);
+          r5_state = comp_r5.compressor_gain(b5.inR);
+        );
+        lg5 = exp(.11512925464970228420089957273422 * (cDrive5 - l5_state));
+        rg5 = exp(.11512925464970228420089957273422 * (cDrive5 - r5_state));
+      
+        b5.l = lg5*b5.inL;
+        b5.r = rg5*b5.inR;
+      );
+    );
+  ); 
+  
+// MEMORY LAYOUT
+fftSize     = 2*8192;
+bufferDist  = 65536;
+audioBufIn  = 0;
+audioBufOut = bufferDist;
+
+FIR1        = 2*bufferDist;
+FIR2        = 3*bufferDist;
+FIR3        = 4*bufferDist;
+FIR4        = 5*bufferDist;
+FIR5        = 6*bufferDist;
+
+F1Block1    = 7*bufferDist;
+F1Block2    = 8*bufferDist;
+F2Block1    = 9*bufferDist;
+F2Block2    = 10*bufferDist;
+F3Block1    = 11*bufferDist;
+F3Block2    = 12*bufferDist;
+F4Block1    = 13*bufferDist;
+F4Block2    = 14*bufferDist;
+F5Block1    = 15*bufferDist;
+F5Block2    = 16*bufferDist;
+
+specBufferLoc = 17*bufferDist;
+
+pixBuf        = 18*bufferDist;
+
+specBuffer.initBuffer(specBufferLoc, specBufferLoc+bufferDist-4);
+
+// INITIALIZATION
+spectrumIn.initSpectrum(audioBufIn, fftSize, srate);
+spectrumOut.initSpectrum(audioBufOut, fftSize, srate);
+
+function setCompOptions()
+instance(comp_l1, comp_r1,
+         comp_l2, comp_r2,
+         comp_l3, comp_r3,
+         comp_l4, comp_r4,
+         comp_l5, comp_r5)
+(
+  comp_l1.setCompressorOptions(ThreshLow1, ThreshHigh1, RatioLow1, RatioHigh1, Attack1, Release1, 0, 120, 5, 400);
+  comp_l2.setCompressorOptions(ThreshLow2, ThreshHigh2, RatioLow2, RatioHigh2, Attack2, Release2, 0, 120, 5, 400);
+  comp_l3.setCompressorOptions(ThreshLow3, ThreshHigh3, RatioLow3, RatioHigh3, Attack3, Release3, 0, 120, 5, 400);
+  comp_l4.setCompressorOptions(ThreshLow4, ThreshHigh4, RatioLow4, RatioHigh4, Attack4, Release4, 0, 120, 5, 400);
+  comp_l5.setCompressorOptions(ThreshLow5, ThreshHigh5, RatioLow5, RatioHigh5, Attack5, Release5, 0, 120, 5, 400);
+  comp_r1.setCompressorOptions(ThreshLow1, ThreshHigh1, RatioLow1, RatioHigh1, Attack1, Release1, 0, 120, 5, 400);
+  comp_r2.setCompressorOptions(ThreshLow2, ThreshHigh2, RatioLow2, RatioHigh2, Attack2, Release2, 0, 120, 5, 400);
+  comp_r3.setCompressorOptions(ThreshLow3, ThreshHigh3, RatioLow3, RatioHigh3, Attack3, Release3, 0, 120, 5, 400);
+  comp_r4.setCompressorOptions(ThreshLow4, ThreshHigh4, RatioLow4, RatioHigh4, Attack4, Release4, 0, 120, 5, 400);
+  comp_r5.setCompressorOptions(ThreshLow5, ThreshHigh5, RatioLow5, RatioHigh5, Attack5, Release5, 0, 120, 5, 400);
+);
+
+@serialize
+version = 2;
+writing = file_avail(0) < 0;
+
+file_var(0, mute1);
+file_var(0, mute2);
+file_var(0, mute3);
+file_var(0, mute4);
+file_var(0, mute5);
+
+file_var(0, solo1);
+file_var(0, solo2);
+file_var(0, solo3);
+file_var(0, solo4);
+file_var(0, solo5);
+
+file_var(0, FIR);
+
+(!writing) ? (
+  hasver = file_avail > 0 ? 1 : 0;
+  (!hasver) ? (
+    dry_wet_mode = 1;
+    version = 1;
+  );
+);
+
+file_var(0, version);
+
+
+file_var(0, dry_wet_mode);
+
+
+update_gain_now();
+eps = 10^(epsilon);
+
+@slider
+filterBank.setCompOptions();
+
+@block
+lbnd = active_threshold > -319.0 ? 10^(active_threshold/20) : 0;
+
+gate_speed = srate / 5;  // 5 Hz gate
+eps = 10^(epsilon);
+
+smoothing_const = 20/srate;
+filterBank.setCompOptions();
+dcl.init_HP6(20/srate);
+dcr.init_HP6(20/srate);
+
+!mute1 ? play1 = 1 : play1 = 0;
+!mute2 ? play2 = 1 : play2 = 0;
+!mute3 ? play3 = 1 : play3 = 0;
+!mute4 ? play4 = 1 : play4 = 0;
+!mute5 ? play5 = 1 : play5 = 0;
+
+( solo1 || solo2 || solo3 || solo4 || solo5 ) ? ( play1 = play2 = play3 = play4 = play5 = 0; );
+solo1 ? play1 = 1;
+solo2 ? play2 = 1;
+solo3 ? play3 = 1;
+solo4 ? play4 = 1;
+solo5 ? play5 = 1;
+
+(FIR) ? (
+  chunkSize = (fftCalcSize - firSize - 1);
+  newPDC = chunkSize + 0.5*firSize + 5;
+) : (
+  newPDC = 5;
+);
+
+(pdc_delay != newPDC) ? (
+  pdc_bot_ch = 0;
+  pdc_top_ch = 2;
+  pdc_delay = newPDC;
+);
+
+@sample
+  function F0_rect(x)
+  (
+    abs(x) > 1 ? x * sign(x) - 0.5 : 0.5 * x * x;
+  );
+  
+  function F1_rect(x)
+  (
+    abs(x) > 1 ? (0.5 * x * x - 0.166666666666666666666666667) * sign(x) : x * x * x * 0.333333333333333333333;
+  );
+  
+  function clip(x)
+  (
+    max(-1, min(1, x))
+  );
+
+  function clip_linear_aa(xn)
+  local(eps, clip_xn,
+        F0_xn, F1_xn, diff1, diff2, term1, term2, idiff)
+  global()
+  instance(xnm1, xnm2, F0_xnm1, F0_xnm2, F1_xnm1, F1_xnm2)
+  (
+    clip_xn   = clip(xn);
+    F0_xn     = F0_rect(xn);
+    F1_xn     = F1_rect(xn);
+  
+    diff1     = ( xn - xnm1 );
+    diff2     = ( xnm2 - xnm1 );
+    eps       = .002;
+      
+    term1     = (abs(diff1) > eps) ? (
+      idiff = 1.0 / (diff1*diff1);
+      ( xn * ( F0_xn - F0_xnm1 ) - (F1_xn - F1_xnm1) ) * idiff
+    ) : (
+      .5 * clip((xn + 2*xnm1)*.33333333333333333333333333333)
+    );
+    
+    term2     = (abs(diff2) > eps) ? (
+      idiff = 1.0 / (diff2*diff2);
+      ( xnm2 * ( F0_xnm2 - F0_xnm1 ) - (F1_xnm2 - F1_xnm1) ) * idiff
+    ) : (
+      .5 * clip((xnm2 + 2*xnm1)*.33333333333333333333333333333)
+    );
+  
+    F1_xnm2   = F1_xnm1;
+    F1_xnm1   = F1_xn;
+  
+    F0_xnm2   = F0_xnm1;
+    F0_xnm1   = F0_xn;
+    
+    xnm2      = xnm1;
+    xnm1      = xn;
+  
+    term1 + term2
+  );
+
+  function init_LR2(freq)
+    global(srate)
+    local(omega, res, ct, st, div)
+    instance(k, a1, a2, a3)
+    (
+      omega = 0.5 * $pi * exp( (1-freq) * log(20/22050) );
+      k = sqrt(2); /* Note the different peak resonance because we're combining 2 SVFs into the Linkwitz-Riley structure */
+
+      ct = cos(omega);
+      st = sin(omega);
+      div = 1.0 / (1.0 + k * st * ct);
+      a1 = ct * ct * div;
+      a2 = st * ct * div;
+      a3 = st * st * div;
+    ); 
+  
+  function reset_LR()
+    global()
+    local()
+    instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq, k, a1, a2, a3)
+    (
+      ic1eq = ic2eq = 0;  
+    );  
+
+  function eval_LRLP(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic3eq, ic4eq, k, a1, a2, a3)
+    (
+      v3 = v0 - ic4eq;
+      v1 = a1 * ic3eq + a2 * v3;
+      v2 = ic4eq + a2 * ic3eq + a3 * v3;
+      ic3eq = 2*v1 - ic3eq;
+      ic4eq = 2*v2 - ic4eq;
+      
+      v2
+    );  
+ 
+  function eval_LRAP(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic5eq, ic6eq, k, a1, a2, a3)
+    (
+      v3 = v0 - ic6eq;
+      v1 = a1 * ic5eq + a2 * v3;
+      v2 = ic6eq + a2 * ic5eq + a3 * v3;
+      ic5eq = 2*v1 - ic5eq;
+      ic6eq = 2*v2 - ic6eq;    
+      
+      v0 - 2*k*v1
+    );    
+
+  function eval_LR2(v0)
+    global()
+    local(v1, v2, v3, all)
+    instance(ic1eq, ic2eq, k, a1, a2, a3, hp, lp)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3 * v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;    
+      
+      all = v0 - 2 * k * v1;
+ 
+      lp = this.eval_LRLP(v2); 
+      hp = all - lp;
+    );  
+  
+  function resetBands()
+  local()
+  global()
+  instance( b1, b2, b3, b4, b5 )
+  (
+    b1.r = b1.l = b2.r = b2.l = b3.r = b3.l = b4.r = b4.l = b5.l = 0;
+  );
+  
+  function resetFilters()
+  global()
+  local()
+  instance(
+            LF1, LF2, LF3, LF4            /* Lowpass left */
+            LA_F2,                        /* Allpass frequency 2 left */
+            LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
+            LA_F4, LA_F4_2, LA_F4_3,      /* Allpass frequency 4 left */
+            RF1, RF2, RF3, RF4            /* Lowpass right */
+            RA_F2,                        /* Allpass frequency 2 right */
+            RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
+            RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */  
+  )
+  (
+    // LR2  => ic1eq, ic2eq, ic3eq, ic4eq
+    // LPLP => ic3eq, ic4eq
+    // LRAP => ic5eq, ic6eq
+    
+    LF1.ic1eq = LF1.ic2eq = LF1.ic3eq = LF1.ic4eq = 0;
+    LF2.ic1eq = LF2.ic2eq = LF2.ic3eq = LF2.ic4eq = 0;
+    LF3.ic1eq = LF3.ic2eq = LF3.ic3eq = LF3.ic4eq = 0;
+    LF4.ic1eq = LF4.ic2eq = LF4.ic3eq = LF4.ic4eq = 0;
+
+    RF1.ic1eq = RF1.ic2eq = RF1.ic3eq = RF1.ic4eq = 0;
+    RF2.ic1eq = RF2.ic2eq = RF2.ic3eq = RF2.ic4eq = 0;
+    RF3.ic1eq = RF3.ic2eq = RF3.ic3eq = RF3.ic4eq = 0;
+    RF4.ic1eq = RF4.ic2eq = RF4.ic3eq = RF4.ic4eq = 0;
+    
+    LA_F4.ic5eq = LA_F4.ic6eq = LA_F3.ic5eq = LA_F3.ic6eq = LA_F2.ic5eq = LA_F2.ic6eq = 0;
+    RA_F4.ic5eq = RA_F4.ic6eq = RA_F3.ic5eq = RA_F3.ic6eq = RA_F2.ic5eq = RA_F2.ic6eq = 0;
+
+    LA_F4_2.ic5eq = LA_F4_2.ic6eq = LA_F3_2.ic5eq = LA_F3_2.ic6eq = LA_F4_3.ic5eq = LA_F4_3.ic6eq = 0;
+    RA_F4_2.ic5eq = RA_F4_2.ic6eq = RA_F3_2.ic5eq = RA_F3_2.ic6eq = RA_F4_3.ic5eq = RA_F4_3.ic6eq = 0;
+  );
+  
+  // Make sure the delay is the same on all bands (identical number of filters)
+  function splitBands(sl, sr)
+  local()
+  global(Cuts, FIR)
+  instance( LF1, LF2, LF3, LF4            /* Lowpass left */
+            LA_F2,                        /* Allpass frequency 2 left */
+            LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
+            LA_F4, LA_F4_2, LA_F4_3,      /* Allpass frequency 4 left */
+            RF1, RF2, RF3, RF4            /* Lowpass right */
+            RA_F2,                        /* Allpass frequency 2 right */
+            RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
+            RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
+            b1, b2, b3, b4, b5, lcuts )
+  (
+    ( lcuts != cuts ) ? (
+      lcuts = cuts;
+      this.resetBands();
+    );
+    
+    (cuts==0) ? (
+      b1.inL = sl;
+      b1.inR = sr;
+    ) : (cuts==1) ? (
+      LF1.eval_LR2(sl);
+      b1.inL = LF1.lp;
+      b2.inL = LF1.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR = RF1.lp;
+      b2.inR = RF1.hp;
+    ) : (cuts==2) ? (
+      LF1.eval_LR2(sl);
+      b1.inL   = LA_F2.eval_LRAP(LF1.lp);
+        
+      LF2.eval_LR2(LF1.hp);
+      b2.inL   = LF2.lp;
+      b3.inL   = LF2.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR   = RA_F2.eval_LRAP(RF1.lp);
+        
+      RF2.eval_LR2(RF1.hp);
+      b2.inR   = RF2.lp;
+      b3.inR   = RF2.hp;
+    ) : (cuts == 3) ? (
+      LF1.eval_LR2(sl);
+      b1.inL   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
+        
+      LF2.eval_LR2(LF1.hp);
+      b2.inL   = LA_F3_2.eval_LRAP(LF2.lp);
+        
+      LF3.eval_LR2(LF2.hp);
+      b3.inL   = LF3.lp;
+      b4.inL   = LF3.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
+      
+      RF2.eval_LR2(RF1.hp);
+      b2.inR   = RA_F3_2.eval_LRAP(RF2.lp);
+      
+      RF3.eval_LR2(RF2.hp);
+      b3.inR   = RF3.lp;
+      b4.inR   = RF3.hp;
+    ) : (cuts == 4) ? (
+      LF1.eval_LR2(sl);
+      b1.inL   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
+      
+      LF2.eval_LR2(LF1.hp);
+      b2.inL   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
+        
+      LF3.eval_LR2(LF2.hp);
+      b3.inL   = LA_F4_3.eval_LRAP(LF3.lp);
+        
+      LF4.eval_LR2(LF3.hp);
+      b4.inL   = LF4.lp;
+      b5.inL   = LF4.hp;
+        
+      RF1.eval_LR2(sr);
+      b1.inR   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
+        
+      RF2.eval_LR2(RF1.hp);
+      b2.inR   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
+        
+      RF3.eval_LR2(RF2.hp);
+      b3.inR   = RA_F4_3.eval_LRAP(RF3.lp);
+        
+      RF4.eval_LR2(RF3.hp);
+      b4.inR   = RF4.lp;
+      b5.inR   = RF4.hp;
+    );
+  );  
+  
+  // Convert to linear phase
+  function linearPhase(fft_mem, fftCalcSize)
+  local(fwd, r1, i1, mag1, flip, i, w)
+  global()
+  instance()
+  (
+    fwd = fft_mem;
+    
+    /* Making the filter linear phase involves both removing
+       the phase; but then also shifting the impulse response
+       to overlap with our chunk. If we just remove the phase, 
+       we'd get an impulse response like this:
+       \____/
+       The goal is to shift it to the middle of the FIR section.
+       Considering that the FIR section is at .25 of the spectrum,
+       we have to shift it further than we normally would (a step of
+       1.5 * pi rather than pi. */
+    
+    flip = 1;
+    i = 0;
+    loop(fftCalcSize,
+      r1  = fwd[];
+      i1  = fwd[1];
+      
+      mag1      = sqrt(sqr(r1) + sqr(i1));
+            
+      fwd[]     = mag1 * cos($pi*i);
+      fwd[1]    = mag1 * sin($pi*i);
+
+      i += 1.5;
+      fwd += 2;
+    );
+    
+    /*i = 0;
+    loop(1,
+      fft_mem[2*i] = 0;
+      fft_mem[2*fftCalcSize-2*i] = 0;
+      i = i + 1;
+    );*/
+    
+  );
+  
+  function dc_correct_response(ptr, firSize)
+  global(
+    dc_fir.reset_HP6,
+    dc_fir.eval_HP6,
+  )
+  (
+    dc_fir.reset_HP6();
+    loop(firSize,
+      ptr[] = dc_fir.eval_HP6(ptr[]); ptr += 2;
+    );
+  );
+  
+  function updateCoeffs()
+  local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i, M)
+  global(Cuts, Freq1, Freq2, Freq3, Freq4, FIR,
+         FIR1, FIR2, FIR3, FIR4, FIR5, bufferDist,
+         firSize, fftCalcSize, FIR_quality,
+         fixdc, lfixdc)
+  instance( F1,  F2,  F3,  F4
+            LF1, LF2, LF3, LF4            /* Lowpass left */
+            LA_F2,                        /* Allpass frequency 2 left */
+            LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
+            LA_F4, LA_F4_2, LA_F4_3,      /* Allpass frequency 4 left */
+            RF1, RF2, RF3, RF4            /* Lowpass right */
+            RA_F2,                        /* Allpass frequency 2 right */
+            RA_F3, RA_F3_2,               /* Allpass frequency 3 right */
+            RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
+            lcuts, lFIR,
+            lFIR_quality,
+            lF1, lF2, lF3, lF4,
+            updateRequired,
+            )
+  (
+      updateRequired = 0;
+      updateRequired = ( 
+        ( lF1 != Freq1 ) ||
+        ( lF2 != Freq2 ) ||
+        ( lF3 != Freq3 ) ||
+        ( lF4 != Freq4 ) ||
+        ( cuts != lcuts ) ||
+        ( FIR != lFIR ) ||
+        ( fixDC != lfixDC ) ||
+        ( lFIR_quality != FIR_quality )
+        );
+
+      updateRequired ? (        
+        lF1 = Freq1;
+        lF2 = Freq2;
+        lF3 = Freq3;
+        lF4 = Freq4;
+        lFIR = FIR;
+        lcuts = cuts;
+        lfixdc = fixdc;
+        lFIR_quality = FIR_quality;
+      
+        F1 = Freq1;
+        F2 = Freq1  + Freq2 * (1 - Freq1);
+        F3 = F2     + Freq3 * (1 - F2);
+        F4 = F3     + Freq4 * (1 - F3);
+          
+        (cuts==1) ? (
+          LF1.init_LR2(Freq1);
+          RF1.k  = LF1.k;
+          RF1.a1 = LF1.a1;
+          RF1.a2 = LF1.a2;
+          RF1.a3 = LF1.a3;
+        ) : (cuts==2) ? (
+          LF1.init_LR2(Freq1);
+          RF1.k  = LF1.k;
+          RF1.a1 = LF1.a1;
+          RF1.a2 = LF1.a2;
+          RF1.a3 = LF1.a3;
+          LF2.init_LR2(F2);
+          RF2.k  = LF2.k;
+          RF2.a1 = LF2.a1;
+          RF2.a2 = LF2.a2;
+          RF2.a3 = LF2.a3;
+          
+          LA_F2.init_LR2(F2);
+          RA_F2.k  = LA_F2.k;
+          RA_F2.a1 = LA_F2.a1;
+          RA_F2.a2 = LA_F2.a2;
+          RA_F2.a3 = LA_F2.a3;
+        ) : (cuts == 3) ? (
+          LF1.init_LR2(Freq1);
+          RF1.k  = LF1.k;
+          RF1.a1 = LF1.a1;
+          RF1.a2 = LF1.a2;
+          RF1.a3 = LF1.a3;
+          LF2.init_LR2(F2);
+          RF2.k  = LF2.k;
+          RF2.a1 = LF2.a1;
+          RF2.a2 = LF2.a2;
+          RF2.a3 = LF2.a3;
+          LF3.init_LR2(F3);
+          RF3.k  = LF3.k;
+          RF3.a1 = LF3.a1;
+          RF3.a2 = LF3.a2;
+          RF3.a3 = LF3.a3;
+          
+          // All-passes for maintaining the phase relation between the bands
+          LA_F2.init_LR2(F2);
+          LA_F3.init_LR2(F3);
+          
+          RA_F3.k   = RA_F3_2.k  = LA_F3_2.k  = LA_F3.k;
+          RA_F3.a1  = RA_F3_2.a1 = LA_F3_2.a1 = LA_F3.a1;
+          RA_F3.a2  = RA_F3_2.a2 = LA_F3_2.a2 = LA_F3.a2;
+          RA_F3.a3  = RA_F3_2.a3 = LA_F3_2.a3 = LA_F3.a3;
+    
+          RA_F2.k  = LA_F2.k;
+          RA_F2.a1 = LA_F2.a1;
+          RA_F2.a2 = LA_F2.a2;
+          RA_F2.a3 = LA_F2.a3;
+        ) : (cuts == 4) ? (
+          LF1.init_LR2(Freq1);
+          RF1.k  = LF1.k;
+          RF1.a1 = LF1.a1;
+          RF1.a2 = LF1.a2;
+          RF1.a3 = LF1.a3;
+          LF2.init_LR2(F2);
+          RF2.k  = LF2.k;
+          RF2.a1 = LF2.a1;
+          RF2.a2 = LF2.a2;
+          RF2.a3 = LF2.a3;
+          LF3.init_LR2(F3);
+          RF3.k  = LF3.k;
+          RF3.a1 = LF3.a1;
+          RF3.a2 = LF3.a2;
+          RF3.a3 = LF3.a3;
+          LF4.init_LR2(F4);
+          RF4.k  = LF4.k;
+          RF4.a1 = LF4.a1;
+          RF4.a2 = LF4.a2;
+          RF4.a3 = LF4.a3;
+          
+          // All-passes for maintaining the phase relation between the bands
+          LA_F2.init_LR2(F2);
+          LA_F3.init_LR2(F3);
+          LA_F4.init_LR2(F4);
+          
+          RA_F4.k  = RA_F4_2.k  = RA_F4_3.k  = LA_F4_2.k  = LA_F4_3.k  = LA_F4.k;
+          RA_F4.a1 = RA_F4_2.a1 = RA_F4_3.a1 = LA_F4_2.a1 = LA_F4_3.a1 = LA_F4.a1;
+          RA_F4.a2 = RA_F4_2.a2 = RA_F4_3.a2 = LA_F4_2.a2 = LA_F4_3.a2 = LA_F4.a2;
+          RA_F4.a3 = RA_F4_2.a3 = RA_F4_3.a3 = LA_F4_2.a3 = LA_F4_3.a3 = LA_F4.a3;
+          
+          RA_F3.k   = RA_F3_2.k  = LA_F3_2.k  = LA_F3.k;
+          RA_F3.a1  = RA_F3_2.a1 = LA_F3_2.a1 = LA_F3.a1;
+          RA_F3.a2  = RA_F3_2.a2 = LA_F3_2.a2 = LA_F3.a2;
+          RA_F3.a3  = RA_F3_2.a3 = LA_F3_2.a3 = LA_F3.a3;
+    
+          RA_F2.k  = LA_F2.k;
+          RA_F2.a1 = LA_F2.a1;
+          RA_F2.a2 = LA_F2.a2;
+          RA_F2.a3 = LA_F2.a3;
+        );
+        
+        /* Are we dealing with a FIR filter? */
+        FIR ? (
+          M = 4;
+          (FIR_quality > 0) ? M *= 2;
+          (FIR_quality > 1) ? M *= 2;
+          firSize = 512*M;
+          fftCalcSize = 1024*M;
+        
+          // CalcFIR
+          memset(FIR1, 0, bufferDist);
+          memset(FIR2, 0, bufferDist);
+          memset(FIR3, 0, bufferDist);
+          memset(FIR4, 0, bufferDist);
+          memset(FIR5, 0, bufferDist);
+          
+          this.resetFilters();
+        
+          /* Fetch impulse response */
+          fptr1 = FIR1;
+          fptr2 = FIR2;
+          fptr3 = FIR3;
+          fptr4 = FIR4;
+          fptr5 = FIR5;
+
+          this.splitBands(1.0/fftCalcSize, 1.0/fftCalcSize);
+               
+          loop(firSize,
+            fptr1[] = this.b1.inL; fptr1 += 2;
+            fptr2[] = this.b2.inL; fptr2 += 2;
+            fptr3[] = this.b3.inL; fptr3 += 2;
+            fptr4[] = this.b4.inL; fptr4 += 2;
+            fptr5[] = this.b5.inL; fptr5 += 2;
+          
+            this.splitBands(0, 0);
+          );
+          
+          fixdc ? (
+            dc_correct_response(FIR1, firSize);
+            dc_correct_response(FIR2, firSize);
+            dc_correct_response(FIR3, firSize);
+            dc_correct_response(FIR4, firSize);
+            dc_correct_response(FIR5, firSize);
+          );
+        
+          /* Transform impulse responses */
+          fft(FIR1, fftCalcSize);
+          fft(FIR2, fftCalcSize);
+          fft(FIR3, fftCalcSize);
+          fft(FIR4, fftCalcSize);
+          fft(FIR5, fftCalcSize);
+          
+          fft_permute(FIR1, fftCalcSize);
+          fft_permute(FIR2, fftCalcSize);
+          fft_permute(FIR3, fftCalcSize);
+          fft_permute(FIR4, fftCalcSize);
+          fft_permute(FIR5, fftCalcSize);
+          
+          (fixdc && (FIR_quality == 0)) ? (
+            FIR1[] = FIR2[] = FIR3[] = FIR4[] = FIR5[] = 0;
+            FIR1[1] = FIR2[1] = FIR3[1] = FIR4[1] = FIR5[1] = 0;
+          );
+          
+          /* Remove phase information (converts to linear phase) */
+          linearPhase(FIR1, fftCalcSize);
+          linearPhase(FIR2, fftCalcSize);
+          linearPhase(FIR3, fftCalcSize);
+          linearPhase(FIR4, fftCalcSize);
+          linearPhase(FIR5, fftCalcSize);
+          
+          fft_ipermute(FIR1, fftCalcSize);
+          fft_ipermute(FIR2, fftCalcSize);
+          fft_ipermute(FIR3, fftCalcSize);
+          fft_ipermute(FIR4, fftCalcSize);
+          fft_ipermute(FIR5, fftCalcSize);
+        );
+      );
+    
+    updateRequired
+  );
+  
+  function doFIR(l, r, block1, block2, fftCalcSize, filterSize, filterLoc, cPos)
+  instance(curBlock, lastBlock, initialized, chunkSize, chunksizeT2)
+  local(tmp, cPosT2)
+  global(bufferdist)
+  (
+    !initialized ? (
+      curBlock  = block1;
+      lastBlock = block2;
+      
+      memset(curBlock, 0, bufferdist);
+      memset(lastBlock, 0, bufferdist);
+      initialized = 1;
+      
+      chunkSize   = (fftCalcSize - filterSize - 1);
+      chunkSizeT2 = chunkSize * 2;
+    );
+  
+    cPos >= chunkSize ? 
+    (
+      tmp       = lastBlock;
+      lastBlock = curBlock;
+      curBlock  = tmp;
+     
+      /* Empty out the data beyond chunkSize of the block that has 
+         just been filled. This used to be the carried over overlap-add
+         tail of the previous one */
+      memset( curBlock + chunkSizeT2, 0, (fftCalcSize-chunkSize)*2 );
+    
+      /* Calculate FFT of current chunk */
+      fft(curBlock, fftCalcSize);
+      //fft_permute(curBlock, fftCalcSize);
+      
+      /* Convolve with the FIR filter (already FFT'd) */
+      convolve_c(curBlock, filterLoc, fftCalcSize);
+      //fft_ipermute(curBlock, fftCalcSize);
+      ifft(curBlock, fftCalcSize);
+      
+      cPos = 0;
+    );
+      
+    /* Save sample */
+    cPosT2 = cPos * 2;
+    lastBlock[cPosT2]   = l;
+    lastBlock[cPosT2+1] = r;
+    
+    this.inL = curBlock[cPosT2];
+    this.inR = curBlock[cPosT2+1];
+    
+    /* Overlap add the previous tail */
+    ( cPos < (fftCalcSize-chunkSize) ) ? 
+    (
+      this.inL += lastBlock[chunkSizeT2+cPosT2];
+      this.inR += lastBlock[chunkSizeT2+cPosT2+1];
+      1
+    );
+ 
+    cPos + 1
+  );
+  
+  function processSample()
+  (  
+    FIR ? (
+      filterBank.resetBands();   
+      cPosNew = filterBank.b1.doFIR(inL, inR, F1Block1, F1Block2, fftCalcSize, firSize, FIR1, cPos);
+      ( cuts > 0 ) ? ( filterBank.b2.doFIR(inL, inR, F2Block1, F2Block2, fftCalcSize, firSize, FIR2, cPos); );
+      ( cuts > 1 ) ? ( filterBank.b3.doFIR(inL, inR, F3Block1, F3Block2, fftCalcSize, firSize, FIR3, cPos); );
+      ( cuts > 2 ) ? ( filterBank.b4.doFIR(inL, inR, F4Block1, F4Block2, fftCalcSize, firSize, FIR4, cPos); );
+      ( cuts > 3 ) ? ( filterBank.b5.doFIR(inL, inR, F5Block1, F5Block2, fftCalcSize, firSize, FIR5, cPos); );
+      cPos = cPosNew;
+    ) : (
+      filterBank.splitBands(inL, inR);
+    );
+    
+    filterBank.processBands();
+  );
+  
+  // Add a tiny delay to catch bad clicks and pops
+  function tiny_delay(x)
+  instance(d1, d2, d3, d4, d5, d6)
+  (
+    d6 = d5;
+    d5 = d4;
+    d4 = d3;
+    d3 = d2;
+    d2 = d1;
+    d1 = x;
+    d6
+  );
+  
+  (current_input_gain != input_gain) ? (
+    current_input_gain += smoothing_const * (input_gain - current_input_gain);
+    g_factor = exp(.11512925464970228420089957273422 * current_input_gain);
+  );
+  
+  (dry_wet_mode == 1) ? (
+    dry = 0.999 * dry + 0.001 * ((drywet < 0) ? 1 : 1.0 - drywet);
+    wet = 0.999 * wet + 0.001 * ((drywet > 0) ? 1 : 1.0 + drywet);
+  ) : (
+    dry = 0.999 * dry + 0.0005 * (1 - drywet);
+    wet = 0.999 * wet + 0.0005 * (drywet + 1);
+  );
+
+  gate = max(max(spl0, spl1), .999 * gate);
+  
+  // Don't eat CPU when plugin doesn't have any input.
+  (gate_level > 0) ? (
+    spl0 *= g_factor;
+    spl1 *= g_factor;
+      
+    FIR ? (
+      specBuffer.updateBuffer(.5*(spl0+spl1));
+      specBuffer.setOffset(newPDC+2);
+      cSpec = specBuffer.readBuffer();
+      spectrumIn.feedSample(cSpec);
+    ) : (
+      spectrumIn.feedSample(.5*(spl0+spl1));
+    );
+  
+    // Split signal into bands
+    filterBank.updateCoeffs();
+    
+    inL = left.tiny_delay(spl0);
+    inR = right.tiny_delay(spl1);
+    
+    processSample();
+    
+    (current_output_gain != output_gain) ? (
+      current_output_gain += smoothing_const * (output_gain - current_output_gain);
+      gout_factor = exp(.11512925464970228420089957273422 * current_output_gain);
+    );
+    
+    cGain1 += smoothing_const * (Gain1 - cGain1);
+    g1 = exp(.11512925464970228420089957273422 * (cGain1 + current_output_gain));
+    spl0 = filterBank.b1.l * g1 * wet + filterBank.b1.inL * dry;
+    spl1 = filterBank.b1.r * g1 * wet + filterBank.b1.inR * dry;
+    ( cuts > 0 ) ? (
+      cGain2 += smoothing_const * (Gain2 - cGain2);
+      g2 = exp(.11512925464970228420089957273422 * (cGain2 + current_output_gain));
+      spl0 += filterBank.b2.l * g2 * wet + filterBank.b2.inL * dry;
+      spl1 += filterBank.b2.r * g2 * wet + filterBank.b2.inR * dry;
+      ( cuts > 1 ) ? (
+        cGain3 += smoothing_const * (Gain3 - cGain3);
+        g3 = exp(.11512925464970228420089957273422 * (cGain3 + current_output_gain));
+        spl0 += filterBank.b3.l * g3 * wet + filterBank.b3.inL * dry;
+        spl1 += filterBank.b3.r * g3 * wet + filterBank.b3.inR * dry;
+        ( cuts > 2 ) ? (
+          cGain4 += smoothing_const * (Gain4 - cGain4);
+          g4 = exp(.11512925464970228420089957273422 * (cGain4 + current_output_gain));
+          spl0 += filterBank.b4.l * g4 * wet + filterBank.b4.inL * dry;
+          spl1 += filterBank.b4.r * g4 * wet + filterBank.b4.inR * dry;
+          ( cuts > 3 ) ? (
+            cGain5 += smoothing_const * (Gain5 - cGain5);        
+            g5 = exp(.11512925464970228420089957273422 * (cGain5 + current_output_gain));
+            spl0 += filterBank.b5.l * g5 * wet + filterBank.b5.inL * dry;
+            spl1 += filterBank.b5.r * g5 * wet + filterBank.b5.inR * dry;
+          );
+        );
+      );
+    );
+    
+    (fixdc && !FIR) ? (
+      spl0 = dcl.eval_HP6(spl0) * wet + spl0 * dry;
+      spl1 = dcr.eval_HP6(spl1) * wet + spl1 * dry;
+    );
+    
+    output_squash ? (
+      output_squash == 1 ? (
+        spl0 = clip(spl0);
+        spl1 = clip(spl1);
+      ) : ( output_squash == 2 ) ? (
+        spl0 = tanh(spl0);
+        spl1 = tanh(spl1);
+      ) : ( output_squash == 3 ) ? (
+        spl0 = l.clip_linear_aa(spl0);
+        spl1 = r.clip_linear_aa(spl1);
+      );
+    );
+  );
+  
+  gate < lbnd ? (
+    spl0 *= gate_level;
+    spl1 *= gate_level;
+    gate_level *= .995;
+  ) : gate_level = 1;
+  
+  out = spl0 + spl1;
+
+  spectrumOut.feedSample(.5*out);
+  
+  curSample += 1;
+  
+@gfx 1080 400
+  overRange = 2 * (1+scaling);
+  overRangeCircle = 10;
+  
+  function createGUI(stripStart)
+  (
+    scaling   = gfx_ext_retina - 1;
+    spectrumX = 0;
+    spectrumY = 0;
+    spectrumW = gfx_w;
+    spectrumH = gfx_h - 25 * (1+scaling);
+    
+    fontface = "Arial";
+    gfx_setfont(GRID_FONT,      fontface, 14*(1+scaling));
+    gfx_setfont(HINT_FONT,      fontface, 14*(1+scaling));
+    
+    spectrumIn.setWindowLocation(spectrumX,  spectrumY, spectrumW, spectrumH);
+    spectrumOut.setWindowLocation(spectrumX, spectrumY, spectrumW, spectrumH);
+  );
+
+  /* Gradients are buffered to save rendering perf */
+  function drawGradients(w, h, spectrumH, gradient_bg)
+  instance(lw, lh, lSpectrumH)
+  global(gfx_mode, gfx_dest, bg_color_r, bg_color_g, bg_color_b, bg_color_a,
+         gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a )
+  local( oldDest, oldMode)
+  (
+    oldMode = gfx_mode;
+    gfx_mode = 0;
+    gfx_set(1,1,1,1);
+    ( ( lw != w ) || ( lh != h ) || (spectrumH != lSpectrumH) ) ? (
+      /* Only draw gradients when size changes */
+      gfx_x = gfx_y = 0;
+      lw = w;
+      lh = h;
+      lSpectrumH = spectrumH;
+      oldDest = gfx_dest;
+      gfx_setimgdim(gradient_bg, w, h);
+      gfx_dest = gradient_bg;
+      gfx_set(0, 0, 0, 1);
+      gfx_rect(0, 0, w, h);
+      gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);
+      gfx_rectto(w,spectrumH);
+      gfx_mode = 1;
+      gfx_gradrect(0, .9*spectrumH, w, .1*spectrumH, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .01, .01, .005, .0001);
+      gfx_gradrect(0, .93*spectrumH, w, .07*spectrumH, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .03, .01, .005, .0001);
+      gfx_gradrect(0, .8*spectrumH, w, .2*spectrumH, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .01, -.0001, .0001, .0001);      
+      gfx_gradrect(0, 0, w, spectrumH, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .001, -.0001, .0001, .0001);
+      gfx_dest = oldDest;
+    );
+    
+    gfx_x = gfx_y = 0; gfx_a = .7 + rand()*rand()*.2;
+    gfx_blit(gradient_bg, 1, 0);
+    gfx_mode = oldMode;
+  );
+  
+  bg_color_r = 0/255;
+  bg_color_g = 0/255;
+  bg_color_b = 0/255;
+  bg_color_a = 1;
+  fft_out_r = .8;
+  fft_out_g = .8;
+  fft_out_b = .8;
+  fft_out_a = 1.0;
+  fft_in_r = .13;
+  fft_in_g = .13;
+  fft_in_b = .23;
+  fft_in_a = .6;
+  grid_color_r = 0.273;
+  grid_color_g = 0.053;
+  grid_color_b = 0.096;
+  grid_color_a = .2;
+  grid_alpha = 0.2 * (1+1*abs(sin(2*time_precise())));
+  backface_color_r = .2;
+  backface_color_g = .2;
+  backface_color_b = .3;
+  backface_color_a = .1;
+  font_color_r = .8;
+  font_color_g = .4;
+  font_color_b = .3;
+  font_color_a = .8;
+  knob_font_color_r = .5;
+  knob_font_color_g = .7;
+  knob_font_color_b = 1;
+  knob_font_color_a = 1;
+  highlight_color_r = .5;
+  highlight_color_g = .7+.2*abs(sin(2*time_precise()));
+  highlight_color_b = .9;
+  highlight_color_a = .6+.4*abs(sin(2*time_precise()));
+  disabled_color_r = .4;
+  disabled_color_g = .4;
+  disabled_color_b = .4;
+  disabled_color_a = .8;
+  
+  stripStart = 35; 
+  createGUI(stripStart);
+  gradient.drawGradients(gfx_w, gfx_h, spectrumH, 2);
+  
+  globalTime = time_precise();
+  delta_time = globalTime - lastGlobalTime;
+  lastGlobalTime = globalTime;
+  
+  animate = 0;
+  animate ? (
+    pixPtr = pixBuf;
+    gfx_mode = 1;
+    top = 0;
+    yvel = 2*gfx_h/375;
+    HXS = .005*yvel*sin(.1*time_precise())*sin(.5*time_precise());
+    loop(.005*gfx_h*gfx_w,
+      HX = .5*gfx_w;
+      HY = .5*gfx_h;
+    
+      X = pixPtr[] += (rand()-.5) + yvel*sin(.03*X+.02*Y) + (X-HX)*HXS; pixPtr += 1;
+      Y = pixPtr[] -= 2+5*rand()  + yvel*cos(.01*X+.01*Y) + (X-HY)*HXS; pixPtr += 1;
+      F = pixPtr[] += rand();
+      pixPtr += 1;
+      
+      ( ( Y < top ) || ( X > gfx_w ) || ( X < 0 ) ) ? (
+        pixPtr -= 3;
+        X = pixPtr[] = rand() * gfx_w; pixPtr += 1;
+        Y = pixPtr[] = gfx_h + rand()*gfx_h; pixPtr += 1;
+        F = pixPtr[] = 0; pixPtr += 1;
+      );
+    
+      gfx_set(1,1-.006*F*F+.07*F,1-.05*F,.1*(1-.025*F));
+      gfx_circle(X,Y,5-.1*F,1,1);
+      
+      gfx_set(1,1-.006*F*F+.07*F,1-.05*F,1-.025*F);
+      gfx_circle(X,Y,min(Y*.01,3-.1*F),1,1);
+      gfx_circle(X,Y,1-.1*F,1,1);
+    );
+  );
+  
+  gfx_r = 1;
+  spectrumIn.drawGrid();
+  spectrumIn.floorLevel = threshRange;
+  spectrumOut.floorLevel = threshRange;
+  spectrumIn.drawFFT(1, fft_in_r, fft_in_g, fft_in_b, fft_in_a);
+  spectrumOut.drawFFT(0, fft_out_r, fft_out_g, fft_out_b, fft_out_a);
+  spectrumIn.updateBands();
+  spectrumIn.drawBands();    
+  spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);  
+
+  
+  toggle_size = 10 * (1 + scaling);
+  x_base = 20 * (1 + scaling);
+  y_base = 20 * (1 + scaling);
+  x_dist = 45 * (1 + scaling);
+  y_dist = 20 * (1 + scaling);
+
+  tFIR.label = "FIR";  
+  tFIR.drawToggle(x_base, y_base, toggle_size, toggle_size, FIR, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Linear phase FIR mode.\n\nLinear phase filters preserve the phase relations between this\nand other tracks but introduce a higher CPU cost and latency.\nEnable only when needed for its linear phase properties.\n\nNote: Modulation of the frequency when in FIR mode can cause crackles.");
+  FIR = tFIR.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  FIR ? (
+    FIR_NQ.drawToggle(60, 20, 10, 10, FIR_quality == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Normal quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
+    FIR_NQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 0;  
+    FIR_HQ.drawToggle(75, 20, 10, 10, FIR_quality == 1, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "High quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
+    FIR_HQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 1;
+    FIR_UQ.label =
+      FIR_quality == 0 ? "Normal"
+      : FIR_quality == 1 ? "High"
+      : FIR_quality == 2 ? "Ultra";
+    FIR_UQ.drawToggle(90, 20, 10, 10, FIR_quality == 2, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Ultra quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
+    FIR_UQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 2;
+  );
+
+  advanced ? (
+    tCouple.label = "Coupled L/R";  
+    tCouple.drawToggle(x_base, y_base + 2 * y_dist, toggle_size, toggle_size, coupled, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
+    coupled = tCouple.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+    tDC.label = "Filter DC";  
+    tDC.drawToggle(x_base, y_base + 3 * y_dist, toggle_size, toggle_size, fixdc, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Filters DC by applying a high pass on the output.");
+    fixdc = tDC.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    dwModeToggle.label = "Non-equal dry/wet mode";  
+    dwModeToggle.drawToggle(x_base, y_base + 4 * y_dist, toggle_size, toggle_size, dry_wet_mode, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Use dry wet mode with 100/100 in the middle. When enabled, dry/wet at -1 is pure dry, at 0 is dry + wet and at 1 is only wet.");
+    dry_wet_mode = dwModeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  );
+  
+  advancedToggle.label = "Advanced";
+  advancedToggle.drawToggle(x_base, y_base + y_dist, toggle_size, toggle_size, advanced, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
+  advanced = advancedToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  //tMakeUp.label = "Compensate threshold";  
+  //tMakeUp.drawToggle(20, 60, 10, 10, makeup, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Compensate threshold gain.");
+  //makeup = tMakeUp.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  /*
+  tFree.label = "Free";
+  tFree.drawToggle(x_base, y_base, toggle_size, toggle_size, output_squash == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Don't limit output.");
+  tFree.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? output_squash = 0;
+  
+  tClip.label = "Clip";  
+  tClip.drawToggle(x_base + x_dist, y_base, toggle_size, toggle_size, output_squash == 1, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Hard clip the output.");
+  tClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? output_squash = 1;
+  
+  sClip.label = "Soft";  
+  sClip.drawToggle(x_base + x_dist * 2, y_base, toggle_size, toggle_size, output_squash == 2 , 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Soft clip the output (tanh shape).");
+  sClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? output_squash = 2;
+  
+  aaClip.label = "Clip (AA)";  
+  aaClip.drawToggle(x_base + x_dist * 3, y_base, toggle_size, toggle_size, output_squash == 3, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Hard clip the output with anti aliasing (may exceed bounds!)");
+  aaClip.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? output_squash = 3;
+  */
+  
+  gfx_x = gfx_y = 30;
+  gfx_setfont(1, "ARIAL", 14);
+  gfx_set(1,0,0,1);
+  gfx_x = 30;
+  gfx_y = 60;
+  
+  gfx_x = gfx_w-130*(1+scaling);
+  gfx_y = bottomRow + 30*(1+scaling);
+  gfx_mode = 4;
+  
+  hinter.drawHint_draw();
+

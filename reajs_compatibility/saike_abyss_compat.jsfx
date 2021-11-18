@@ -1,0 +1,308 @@
+import reajs_compatibility.jsfx-inc
+noindex: truedesc:Abyss Reverb (Saike) [BETA] [ReaJS-Compatibility]
+tags: reverb
+version: 0.05
+author: Joep Vanlier
+changelog: Reserve some extra space for fft (for older reajs compatibility)
+license: MIT
+slider1:diffusion=0.6<0,1,0.00001>diffusion
+slider2:current_verb_decay=0.8<0,.95,0.00001>verb_decay
+slider3:verb_mod_depth=0.1<0,1,0.00001>mod_depth
+slider4:current_verb_mod_rate=0.3<0,1,0.00001>mod_rate
+slider5:current_verb_lowpass=1<0,1,0.00001>lowpass
+slider6:current_verb_highpass=0<0,1,0.00001>highpass
+slider7:shimmer=0.2<0,0.4,.001>shimmer
+slider8:drop_mode=0<0,2,1{Off,Water,Ice}>drop mode
+slider9:drops=0<0,1,.001>drop frequency
+slider10:nonlinearity=0<0,1,.001>non-linearity
+slider11:wet=0.25<0,1,.00001>dry/wet
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_abyss_pitchlib.jsfx-inc
+import saike_abyss_delays.jsfx-inc
+import saike_abyss_verb.jsfx-inc
+
+@init
+bigger_update = 1;
+
+function process_verb()
+local()
+global(ssl, ssr,
+      bigger_update,
+      current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass,
+      )
+instance(verb_drymul, verb_wetmul)
+(
+  bigger_update ? (
+    this.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    bigger_update = 0;
+  );
+
+  this.eval_reverb(ssl, ssr);
+  ssl = this.out_left;
+  ssr = this.out_right;
+);
+
+function alloc_shifter(freemem, pitch_block_size)
+instance(fftmem1, fftmem2, pitch_shift_buffer)
+local()
+global()
+(
+  freemem = (fftmem1 = freemem) + pitch_block_size;
+  freemem = (fftmem2 = freemem) + pitch_block_size;
+  freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+  freemem
+);
+
+function update_shifter()
+global()
+local(shifter_buffer_size, transition_region)
+instance(pitch_shift_buffer, fftmem1, fftmem2)
+(
+  transition_region = 4096; //1024?
+  shifter_buffer_size = 4 * transition_region;
+  this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+);
+
+function init_linearSVF_absolute(f0, res)
+global(srate)
+local(g)
+instance(f0, ic1eq, ic2eq, k, a1, a2, a3, gnorm)
+(
+  g = tan($pi * f0 / srate);
+  k = 2 - 2*res;
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+  gnorm = sqrt(1 - res*res);
+);
+
+function eval_linearSVF_BP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3, gnorm)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;
+  v1 * gnorm
+);
+
+function update_sparkle_filter()
+instance(decay)
+global(srate, drops, rtime)
+(
+  rtime = (0.2 - 0.199 * drops) * (1 + rand());
+  decay = 1.0 + log(0.5) / rtime / srate;
+);
+
+
+function sparklefilter(x)
+instance(decay, vol, proba)
+local(out, fnext, ic1eq, ic2eq)
+global()
+(
+  out = 0;
+  proba = 1;
+  
+  // Wait for next blip!
+  (vol < .001) ? (
+    vol = 0.75;
+    (rand() < proba) ? (
+      this.update_sparkle_filter();
+      fnext = rand();
+      fnext = 440*2^(60*fnext/12);
+      ic1eq = ic2eq = 0;
+      this.init_linearSVF_absolute(fnext, .99);
+    );
+    
+    out = 0
+  ) : (
+    out = vol * this.eval_linearSVF_BP(x);
+    vol *= decay;
+  );
+  
+  out
+);
+
+n_particles = 2000;
+
+freemem = 0;
+freemem = verb.init_reverb(freemem);
+freemem = (particles = freemem) + n_particles * 2;
+
+pitch_block_size = 8*4096; /* We have 64 blocks of this */
+freemem = shifter.alloc_shifter(freemem, pitch_block_size);
+freemem = shifter_up.alloc_shifter(freemem, pitch_block_size);
+freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
+
+shifter.update_shifter();
+shifter_up.update_shifter();
+shifter_shimmer.update_shifter();
+
+semitones = 12;
+shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+semitones = -11.9 + .1 * rand();
+shifter.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+semitones = 11.9 + .1 * rand();
+shifter_up.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+function init_particles(loc, n_particles)
+local(ptr, mag, ph)
+global()
+(
+  ptr = loc;
+  loop(n_particles,
+    mag = .4*rand();
+    ph = 2 * $pi * rand();
+  
+    ptr[] = sin(ph) * mag;
+    ptr += 1;
+    ptr[] = cos(ph) * mag;
+    ptr += 1;
+  );
+);
+
+init_particles(particles, n_particles);
+
+current_verb_diffusion = diffusion;
+current_verb_mod_depth = verb_mod_depth;
+
+@slider
+
+@block
+sparkle_left.update_sparkle_filter();
+sparkle_right.update_sparkle_filter();
+
+@sample
+current_verb_diffusion = 0.999 * current_verb_diffusion + 0.001 * diffusion;
+current_verb_mod_depth = 0.999 * current_verb_mod_depth + 0.001 * verb_mod_depth;
+
+sample_clock += 1;
+(sample_clock % 8) == 0 ? bigger_update = 1;
+
+(shimmer > 0) ? (
+  ssl = spl0 * (1.0 - shimmer) + shimmer * shifter_shimmer.outR;
+  ssr = spl1 * (1.0 - shimmer) + shimmer * shifter_shimmer.outL;
+) : (
+  ssl = spl0;
+  ssr = spl1;
+);
+
+(drop_mode == 2) ? (
+  ssl += sparkle_l;
+  ssr += sparkle_r;
+);
+
+shifter.pitchShifterUpdate(ssl, ssr);
+shifter_up.pitchShifterUpdate(ssl, ssr);
+
+ssl += shifter.outL;
+ssr += shifter.outR;
+ssl += .1 * shifter_up.outL;
+ssr += .1 * shifter_up.outR;
+ssl /= 2.1;
+ssr /= 2.1;
+
+current_nonlinearity = 0.999 * current_nonlinearity + 0.001 * nonlinearity;
+nl = exp(4*current_nonlinearity);
+ssl *= nl;
+ssr *= nl;
+nl = 1/nl;
+
+verb.process_verb();
+
+ssl *= nl;
+ssr *= nl;
+
+(drop_mode == 1) ? (
+  sparkle_l = sparkle_left.sparklefilter(ssl);
+  sparkle_r = sparkle_right.sparklefilter(ssr);
+  ssl += sparkle_l;
+  ssr += sparkle_r;
+) : ( drop_mode == 2 ) ? (
+  sparkle_l = sparkle_left.sparklefilter(spl0);
+  sparkle_r = sparkle_right.sparklefilter(spl1);
+);
+
+spl0 = ssl * wet + spl0 * (1 - wet);
+spl1 = ssr * wet + spl1 * (1 - wet);
+
+shimmer ? shifter_shimmer.pitchShifterUpdate(ssl, ssr);
+
+@gfx
+function draw_gfx(particles, n_particles, x, y, w, h)
+local(ptr, scale, xp, zp, xs, ys, xv, yv, znear, zs, d, mag, ph, z_in, color_scale, idx, dlim)
+global(gfx_x, gfx_y, gfx_mode, gfx_dest, current_verb_mod_depth, current_verb_mod_rate, current_verb_decay, shimmer, nonlinearity)
+(
+  gfx_setimgdim(0, w, h);
+  gfx_dest = 0;
+  gfx_mode = 0;
+  znear = .47;
+  
+  z_in = .3 * znear;
+
+  gfx_set(0, 0, 0, .005 + .03 * (1-current_verb_decay));
+  gfx_rect(x, y, w, h);
+  
+  gfx_mode = 1;
+  gfx_set(1, 1, 1, 1);
+  ptr = particles;
+  idx = 0;
+  loop(n_particles,
+    xp = ptr[];
+    zp = ptr[1];
+    
+    (zp > -z_in) ? (
+      d = xp * xp + zp * zp;
+      zp += z_in;
+      
+      color_scale = sqrt(1/d);
+      idx > n_particles*(shimmer * (1-5*nonlinearity)) ? (
+        gfx_set(.07*rand()*color_scale, .01*rand()*color_scale, .029*rand()*color_scale + color_scale*color_scale, .3);
+        dlim = 0.0003;
+      ) : (
+        gfx_set(1.7, 0.5, 2.7, .3);
+        zp -= .01;
+        d += .001;
+        dlim = 0.001001;
+      );
+      nonlinearity ? ( d += .001*nonlinearity * rand(); );
+      
+      zs = (znear / zp);
+      xs = xp * zs;
+      ys = (-0.08 - (1 - .2 * current_verb_mod_depth * abs(sin(current_verb_mod_rate * color_scale))) * .0002 / d) * zs;
+      
+      (d < dlim) ? (
+        mag = 0.1 + rand();
+        ph = 2 * $pi * rand();
+      
+        ptr[] = sin(ph) * mag;
+        ptr[1] = cos(ph) * mag;
+      );
+      gfx_circle(x + w * xs + 0.5 * w, y - h * ys - .05 * h, 1, 1);
+    );
+    
+    ptr[] = 0.983 * ptr[];
+    ptr[1] = 0.983 * ptr[1];
+    
+    ptr += 2;
+    idx += 1;
+  );
+  
+  gfx_set(1, 1, 1, 1.7);
+  gfx_mode = 1;
+  gfx_dest = -1;
+  
+  gfx_x = x;
+  gfx_y = y;
+  gfx_blit(0, 1, 0);
+);
+draw_gfx(particles, n_particles, 0, 0, gfx_w, gfx_h);
+gfx_blurto(gfx_w, gfx_h);

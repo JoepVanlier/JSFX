@@ -1,0 +1,218 @@
+import reajs_compatibility.jsfx-inc
+noindex: truetags: Saike - Basic pitch shifter
+version: 0.01
+author: Joep Vanlier
+changelog: initial commit
+license: MIT
+(C) Joep Vanlier 2020
+the pitch lib. :).
+
+desc:Saike Pitch Shifter [ReaJS-Compatibility]
+
+import saike_pitchlib.jsfx-inc
+
+slider1:semitones=0<-36,36,.0001>semitones
+slider2:speed=1<0,2,.0001>playspeed
+slider3:snap_to_current=0<0,1>snap to now
+
+slider7:phase_match=1<0,1,1{Off,On}>Phase matching
+slider8:window=5<0,7,1{32,64,128,256,512,1024,2048,4096,8192,16384,32768}>Transition region
+
+@init
+function test_reinit()
+(
+  (window != last_window) || (last_matching != phase_match) ? (
+    transition_region = 2^(window+5);
+    bufferSize = 4 * transition_region;
+    shifter.pitchShifter(phase_match, transition_region, bufferSize, 2*65536, 3*65536, transition_region, 1);
+    last_window = window;
+    last_matching = phase_match;
+  );
+);
+
+/*
+pdc_bot_ch=0;
+pdc_top_ch=2;
+pdc_delay=1035;
+*/
+
+location = 65536*4;
+bigbuffer = 65536*40;
+playspeed.pitchlibInitBuffer(location, location + bigbuffer);
+readHead = 4;
+
+function smooth_parameter(target)
+instance(s, coeff)
+global()
+local(y, v)
+(
+  v = coeff*(target - s);
+  y = v + s;
+  s = y + v;
+  y
+);
+
+function initialize_smoother(cutoff)
+instance(coeff)
+global(srate)
+local(g)
+( 
+  g = tan($pi*cutoff/srate);
+  coeff = g/(1+g);  
+);
+
+function interpolator_init(slider_idx)
+instance(next_val, idx, s)
+local()
+global()
+(
+  s = slider(slider_idx);
+  next_val = slider(slider_idx);
+  idx = slider_idx;
+);
+
+function interpolator_block()
+instance(delta, next_changepoint_t, next_val, idx)
+local(next_changepoint_y)
+global(samplesblock)
+(
+  next_changepoint_t = slider_next_chg(idx, next_changepoint_y);
+  next_changepoint_t > 0 ? 
+  (
+    next_val = slider(idx);
+  ) : (
+    next_changepoint_y = slider(idx);
+    next_changepoint_t = samplesblock;
+  );
+    
+  delta = (next_changepoint_y - next_val) / next_changepoint_t;
+);
+  
+function interpolate()
+instance(delta, next_changepoint_t, next_val, idx, coeff)
+local(current_value, next_changepoint_y)
+global(current_sample)
+(
+  current_value = next_val;
+  current_sample == next_changepoint_t ? 
+  (
+    delta = 0;
+    next_changepoint_t = slider_next_chg(idx, next_changepoint_y);
+    delta = next_changepoint_t > current_sample ? (next_changepoint_y - current_value) / (next_changepoint_t-current_sample) : 0;
+  );
+    
+  next_val = current_value + delta;
+    
+  coeff > 0 ? this.smooth_parameter(current_value) : current_value
+);
+
+playspeed_interpolator.interpolator_init(2);
+playspeed_interpolator.initialize_smoother(20);
+
+@slider
+test_reinit();
+
+snap_to_current > 0 ? (
+  readHead = 4;
+  snap_to_current = 0;
+);
+
+@block
+playspeed_interpolator.interpolator_block();
+
+@sample
+pspeed = playspeed_interpolator.interpolate();
+
+playspeed.pitchlibUpdateBuffer2(spl0, spl1);
+readHead < bigbuffer ? (
+  playspeed.pitchlibReadBufferAt(readHead);
+  spl0 = playspeed.outL;
+  spl1 = playspeed.outR;
+  readHead += 2*(1.0-pspeed);
+  
+  readHead < 4 ? readHead = 4;
+);
+
+shifter.pitchShifterUpdate(spl0, spl1);
+shifter.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+spl0 = shifter.outL;
+spl1 = shifter.outR;
+
+@gfx
+gfx_set(235/256, 235/256, 235/256, 1);
+gfx_rect(0, 0, gfx_w, gfx_h);
+gfx_set(125/256, 207/256, 1, 1);
+gfx_x = 5;
+gfx_y = 5;
+gfx_printf("Incurred lag: %d ms / %d ms", 1000 * readHead / (2*srate), 1000 * bigbuffer / (2*srate) );
+
+
+function qplot(mem, x, y, sc)
+local(t, cy, lx, ly, x)
+global()
+(
+  t = 0;
+  cy = 0;
+  lx = 0;
+  ly = 0;
+  loop(3000,
+    cy = - sc * mem[t];
+    gfx_line(x-.1, y + ly, x, y + 30*cy);
+    x += .94;
+    t += 1;
+    ly = cy;
+  );
+);
+
+debugging = 0;
+debugging == 1 ? (
+  // Debug with test signal
+  gfx_set(235/256, 235/256, 235/256, 1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+  gfx_set(125/256, 207/256, 1, 1);
+  
+  l2 = 65536*12;
+  TMP1 = 65536*13;
+  TMP2 = 65536*14;
+  test_buffer.pitchlibInitBuffer(l2, l2 + 2048);
+   
+  loop(5,
+    test_buffer.pitchlibUpdateBuffer2(sin(ts), sin(ts));
+    ts+= .1;
+  );
+  
+  qplot(test_buffer.scopebuffer, 30, 100, 1);
+  
+  CF = 1024;
+  trueshift = 36;
+  test_buffer.pitchlibCopyFromBuffer(TMP1, CF + trueshift, CF);
+  test_buffer.pitchlibCopyFromBuffer(TMP2, CF, CF); //test_buffer.len
+  
+  qplot(TMP1, 30, 200, 1);
+  qplot(TMP2, 30, 300, 1);
+  
+  // Calculate ACF max returns the number of samples shift.
+  cmax_position = pitchlibDetermineMaxACF(TMP1, TMP2, CF);
+  
+  qplot(TMP1, 30, 400, .000001);
+  gfx_x = gfx_y = 0;
+  gfx_printf("%f", cmax_position);
+) : ( debugging == 2 ) ? (
+  sc = .25;
+  gfx_set(235/256, 235/256, 235/256, 1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+  gfx_set(125/256, 207/256, 1, 1);
+  
+  memcpy(17*65536, 15*65536, 65536);
+  memcpy(18*65536, 16*65536, 65536);
+  
+  qplot(17*65536, 30, 200, sc*15);
+  qplot(18*65536, 30, 300, sc*15);
+  
+  cmax_position = pitchlibDetermineMaxACF(17*65536, 18*65536, 1024);
+  
+  gfx_x = gfx_y = 0;
+  gfx_printf("%d", cmax_position);
+  
+  qplot(17*65536, 30, 400, sc*.0001);
+);

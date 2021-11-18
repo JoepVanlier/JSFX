@@ -1,0 +1,4248 @@
+import reajs_compatibility.jsfx-inc
+noindex: truedesc:Saike SEQS (Sequenced FX) (beta) [ReaJS-Compatibility]
+tags: time-based effect
+version: 0.78
+author: Joep Vanlier
+changelog: Double pitch shifter memory buffer (old reajs compatibility).
+license: MIT
+about:
+  # SEQS: A small GUI-based effect sequencer for stutters, slowdowns and various audio effects.
+  [drag_drop](https://user-images.githubusercontent.com/19836026/115153701-a2ee2300-a077-11eb-86bc-8eab6f13450d.gif)
+  [modulators_new](https://user-images.githubusercontent.com/19836026/115153706-a681aa00-a077-11eb-8105-ec78bf7133e1.gif)
+  ### Demos
+  You can find demos of the plugin [here](https://www.youtube.com/watch?v=0cF9u7FiwuM) and [here](https://www.youtube.com/watch?v=VHcXz9xgGqo)
+  ### Features
+  - Choose from 14 effects, with lots of parameters inside each effect.
+  - Modulate all of the effect parameters by linking them up to the two macro modulator controls.
+  - Drag and drop to reorder the effects that do not control the playhead.
+  - Synchronize the patterns to the host, free or MIDI.
+  - See exactly what audio is coming in, right above the pattern, making it easier to place the blocks in the correct places.
+  - Build up to 64 patterns.
+  - Select pattern by incoming MIDI note.
+  - Choose to set times in the plugin by time or beats.
+  - Randomize tracks.
+  - Choose from a large number of effects:
+    - Effects that modify the playhead: Slowdown, Tape stop, Retrigger, Reverse.
+    - Chorus / Phaser / Flaser module.
+    - Pitch shifter.
+    - Degradation effects (sample rate and bitrate reduction).
+    - Two non-linear envelope controlled multimode filters (choose from 15 filter types, with several non-linear ones).
+    - Volume envelope.
+    - Reverb.
+    - Pitched Delay (delay with delaylength such that it produces tonal sounds).
+    - Amplitude / Ring modulation module.
+    - Tempo synchronized delay.
+
+slider1:current_speed=4<1,16,1>-Current speed
+slider2:current_pattern_index=0<0,63,1>-Current pattern
+
+slider3:dummy=0<0,1,1>-Dummy
+slider4:dummy=0<0,1,1>-Dummy
+slider5:dummy=0<0,1,1>-Dummy
+slider6:dummy=0<0,1,1>-Dummy
+slider7:playback_enabled=0<0,1,1>-Playback enabled
+slider8:record_enabled=0<0,1,1>-Record enabled
+slider9:chorus_enabled=0<0,1,1>-Chorus enabled
+
+slider10:reset_enabled=1<0,1,1>-Reset enabled
+slider11:slowdown_enabled=0<0,1,1>-Slowdown enabled
+slider12:dynamic_slowdown_enabled=0<0,1,1>-Dynamic slowdown enabled
+slider13:retrigger_enabled=0<0,1,1>-Retrigger enabled
+slider14:reverse_enabled=0<0,1,1>-Reverse enabled
+slider15:gate_enabled=0<0,1,1>-Gate enabled
+slider16:filter_enabled=0<0,1,1>-Filter enabled
+slider17:reverb_enabled=0<0,1,1>-Reverb enabled
+slider18:degrade_enabled=0<0,1,1>-Degrade enabled
+slider19:tapestop_enabled=0<0,1,1>-Tapestop enabled
+slider20:karplus_enabled=0<0,1,1>-Karplus enabled
+slider21:pitch_shifter_enabled=0<0,1,1>-Pitch shifter enabled
+slider22:modulation_enabled=0<0,1,1>-Modulation enabled
+slider23:filter2_enabled=0<0,1,1>-Filter enabled
+slider24:delay_enabled=0<0,1,1>-Delay enabled
+
+slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
+slider26:drive=0<-6,48,1>-Filter Drive (dB)
+slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
+slider28:cutoff_final=.6<0,1,.0001>-Cutoff Finish
+slider29:resonance=0.7<0,1,.0001>-Resonance
+slider30:morph=0<0,1,.0001>-Morph
+slider31:cutoff_atk=0<0,1,0.0001>-Envelope Rise
+slider32:cutoff_decay=0<0,1,0.0001>-Envelope Decay
+slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
+slider34:pitch_shifter_pitch=0<-24,24,.0001>-Pitch Shift
+
+slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
+slider64:midi_note_pattern_select=120<0,127,1>-First Pattern
+
+options:maxmem=34000000
+options:no_meter
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_seqs_midilib.jsfx-inc
+import saike_seqs_delays.jsfx-inc
+import saike_seqs_widgets.jsfx-inc
+import saike_seqs_filters.jsfx-inc
+import saike_seqs_envelope.jsfx-inc
+import saike_seqs_interpolators.jsfx-inc
+import saike_seqs_pitchlib.jsfx-inc
+
+@init
+gfx_ext_retina = 1;
+CURRENT_VERSION = 7;
+version = CURRENT_VERSION;
+DRAG_STRING = 50;
+DRAG_BLOCK = 1;
+DRAG_NUDGE = 2;
+DRAG_EFFECT = 3;
+DRAG_EFFECT_2 = 4;
+DRAG_SOLO = 5;
+DRAG_MODSIZE = 6;
+loaded_pattern = -1;
+TAPESTOP_MAX = 10;
+
+log10d20_conversion  = 0.11512925464970228420089957273422;
+
+sample_clock = 0;
+oversampling = 1;
+pattern_change = 1;
+current_sample = 0;
+n_segments == 0 ? n_segments = 32;
+loop_point == 0 ? loop_point = 32;
+max_segments = 64;
+max_effects = 32;
+max_stored_patterns = 64;
+crossfade_samples = 128*2;
+pi_inv_crossfade_samples = $pi / crossfade_samples;
+
+fixed_effects = 8;
+free_effects = 11;
+function from_order_mem()
+(
+  effect1 = order_mem[0];
+  effect2 = order_mem[1];
+  effect3 = order_mem[2];
+  effect4 = order_mem[3];
+  effect5 = order_mem[4];
+  effect6 = order_mem[5];
+  effect7 = order_mem[6];
+  effect8 = order_mem[7];
+  effect9 = order_mem[8];
+  effect10 = order_mem[9];
+
+  effect1 = effect1 ? effect1 : 1;
+  effect2 = effect2 ? effect2 : 2;
+  effect3 = effect3 ? effect3 : 3;
+  effect4 = effect4 ? effect4 : 4;
+  effect5 = effect5 ? effect5 : 5;
+  effect6 = effect6 ? effect6 : 6;
+  effect7 = effect7 ? effect7 : 7;
+  effect8 = effect8 ? effect8 : 8;
+  effect9 = effect9 ? effect9 : 9;
+  effect10 = effect10 ? effect10 : 10;
+);
+
+function to_order_mem()
+(
+  memset(order_mem, 0, max_segments - 1);
+  order_mem[0] = effect1;
+  order_mem[1] = effect2;
+  order_mem[2] = effect3;
+  order_mem[3] = effect4;
+  order_mem[4] = effect5;
+  order_mem[5] = effect6;
+  order_mem[6] = effect7;
+  order_mem[7] = effect8;
+  order_mem[8] = effect9;
+  order_mem[9] = effect10;
+);
+
+function time_func(func, t)
+global(current_tapestop_depth, current_tapestop_shape)
+local(cc)
+(
+  (func < 1) ? (
+    t * (1.0 - exp(-5 * pow(t, .5 + 5 * current_tapestop_depth)))
+  ) : (func < 2) ? (
+    (1 + 2 * current_tapestop_depth * exp(-4 * t)) * t * (1.0 - exp(-15 * t))
+  ) : (func < 3) ? (
+    t - t * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t)) * exp(-3 * t)
+  ) : (func < 4) ? (
+    t * (1.0 - exp(-4 * t) * cos(8 * current_tapestop_depth * $pi * t))
+  ) : (func < 5) ? (
+    (4 * current_tapestop_depth * exp(-4 * t)) * t * (1.0 - exp(-13 * t))
+  ) : (func < 6) ? (
+    (4 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-13 * t)) * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t))
+  ) : (func < 7) ? (
+    (8 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-13 * t)) * (0.5 + 0.5 * cos(8 * current_tapestop_depth * $pi * t))
+  ) : (func < 8) ? (
+    (45 * current_tapestop_depth * exp(-8 * t)) * t * (1.0 - exp(-1 * t)) * (0.5 + 0.5 * cos(16 * current_tapestop_depth * $pi * t))
+  ) : (func < 9) ? (
+    t * (8*current_tapestop_depth*t - floor(8*current_tapestop_depth*t)) / (0.4 + 3*current_tapestop_depth*t)
+  ) : (func < 10) ? (
+    1.5 * exp(-2 * t) * (t - t * (0.5 + 0.5 * cos($pi * (exp(4 * current_tapestop_depth * t) - 1))))
+  ) : (func < 11) ? (
+    cc = 2 * t - 0.5;
+    2 * t * abs(cc - floor(cc) - 0.5) * exp(-(1.0 - current_tapestop_depth) * t);
+  );
+);
+
+function randomize_row_modulator(mem, n_segments)
+local(ptr, val, last_val, mode, idx)
+global()
+(
+  mode = rand();
+  idx = val = last_val = 0;
+  ptr = mem;
+  
+  loop(n_segments - 1,
+    last_val = val;
+    val = rand();
+    (mode < 0.25) ? (
+      val /= (1.0 + idx % 4);
+    ) : (mode < 0.5) ? (
+      val *= val;
+    );
+    
+    ptr[] = val;
+    ptr += 1;
+    idx += 1;
+  );
+);
+
+// Generated functions with labels for tempo sync delays
+function delay_time_string(x) local() global() ( (x < 0.038461538461538464) ? "1/16" : (x < 0.07692307692307693) ? "1/12" : (x < 0.11538461538461539) ? "1/8" : (x < 0.15384615384615385) ? "1/7" : (x < 0.19230769230769232) ? "1/6" : (x < 0.23076923076923078) ? "1/5" : (x < 0.2692307692307692) ? "1/4" : (x < 0.3076923076923077) ? "1/3" : (x < 0.34615384615384615) ? "1/2" : (x < 0.38461538461538464) ? "3/5" : (x < 0.4230769230769231) ? "2/3" : (x < 0.46153846153846156) ? "3/4" : (x < 0.5) ? "1" : (x < 0.5384615384615384) ? "4/3" : (x < 0.5769230769230769) ? "5/4" : (x < 0.6153846153846154) ? "5/3" : (x < 0.6538461538461539) ? "1.5" : (x < 0.6923076923076923) ? "2" : (x < 0.7307692307692307) ? "3" : (x < 0.7692307692307693) ? "4" : (x < 0.8076923076923077) ? "5" : (x < 0.8461538461538461) ? "6" : (x < 0.8846153846153846) ? "7" : (x < 0.9230769230769231) ? "8" : (x < 0.9615384615384616) ? "12" : "16");
+function delay_time(x) local() global() ( (x < 0.038461538461538464) ? 0.0625 : (x < 0.07692307692307693) ? 0.08333333333333333 : (x < 0.11538461538461539) ? 0.125 : (x < 0.15384615384615385) ? 0.14285714285714285 : (x < 0.19230769230769232) ? 0.16666666666666666 : (x < 0.23076923076923078) ? 0.2 : (x < 0.2692307692307692) ? 0.25 : (x < 0.3076923076923077) ? 0.3333333333333333 : (x < 0.34615384615384615) ? 0.5 : (x < 0.38461538461538464) ? 0.6 : (x < 0.4230769230769231) ? 0.6666666666666666 : (x < 0.46153846153846156) ? 0.75 : (x < 0.5) ? 1 : (x < 0.5384615384615384) ? 1.3333333333333333 : (x < 0.5769230769230769) ? 1.25 : (x < 0.6153846153846154) ? 1.6666666666666667 : (x < 0.6538461538461539) ? 1.5 : (x < 0.6923076923076923) ? 2 : (x < 0.7307692307692307) ? 3 : (x < 0.7692307692307693) ? 4 : (x < 0.8076923076923077) ? 5 : (x < 0.8461538461538461) ? 6 : (x < 0.8846153846153846) ? 7 : (x < 0.9230769230769231) ? 8 : (x < 0.9615384615384616) ? 12 : 1);
+
+function initialize_sample(mem_loc, max_len)
+instance(mem, mem_end)
+global()
+(
+  mem = mem_loc;
+  mem_end = mem_loc + max_len - 2;
+);
+
+// We maintain the length of the recorded sample in the first memory location.
+// If we are past this, we fade out.
+function start_recording_sample(buffer_location, mem_final)
+instance(mem, mem_end, write_ptr, rec, stopping)
+global()
+(
+  stopping = 0;
+  mem = buffer_location;
+  mem[] = 0; // Set current length
+  write_ptr = mem + 1;
+  mem_end = mem_final;
+  
+  rec = 1;
+);
+
+function stop_recording_sample()
+instance(stopping, rec)
+global(crossfade_samples)
+(
+  rec ? (
+    /* Record a little bit extra for the fades */
+    stopping = crossfade_samples + 2;
+  );
+);
+
+// We record and store the current length in mem[].
+// Note that when we start fading out, we stop updating the length.
+// This will result in any playhead that's following this to start
+// fading out.
+function record(left, right)
+instance(mem, mem_end, write_ptr, stopping, rec)
+global()
+(
+  write_ptr < mem_end ? (
+    write_ptr[] = left;
+    write_ptr[1] = right;
+    write_ptr += 2;
+  );
+
+  // Don't stop immediately (need a few extra samples for the fade).
+  stopping > 0 ? (
+    stopping == 1 ? rec = 0;
+    stopping -= 1;
+  ) : (
+    // Store current location on the buffer. Note that when we are stopping.
+    // we stop updating this value. Note that this will indicate to the 
+    // player that it needs to start fading out, and that for serialization
+    // purposes, we need crossfade_samples more samples.
+    mem[] = write_ptr;
+  );
+);
+
+function start_playback(buffer_loc)
+instance(mem, read_ptr, x_fade_position, playing)
+global(crossfade_samples)
+(
+  mem = buffer_loc;
+  read_ptr = mem + 1;
+  x_fade_position = crossfade_samples;
+  playing = 1;
+);
+
+function stop_playback()
+instance(x_fade_position)
+global(crossfade_samples)
+(
+  x_fade_position = - crossfade_samples;
+);
+
+function process_fade()
+(
+  1
+);
+
+function play()
+instance(mem, read_ptr, x_fade_position,
+         outL, outR, playing, fade_level)
+global(crossfade_samples, pi_inv_crossfade_samples)
+local()
+(
+  // Positive fade means fading in
+  (x_fade_position > 0.01) ? (
+    fade_level = 1.0 - sqrt(0.5 - 0.5 * cos(x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position -= 1;
+  // Negative fade means fading out
+  ) : (x_fade_position < -0.01) ? (
+    fade_level = sqrt(0.5 - 0.5 * cos(- x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position += 1;
+    (x_fade_position == 0) ? (
+      playing = 0; // Terminate playback
+    );
+  ) : (
+    // Fade out if we're approaching the end of the recorded sample
+    fade_level = 1;
+    (read_ptr > mem[]) ? (
+      x_fade_position = - crossfade_samples;
+    );
+  );
+  
+  outL = fade_level * read_ptr[];
+  outR = fade_level * read_ptr[1];
+  read_ptr += 2;
+  
+  fade_level
+);
+
+function init_knob(sc, minimum, idx, def)
+instance(scale, min_value, slider_idx, default, value)
+global(loaded)
+(
+  scale = sc;
+  min_value = minimum;
+  default = def;
+  slider_idx = idx;
+  
+  // First time load (from reset perhaps?) override all the values
+  loaded == 0 ? (
+    slider_idx > 0 ? (
+      slider(slider_idx) = default;
+    );
+    
+    value = (default - min_value) / scale;
+  );
+);
+
+function set_value(new_value)
+instance(value, scale, min_value)
+global()
+local()
+(
+  value = (new_value - min_value) / scale;
+);
+
+function set_value_raw(new_value)
+instance(value, scale, min_value, slider_idx)
+local()
+global()
+(
+  value = new_value;
+  slider_idx > 0 ? (
+    slider(slider_idx) = scale * value + min_value;
+    slider_automate(slider_idx);
+  );
+);
+
+function knob_read_value()
+global()
+instance(value, scale, min_value, slider_idx)
+local()
+(
+  value = (slider(slider_idx) - min_value) / scale;
+);
+
+function serialize_knob()
+instance(value, mod1, mod2, vel, default, min_value, scale)
+local()
+global(writing)
+(
+  !writing ? (
+    value = (default - min_value) / scale;
+    vel = 0;
+    mod1 = 0;
+    mod2 = 0;
+  );
+  file_var(0, value);
+  file_var(0, vel);
+  file_var(0, mod1);
+  file_var(0, mod2);
+);
+
+DB_SLIDER = 1;
+FREQ_SLIDER = 2;
+NORMALIZED_SLIDER = 3;
+ATTACK_SLIDER = 4;
+DECAY_SLIDER = 5;
+SCALED_SLIDER = 6;
+PITCH_SLIDER = 7;
+ROUNDED_PITCH_SLIDER = 8;
+DEPTH_SLIDER = 9;
+CUSTOM_SLIDER = 10;
+
+function knob_set_display(type, in_active)
+instance(label, active, value, scale, min_value)
+local(center)
+global(srate, tempo_sync_envelopes, getFastEnvelopeLabel,
+       DB_SLIDER,
+       FREQ_SLIDER,
+       NORMALIZED_SLIDER,
+       ATTACK_SLIDER,
+       DECAY_SLIDER,
+       OFF_SLIDER
+       SCALED_SLIDER,
+       PITCH_SLIDER
+       ROUNDED_PITCH_SLIDER,
+       DEPTH_SLIDER,
+       CUSTOM_SLIDER)
+(
+  // Type of slider
+  type == DB_SLIDER ? (
+    // dB
+    label = sprintf(1, "%.1f dB", value * scale + min_value);
+  ) : ( type == FREQ_SLIDER ) ? (
+    // Frequency slider
+    center = .5 * srate * exp( (1 - value) * log(20/22050) );
+    label = center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000)
+  ) : ( type == NORMALIZED_SLIDER ) ? (
+    label = sprintf(1, "%.1f", value)
+  ) : ( type == ATTACK_SLIDER ) ? (
+    label = tempo_sync_envelopes ? ( 
+      getFastEnvelopeLabel(value)
+    ) : ( 
+      (value > .5) ? sprintf(1, "%d ms", (3 * 10^(2*value))) : sprintf(1, "%.1f ms", (3 * 10^(2*value)))
+    );
+  ) : ( type == DECAY_SLIDER ) ?
+  (
+    label = tempo_sync_envelopes ? ( 
+      getFastEnvelopeLabel(value)
+    ) : ( 
+      (value > .5) ? sprintf(1, "%d ms", (30 * 10^(2*value))) : sprintf(1, "%.1f ms", (30 * 10^(2*value)))
+    )
+  ) : ( type == SCALED_SLIDER ) ? (
+    label = sprintf(1, "%.1f", scale * value + min_value);
+  ) : ( type == ROUNDED_PITCH_SLIDER ) ? (
+    label = sprintf(1, "%.2f st", floor(scale * value + min_value));
+  ) : ( type == PITCH_SLIDER ) ? (
+    label = sprintf(1, "%.2f st", scale * value + min_value);
+  ) : ( type == DEPTH_SLIDER ) ? (
+    label = sprintf(1, "%d ms", 50 * exp( (1 - value) * log(1/50) ));
+  ) : (
+    // Unknown labels get forwarded (for now)
+    label = type;
+  );
+  
+  active = in_active;
+);
+
+function getCurrentValue()
+instance(scale, min_value, value, mod1, mod2, modulator)
+global(modulator1_target, modulator2_target)
+local()
+(
+  cl01(value + modulator1_target * mod1 + modulator2_target * mod2) * scale + min_value
+);
+
+function update_current_levels()
+(
+  current_drive = driveKnob.getCurrentValue();
+  current_cutoff_start = cutoffKnob.getCurrentValue();
+  current_cutoff_final = cutoffEndKnob.getCurrentValue();
+  current_resonance = resonanceKnob.getCurrentValue();
+  current_morph = morphKnob.getCurrentValue();
+  current_cutoff_atk = cutoffAttackKnob.getCurrentValue();
+  current_cutoff_decay = cutoffDecayKnob.getCurrentValue();
+  current_cutoff_sustain = cutoffSustainKnob.getCurrentValue();
+
+  current_gate_start = gateStart.getCurrentValue();
+  current_gate_stop = gateEnd.getCurrentValue();
+  current_gate_atk = gateAttackKnob.getCurrentValue();
+  current_gate_decay = gateDecayKnob.getCurrentValue();
+  current_gate_sustain = gateSustainKnob.getCurrentValue();
+  
+  current_verb_diffusion = verbDiffusionKnob.getCurrentValue();
+  current_verb_decay = verbDecayKnob.getCurrentValue();
+  current_verb_mod_depth = verbModDepthKnob.getCurrentValue();
+  current_verb_mod_rate = verbModRateKnob.getCurrentValue();
+  current_verb_lowpass = verbLowPassKnob.getCurrentValue();
+  current_verb_highpass = verbHighPassKnob.getCurrentValue();
+  current_verb_dry = verbDry.getCurrentValue();
+  current_verb_wet = verbWet.getCurrentValue();
+  
+  current_playhead_dry = playheadDry.getCurrentValue();
+  current_playhead_wet = playheadWet.getCurrentValue();
+  
+  current_verb_gate_atk = verbGateAttackKnob.getCurrentValue();
+  current_verb_gate_decay = verbGateDecayKnob.getCurrentValue();
+  current_verb_gate_sustain = verbGateSustainKnob.getCurrentValue();
+  
+  current_bitrate = bitrateKnob.getCurrentValue();
+  current_samplerate = samplerateKnob.getCurrentValue();
+  current_saturate = satKnob.getCurrentValue();
+  current_degrade_mix = degradeMix.getCurrentValue();
+  
+  current_tapestop_decay = tapestopSpeedKnob.getCurrentValue();
+  
+  current_tapestop_depth = tapestopDepthKnob.getCurrentValue();
+  current_tapestop_shape = tapestopShapeKnob.getCurrentValue();
+  
+  current_karplus_pitch = karplusPitchKnob.getCurrentValue();
+  current_karplus_feedback = karplusFeedback.getCurrentValue();
+  current_karplus_cutoff = karplusCutoffKnob.getCurrentValue();
+  current_karplus_dry = karplusDry.getCurrentValue();
+  current_karplus_wet = karplusWet.getCurrentValue();
+  current_karplus_voices = karplusVoicesKnob.getCurrentValue();
+  current_karplus_detune = karplusDetune.getCurrentValue();
+  
+  current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
+  current_shifter_dry = shifterDry.getCurrentValue();
+  current_shifter_wet = shifterWet.getCurrentValue();
+  
+  current_drive2 = driveKnob2.getCurrentValue();
+  current_cutoff_start2 = cutoffKnob2.getCurrentValue();
+  current_cutoff_final2 = cutoffEndKnob2.getCurrentValue();
+  current_resonance2 = resonanceKnob2.getCurrentValue();
+  current_morph2 = morphKnob2.getCurrentValue();
+  current_cutoff_atk2 = cutoffAttackKnob2.getCurrentValue();
+  current_cutoff_decay2 = cutoffDecayKnob2.getCurrentValue();
+  current_cutoff_sustain2 = cutoffSustainKnob2.getCurrentValue();
+  
+  current_modulator_wet = modulatorWet.getCurrentValue();
+  current_modulator_phase = modulatorPhase.getCurrentValue();
+  current_modulator_offset = modulatorOffset.getCurrentValue();
+  current_modulator_pitch = modulatorPitch.getCurrentValue();
+  current_modulator_atk = modulatorAttackKnob.getCurrentValue();
+  current_modulator_decay = modulatorDecayKnob.getCurrentValue();
+  current_modulator_sustain = modulatorSustainKnob.getCurrentValue();
+  
+  current_delay_time = delayTimeKnob.getCurrentValue();
+  current_delay_feedback = delayFeedbackKnob.getCurrentValue();
+  current_delay_cutoff_lp = delayCutoffLPKnob.getCurrentValue();
+  current_delay_cutoff_hp = delayCutoffHPKnob.getCurrentValue();
+  current_delay_sat = delaySatKnob.getCurrentValue();
+  current_delay_dry = delayDryKnob.getCurrentValue();
+  current_delay_wet = delayWetKnob.getCurrentValue();
+  
+  current_chorus_depth = chorusDepthKnob.getCurrentValue();
+  current_chorus_feedback = chorusFeedbackKnob.getCurrentValue();
+  current_chorus_voices = chorusVoicesKnob.getCurrentValue();
+  current_chorus_dry = chorusDryKnob.getCurrentValue();
+  current_chorus_wet = chorusWetKnob.getCurrentValue();
+  current_chorus_speed = chorusSpeedKnob.getCurrentValue();
+);
+
+function init_controls()
+(
+  driveKnob.init_knob(54, -6, 26, 0);
+  cutoffKnob.init_knob(1, 0, 27, 0.6);
+  cutoffEndKnob.init_knob(1, 0, 28, 0.6);
+  resonanceKnob.init_knob(1, 0, 29, 0.7);
+  morphKnob.init_knob(1, 0, 30, 0);
+  cutoffAttackKnob.init_knob(1, 0, 31, 0);
+  cutoffDecayKnob.init_knob(1, 0, 32, 0.6);
+  cutoffSustainKnob.init_knob(1, 0, 33, 0.2);
+  
+  gateStart.init_knob(96, -48, 0, -12);
+  gateEnd.init_knob(96, -48, 0, 0);
+  gateAttackKnob.init_knob(1, 0, 0, 0.06);
+  gateDecayKnob.init_knob(1, 0, 0, 0.6);
+  gateSustainKnob.init_knob(1, 0, 0, 1.0);
+  
+  verbDiffusionKnob.init_knob(1, 0, 0, 0.7);
+  verbDecayKnob.init_knob(1, 0, 0, 0.4);
+  verbModDepthKnob.init_knob(1, 0, 0, 0.0);
+  verbModRateKnob.init_knob(1, 0, 0, 0.5);
+  verbLowPassKnob.init_knob(1, 0, 0, 1.0);
+  verbHighPassKnob.init_knob(1, 0, 0, 0.3);
+  verbDry.init_knob(64, -64, 0, 0);
+  verbWet.init_knob(64, -64, 0, -8);
+  
+  playheadDry.init_knob(64, -64, 0, -64);
+  playheadWet.init_knob(64, -64, 0, 0);
+  
+  verbGateAttackKnob.init_knob(1, 0, 0, 0.06);
+  verbGateDecayKnob.init_knob(1, 0, 0, 0.6);
+  verbGateSustainKnob.init_knob(1, 0, 0, 0.2);
+  
+  min_degrade = 3;
+  bitrateKnob.init_knob(21, 3, 0, 16);
+  samplerateKnob.init_knob(1, 0, 0, 1.0);
+  satKnob.init_knob(54, -6, 0, -6);
+  degradeMix.init_knob(1, 0, 0, 1.0);
+  
+  tapestopSpeedKnob.init_knob(1, 0, 0, 0.6);
+  
+  tapestopDepthKnob.init_knob(1, 0, 0, 1.0);
+  tapestopShapeKnob.init_knob(TAPESTOP_MAX, 0, 0, 1.0);
+  
+  karplusPitchKnob.init_knob(1, 0, 0, 0.5);
+  karplusFeedback.init_knob(1, 0, 0, 0.15);
+  karplusCutoffKnob.init_knob(1, 0, 0, 0.7);
+  karplusDry.init_knob(96, -48, 0, -48.0);
+  karplusWet.init_knob(96, -48, 0, 0.0);
+  karplusVoicesKnob.init_knob(1, 0, 0, 0);
+  karplusDetune.init_knob(1, 0, 0, 0);
+  
+  shifterPitchKnob.init_knob(48, -24, 34, 0);
+  shifterDry.init_knob(64, -64, 0, -64);
+  shifterWet.init_knob(64, -64, 0, 0);
+  
+  driveKnob2.init_knob(54, -6, 0, 0);
+  cutoffKnob2.init_knob(1, 0, 0, 0.6);
+  cutoffEndKnob2.init_knob(1, 0, 0, 0.6);
+  resonanceKnob2.init_knob(1, 0, 0, 0.7);
+  morphKnob2.init_knob(1, 0, 0, 0);
+  cutoffAttackKnob2.init_knob(1, 0, 0, 0);
+  cutoffDecayKnob2.init_knob(1, 0, 0, 0.6);
+  cutoffSustainKnob2.init_knob(1, 0, 0, 0.2);
+  
+  modulatorWet.init_knob(1, 0, 0, 1);
+  modulatorPhase.init_knob(1, 0, 0, 1);
+  modulatorOffset.init_knob(1, 0, 0, 1);
+  modulatorPitch.init_knob(1, 0, 0, .334);
+  modulatorAttackKnob.init_knob(1, 0, 0, 0.06);
+  modulatorDecayKnob.init_knob(1, 0, 0, 0.6);
+  modulatorSustainKnob.init_knob(1, 0, 0, 0.2);
+  
+  delayTimeKnob.init_knob(1, 0, 0, 0.25);
+  delayFeedbackKnob.init_knob(1, 0, 0, 0.7);
+  delayCutoffLPKnob.init_knob(1, 0, 0, 1.0);
+  delayCutoffHPKnob.init_knob(1, 0, 0, 0.0);
+  delaySatKnob.init_knob(54, -6, 0, -6);
+  delayDryKnob.init_knob(96, -48, 0, 0.0);
+  delayWetKnob.init_knob(96, -48, 0, 0.0);
+  
+  chorusDepthKnob.init_knob(1, 0, 0, 0.5);
+  chorusFeedbackKnob.init_knob(1, 0, 0, 0.5);
+  chorusVoicesKnob.init_knob(1, 0, 0, 0.0);
+  chorusDryKnob.init_knob(96, -48, 0, 0.0);
+  chorusWetKnob.init_knob(96, -48, 0, 0.0);
+  chorusSpeedKnob.init_knob(1, 0, 0, 0.5);
+  
+  update_current_levels();
+);
+
+from_order_mem();
+init_controls();
+loaded = 1;
+
+function identify_note(midi_pitch)
+local(octave, note, note_label)
+global(CUSTOM_SLIDER)
+(
+  octave = floor((midi_pitch - 12) / 12);
+  note = (midi_pitch - 21) % 12;
+  note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
+  sprintf(CUSTOM_SLIDER, "%s%d", note_label, octave)
+);
+
+function init_playhead()
+(
+  current_playhead = 0;
+  amp0 = 1;
+  amp1 = 0;
+);
+
+function pattern_update()
+(
+  (loaded_pattern != current_pattern_index) ? (
+    loaded_pattern = current_pattern_index;
+    current_pattern = pattern_buffer + current_pattern_index * pattern_size;
+    reset_values = current_pattern;
+    speed_values = current_pattern + max_segments;
+    dynspeed_values = current_pattern + 2 * max_segments;
+    retrig_values = current_pattern + 3 * max_segments;
+    filt_values = current_pattern + 4 * max_segments;
+    reverse_values = current_pattern + 5 * max_segments;
+    gate_values = current_pattern + 6 * max_segments;
+    reverb_values = current_pattern + 7 * max_segments;
+    degrade_values = current_pattern + 8 * max_segments;
+    tapestop_values = current_pattern + 9 * max_segments;
+    karplus_values = current_pattern + 10 * max_segments;
+    pitch_shifter_values = current_pattern + 11 * max_segments;
+    modulation_fx_values = current_pattern + 12 * max_segments;
+    filt2_values = current_pattern + 13 * max_segments;
+    delay_values = current_pattern + 14 * max_segments;
+    chorus_values = current_pattern + 15 * max_segments;
+    
+    record_values = current_pattern + 16 * max_segments;
+    playback_values = current_pattern + 17 * max_segments;
+    
+    modulator1_values = current_pattern + 30 * max_segments;
+    modulator2_values = current_pattern + 31 * max_segments;
+  );
+);
+
+function copy_pattern()
+(
+  memcpy(copy_buffer, pattern_buffer + current_pattern_index * pattern_size, pattern_size);
+);
+
+function paste_pattern()
+(
+  memcpy(pattern_buffer + current_pattern_index * pattern_size, copy_buffer, pattern_size);
+);
+
+/*
+function interpolator_init()
+(
+  // Set up the interpolators
+  drive_interpolator.interpolator_init(26);
+  cutoff_start_interpolator.interpolator_init(27);
+  cutoff_final_interpolator.interpolator_init(28);
+  reso_interpolator.interpolator_init(29);
+  morph_interpolator.interpolator_init(30);
+     
+  (last_inertia != inertia) ? (
+    last_inertia = inertia;
+    inertia_cutoff = 1000.0/inertia;
+    drive_interpolator.initialize_smoother(inertia_cutoff);
+    cutoff_start_interpolator.initialize_smoother(inertia_cutoff);
+    cutoff_final_interpolator.initialize_smoother(inertia_cutoff);
+    reso_interpolator.initialize_smoother(inertia_cutoff);
+    morph_interpolator.initialize_smoother(inertia_cutoff);
+    
+    drive_interpolator.s = slider(26);
+    cutoff_start_interpolator.s = slider(27);
+    cutoff_final_interpolator.s = slider(28);
+    reso_interpolator.s = slider(29);
+    morph_interpolator.s = slider(30);
+  );
+);
+
+function interpolators_block()
+(
+  drive_interpolator.interpolator_block();
+  cutoff_start_interpolator.interpolator_block();
+  cutoff_final_interpolator.interpolator_block();
+  reso_interpolator.interpolator_block();
+  morph_interpolator.interpolator_block();
+);
+*/
+
+function init_allpass(buffer, buffer_size)
+instance(buffer)
+(
+  this.initBuffer(buffer, buffer + buffer_size);
+  buffer + buffer_size + 1
+);
+
+function eval_allpass(x)
+local(ap_sample, delayed_sample)
+instance(gain, offset)
+(
+  delayed_sample = this.readBuffer_fixed(offset);
+  ap_sample = x + gain * delayed_sample;
+  y = delayed_sample - gain * ap_sample;
+
+  this.writeBuffer(ap_sample);
+  
+  y
+);
+
+function eval_tpt_monopole(x)
+instance(s, coeff)
+global()
+local(y, v)
+(
+  v = coeff*(x - s);
+  y = v + s;
+  s = y + v;
+  y
+);
+  
+function init_tpt_monopole(cutoff)
+instance(coeff)
+global(srate)
+local(omega, sin_omega)
+( 
+  omega = $pi * cutoff/srate;
+  sin_omega = sin(omega);
+  coeff = sin_omega / (sin_omega + cos(omega));
+);
+
+function init_reverb(buffer_position)
+global(srate)
+local(buffer_size)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right
+         decay_diffuser_left, decay_diffuser_right,
+         delay_left_1, delay_right_1,
+         delay_left_2, delay_right_2,
+         delay_right_2_offset, delay_left_2_offset, 
+         delay_left_1_offset, delay_right_1_offset, 
+         delay_left_2_offset, delay_right_2_offset,
+         srate_scaling,
+         out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left,
+         out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right)
+(
+  // Datorro Reverb (1997)
+  buffer_size = 8192;
+  srate_scaling = srate / 29761;
+  
+  buffer_position = diffuser1.init_allpass(buffer_position, buffer_size);
+  diffuser1.offset = 142 * srate_scaling;
+  buffer_position = diffuser2.init_allpass(buffer_position, buffer_size);
+  diffuser2.offset = 107 * srate_scaling;
+  buffer_position = diffuser3.init_allpass(buffer_position, buffer_size);
+  diffuser3.offset = 379 * srate_scaling;
+  buffer_position = diffuser4.init_allpass(buffer_position, buffer_size);
+  diffuser4.offset = 277 * srate_scaling;
+  
+  buffer_position = lfo_diffuser_left.init_allpass(buffer_position, buffer_size);
+  lfo_diffuser_left.offset = 672 * srate_scaling;
+  buffer_position = lfo_diffuser_right.init_allpass(buffer_position, buffer_size);
+  lfo_diffuser_right.offset = 908 * srate_scaling;
+  
+  buffer_position = decay_diffuser_left.init_allpass(buffer_position, buffer_size);
+  decay_diffuser_left.offset = 1800 * srate_scaling;
+  buffer_position = decay_diffuser_right.init_allpass(buffer_position, buffer_size);
+  decay_diffuser_right.offset = 2656 * srate_scaling;
+  
+  buffer_position = delay_left_1.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_right_1.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_left_2.init_allpass(buffer_position, buffer_size);
+  buffer_position = delay_right_2.init_allpass(buffer_position, buffer_size);
+  
+  delay_right_2_offset = 3163 * srate_scaling;
+  delay_left_2_offset = 3720 * srate_scaling;
+  delay_left_1_offset = 4453 * srate_scaling;
+  delay_right_1_offset = 4217 * srate_scaling;
+  delay_left_2_offset = 3720 * srate_scaling;
+  delay_right_2_offset = 3163 * srate_scaling;
+  
+  out_delay1_left = 266 * srate_scaling;
+  out_delay2_left = 2974 * srate_scaling;
+  out_delay3_left = 1913 * srate_scaling;
+  out_delay4_left = 1996 * srate_scaling;
+  out_delay5_left = 1990 * srate_scaling;
+  out_delay6_left = 187 * srate_scaling;
+  out_delay7_left = 1066 * srate_scaling;
+  
+  out_delay1_right = 353 * srate_scaling;
+  out_delay2_right = 3627 * srate_scaling;
+  out_delay3_right = 1228 * srate_scaling;
+  out_delay4_right = 2673 * srate_scaling;
+  out_delay5_right = 2111 * srate_scaling;
+  out_delay6_right = 335 * srate_scaling;
+  out_delay7_right = 121 * srate_scaling;  
+  
+  buffer_position
+);
+
+function update_reverb_settings(diffusion, decay, depth, freq, lowpass, highpass)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right,
+         decay_diffuser_left, decay_diffuser_right, fb,
+         mod_depth, mod_rate,
+         lp1, hp1, lp2, hp2)
+local()
+global(srate)
+(
+  diffuser1.gain = - 0.98684211 * diffusion; /* Decorrelate input signal */
+  diffuser2.gain = - 0.98684211 * diffusion; /* Decorrelate input signal */
+  diffuser3.gain = - 0.82236842 * diffusion; /* Decorrelate input signal */
+  diffuser4.gain = - 0.82236842 * diffusion; /* Decorrelate input signal */
+  lfo_diffuser_left.gain = 0.92105263 * diffusion;  /* Tail density */
+  lfo_diffuser_right.gain = 0.92105263 * diffusion;  /* Tail density */
+  decay_diffuser_left.gain = - 0.65789474 * diffusion;  /* Decorrelate tank signal */
+  decay_diffuser_right.gain = - 0.65789474 * diffusion;  /* Decorrelate tank signal */
+  fb = decay;
+  mod_depth = 32 * depth;
+  mod_rate = freq / srate;
+  
+  lp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - lowpass) * log(20/22050) ));
+  lp2.coeff = lp1.coeff;
+  hp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - highpass) * log(20/22050) ));
+  hp2.coeff = hp1.coeff;
+);
+
+function eval_reverb(l, r)
+instance(diffuser1, diffuser2, diffuser3, diffuser4,
+         lfo_diffuser_left, lfo_diffuser_right,
+         decay_diffuser_left, decay_diffuser_right,
+         delay_left_1, delay_right_1,
+         delay_left_2, delay_right_2,
+         delay_right_2_offset, delay_left_2_offset, 
+         delay_left_1_offset, delay_right_1_offset, 
+         delay_left_2_offset, delay_right_2_offset,
+         fb, out_left, out_right, srate_scaling,
+         out_delay1_left, out_delay2_left, out_delay3_left, out_delay4_left, out_delay5_left, out_delay6_left, out_delay7_left
+         out_delay1_right, out_delay2_right, out_delay3_right, out_delay4_right, out_delay5_right, out_delay6_right, out_delay7_right,
+         mod_rate, mod_depth,
+         lp1, lp2, hp1, hp2)
+local(in, diffused, left_tank, right_tank, l_delay, r_delay, accumulator)
+global(sample_clock)
+(
+  in = 0.5 * (l + r);
+  
+  diffused = 
+    diffuser4.eval_allpass(
+      diffuser3.eval_allpass(
+        diffuser2.eval_allpass(
+          diffuser1.eval_allpass(
+            in
+          )
+        )
+      )
+    );
+  
+  left_tank = right_tank = diffused;
+  
+  // Flipped on purpose!
+  left_tank += fb * delay_right_2.readBuffer_fixed(delay_right_2_offset);
+  right_tank += fb * delay_left_2.readBuffer_fixed(delay_left_2_offset);
+  
+  lfo_diffuser_left.offset = (672 + mod_depth * sin(mod_rate * sample_clock)) * srate_scaling;
+  lfo_diffuser_right.offset = (908 + mod_depth * sin(mod_rate * sample_clock)) * srate_scaling;
+
+  delay_left_1.writeBuffer(lfo_diffuser_left.eval_allpass(left_tank));
+  delay_right_1.writeBuffer(lfo_diffuser_right.eval_allpass(right_tank));
+  
+  // Damping here
+  l_delay = lp1.eval_tpt_monopole(delay_left_1.readBuffer_fixed(delay_left_1_offset));
+  r_delay = lp2.eval_tpt_monopole(delay_right_1.readBuffer_fixed(delay_right_1_offset)) ;
+  
+  l_delay = decay_diffuser_left.eval_allpass(l_delay);
+  r_delay = decay_diffuser_right.eval_allpass(r_delay);
+  
+  delay_left_2.writeBuffer(l_delay);
+  delay_right_2.writeBuffer(r_delay);
+  
+  l_delay = delay_left_2.readBuffer_fixed(delay_left_2_offset);
+  r_delay = delay_right_2.readBuffer_fixed(delay_right_2_offset);
+  
+  // Left output
+  accumulator = 0.6 * delay_right_1.readBuffer_fixed(out_delay1_left);
+  accumulator += 0.6 * delay_right_1.readBuffer_fixed(out_delay2_left);
+  accumulator -= 0.6 * decay_diffuser_right.readBuffer_fixed(out_delay3_left);
+  accumulator += 0.6 * delay_right_2.readBuffer_fixed(out_delay4_left);
+  accumulator -= 0.6 * delay_left_1.readBuffer_fixed(out_delay5_left);
+  accumulator -= 0.6 * decay_diffuser_left.readBuffer_fixed(out_delay6_left);
+  out_left = accumulator - 0.6 * delay_left_2.readBuffer_fixed(out_delay7_left);
+
+  accumulator = 0.6 * delay_left_1.readBuffer_fixed(out_delay1_right);
+  accumulator += 0.6 * delay_left_1.readBuffer_fixed(out_delay2_right);
+  accumulator -= 0.6 * decay_diffuser_left.readBuffer_fixed(out_delay3_right);
+  accumulator += 0.6 * delay_left_2.readBuffer_fixed(out_delay4_right);
+  accumulator -= 0.6 * delay_right_1.readBuffer_fixed(out_delay5_right);
+  accumulator -= 0.6 * decay_diffuser_right.readBuffer_fixed(out_delay6_right);
+  out_right = accumulator - 0.6 * delay_right_2.readBuffer_fixed(out_delay7_right);
+  
+  out_left = out_left - hp1.eval_tpt_monopole(out_left);
+  out_right = out_right - hp2.eval_tpt_monopole(out_right);
+);
+
+
+freemem = 0;
+pattern_size = max_segments * max_effects;
+freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
+freemem = (copy_buffer = freemem) + pattern_size;
+freemem = (midimem = freemem) + 32768;
+freemem = (note_history = freemem) + 32768;
+midi.initializeMIDI(midimem, note_history, 1, 1);
+midi.notesOn = 0;
+
+current_shifter_mode = -1;
+pitch_block_size = 4*4096; /* We have 64 blocks of this */
+freemem = (fftmem1 = freemem) + pitch_block_size;
+freemem = (fftmem2 = freemem) + pitch_block_size;
+freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+
+function update_shifter()
+global(current_shifter_mode, shifter.pitchShifter, shifter_mode,
+       pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2)
+local(transition_region, shifter_buffer_size)
+(
+  current_shifter_mode != shifter_mode ? (
+    current_shifter_mode = shifter_mode;
+    transition_region = shifter_mode ? 1024 : 256;
+    shifter_buffer_size = 4 * transition_region;
+    shifter.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+  );
+);
+update_shifter();
+
+BUF_SIZE = 32768 * 3 * 60;
+CHORUS_SIZE = 32768 * 3;
+SAMPLE_DURATION = 16 * 32768; // 5.46 seconds at 96 kHz max
+freemem = (l_buffer = freemem) + BUF_SIZE;
+freemem = (r_buffer = freemem) + BUF_SIZE;
+freemem = (beat_buffer = freemem) + 0.5 * BUF_SIZE;
+freemem = (karplus_buffer_l = freemem) + 0.5 * BUF_SIZE - max_segments;
+freemem = (karplus_buffer_r = freemem) + 0.5 * BUF_SIZE - max_segments;
+freemem = (delay_buffer_l = freemem) + 0.5 * BUF_SIZE;
+freemem = (delay_buffer_r = freemem) + 0.5 * BUF_SIZE;
+freemem = (chorus_buffer_l = freemem) + CHORUS_SIZE;
+freemem = (chorus_buffer_r = freemem) + CHORUS_SIZE;
+freemem = (shuffle_buffer = freemem) + max_segments;
+freemem = (order_mem = freemem) + max_segments;
+l_buffer.initBuffer(l_buffer, l_buffer + BUF_SIZE);
+r_buffer.initBuffer(r_buffer, r_buffer + BUF_SIZE);
+beatmem.initBuffer(beat_buffer, beat_buffer + 0.5*BUF_SIZE);
+karplus.l_karplus.initBuffer(karplus_buffer_l, karplus_buffer_l + 0.1*BUF_SIZE);
+karplus.r_karplus.initBuffer(karplus_buffer_r, karplus_buffer_r + 0.1*BUF_SIZE);
+karplus2.l_karplus.initBuffer(karplus_buffer_l + 0.1 * BUF_SIZE, karplus_buffer_l + 0.2 * BUF_SIZE);
+karplus2.r_karplus.initBuffer(karplus_buffer_r + 0.1 * BUF_SIZE, karplus_buffer_r + 0.2 * BUF_SIZE);
+karplus3.l_karplus.initBuffer(karplus_buffer_l + 0.2 * BUF_SIZE, karplus_buffer_l + 0.3 * BUF_SIZE);
+karplus3.r_karplus.initBuffer(karplus_buffer_r + 0.2 * BUF_SIZE, karplus_buffer_r + 0.3 * BUF_SIZE);
+karplus4.l_karplus.initBuffer(karplus_buffer_l + 0.3 * BUF_SIZE, karplus_buffer_l + 0.4 * BUF_SIZE);
+karplus4.r_karplus.initBuffer(karplus_buffer_r + 0.3 * BUF_SIZE, karplus_buffer_r + 0.4 * BUF_SIZE);
+karplus5.l_karplus.initBuffer(karplus_buffer_l + 0.4 * BUF_SIZE, karplus_buffer_l + 0.5 * BUF_SIZE);
+karplus5.r_karplus.initBuffer(karplus_buffer_r + 0.4 * BUF_SIZE, karplus_buffer_r + 0.5 * BUF_SIZE);
+l_delay.initBuffer(delay_buffer_l, delay_buffer_l + 0.5 * BUF_SIZE);
+r_delay.initBuffer(delay_buffer_r, delay_buffer_r + 0.5 * BUF_SIZE);
+l_chorus.initBuffer(chorus_buffer_l, chorus_buffer_l + CHORUS_SIZE);
+r_chorus.initBuffer(chorus_buffer_r, chorus_buffer_r + CHORUS_SIZE);
+
+
+// Sample locations are recorded as [memory location, length]
+freemem = (samplelocs = freemem) + 10;
+idx = 0;
+loop(10,
+  freemem = (samplelocs[idx] = freemem) + SAMPLE_DURATION;
+  idx += 1;
+);
+
+freemem = verb.init_reverb(freemem);
+
+interpolator_init();
+pattern_update();
+init_playhead();
+
+@slider
+  slidercalled += 1;
+  driveKnob.knob_read_value();
+  cutoffKnob.knob_read_value();
+  cutoffEndKnob.knob_read_value();
+  resonanceKnob.knob_read_value();
+  morphKnob.knob_read_value();
+  cutoffAttackKnob.knob_read_value();
+  cutoffDecayKnob.knob_read_value();
+  cutoffSustainKnob.knob_read_value();
+  shifterPitchKnob.knob_read_value();
+
+  current_drive = driveKnob.getCurrentValue();
+  current_cutoff_start = cutoffKnob.getCurrentValue();
+  current_cutoff_final = cutoffEndKnob.getCurrentValue();
+  current_resonance = resonanceKnob.getCurrentValue();
+  current_morph = morphKnob.getCurrentValue();
+  current_cutoff_atk = cutoffAttackKnob.getCurrentValue();
+  current_cutoff_decay = cutoffDecayKnob.getCurrentValue();
+  current_cutoff_sustain = cutoffSustainKnob.getCurrentValue();
+  current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
+
+@block
+radians_to_dt = 2.0 * $pi / srate;
+
+midi.processMIDIBlock();
+//interpolators_block();
+time_mode == 0 ? current_sample = beat_position * from_beat;
+
+effect1 == 0 ? (
+  from_order_mem();
+);
+
+@serialize
+function serialize_rle(mem, len, writing)
+local(ptr, end_ptr, count, value, validate)
+global(critical_error)
+(
+  ptr = mem;
+  (!writing) ?
+  (
+    end_ptr = mem + len - 1;
+    while(ptr < end_ptr)
+    (
+      file_var(0, value);
+      (value == 1337) ? (validate = ptr - mem);
+       
+      // We only apply RLE to zeros
+      (value == 0) ? (
+        file_var(0, count);
+        memset(ptr, 0, count);
+        ptr += count;
+      ) : (
+        ptr[] = value;
+        ptr += 1;
+      );
+    );
+    
+    file_var(0, validate);
+    critical_error = validate == 1337 ? 0 : 1;
+  ) : (
+    count = 0;
+    loop(len - 1,
+      value = ptr[];
+      
+      (value == 0) ? (
+        count += 1;
+      ) : ( 
+        (count > 0) ? (
+          file_var(0, 0);
+          file_var(0, count);
+          count = 0;
+        );
+        
+        file_var(0, value);      
+      );
+      
+      ptr += 1;
+    );
+    
+    // Eww :(
+    (count > 0) ? (
+      file_var(0, 0);
+      file_var(0, count);
+    );
+    
+    file_var(0, 1337);
+  );
+);
+
+function serialize_sample(idx, writing)
+local(location, sample_duration, validate)
+global(samplelocs, critical_error, crossfade_samples, ldur)
+(
+  location = samplelocs[idx];
+  sample_duration = location[] + crossfade_samples - location;
+  
+  ldur = sample_duration;
+  
+  file_var(0, sample_duration);
+  file_mem(0, location, sample_duration + 1);
+  
+  !writing ? (
+    file_var(0, validate);
+    critical_error = validate == 1337 ? 0 : 1;
+  ) : (
+    file_var(0, 1337);
+  );
+);
+
+writing = file_avail(0) < 0;
+loaded = 1;
+file_var(0, version);
+!writing ? last_read_version = version;
+
+(version < 3) ? (
+  file_mem(0, pattern_buffer, pattern_size * max_stored_patterns);
+) : (
+  serialize_rle(pattern_buffer, pattern_size * max_stored_patterns, writing);
+);
+file_var(0, selected_details);
+
+file_var(0, gate_enabled);
+
+file_var(0, gate_start);
+file_var(0, gate_stop);
+file_var(0, gate_atk);
+file_var(0, gate_decay);
+file_var(0, gate_sustain);
+
+file_var(0, verb_diffusion);
+file_var(0, verb_decay);
+file_var(0, verb_mod_depth);
+file_var(0, verb_mod_rate);
+file_var(0, verb_lowpass);
+file_var(0, verb_highpass);
+file_var(0, verb_dry);
+file_var(0, verb_wet);
+file_var(0, verb_gate_atk);
+file_var(0, verb_gate_decay);
+file_var(0, verb_gate_sustain);
+
+file_var(0, time_mode);
+file_var(0, tapestop_decay);
+file_var(0, tempo_sync_envelopes);
+!writing ? tempo_sync_envelopes.value = tempo_sync_envelopes;
+
+file_var(0, karplus_feedback);
+file_var(0, karplus_cutoff);
+file_var(0, karplus_pitch);
+file_var(0, karplus_wet);
+file_var(0, karplus_dry);
+file_var(0, snap_karplus);
+
+file_mem(0, copy_buffer, pattern_size);
+
+file_var(0, snap_shifter);
+file_var(0, shifter_dry);
+file_var(0, shifter_wet);
+
+file_var(0, shifter_mode);
+
+// Serialize all the parameters in one go. Note that due to version 1, we have to override some later because they are stored earlier.
+driveKnob.serialize_knob(); 
+cutoffKnob.serialize_knob();
+cutoffEndKnob.serialize_knob();
+resonanceKnob.serialize_knob();
+morphKnob.serialize_knob();
+cutoffAttackKnob.serialize_knob();
+cutoffDecayKnob.serialize_knob();
+cutoffSustainKnob.serialize_knob();
+  
+gateStart.serialize_knob();
+gateEnd.serialize_knob();
+gateAttackKnob.serialize_knob();
+gateDecayKnob.serialize_knob();
+gateSustainKnob.serialize_knob();
+  
+verbDiffusionKnob.serialize_knob();
+verbDecayKnob.serialize_knob();
+verbModDepthKnob.serialize_knob();
+verbModRateKnob.serialize_knob();
+verbLowPassKnob.serialize_knob();
+verbHighPassKnob.serialize_knob();
+verbDry.serialize_knob();
+verbWet.serialize_knob();
+verbGateAttackKnob.serialize_knob();
+verbGateDecayKnob.serialize_knob();
+verbGateSustainKnob.serialize_knob();
+  
+bitrateKnob.serialize_knob();
+samplerateKnob.serialize_knob();
+satKnob.serialize_knob();
+  
+tapestopSpeedKnob.serialize_knob();
+
+karplusPitchKnob.serialize_knob();
+karplusFeedback.serialize_knob();
+karplusCutoffKnob.serialize_knob();
+karplusDry.serialize_knob();
+karplusWet.serialize_knob();
+
+// Karplus pitch changed in version 2
+(!writing) ?
+(
+  (version < 2) ? (
+    karplusPitchKnob.value = (karplusPitchKnob.value * 36 + 12) / 48;
+    karplusPitchKnob.mod1 *= (36 / 48);
+    karplusPitchKnob.mod2 *= (36 / 48);
+  );
+);
+
+shifterPitchKnob.serialize_knob();
+shifterDry.serialize_knob();
+shifterWet.serialize_knob();
+
+// Version 0 compatibility
+version == 0 && !writing ? (
+  driveKnob.set_value(drive);
+  cutoffKnob.set_value(cutoff_start);
+  cutoffEndKnob.set_value(cutoff_final);
+  resonanceKnob.set_value(resonance);
+  morphKnob.set_value(morph);
+  cutoffAttackKnob.set_value(cutoff_atk);
+  cutoffDecayKnob.set_value(cutoff_decay);
+  cutoffSustainKnob.set_value(cutoff_sustain);
+    
+  gateStart.set_value(gate_start);
+  gateEnd.set_value(gate_stop);
+  gateAttackKnob.set_value(gate_atk);
+  gateDecayKnob.set_value(gate_decay);
+  gateSustainKnob.set_value(gate_sustain);
+    
+  verbDiffusionKnob.set_value(verb_diffusion);
+  verbDecayKnob.set_value(verb_decay);
+  verbModDepthKnob.set_value(verb_mod_depth);
+  verbModRateKnob.set_value(verb_mod_rate);
+  verbLowPassKnob.set_value(verb_lowpass);
+  verbHighPassKnob.set_value(verb_highpass);
+  verbDry.set_value(verb_dry);
+  verbWet.set_value(verb_wet);
+  verbGateAttackKnob.set_value(verb_gate_atk);
+  verbGateDecayKnob.set_value(verb_gate_decay);
+  verbGateSustainKnob.set_value(verb_gate_sustain);
+    
+  /*
+  These were forgotten in v1 :o
+  bitrateKnob.set_value();
+  samplerateKnob.set_value();
+  satKnob.set_value();*/
+    
+  tapestopSpeedKnob.set_value(tapestop_decay);
+  
+  karplusPitchKnob.set_value(karplus_pitch);
+  karplusFeedback.set_value(karplus_feedback);
+  karplusCutoffKnob.set_value(karplus_cutoff);
+  karplusDry.set_value(karplus_dry);
+  karplusWet.set_value(karplus_wet);
+    
+  shifterPitchKnob.set_value(pitch_shifter_pitch);
+  shifterDry.set_value(shifter_dry);
+  shifterWet.set_value(shifter_wet);
+);
+
+!writing ? post_gate = 0;
+file_var(0, post_gate);
+
+!writing ? filter_on_off = 0;
+file_var(0, filter_on_off);
+
+writing ? (
+  memset(order_mem, 0, max_segments);
+  to_order_mem();
+  file_mem(0, order_mem, max_segments);
+) : (
+  memset(order_mem, 0, max_segments);
+  file_mem(0, order_mem, max_segments);
+  from_order_mem();
+);
+
+degradeMix.serialize_knob();
+
+driveKnob2.serialize_knob(); 
+cutoffKnob2.serialize_knob();
+cutoffEndKnob2.serialize_knob();
+resonanceKnob2.serialize_knob();
+morphKnob2.serialize_knob();
+cutoffAttackKnob2.serialize_knob();
+cutoffDecayKnob2.serialize_knob();
+cutoffSustainKnob2.serialize_knob();
+
+!writing ? filter2_type = 0;
+file_var(0, filter2_type);
+
+!writing ? filter_on_off2 = 0;
+file_var(0, filter_on_off2);
+
+modulatorWet.serialize_knob();
+modulatorPhase.serialize_knob();
+modulatorOffset.serialize_knob();
+modulatorPitch.serialize_knob();
+modulatorAttackKnob.serialize_knob();
+modulatorDecayKnob.serialize_knob();
+modulatorSustainKnob.serialize_knob();
+
+!writing ? snap_modulator = 0;
+file_var(0, snap_modulator);
+
+delayTimeKnob.serialize_knob();
+delayFeedbackKnob.serialize_knob();
+delayCutoffLPKnob.serialize_knob();
+delayCutoffHPKnob.serialize_knob();
+delaySatKnob.serialize_knob();
+delayDryKnob.serialize_knob();
+delayWetKnob.serialize_knob();
+
+chorusDepthKnob.serialize_knob();
+chorusFeedbackKnob.serialize_knob();
+chorusVoicesKnob.serialize_knob();
+chorusDryKnob.serialize_knob();
+chorusWetKnob.serialize_knob();
+chorusSpeedKnob.serialize_knob();
+
+!writing ? delay_gain_mode = 0;
+file_var(0, delay_gain_mode);
+
+!writing ? modulation_reset_phase = 0;
+file_var(0, modulation_reset_phase);
+
+!writing ? loop_point = n_segments;
+file_var(0, loop_point);
+
+karplusVoicesKnob.serialize_knob();
+karplusDetune.serialize_knob();
+
+!writing ? (
+  idx = 0;
+  loop(8,
+    memset(samplelocs[idx], 0, 20 * crossfade_samples + 1);
+    idx += 1;
+  );
+);
+
+// Serialize the loaded samples
+version > 3 ? (
+  has_samples = 1 - do_not_store_samples;
+  file_var(0, has_samples);
+  has_samples > 0 ? (
+    idx = 0;
+    loop(8,
+      !writing ? memset(samplelocs[idx], 0, crossfade_samples + 1);
+      serialize_sample(idx, writing);
+      idx += 1;
+    );
+  );
+);
+
+do_not_store_samples = 1 - has_samples;
+
+((!writing) && (last_read_version < 5)) ? (
+  slowdown_scaling = 1;
+) : (
+  file_var(0, slowdown_scaling);
+);
+
+playheadWet.serialize_knob();
+playheadDry.serialize_knob();
+tapestopDepthKnob.serialize_knob();
+tapestopShapeKnob.serialize_knob();
+
+((!writing) && (last_read_version < 6)) ? (
+  legacy_tapestop = 1;
+) : (
+  file_var(0, legacy_tapestop);
+);
+advanced_tapestop = 1 - legacy_tapestop;
+
+((!writing) && (last_read_version < 7)) ? (
+  randomizing_modulator_a = 0;
+  randomizing_modulator_b = 0;
+) : (
+  file_var(0, randomizing_modulator_a);
+  file_var(0, randomizing_modulator_b);
+);
+
+((!writing) && (last_read_version < 7)) ? (
+  timeline_tapestop = 0;
+) : (
+  file_var(0, timeline_tapestop);
+);
+
+update_current_levels();
+version = CURRENT_VERSION; // Update to current version
+
+loaded_pattern = -1;
+pattern_update();
+
+@sample
+pattern_update();
+
+function calc_times_universal(atk, decay, sustain)
+instance()
+(
+  tempo_sync_envelopes ? (
+    this.calc_times_sync(atk, decay, sustain);
+  ) : (
+    this.calc_times(atk, decay, sustain);    
+  );
+);
+
+sample_clock += 1;
+bigger_update = sample_clock % 16 == 0;
+
+function jump_to_target()
+local()
+global(current_playhead, playhead_0, playhead_1,
+       target_position,
+       x_fade_position, crossfade_samples, 
+       too_fast, jumps)
+(
+  jumps += 1;
+
+  // Initiate the crossfade
+  x_fade_position != 0 ? too_fast = 100;
+  x_fade_position = crossfade_samples;
+  
+  // Which playhead are we moving away from?
+  current_playhead == 0 ? (
+    playhead_1 = target_position + crossfade_samples;
+  ) : (
+    playhead_0 = target_position + crossfade_samples;
+  );
+  
+  current_playhead = 1 - current_playhead;
+);
+
+function schedule_jump(offset)
+local(already_set)
+global()
+instance(j1, j2, j3, j4, j5, j6, j7)
+(
+  already_set = (offset == j1) || (offset == j2) || (offset == j3) || (offset == j4) || (offset == j5) || (offset == j6) || (offset == j7);
+
+  !already_set ? (
+    (offset < j1) ? (
+      j7 = j6;
+      j6 = j5;
+      j5 = j4;
+      j4 = j3;
+      j3 = j2;
+      j2 = j1;
+      j1 = offset;
+    ) : (offset < j2) ? (
+      j7 = j6;
+      j6 = j5;    
+      j5 = j4;
+      j4 = j3;
+      j3 = j2;
+      j2 = offset;
+    ) : (offset < j3) ? (
+      j7 = j6;
+      j6 = j5;    
+      j5 = j4;
+      j4 = j3;
+      j3 = offset;
+    ) : (offset < j4) ? (
+      j7 = j6;
+      j6 = j5;    
+      j5 = j4;
+      j4 = offset;
+    ) : (offset < j5) ? (
+      j7 = j6;
+      j6 = j5;    
+      j5 = offset;
+    ) : (offset < j6) ? (
+      j7 = j6;
+      j6 = offset;
+    ) : ( offset < j7 ) ? (
+      j7 = offset;
+    );
+  );
+);
+
+function reset_jump()
+instance(j1, j2, j3, j4, j5, j6, j7, current)
+(
+  current = 0;
+  j1 = j2 = j3 = j4 = j5 = j6 = j7 = 10000000000000000;
+);
+
+function eval_jump()
+local()
+global()
+instance(j1, j2, j3, j4, j5, j6, j7, current)
+(
+  (j1 - current) == 0 ? (
+    jump_to_target();
+    j1 = j2;
+    j2 = j3;
+    j3 = j4;
+    j4 = j5;
+    j5 = j6;
+    j6 = j7;
+    j7 = 0;
+  );
+  
+  current += 1;
+);
+
+function update_time_info()
+(
+  samples_per_beat = (srate * 60) / tempo / current_speed;
+  loop_length = loop_point * samples_per_beat;
+  pattern_length = n_segments * samples_per_beat;
+  to_index = n_segments / pattern_length;
+  from_beat = 60 * srate / tempo;
+);
+
+function update_envelope_simple(target)
+instance(k_rise, k_decay, env_attack_samples, tEnvelope, env, m_sustain)
+global()
+local()
+(
+  tEnvelope < 1 ? (
+    // Rise until we're up
+    env < 0.95 * target ? (
+      env += k_rise * (target - env);
+    ) : (
+      tEnvelope = 1;
+    );
+  ) : (
+   // Decay
+   env += k_decay * (m_sustain * target - env);
+  );
+);
+
+function process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain)
+local(pre_l, pre_r, filter_on)
+global(ssl, ssr,
+       sample_clock, bigger_update,
+       log10d20_conversion)
+instance(preamp, inv_preamp, current_cutoff, declick)
+(
+  bigger_update ? (
+    this.filter_envelope.calc_times_universal(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+  );
+  
+  current_cutoff = current_cutoff_start + this.filter_envelope.update_envelope(filter_target) * (current_cutoff_final - current_cutoff_start);
+  sample_clock % 4 == 0 ? (
+    this.filter.init_filter(filter_type, current_cutoff, current_cutoff, current_morph, current_morph, current_resonance);
+    
+    preamp == 0 ? (
+      preamp      = exp(log10d20_conversion*current_drive);
+      inv_preamp  = exp(-log10d20_conversion*current_drive);
+    ) : (
+      preamp      = 0.993 * preamp + 0.007 * exp(log10d20_conversion*current_drive);
+      inv_preamp  = 1.0 / preamp;
+    );
+  );
+  
+  pre_l = ssl;
+  pre_r = ssr;
+  
+  filter_on = !filter_on_off || filter_target || declick > 0.001;
+  declick = filter_on_off ? 0.998 * declick + 0.002 * filter_target : 1;
+  
+  filter_on ? (
+    ssl *= preamp;
+    ssr *= preamp;
+    this.filter.processSample(filter_type);
+    ssl *= inv_preamp;
+    ssr *= inv_preamp;
+  );
+  
+  declick ? (
+    ssl = ssl * declick + pre_l * (1.0 - declick);
+    ssr = ssr * declick + pre_r * (1.0 - declick);
+  );
+);
+
+function process_modulator()
+global(bigger_update, radians_to_dt, ssl, ssr, modulation_target,
+       snap_modulator,
+       current_modulator_wet, current_modulator_phase, current_modulator_offset,
+       current_modulator_pitch,
+       current_modulator_atk, current_modulator_decay, current_modulator_sustain)
+local(midi_pitch, env, wet, dry, mul, off)
+instance(t, current_phase_advance, current_pitch, current_phase)
+(
+  bigger_update ? (
+    midi_pitch = 45 + 36 * current_modulator_pitch;
+    snap_modulator ? midi_pitch = floor(midi_pitch);
+    current_pitch = 440 * 2^((midi_pitch - 69)/12);
+  
+    this.envelope.calc_times_universal(current_modulator_atk, current_modulator_decay, current_modulator_sustain);
+    current_phase_advance = radians_to_dt * current_pitch;
+    current_phase = $pi * current_modulator_phase;
+  );
+  
+  env = this.envelope.update_envelope(modulation_target);
+  wet = 0.98 * wet + 0.02 * current_modulator_wet * env;
+  dry = 1.0 - wet;
+  
+  t += current_phase_advance;
+  off = 0.5 * current_modulator_offset;
+  mul = 1.0 - off;
+  ssl = ssl * (dry + wet * (sin(t + current_phase) * mul + off));
+  ssr = ssr * (dry + wet * (sin(t) * mul + off));
+);
+
+function process_gate()
+(
+  bigger_update ? (
+    gate_envelope.calc_times_universal(current_gate_atk, current_gate_decay, current_gate_sustain);
+  );
+  
+  current_gate = current_gate_start + gate_envelope.update_envelope(gate_target) * (current_gate_stop - current_gate_start);
+  gatemul = exp(log10d20_conversion*current_gate);
+  ssl *= gatemul;
+  ssr *= gatemul;
+);
+
+function process_verb()
+local()
+global(ssl, ssr,
+      verb_envelope.calc_times_universal, verb_envelope.update_envelope,
+      
+      log10d20_conversion, bigger_update, current_verb_gate,
+      reverb_target,
+
+      // User controlled
+      post_gate,
+      current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass,
+      current_verb_gate_atk, current_verb_gate_decay, current_verb_gate_sustain,
+      current_verb_dry, current_verb_wet,
+      )
+instance(verb_drymul, verb_wetmul)
+(
+  bigger_update ? (
+    this.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    verb_envelope.calc_times_universal(current_verb_gate_atk, current_verb_gate_decay, current_verb_gate_sustain);
+    verb_drymul = exp(log10d20_conversion*current_verb_dry);
+    verb_wetmul = exp(log10d20_conversion*current_verb_wet);
+    
+    post_gate ? verb_wetmul *= current_verb_gate;
+  );
+  
+  current_verb_gate = verb_envelope.update_envelope(reverb_target);
+
+  this.eval_reverb(ssl * current_verb_gate, ssr * current_verb_gate);
+  ssl = verb_drymul * ssl + verb_wetmul * this.out_left;
+  ssr = verb_drymul * ssr + verb_wetmul * this.out_right;
+);
+
+function process_karplus(current_karplus_pitch, ssl, ssr)
+instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain, l_karplus, r_karplus, kpl, kpr)
+local(lk, rk, v, y, omega, omega_fundamental, max_fb, f0, sin_omega,
+      midi_pitch, current_pitch, )
+global(current_karplus_feedback, current_karplus_cutoff,
+       current_karplus_wet, current_karplus_dry, log10d20_conversion,
+       srate,
+       bigger_update,
+       igain,
+       snap_karplus,
+       karplus_target
+       )
+(
+  bigger_update ? (
+    midi_pitch = 33 + 48 * current_karplus_pitch;
+    snap_karplus ? midi_pitch = floor(midi_pitch);
+    current_pitch = 440 * 2^((midi_pitch - 69)/12);
+    
+    karplus_offset = srate / current_pitch;
+    cutoff_current = 0.98 * cutoff_current + 0.02 * current_karplus_cutoff;
+    omega = .99999 * $pi * exp((1.0 - cutoff_current) * log(20/22050));
+    
+    f0 = 0.5 * omega;
+    sin_omega = sin(f0);
+    coeff = sin_omega / (sin_omega + cos(f0));
+
+    current_wet_gain = 0.9 * current_wet_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * current_karplus_wet) : 0);
+    current_dry_gain = 0.9 * current_dry_gain + 0.1 * (karplus_target ? exp(log10d20_conversion * current_karplus_dry) : 1);
+    
+    max_fb = 0.98;
+    fb = 2.0 * max_fb * current_karplus_feedback - max_fb;
+    fb = sign(fb) * sqrt(abs(fb));
+    
+    fb_current = 0.996 * fb_current + 0.004 * fb;
+    igain = 2.0 * sqrt(1.0 - abs(fb_current));
+    
+    // We need to correct for the phase shift incurred due to our lowpass filter
+    // otherwise our karplus will detune as we sweep the cutoff.
+    omega_fundamental = 2.0 * $pi * current_pitch / srate;
+    
+    // Phase shift in radians.
+    shift = atan(omega_fundamental / omega);
+    
+    // Convert back to samples for the fundamental.
+    shift = - shift / omega_fundamental;
+  );
+  
+  lk = l_karplus.readBuffer(karplus_offset - 2 + shift);
+  rk = r_karplus.readBuffer(karplus_offset - 2 + shift);
+
+  v = coeff*(lk - ls);
+  y = v + ls;
+  ls = y + v;
+  lk = y;
+
+  v = coeff*(rk - rs);
+  y = v + rs;
+  rs = y + v;
+  rk = y;
+
+  kpl = fb_current * lk;
+  kpr = fb_current * rk;
+
+  l_karplus.writeBuffer(ssl * current_wet_gain + kpl);
+  r_karplus.writeBuffer(ssr * current_wet_gain + kpr);
+  
+  kpl *= igain;
+  kpr *= igain;
+);
+
+function process_delay()
+global(ssl, ssr,
+       samples_per_beat,
+       delay_target,
+       delay_gain_mode,
+       current_delay_time, current_delay_feedback,
+       current_delay_cutoff_lp, current_delay_cutoff_hp,
+       current_delay_sat,
+       current_delay_dry, current_delay_wet,
+       bigger_update,
+       l_delay.writeBuffer, r_delay.writeBuffer
+       l_delay.readBuffer, r_delay.readBuffer,
+       log10d20_conversion)
+instance(current_wet_gain, current_dry_gain, fb_current,
+         cutoff_lp, cutoff_hp, coeff_lp, coeff_hp,
+         lp_l, lp_r, hp_l, hp_r, smoothed_target)
+local(fb, max_fb, dl, dr, delay_offset, omega, g, v, y, sin_omega)
+(
+  bigger_update ? (
+    smoothed_target = 0.9 * smoothed_target + 0.1 * delay_target;
+    !delay_gain_mode ? smoothed_target = 1;
+    current_wet_gain = 0.9 * current_wet_gain + 0.1 * ((delay_target || delay_gain_mode) ? exp(log10d20_conversion * current_delay_wet) : 0);
+    current_dry_gain = 0.9 * current_dry_gain + 0.1 * (delay_target ? exp(log10d20_conversion * current_delay_dry) : 1);
+    
+    max_fb = 0.98;
+    fb = 2.0 * max_fb * current_delay_feedback - max_fb;
+    fb = sign(fb) * sqrt(abs(fb));
+    fb_current = 0.996 * fb_current + 0.004 * fb;
+    
+    cutoff_lp = 0.98 * cutoff_lp + 0.02 * current_delay_cutoff_lp;
+    cutoff_hp = 0.98 * cutoff_hp + 0.02 * current_delay_cutoff_hp;
+    
+    omega = 0.5 * 0.99999 * $pi * exp((1.0 - cutoff_lp) * log(20/22050));
+    sin_omega = sin(omega);
+    coeff_lp = sin_omega / (sin_omega + cos(omega));
+    
+    omega = 0.5 * 0.99999 * $pi * exp((1.0 - cutoff_hp) * log(20/22050));
+    sin_omega = sin(omega);
+    coeff_hp = sin_omega / (sin_omega + cos(omega));
+    
+    delay_offset = 0.98 * delay_offset + 0.02 * 4 * samples_per_beat * delay_time(current_delay_time) + 1;
+  );
+  
+  dl = l_delay.readBuffer(delay_offset);
+  dr = r_delay.readBuffer(delay_offset);
+  
+  v = coeff_lp*(dl - lp_l);
+  y = v + lp_l;
+  lp_l = y + v;
+  dl = y;
+  
+  v = coeff_lp*(dr - lp_r);
+  y = v + lp_r;
+  lp_r = y + v;
+  dr = y;
+  
+  v = coeff_hp*(dl - hp_l);
+  y = v + hp_l;
+  hp_l = y + v;
+  dl = dl - y;
+  
+  v = coeff_hp*(dr - hp_r);
+  y = v + hp_r;
+  hp_r = y + v;
+  dr = dr - y;
+  
+  v = ssl * smoothed_target + fb_current * dl;
+  y = ssr * smoothed_target + fb_current * dr;
+  
+  current_delay_sat > -6 ? (
+    g = exp(log10d20_conversion*current_delay_sat);
+    v = tanh(g*v)/g;
+    y = tanh(g*y)/g;
+  );
+  
+  l_delay.writeBuffer(v);
+  r_delay.writeBuffer(y);
+  
+  ssl = dl * current_wet_gain + ssl * current_dry_gain;
+  ssr = dr * current_wet_gain + ssr * current_dry_gain;
+);
+
+function process_chorus()
+global(ssl, ssr,
+       srate, radians_to_dt,
+       chorus_target,
+       current_chorus_depth, current_chorus_speed,
+       current_chorus_feedback, current_chorus_voices, chorus_speed,
+       current_chorus_dry, current_chorus_wet,
+       bigger_update,
+       l_chorus.writeBuffer, r_chorus.writeBuffer
+       l_chorus.readBuffer_cheapo, r_chorus.readBuffer_cheapo,
+       log10d20_conversion)
+instance(current_wet_gain, current_dry_gain, fb_current, current_depth, current_pos, chorus_dt, voices, voice_step, inv_voice)
+local(fb, max_fb, dl, dr, omega, p)
+(
+  bigger_update ? (
+    current_wet_gain = 0.9 * current_wet_gain + 0.1 * (chorus_target ? exp(log10d20_conversion * current_chorus_wet) : 0);
+    current_dry_gain = 0.9 * current_dry_gain + 0.1 * (chorus_target ? exp(log10d20_conversion * current_chorus_dry) : 1);
+    
+    max_fb = 0.98;
+    fb = 2.0 * max_fb * current_chorus_feedback - max_fb;
+    fb = sign(fb) * sqrt(abs(fb));
+    fb_current = 0.996 * fb_current + 0.004 * fb;
+    
+    current_depth = 0.96 * current_depth + 0.04 * 0.05 * srate * exp((1.0 - current_chorus_depth) * log(1/50));
+    chorus_dt = radians_to_dt * current_chorus_speed;
+    
+    voices = floor(1 + 3 * current_chorus_voices);
+    inv_voice = 1 / voices;
+    voice_step = 2 * $pi * inv_voice;
+    inv_voice = sqrt(inv_voice);
+    fb_current *= inv_voice;
+  );
+  
+  dl = 0;
+  dr = 0;
+  p = current_pos += chorus_dt;
+  loop(voices,
+    omega = current_depth * (0.5 + 0.5 * sin(p));
+    dl += l_chorus.readBuffer_cheapo(omega);
+    dr += r_chorus.readBuffer_cheapo(omega);
+    p += voice_step;
+  );
+  
+  l_chorus.writeBuffer(ssl + fb_current * dl);
+  r_chorus.writeBuffer(ssr + fb_current * dr);
+  
+  ssl = dl * current_wet_gain * inv_voice + ssl * current_dry_gain;
+  ssr = dr * current_wet_gain * inv_voice + ssr * current_dry_gain;
+);
+
+function interp(x0, frac)
+instance(x1, x2, x3)
+local(id0, id1, id2, id3)
+global()
+(
+  id0 = x1;
+  id1 = 0.5*(x2 - x0);
+  id2 = x0 - 2.5*x1 + 2*x2 - 0.5*x3;
+  id3 = 0.5*(x3 - x0) + 1.5 * (x1 - x2);
+  
+  x3 = x2;
+  x2 = x1;
+  x1 = x0;
+  
+  ((id3*frac+id2)*frac+id1)*frac+id0
+);
+
+function hist(x0)
+instance(x1, x2, x3)
+local()
+global()
+(
+  x3 = x2;
+  x2 = x1;
+  x1 = x0;
+);
+
+function process_degrade()
+instance(factor,
+         ib_factor, b_factor,
+         cpos, degrade_pos,
+         from_l, from_r, to_l, to_r,
+         l_hist, r_hist, preamp,
+         degrade_mix)
+local(target, dry_l, dry_r)
+global(sm, bigger_update, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion, current_degrade_mix)
+(
+  bigger_update ? (
+    b_factor = 2^(current_bitrate - 1);
+    ib_factor = 1/b_factor;
+    
+    target = srate * exp( (1-current_samplerate) * log(1000/44100) );
+    factor = (srate / target);
+    
+    degrade_mix = degrade_mix * 0.9 + degrade_target * current_degrade_mix * 0.1;
+  );
+  
+  dry_l = ssl;
+  dry_r = ssr;
+  degrade_pos += 1;
+  
+  degrade_mix > 0.0000001 ? (  
+    ssl = ib_factor * floor(ssl * b_factor);
+    ssr = ib_factor * floor(ssr * b_factor);
+    
+    // "S&H"
+    degrade_pos > factor ? (
+      while(
+        degrade_pos -= factor;
+        cpos > factor
+      );
+      
+      from_l = to_l;
+      from_r = to_r;
+      
+      to_l = l_hist.interp(ssl, cpos - floor(cpos));
+      to_r = r_hist.interp(ssr, cpos - floor(cpos));
+    );
+    
+    l_hist.hist(ssl);
+    r_hist.hist(ssr);
+    
+    ssl = to_l;
+    ssr = to_r;
+    
+    current_saturate > -6 ? (
+      preamp = exp(log10d20_conversion*current_saturate);
+      ssl = tanh(preamp*ssl)/preamp;
+      ssr = tanh(preamp*ssr)/preamp;
+    );
+    
+    ssl = ssl * degrade_mix + dry_l * (1.0 - degrade_mix);
+    ssr = ssr * degrade_mix + dry_r * (1.0 - degrade_mix);
+  );
+);
+
+function process_pitch_shifter()
+local(processed_l, processed_r)
+global(pitch_shifter_target,
+       shifter.setPitchShifterSpeed,
+       shifter.pitchShifterUpdate,
+       shifter.outL, shifter.outR,
+       sample_clock, shift_pitch,
+       ssl, ssr,
+       snap_shifter,
+       update_shifter,
+
+       current_pitch_shifter_pitch,
+       current_shifter_dry, current_shifter_wet,
+       log10d20_conversion)
+instance(dry, wet, current, c_wet, c_dry, c_pitch)
+(
+  current = 0.9992 * current + 0.0008 * pitch_shifter_target;
+
+  current > .000000001 ? (
+    sample_clock % 4 == 0 ? (
+      update_shifter();
+      shift_pitch = (snap_shifter ? floor(current_pitch_shifter_pitch) : current_pitch_shifter_pitch) / 12;
+      (c_dry == 0) ? ( c_wet = current_shifter_wet; c_dry = current_shifter_dry; c_pitch = shift_pitch; );
+
+      c_pitch = 0.94 * c_pitch + 0.06 * shift_pitch;
+      c_wet = 0.994 * c_wet + 0.006 * current_shifter_wet;
+      c_dry = 0.994 * c_dry + 0.006 * current_shifter_dry;
+
+      shifter.setPitchShifterSpeed(2*((2^(c_pitch))-1.0));
+
+      dry = exp(log10d20_conversion*c_dry);
+      wet = exp(log10d20_conversion*c_wet);
+    );
+    
+    shifter.pitchShifterUpdate(ssl, ssr);
+    processed_l = ssl * dry + shifter.outL * wet;
+    processed_r = ssr * dry + shifter.outR * wet;
+    
+    ssl = processed_l * current + (1.0 - current) * ssl;
+    ssr = processed_r * current + (1.0 - current) * ssr;
+  );
+);
+
+mmsg = midi.processMIDISample();
+mmsg ? (
+  // Are we recording a new reference note?
+  (midi_rec_toggle.value == 1) ? (
+    
+    midi_rec_toggle.value = 0;
+    midi_note_pattern_select = midi.lastNote;
+  ) : (
+    midi.lastNote >= midi_note_pattern_select ? (
+      current_pattern_index = midi.lastNote - midi_note_pattern_select;
+      slider_automate(current_pattern_index);
+    );
+    
+    mmsg == 1 && time_mode == 1 ? (
+      current_sample = 0;
+      reset_sample = 0;
+    );
+  );
+);
+
+update_time_info();
+target_position += 1; /* Target position moves with the track */
+
+current_sample += 1;
+current_sample > loop_length ? 
+(
+  while(
+    current_sample -= loop_length;
+    current_sample > loop_length
+  );
+);
+sequencer_index = floor(to_index * current_sample);
+
+reset_sample = current_sample + crossfade_samples;
+reset_sample > loop_length ? reset_sample -= loop_length;
+reset_index = floor(to_index * reset_sample);
+
+//////////////////////////////////////////////////////////////////////////
+// SEQUENCER HANDLING
+function seek_next(position, continue_until, max_value)
+local(idx)
+global(chunk_duration_b)
+(
+  idx = 0;
+  while(
+    idx += 1;
+    position += 1;
+    (idx < max_value) && (position[] == continue_until)
+  );
+  
+  idx
+);
+
+
+// Delayed sequences to accomodate for crossfades
+(reset_index != last_reset_index) ? (
+  (reset_index == 0) ? (
+    randomizing_modulator_a ? randomize_row_modulator(modulator1_values, n_segments);
+    randomizing_modulator_b ? randomize_row_modulator(modulator2_values, n_segments);
+  );
+
+  reset_enabled ? (
+    reset = abs(reset_values[reset_index]);
+    ((reset > 0) || (reset_index == 0)) ? (
+      // New target position is now
+      target_position = 0;
+      jump_schedule.reset_jump();
+      jump_schedule.schedule_jump(0);
+    );
+  ) : (
+    // First block should always reset regardless.
+    // Even if reset is "off", this prevents running away from the buffer.
+    (reset_index == 0) ? (
+      // New target position is now
+      target_position = 0;
+      jump_schedule.reset_jump();
+      jump_schedule.schedule_jump(0);
+    );
+  );
+  
+  retrigger_enabled ? (
+    // If positive, seek to last negative with the same value.
+    retrig = retrig_values[reset_index];
+    
+    retrig > 0 ? (
+      jump_schedule.reset_jump();
+      chunk_duration = seek_next(retrig_values + reset_index, -retrig, 64);
+      block_len = samples_per_beat * chunk_duration;
+    );
+    
+    retrig == 1 ? ( jump_schedule.schedule_jump(); )
+    : (retrig == 2) ? ( jump_schedule.schedule_jump(); jump_schedule.schedule_jump(floor(0.5 * block_len)); )
+    : (retrig == 3) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.33333 * block_len)); jump_schedule.schedule_jump(floor(0.66666 * block_len)); )
+    : (retrig == 4) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.25 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.75 * block_len)); )
+    : (retrig == 5) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.2 * block_len)); jump_schedule.schedule_jump(floor(0.4 * block_len)); jump_schedule.schedule_jump(floor(0.6 * block_len)); jump_schedule.schedule_jump(floor(0.8 * block_len)); )
+    : (retrig == 6) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.16666666667 * block_len)); jump_schedule.schedule_jump(floor(0.333333333333333 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.66666666666666666667 * block_len)); jump_schedule.schedule_jump(floor(0.83333333333333333333 * block_len)); )
+  );
+  
+  ////////////////////////////
+  /* Handle sample playback */
+  ////////////////////////////
+  
+  // If record is positive, it's a start
+  // If it's negative it's a continuation.
+  record_enabled ? (
+    record_value = record_values[reset_index];
+    (record_value >= 0) ?
+    (
+      // Initiate recording into buffer
+      (current_recorder == 1) ? (
+        (record_value >= 0) ? rec1.stop_recording_sample();
+        (record_value > 0) ? rec0.start_recording_sample(samplelocs[record_value - 1], samplelocs[record_value - 1] + SAMPLE_DURATION);
+      ) : (
+        (record_value >= 0) ? rec0.stop_recording_sample();
+        (record_value > 0) ? rec1.start_recording_sample(samplelocs[record_value - 1], samplelocs[record_value - 1] + SAMPLE_DURATION);
+      );
+      current_recorder = 1.0 - current_recorder;
+    );
+    last_record_value = record_value;
+  );
+  
+  playback_enabled ? (
+    playback_value = playback_values[reset_index];
+    (playback_value >= 0) ?
+    (
+      (current_playback == 1) ? (
+        (playback_value > 0) ? play0.start_playback(samplelocs[playback_value - 1]);
+        (playback_value >= 0) ? play1.stop_playback();
+      ) : (
+        (playback_value > 0) ? play1.start_playback(samplelocs[playback_value - 1]);
+        (playback_value >= 0) ? play0.stop_playback();      
+      );
+      current_playback = 1.0 - current_playback;
+    );
+    last_playback_value = playback_value;
+  );
+);
+
+jump_schedule.eval_jump();
+
+// Non delayed sequences
+(sequencer_index != last_sequencer_index) ? (
+  
+  slowdown_enabled ? (
+    speed = abs(speed_values[sequencer_index]);
+    
+    // Fractional speed
+    (slowdown_scaling == 1) ? (
+      speed = (speed == 0) ? 1.0
+      : (speed == 1) ? 0.75
+      : (speed == 2) ? 0.66
+      : (speed == 3) ? 0.5
+      : (speed == 4) ? 0.25
+    ) : (
+      speed = 2^(-speed/12);
+    );
+  ) : ( speed = 1 );
+  
+  // Reverse it?
+  (reverse_enabled && abs(reverse_values[sequencer_index]) == 1) ? speed = -speed;
+  
+  // Calculate the actual offset speed.
+  // This is given by - (relative_speed - speed of incoming audio)
+  // Speed of the incoming audio is 1 sample / sample.
+  speed = 1.0 - speed;
+  
+  previous_filter_target = filter_target;
+  filter_target = filt_values[sequencer_index];
+  filter_target == 1 ? (
+    filter.filter_envelope.reset = 0;
+    filter.filter_envelope.reset_envelope();
+  );
+  filter_target = abs(filter_target);
+  
+  previous_filter2_target = filter2_target;
+  filter2_target = filt2_values[sequencer_index];
+  filter2_target == 1 ? (
+    filter2.filter_envelope.reset = 0;
+    filter2.filter_envelope.reset_envelope();
+  );
+  filter2_target = abs(filter2_target);
+  
+  previous_modulation = modulation_target;
+  modulation_target = modulation_fx_values[sequencer_index];
+  modulation_target == 1 ? (
+    modulation_effect.envelope.reset = 0;
+    modulation_effect.envelope.reset_envelope();
+    modulation_reset_phase ? modulation_effect.t = 0;
+  );
+  filter2_target = abs(filter2_target);
+  
+  gate_target = gate_values[sequencer_index];
+  gate_target == 1 ? (
+    gate_envelope.reset = 0;
+    gate_envelope.reset_envelope();
+  );
+  gate_target = abs(gate_target);
+  
+  reverb_target = reverb_values[sequencer_index];
+  reverb_target == 1 ? (
+    verb_envelope.reset = 0;
+    verb_envelope.reset_envelope();
+  );
+  reverb_target = abs(reverb_target);
+  
+  degrade_target = abs(degrade_values[sequencer_index]);
+  
+  tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
+  (tapestop_target > 0) ? (
+    tapestop_envelope.calc_times_universal(current_tapestop_decay, current_tapestop_decay, 0);
+    stop_factor = 1;
+    t_stop = 0;
+    t_stop_length = tapestop_envelope.env_attack_samples;
+    
+//    time_sec = tapestop_envelope.env_attack_samples * 9.89895 / srate;
+    time_samples = tapestop_envelope.env_attack_samples * 9.89895;
+    tapestop_envelope.delta_time = 1.0 / time_samples;
+  );
+  tapestop_target = abs(tapestop_target);
+  
+  karplus_target = abs(karplus_values[sequencer_index]);
+  pitch_shifter_target = abs(pitch_shifter_values[sequencer_index]);
+  delay_target = abs(delay_values[sequencer_index]);
+  chorus_target = abs(chorus_values[sequencer_index]);
+  
+  dyn_speed = speed;
+  
+  modulator1_target = modulator1_values[sequencer_index];
+  modulator2_target = modulator2_values[sequencer_index];
+  
+  time_effect_active = (speed != 0) || tapestop_target || (retrig && retrigger_enabled);
+  
+  update_current_levels();
+);
+
+target_time_warp = 0;
+tapestop_target ? (
+  (advanced_tapestop == 0) ? (
+    move_mode == 0 ? (
+      stop_factor = (1.0 - tapestop_envelope.k_decay) * stop_factor;
+      dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
+    ) : (
+      stop_factor = stop_factor + tapestop_envelope.k_decay * ((t_stop > 10 * tapestop_envelope.env_attack_samples) - stop_factor);
+      t_stop += 1.0;
+      dyn_speed = 1.0 - (stop_factor * (1.0 - speed));
+    );
+  ) : (
+    dyn_speed = speed + time_func(timeline_tapestop ? tapestop_target : current_tapestop_shape, t_stop) / t_stop;
+    t_stop += tapestop_envelope.delta_time;
+  );
+);
+
+last_sequencer_index = sequencer_index;
+last_reset_index = reset_index;
+
+record_enabled ? (
+  rec0.rec ? rec0.record(spl0, spl1);
+  rec1.rec ? rec1.record(spl0, spl1);
+);
+
+playback_enabled ? (
+  sample_fade = 0;
+  play0.playing ? sample_fade += play0.play();
+  play1.playing ? sample_fade += play1.play();
+  spl0 = spl0 * (1.0 - sample_fade) + play0.outL + play1.outL;
+  spl1 = spl1 * (1.0 - sample_fade) + play0.outR + play1.outR;
+);
+
+l_buffer.writeBuffer(spl0);
+r_buffer.writeBuffer(spl1);
+
+// Reference playhead is where the playhead is sent after a "reset" by retrigger.
+playhead_0 += dyn_speed;
+playhead_1 += dyn_speed;
+
+// Equal power fades (x^2 + y^2 = 1)
+x_fade_position > 0 ? (
+  // Which playhead are we moving _towards_
+  fade_level = 0.5 - 0.5 * cos(x_fade_position * pi_inv_crossfade_samples);
+  current_playhead == 0 ? (
+    amp1 = sqrt(fade_level);
+    amp0 = sqrt(1.0 - amp1);
+    x_fade_position -= 1;
+  ) : (
+    amp0 = sqrt(fade_level);
+    amp1 = sqrt(1.0 - amp0);
+    x_fade_position -= 1;
+  );
+  
+  ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
+  ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
+) : (
+  current_playhead ? (
+    ssl = l_buffer.readBuffer(playhead_1);
+    ssr = r_buffer.readBuffer(playhead_1);
+    
+    (playhead_1 > (BUF_SIZE - crossfade_samples)) ?
+    (
+      // New target position is now
+      target_position = 0;
+      jump_schedule.reset_jump();
+      jump_schedule.schedule_jump(0);
+    );
+  ) : (
+    ssl = l_buffer.readBuffer(playhead_0);
+    ssr = r_buffer.readBuffer(playhead_0);
+    
+    (playhead_0 > (BUF_SIZE - crossfade_samples)) ?
+    (
+      // New target position is now
+      target_position = 0;
+      jump_schedule.reset_jump();
+      jump_schedule.schedule_jump(0);
+    );
+  );
+);
+
+current_playhead_level = 0.9992 * current_playhead_level + 0.0008 * time_effect_active;
+
+current_playhead_level > .000000001 ? (
+  playhead_drymul = current_playhead_dry > -64 ? exp(log10d20_conversion*current_playhead_dry) : 0;
+  playhead_wetmul = exp(log10d20_conversion*current_playhead_wet);
+
+  tmpl = playhead_wetmul * ssl + playhead_drymul * l_buffer.readBuffer(256);
+  tmpr = playhead_wetmul * ssr + playhead_drymul * r_buffer.readBuffer(256);
+  
+  ssl = current_playhead_level * tmpl + (1.0 - current_playhead_level) * ssl;
+  ssr = current_playhead_level * tmpr + (1.0 - current_playhead_level) * ssr;
+);
+
+function do_effect(effect_idx)
+(
+  effect_idx == 1 ? (
+    pitch_shifter_enabled ? process_pitch_shifter();
+  ) : ( effect_idx == 2 ) ? (
+    degrade_enabled ? process_degrade();
+  ) : ( effect_idx == 3 ) ? (
+    filter_enabled ? filter.process_filter(filter_on_off, filter_target, filter_type, current_drive, current_morph, current_resonance, current_cutoff_start, current_cutoff_final, current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+  ) : ( effect_idx == 4 ) ? (
+    gate_enabled ? process_gate();
+  ) : ( effect_idx == 5 ) ? (
+    reverb_enabled ? verb.process_verb();
+  ) : ( effect_idx == 6 ) ? (
+    karplus_enabled ? (
+      karplus.process_karplus(current_karplus_pitch, ssl, ssr);
+      kpl = karplus.kpl;
+      kpr = karplus.kpr;
+      
+      // Make only multi-voice pay for selection
+      // Also: yuck :(
+      current_karplus_voices > 0.25 ? (
+        pitch_offset = 0.02 * current_karplus_detune;
+        pitch_offset2 = 0.01 * current_karplus_detune;
+        current_karplus_voices > 0.99 ? (
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          karplus3.process_karplus(current_karplus_pitch - pitch_offset, ssl, ssr);
+          karplus4.process_karplus(current_karplus_pitch - pitch_offset2, ssl, ssr);
+          karplus5.process_karplus(current_karplus_pitch + pitch_offset2, ssl, ssr);
+          kpl = (kpl + karplus2.kpl + karplus3.kpl + karplus4.kpl + karplus5.kpl) * 0.4472136;
+          kpr = (kpr + karplus2.kpr + karplus3.kpr + karplus4.kpr + karplus5.kpr) * 0.4472136;
+        ) : ( current_karplus > 0.75 ) ? (
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          karplus3.process_karplus(current_karplus_pitch - pitch_offset, ssl, ssr);
+          karplus4.process_karplus(current_karplus_pitch - pitch_offset2, ssl, ssr);
+          kpl = (kpl + karplus2.kpl + karplus3.kpl + karplus4.kpl) * 0.5;
+          kpr = (kpr + karplus2.kpr + karplus3.kpr + karplus4.kpr) * 0.5;
+        ) : ( current_karplus > 0.5 ) ? (
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          karplus3.process_karplus(current_karplus_pitch - pitch_offset, ssl, ssr);
+          kpl = (kpl + karplus2.kpl + karplus3.kpl) * 0.5573502;
+          kpr = (kpr + karplus2.kpr + karplus3.kpr) * 0.5573502;
+        ) : ( 
+          karplus2.process_karplus(current_karplus_pitch + pitch_offset, ssl, ssr);
+          kpl = (kpl + karplus2.kpl) * 0.7071068;
+          kpr = (kpr + karplus2.kpr) * 0.7071068;
+        );
+      );
+       
+      ssl = ssl * karplus.current_dry_gain + kpl;
+      ssr = ssr * karplus.current_dry_gain + kpr;
+    );
+  ) : ( effect_idx == 7 ) ? (
+    modulation_enabled ? modulation_effect.process_modulator();
+  ) : ( effect_idx == 8 ) ? (
+    filter2_enabled ? filter2.process_filter(filter_on_off2, filter2_target, filter2_type, current_drive2, current_morph2, current_resonance2, current_cutoff_start2, current_cutoff_final2, current_cutoff_atk2, current_cutoff_decay2, current_cutoff_sustain2);
+  ) : ( effect_idx == 9 ) ? (
+    delay_enabled ? delay.process_delay();
+  ) : ( effect_idx == 10 ) ? (
+    chorus_enabled ? chorus.process_chorus();
+  );
+);
+
+do_effect(effect1);
+do_effect(effect2);
+do_effect(effect3);
+do_effect(effect4);
+do_effect(effect5);
+do_effect(effect6);
+do_effect(effect7);
+do_effect(effect8);
+do_effect(effect9);
+do_effect(effect10);
+
+spl0 = ssl;
+spl1 = ssr;
+
+@gfx 1009 665
+current_cursor = randomize_toggle.value ? 32515 : 32512;
+
+function convert_tempos(target_sync_mode)
+local()
+instance()
+global(
+  cutoffAttackKnob.value,
+  cutoffDecayKnob.value,
+  gateAttackKnob.value,
+  gateDecayKnob.value,
+  verbGateAttackKnob.value,
+  verbGateDecayKnob.value,
+  tapestopSpeedKnob.value
+  cutoffAttackKnob.set_value_raw,
+  cutoffDecayKnob.set_value_raw,
+  gateAttackKnob.set_value_raw,
+  gateDecayKnob.set_value_raw,
+  verbGateAttackKnob.set_value_raw,
+  verbGateDecayKnob.set_value_raw,
+  tapestopSpeedKnob.set_value_raw
+)
+(
+  target_sync_mode ? (
+    cutoffAttackKnob.set_value_raw(to_synced(cutoffAttackKnob.value, 1.0));
+    cutoffDecayKnob.set_value_raw(to_synced(cutoffDecayKnob.value, 0.1));
+    gateAttackKnob.set_value_raw(to_synced(gateAttackKnob.value, 1.0));
+    gateDecayKnob.set_value_raw(to_synced(gateDecayKnob.value, 0.1));
+    verbGateAttackKnob.set_value_raw(to_synced(verbGateAttackKnob.value, 1.0));
+    verbGateDecayKnob.set_value_raw(to_synced(verbGateDecayKnob.value, 0.1));
+    tapestopSpeedKnob.set_value_raw(to_synced(tapestopSpeedKnob.value, 0.1));
+  ) : (
+    cutoffAttackKnob.set_value_raw(to_non_synced(cutoffAttackKnob.value, 1.0));
+    cutoffDecayKnob.set_value_raw(to_non_synced(cutoffDecayKnob.value, 0.1));
+    gateAttackKnob.set_value_raw(to_non_synced(gateAttackKnob.value, 1.0));
+    gateDecayKnob.set_value_raw(to_non_synced(gateDecayKnob.value, 0.1));
+    verbGateAttackKnob.set_value_raw(to_non_synced(verbGateAttackKnob.value, 1.0));
+    verbGateDecayKnob.set_value_raw(to_non_synced(verbGateDecayKnob.value, 0.1));
+    tapestopSpeedKnob.set_value_raw(to_non_synced(tapestopSpeedKnob.value, 0.1));
+  );
+);
+
+function draw_logo(x_origin, y_origin, dx, dy)
+local(cx, cy, xs, ys)
+global(q)
+(
+  q += .01;
+  //q > 2.5 ? q = 2.5;
+  
+  xs = dx - 2;
+  ys = dy - 2;
+  cy = y_origin + 0 * dy;
+  cx = x_origin;
+  gfx_set(0.4, 0.2, 0.8, (q-0.0088999644001424)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.005695977216091136)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.003203987184051264)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.001423994304022784)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.000355998576005696)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.10288358846564613)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.09113563545745818)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.0800996796012816)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.06977572089711641)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.06016375934496262)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.3645425418298327)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.3421146315414738)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.3203987184051264)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.2993948024207903)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.27910288358846563)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.598433606265575)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.5695977216091136)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.5414738341046635)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.514061943752225)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.48736205055179777)); gfx_rect(cx, cy, xs, ys);
+  cy = y_origin + 1 * dy;
+  cx = x_origin;
+  gfx_set(0.4, 0.2, 0.8, (q-0.012815948736205056)); gfx_rect(cx, cy, xs, ys);cx += 6 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.1153435386258455)); gfx_rect(cx, cy, xs, ys);cx += 6 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.3876824492702029)); gfx_rect(cx, cy, xs, ys);cx += 4 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.2595229619081524)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.6279814880740477)); gfx_rect(cx, cy, xs, ys);
+  cy = y_origin + 2 * dy;
+  cx = x_origin;
+  gfx_set(0.4, 0.2, 0.8, (q-0.017443930224279102)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.022783908864364544)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.028835884656461374)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.0355998576005696)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.04307582769668921)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.12851548593805626)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.1423994304022784)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.15699537201851194)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.17230331078675684)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.18832324670701317)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.4115343538625845)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.6279814880740477)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.24065503737985047)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.6582413670345318)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.6892132431470274)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.7208971164115343)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.7532929868280527)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.7864008543965824)); gfx_rect(cx, cy, xs, ys);
+  cy = y_origin + 3 * dy;
+  cx = x_origin;
+  cx += 4 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.051263794944820223)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.2050551797792809)); gfx_rect(cx, cy, xs, ys);cx += 6 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.43609825560697757)); gfx_rect(cx, cy, xs, ys);cx += 3 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.598433606265575)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.22249911000355999)); gfx_rect(cx, cy, xs, ys);cx += 6 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.8202207191171236)); gfx_rect(cx, cy, xs, ys);
+  cy = y_origin + 4 * dy;
+  cx = x_origin;
+  gfx_set(0.4, 0.2, 0.8, (q-0.10288358846564613)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.09113563545745818)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.0800996796012816)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.06977572089711641)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.06016375934496262)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.22249911000355999)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.24065503737985047)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.2595229619081524)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.27910288358846563)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.2993948024207903)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-0.461374154503382)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.48736205055179777)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.514061943752225)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.5414738341046635)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.5695977216091136)); gfx_rect(cx, cy, xs, ys);cx += 2 * dx;gfx_set(0.4, 0.2, 0.8, (q-1.0)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.9626201495194019)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.9259522961908152)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.8899964400142399)); gfx_rect(cx, cy, xs, ys);cx += dx;gfx_set(0.4, 0.2, 0.8, (q-0.854752580989676)); gfx_rect(cx, cy, xs, ys);
+);
+
+function setup_theme()
+(
+  base_r = .1;
+  base_g = .1;
+  base_b = .1;
+  
+  size_factor = gfx_h / 665; //(665 + (modrow1.h - 2 * block_width) + (modrow2.h - 2 * block_width))
+  size_factor = min(size_factor, gfx_w / 910); // 1009
+  
+  scaling = gfx_ext_retina == 2 ? 1 : 0;
+  scaling = min(scaling, size_factor - 1);
+  //scaling = 1.3; // REMOVE BEFORE FLIGHT
+  fontscaling = scaling;
+  
+  BASE_FONT = 1;
+  gfx_setfont(BASE_FONT, "Arial", 16 * (1 + fontscaling));
+  font_r = .8;
+  font_g = .7;
+  font_b = .8;
+  
+  BAND_FONT = 5;
+  gfx_setfont(BAND_FONT, "Arial", floor(16 * (1+fontscaling)));
+  
+  KNOB_FONT = 6;
+  gfx_setfont(KNOB_FONT, "Arial", floor(14 * (1+fontscaling)));
+  
+  KNOB_FONT2 = 7;
+  gfx_setfont(KNOB_FONT2, "Arial", floor(13 * (1+fontscaling)));
+  
+  HINT_FONT = 8;
+  gfx_setfont(HINT_FONT, "Arial", floor(13 * (1+fontscaling)));
+  
+  TOGGLE_FONT = 9;
+  gfx_setfont(TOGGLE_FONT, "Arial", floor(13 * (1+fontscaling)));
+  
+  MOD_FONT = 10;
+  gfx_setfont(MOD_FONT, "Arial", floor(12 * (1+fontscaling)));
+  
+  SAMPLE_FONT = 11;
+  BETA_FONT = 12;
+  
+  style == 0 ? (
+    s_FILTER = sprintf(65, "FILTER");
+    s_ENVELOPE = sprintf(66, "ENVELOPE");
+    s_GATE = sprintf(67, "VOLUME ENVELOPE");
+    s_REVERB = sprintf(68, "REVERB");
+    s_DEGRADE = sprintf(69, "DEGRADE");
+    s_TAPESTOP = sprintf(70, "TAPE STOP");
+    s_KARPLUS = sprintf(71, "PITCHED DELAY");
+    s_PITCH = sprintf(72, "PITCH SHIFTER");
+    s_FILTER2 = sprintf(73, "FILTER 2");
+    s_MODFX = sprintf(74, "MOD FX");
+    s_DELAY = sprintf(75, "DELAY");
+    s_CHORUS = sprintf(76, "CHORUS");
+    s_SAMPLE = sprintf(77, "SAMPLE");
+    s_SLOWDOWN = sprintf(78, "SLOWDOWN");
+    s_RETRIGGER = sprintf(79, "RETRIGGER");
+    s_REVERSE = sprintf(80, "REVERSE");
+  ) : ( style == 1 ) ? (
+    s_FILTER = sprintf(65, "Filter");
+    s_ENVELOPE = sprintf(66, "Envelope");
+    s_GATE = sprintf(67, "Volume Envelope");
+    s_REVERB = sprintf(68, "Reverb");
+    s_DEGRADE = sprintf(69, "Degrade");
+    s_TAPESTOP = sprintf(70, "Tape Stop");
+    s_KARPLUS = sprintf(71, "Pitched Delay");
+    s_PITCH = sprintf(72, "Pitch Shifter");
+    s_FILTER2 = sprintf(73, "Filter 2");
+    s_MODFX = sprintf(74, "Modulation Effects");
+    s_DELAY = sprintf(75, "Delay");
+    s_CHORUS = sprintf(76, "Chorus");
+    s_SAMPLE = sprintf(77, "Sample");
+    s_SLOWDOWN = sprintf(78, "Slowdown");
+    s_RETRIGGER = sprintf(79, "Retrigger");
+    s_REVERSE = sprintf(80, "Reverse");
+  ) : ( style == 2 ) ? (
+    s_FILTER = sprintf(65, "Filter");
+    s_ENVELOPE = sprintf(66, "Envelope");
+    s_GATE = sprintf(67, "Volume Envelope");
+    s_REVERB = sprintf(68, "Reverb");
+    s_DEGRADE = sprintf(69, "Degrade");
+    s_TAPESTOP = sprintf(70, "Tape Stop");
+    s_KARPLUS = sprintf(71, "Pitched Delay");
+    s_PITCH = sprintf(72, "Pitch Shifter");
+    s_FILTER2 = sprintf(73, "Filter 2");
+    s_MODFX = sprintf(74, "Modulation Effects");
+    s_DELAY = sprintf(75, "Delay");
+    s_CHORUS = sprintf(76, "Chorus");
+    s_SAMPLE = sprintf(77, "Sample");
+    s_SLOWDOWN = sprintf(78, "Slowdown");
+    s_RETRIGGER = sprintf(79, "Retrigger");
+    s_REVERSE = sprintf(80, "Reverse");
+  );
+
+  style == 0 ? (
+    font_color_r = .7;
+    font_color_g = .6;
+    font_color_b = .8;
+  ) : (
+    font_color_r = .7;
+    font_color_g = .7;
+    font_color_b = .7;
+  );
+  dial_animation = 1;
+  dial_position_color_r = 0.2;
+  dial_position_color_g = 0.7;
+  dial_position_color_b = 0.4;
+  
+  font_color_a = 1;
+  knob_font_color_r = 0.9;
+  knob_font_color_g = 0.9;
+  knob_font_color_b = 0.8;
+  knob_font_color_a = 1;
+  edge_r = 39/255 * .5;
+  edge_g = 39/255 * .5;
+  edge_b = 41/255 * .5;
+  edge_a = 1.0;
+  
+  edge_font_r = 0.9;
+  edge_font_g = 0.9;
+  edge_font_b = 0.8;
+  
+  widget_r = 35/255;
+  widget_g = 155/255;
+  widget_b = 30/255;
+  widget_a = 1.0;
+  toggle_r = .5;
+  toggle_g = 1.6;
+  toggle_b = .5;
+  toggle_a = 1.0;
+);
+setup_theme();
+too_fast > 0 ? too_fast -= 1;
+
+grid_origin_x = 5 * (1 + scaling);
+grid_origin_y = 5 * (1 + scaling);
+label_width = floor(150 * (1 + scaling));
+block_width = floor(22.83 * (1 + scaling));
+block_spacing = floor(1 * (1 + scaling));
+
+function nice_rect_color(x, y, w, h, label, base_r, base_g, base_b, edge_r, edge_g, edge_b)
+local(label, txt_w, txt_h)
+global(font_r, font_g, font_b, gfx_x, gfx_y)
+(
+  gfx_set(base_r, base_g, base_b, 1.0);
+  gfx_rect(x, y, w, h);
+  
+  gfx_set(edge_r, edge_g, edge_b, 1.0);
+  gfx_line(x, y, x + w - 1, y);
+  gfx_line(x, y, x, y + h - 1);
+  gfx_line(x, y + h - 1, x + w - 1, y + h - 1);
+  gfx_line(x + w - 1, y, x + w - 1, y + h - 1);
+  
+  label > 0 ? (
+    gfx_measurestr(label, txt_w, txt_h);
+    gfx_x = x - 0.5 * (txt_w - w);
+    gfx_y = y - 0.5 * (txt_h - h);
+    gfx_set(font_r, font_g, font_b, 1.0);
+    gfx_printf(label);
+  );
+);
+
+function nice_rect(x, y, w, h, value, powered, base_r, base_g, base_b)
+global()
+local(label, txt_w, txt_h, power_intensity, power_intensity, rr, gg, bb, er, eg, eb, p2, pv)
+(
+ power_intensity = (0.2 + 0.8 * powered);
+  p2 = (1.5 + 0.25 * (value==0)) * power_intensity;
+  er = base_r * p2;
+  eg = base_g * p2;
+  eb = base_b * p2;
+  pv = power_intensity;
+  rr = base_r * pv;
+  gg = base_g * pv;
+  bb = base_b * pv;
+  this.nice_rect_color(x, y, w, h, value != 0 ? sprintf(1, "%d", value) : 0, rr, gg, bb, er, eg, eb);
+);
+
+function connecting_rect(x, y, w, h, value, powered, base_r, base_g, base_b)
+local(pv, rr, gg, bb, er, eg, eb, p2, power_intensity)
+global()
+(
+  power_intensity = (0.2 + 0.8 * powered);
+  
+  pv = power_intensity;
+  rr = base_r * pv;
+  gg = base_g * pv;
+  bb = base_b * pv;
+  gfx_set(rr, gg, bb, 1.0);
+  gfx_rect(x, y, w, h, 1, 0);
+  
+  p2 = (1.5 + 0.25 * (value==0)) * power_intensity;
+  er = base_r * p2;
+  eg = base_g * p2;
+  eb = base_b * p2;
+  gfx_set(er, eg, eb, 1.0);
+  gfx_line(x, y-1, x+w, y-1);
+  gfx_line(x, y+h-1, x+w, y+h-1);
+);
+
+function power_button(x, y, w, h, powered)
+global(base_r, base_g, base_b,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y)
+local(ww, hh)
+(
+  gfx_set(base_r, base_g, base_b, 1.0);
+  gfx_rect(x, y, w, h);
+  
+  gfx_set(2 * base_r, 2 * base_g, 2 * base_b, 1.0);
+  gfx_line(x, y, x + w - 1, y);
+  gfx_line(x, y, x, y + h - 1);
+  gfx_line(x, y + h - 1, x + w - 1, y + h - 1);
+  gfx_line(x + w - 1, y, x + w - 1, y + h - 1);
+  
+  ww = floor(0.5 * w);
+  hh = floor(0.5 * h);
+  
+  powered ? gfx_set(0.2, 0.7, 0.4, 1) : gfx_set(0, 0, 0, 1);
+  gfx_circle(x + ww, y + hh, ww/2, 0, 1);
+  gfx_circle(x + ww, y + hh, ww/2 + 0.5, 0, 1);
+  gfx_line(x + ww, y + .95 * hh, x + ww, y + 0.25 * hh);
+  gfx_line(x + ww + 1, y + .85 * hh, x + ww + 1, y + 0.25 * hh);
+  gfx_line(x + ww - 1, y + .85 * hh, x + ww - 1, y + 0.25 * hh);
+);
+
+function select_colormap(rows)
+local()
+global(colormap_scaling)
+(
+  colormap_scaling = 4 / rows;
+);
+
+function set_row_color(idx)
+local(n)
+global(colormap_scaling,
+       row_color_r, row_color_g, row_color_b
+       panel_label_r, panel_label_g, panel_label_b,
+       edge_r, edge_g, edge_b,
+       dial_position_color_r, dial_position_color_g, dial_position_color_b,
+       selection_button_r, selection_button_g, selection_button_b)
+(
+  n = colormap_scaling * idx;
+  row_color_r = min(max(min(n-1.5,-n+4.5),0),1) * 0.4 + 0.1;
+  row_color_g = min(max(min(n-0.5,-n+3.5),0),1) * 0.4 + 0.1;
+  row_color_b = min(max(min(n+0.5,-n+2.5),0),1) * 0.4 + 0.1;
+  
+  panel_label_r = row_color_r;
+  panel_label_g = row_color_g;
+  panel_label_b = row_color_b;
+  
+  selection_button_r = edge_r = 0.15 * row_color_r;
+  selection_button_g = edge_g = 0.15 * row_color_g;
+  selection_button_b = edge_b = 0.15 * row_color_b;
+
+  dial_position_color_r = 1.1 * row_color_r;
+  dial_position_color_g = 1.1 * row_color_g;
+  dial_position_color_b = 1.1 * row_color_b;
+);
+
+function release_drag()
+global(drag_mode, captured_by, dragging)
+local()
+(
+  dragging = drag_mode = captured_by = 0;
+);
+
+function shift_drag(y_over, me, mem, idx)
+global(loop_point, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
+       shift_ref, dragging, captured_by, drag_mode, idx_ref,
+       DRAG_NUDGE)
+local(shift)
+(
+  // Shift row
+  y_over && (idx >= 0) && (idx <= loop_point) ? (
+    (mouse_cap & 16) == 16 ? (
+      current_cursor = 32644;
+      (mouse_cap == (1 + 16)) ? (
+        // ALT + DRAG
+        (last_cap & 1 == 0) ? (
+          captured_by = me;
+          dragging = 1;
+          drag_mode = DRAG_NUDGE;
+          idx_ref = idx;
+        );
+      );
+    );
+  );
+  
+  // Shifting rows ...
+  (drag_mode == DRAG_NUDGE) && (captured_by == me) ? (
+    (mouse_cap & 1 == 0) ? (
+      release_drag();
+    ) : (
+      shift = idx - idx_ref;
+      
+      last_shift = max(last_shift, shift);
+      // It's a rotate!
+      //   ... albeit a very inefficient one.
+      loop(abs(shift),
+        shift > 0 ? (
+          shuffle_buffer[0] = mem[loop_point - 1];
+          memcpy(shuffle_buffer + 1, mem, loop_point - 1);
+        ) : ( shift < 0 ) ? (
+          shuffle_buffer[loop_point - 1] = mem[0];
+          memcpy(shuffle_buffer, mem + 1, loop_point - 1);
+        );
+        memcpy(mem, shuffle_buffer, loop_point);
+      );
+      
+      idx_ref = idx;
+    );
+  );
+);
+
+function move_to(loc, grab, insert, n)
+local(from_value)
+global()
+(
+  from_value = loc[grab];
+  memcpy(loc + grab, loc + grab + 1, n - grab);
+  memcpy(loc + insert, loc + insert - 1, n - insert);
+  loc[insert] = from_value;
+);
+
+function handle_effect_drag(first, n_effects)
+global(drag_mode, captured_by, drag_row_index,
+       mouse_x, mouse_y, mouse_cap,
+       grid_origin_x, grid_origin_y,
+       label_width, block_width, block_spacing,
+       nice_rect, DRAG_STRING,
+       row_color_r, row_color_g, row_color_b,
+       drag_ref_x, drag_ref_y, effect_insertion_idx,
+       DRAG_EFFECT, DRAG_EFFECT_2,
+       to_order_mem
+       from_order_mem
+       order_mem,
+       drag_color_idx)
+local(ret, from, to, last)
+(
+  last = 6 + n_effects - 1;
+  ret = 0;
+  set_row_color(drag_color_idx);
+
+  // Dragging order
+  (drag_mode == DRAG_EFFECT || drag_mode == DRAG_EFFECT_2) ? (
+    (drag_row_index <= first) ? (
+      release_drag();
+    ) : (
+      (mouse_cap == 1) ? (
+        (abs(mouse_x - drag_ref_x) + abs(mouse_y - drag_ref_y)) > 20 ? drag_mode = 4;
+      
+        drag_mode == 4 ? (
+          nice_rect_color(mouse_x, mouse_y - block_width, label_width, block_width, DRAG_STRING,row_color_r, row_color_g, row_color_b, row_color_r * 2, row_color_g * 2, row_color_b * 2);
+          
+          effect_insertion_idx = floor(mouse_y / (block_width + block_spacing)) - 1;
+          effect_insertion_idx = clamp(effect_insertion_idx, first - 1, last);
+          
+          gfx_set(1, 1, 1, .3);
+          gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - 1 - block_spacing, label_width, 3);
+          gfx_set(1, 1, 1, 1);
+          gfx_rect(grid_origin_x, grid_origin_y + effect_insertion_idx * (block_width + block_spacing) - block_spacing, label_width, 1);
+        );
+      ) : (
+        (drag_mode == DRAG_EFFECT_2) ? (
+          to_order_mem();
+          move_to(order_mem, drag_row_index - first - 1, clamp(effect_insertion_idx - first + 1, 0, n_effects - 1), n_effects);
+          from_order_mem();
+        );
+        release_drag();
+        ret = 1;
+      );
+    );
+  );
+  
+  ret
+);
+
+function randomize_row(mem, n_segments, max_value)
+local(ptr, val, last_val, long_note_prob)
+global()
+(
+  long_note_prob = rand();
+  val = last_val = 0;
+  ptr = mem;
+  loop(n_segments - 1,
+    last_val = val;
+    val = floor(rand() * (max_value + 1));
+    
+    (abs(val) == abs(last_val)) && (rand() < long_note_prob) ? val = -abs(val);
+    ptr[] = val;
+    ptr += 1;
+  );
+);
+
+function mouse_wheel_values(mem, idx, n_segments, max_value)
+local(start_idx, end_idx, ptr, old, value)
+global(mouse_wheel)
+(
+  (mouse_wheel != 0) ? (
+    //idx += 1;
+    abs(mem[idx]) > 0 ? (
+      start_idx = idx;
+  
+      // Is it a start point? Check if it's a continuation of a block. If so seek backwards to the start
+      mem[start_idx] < 0 ? (
+        while((mem[start_idx] < 0) && (start_idx > 0))
+        (
+          start_idx -= 1;
+        );
+      );
+      
+      end_idx = idx + 1;
+      while((mem[end_idx] < 0) && (end_idx < n_segments))
+      (
+        end_idx += 1;
+      );
+      
+      ptr = mem + start_idx;
+      loop(end_idx - start_idx,
+        old = ptr[];
+        value = abs(old) + sign(mouse_wheel);
+        value = min(max(1, value), max_value);
+        ptr[] = sign(old) * value;
+        ptr += 1;
+      );
+    );
+    mouse_wheel = 0;
+  );
+);
+
+function process_effect_row(row_index, me, mem, x, y, label, max_value, power_slider, hint)
+global(label_width, block_width, block_spacing, selected_details,
+       nice_rect, scaling,
+       n_segments, potato,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y,
+       BASE_FONT
+       mouse_wheel, mouse_cap, mouse_x, mouse_y,
+       last_cap, captured_by,
+       hinter.updateHintTime,
+       retrig_toggle.value
+       base_r, base_g, base_b,
+       row_color_r, row_color_g, row_color_b, printed_value,
+       start_idx, selected_row, dragging, drag_mode, current_cursor, drag_row_index, drag_color_idx, DRAG_STRING, drag_ref_x, drag_ref_y,
+       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO,
+       randomize_toggle.value)
+local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
+(
+  set_row_color(row_index);
+  nice_rect(x, y, label_width - 1, block_width, 0, slider(power_slider), row_color_r * .8, row_color_g * .8, row_color_b * .8);
+  ptr = mem;
+  
+  // Are we selected?
+  (selected_details == me) ? (
+    selected_row = row_index;
+    gfx_set(1.0, 1.0, 1.0, 0.15 + 0.1 * sin(3*time_precise()));
+    gfx_rect(x, y, label_width, block_width);
+  );
+  
+  gfx_set(font_r, font_r, font_r, 1.0);
+  gfx_setfont(BASE_FONT);
+  gfx_measurestr(label, txt_w, txt_h);
+  gfx_x = x - 0.5 * (txt_w - label_width);
+  gfx_y = y - 0.5 * (txt_h - block_width);
+  gfx_printf(label);
+  
+  // Move to the actual sequencer cols
+  x += label_width;
+  
+  power_button(x, y, block_width - 1, block_width, slider(power_slider));
+  
+  x += block_width;
+  ptr = mem;
+  target = 0;
+  connect_size = 1.5 * (1 + scaling);
+  loop(n_segments,
+    current = ptr[];
+    abs(current) > 0 ? (
+      active_r = row_color_r;
+      active_g = row_color_g;
+      active_b = row_color_b;
+      printed_value = max_value > 1 && slider(power_slider) ? abs(current) : 0;
+    ) : (
+      active_r = base_r;
+      active_g = base_g;
+      active_b = base_b;
+      printed_value = 0;
+    );
+    (abs(last) == abs(current)) && (current < 0) ? (
+      nice_rect(x, y, block_width, block_width, printed_value, slider(power_slider), active_r, active_g, active_b);
+      connecting_rect(x - connect_size, y + 1, 2 * connect_size, block_width - 1, printed_value, slider(power_slider), active_r, active_g, active_b);
+    ) : (
+      nice_rect(x, y, block_width, block_width, printed_value, slider(power_slider), active_r, active_g, active_b);
+    );
+    target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, block_width));
+    x += block_spacing + block_width;
+    ptr += 1;
+    target = (target + 1) % 4;
+    last = current;
+  );
+  
+  y_over = (mouse_y > y) && (mouse_y < (y + block_width));
+  
+  mouse_x < x && y_over ? hinter.updateHintTime(hint);
+  
+  (captured_by == me) ? dragging = 1;
+  
+  // Process events
+  x -= n_segments * (block_width + block_spacing);
+  idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  
+  shift_drag(y_over, me, mem, idx);
+  
+  // Allow increasing / decreasing value by mouse_wheel
+  y_over && (idx > 0 && idx < n_segments) ? (
+    mouse_wheel_values(mem, idx, n_segments, max_value);
+  );
+ 
+  // Drag out new items
+  (mouse_cap == 1 || mouse_cap == 2 || mouse_cap == 5) ? (
+    ((drag_mode == DRAG_SOLO) && y_over) ? (
+      (drag_ref_y != me) ? (
+        slider(power_slider) = drag_ref_x;
+        drag_ref_y = me;
+      );
+    );
+  
+    // Not captured, start dragging.
+    (last_cap == 0) ? (
+      // Are we in the positional columns?
+      y_over && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
+        // Start dragging a region
+        start_idx = idx;
+        drag_mode = DRAG_BLOCK;
+        ((mouse_cap & 1) > 0) ? captured_by = me : captured_by = -me;
+      ) : (
+        y_over ? (
+          (mouse_x < x) && (mouse_x > x - (block_width + block_spacing)) ? (
+            // Toggle the lane power
+            drag_mode = DRAG_SOLO;
+            drag_ref_x = 1 - slider(power_slider);
+            drag_ref_y = me;
+            slider(power_slider) = drag_ref_x;
+            slider_automate(slider(power_slider));
+          ) : (mouse_x < x) ? (
+            (randomize_toggle.value) ? (
+              // Randomize drag
+              randomize_row(mem, n_segments, max_value);
+            ) : (
+              // Select the lane and potentially reorder things
+              selected_details = me;
+              captured_by = me;
+              drag_mode = DRAG_EFFECT;
+              sprintf(DRAG_STRING, "%s", label);
+              drag_row_index = floor(mouse_y / (block_width + block_spacing));
+              drag_color_idx = row_index;
+              drag_ref_x = mouse_x;
+              drag_ref_y = mouse_y;
+            );
+          );
+        );
+      );
+    ) : ( me == abs(captured_by) ) ? (
+      captured_by > 0 ? gfx_set(0, 0, 1, .1) : gfx_set(1, 0, 0, .1);
+      ptr = max(min(start_idx, idx), 0);
+      idx = min(max(start_idx, idx), n_segments - 1);
+      gfx_rect(x + (block_width + block_spacing) * ptr, y, (idx - ptr + 1) * (block_width + block_spacing), block_width, 1);
+      
+      gfx_set(0, 0, 0, .6);
+      mouse_cap == 5 ? gfx_rect(x + (block_width + block_spacing) * ptr + 2, y + 2, (idx - ptr + 1) * (block_width + block_spacing) - 4, block_width - 4, 1);
+    );
+  ) : (
+    ( (abs(captured_by) == me) && (drag_mode == DRAG_BLOCK) ) ? (
+      // We dragged an area
+      ptr = max(min(start_idx, idx), 0);
+      idx = min(max(start_idx, idx), n_segments - 1);
+      start_idx = ptr;
+      // Left or right mouse drag
+      captured_by > 0 ? (
+        target = ((last_cap & 4) > 0) ? 0 : abs(mem[ptr]) + 1;
+        target > max_value ? target = max_value;
+      ) : (
+        target = abs(mem[ptr]) - 1;
+        target < 0 ? target = 0; // max_value;
+      );
+      // Negative values mean a continuation
+      mem[ptr] = target;
+      ptr += 1;
+      target = retrig_toggle.value ? target : - target;
+      loop(idx - start_idx,
+        mem[ptr] = target;
+        ptr += 1;
+      );
+      
+      mem[ptr] = abs(mem[ptr]); /* TODO: Add bound verification here for last sample */
+      release_drag();
+    );
+    
+    (drag_mode == DRAG_SOLO) ? (
+      release_drag();
+    );
+  );
+  
+  y += block_width + block_spacing;
+);
+
+function draw_scope(scope_w, scope_h)
+global(SCOPE,
+       current_sample, samples_per_beat, sample_clock,
+       block_width, block_spacing, l_buffer.write_ptr,
+       gfx_w, gfx_h, gfx_x, gfx_y, gfx_dest)
+instance(last_scope_w, last_scope_h, last_samples, iter)
+local(lastx, x, s, dx, minacc, maxacc, wave_range, wave_center, x_old, y_old)
+(
+  SCOPE = 1;
+  iter += 1;
+  
+  ((last_scope_w != scope_w) || (last_scope_h != scope_h)) ? (
+    last_scope_w = scope_w;
+    last_scope_h = scope_h;
+    gfx_setimgdim(1, scope_w, scope_h);
+  );
+
+  gfx_dest = 1;
+  x_old = gfx_x;
+  y_old = gfx_y;
+  gfx_x = 0;
+  gfx_y = 0;
+  
+  //(iter % 4) == 0 ? gfx_blurto(scope_w, scope_h);
+  gfx_set(0, 0, 0, .005);
+  gfx_rect(0, 0, scope_w, scope_h);
+  
+  wave_range = 0.5 * scope_h;
+  wave_center = wave_range;
+  x = (block_width + block_spacing) * (current_sample / samples_per_beat);
+  dx = (block_width + block_spacing) / samples_per_beat;
+  s = 1;
+  maxacc = 0;
+  minacc = 0;
+  gfx_set(0.5, 0.5, 0.5, 0.8);
+  loop(sample_clock - last_samples,
+    maxacc = max((l_buffer.write_ptr)[s], maxacc);
+    minacc = min((l_buffer.write_ptr)[s], minacc);
+    
+    (floor(lastx) != floor(x)) ? (
+      gfx_line(x, wave_center + maxacc * wave_range, x, wave_center + minacc * wave_range);
+      lastx = x;
+      maxacc = 0;
+      minacc = 0;
+    );
+    x -= dx;
+    s -= 1;
+  ); 
+  
+  last_samples = sample_clock;
+  gfx_dest = -1;
+  gfx_x = x_old;
+  gfx_y = y_old;
+  
+  1
+);
+
+function handle_drag_y_resize(me, x, drag_min, drag_max)
+global(mouse_cap, mouse_x, mouse_y, last_cap,
+       drag_mode, DRAG_MODSIZE, captured_by,
+       current_cursor)
+instance(reference_y)
+local(delta)
+(
+  delta = 0;
+  
+  // Handle resizing
+  ((drag_mode == DRAG_MODSIZE) && (captured_by == -me)) ? (
+    mouse_cap == 1 ? (
+      delta = mouse_y - reference_y;
+      reference_y = mouse_y;
+    ) : release_drag();
+  );
+  (mouse_x < x) && (mouse_y > drag_min) && (mouse_y < drag_max) ? (
+    current_cursor = 32645;
+    (mouse_cap == 1) && (last_cap == 0) ? (
+      drag_mode = DRAG_MODSIZE;
+      captured_by = -me;
+      reference_y = mouse_y;
+    );
+  );
+  
+  delta
+);
+
+
+function process_modulation_row(row_index, modulator_index, me, mem, x, y, height, label, hint)
+global(label_width, block_width, block_spacing, selected_details,
+       nice_rect,
+       scaling,
+       n_segments,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y,
+       BASE_FONT, MOD_FONT,
+       mouse_cap, mouse_x, mouse_y, last_cap, captured_by,
+       hinter.updateHintTime,
+       retrig_toggle.value
+       base_r, base_g, base_b,
+       row_color_r, row_color_g, row_color_b, printed_value,
+       activeModifier, dragging, captured_by, drag_mode, DRAG_BLOCK,
+       randomize_toggle.value
+       resize_drag.handle_drag_y_resize)
+local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max)
+instance(start_idx, h, subdiv, snap, randomize)
+(
+  h == 0 ? h = height;
+  subdiv == 0 ? subdiv = 12;
+
+  drag_min = y + h - 5 * (1 + scaling);
+  drag_max = drag_min + 10 * (1+scaling);
+  y_over = (mouse_y > y + 5 * (1+scaling)) && (mouse_y < drag_min);
+
+  h = max(h + resize_drag.handle_drag_y_resize(me, x + label_width, drag_min, drag_max), height);
+
+  set_row_color(row_index);
+  nice_rect(x, y, label_width - 1, h, 0, 1, row_color_r, row_color_g, row_color_b);
+  nice_rect(x + label_width, y, block_width - 1, h, 0, 1, base_r, base_g, base_b);
+  ptr = mem;
+  
+  // Are we selected?
+  (activeModifier == modulator_index) ? (
+    gfx_set(1.0, 1.0, 1.0, 0.15 + 0.1 * sin(3*time_precise()));
+    gfx_rect(x, y, label_width, h);
+  );
+  
+  gfx_set(font_r, font_r, font_r, 1.0);
+  gfx_setfont(BASE_FONT);
+  gfx_measurestr(label, txt_w, txt_h);
+  gfx_x = x - 0.5 * (txt_w - label_width);
+  gfx_y = y - 0.5 * (txt_h - block_width);
+  gfx_printf(label);
+  
+  // Move to the actual sequencer cols
+  x += label_width - block_spacing;
+  
+  (mouse_x < x) && y_over ? (
+    hinter.updateHintTime(hint);
+    (mouse_cap == 1) && (last_cap == 0) ? (
+      (randomize_toggle.value) ? (
+        randomize_row_modulator(mem, n_segments);
+      ) : (
+        // Select row
+        activeModifier = (activeModifier == modulator_index) ? 0 : modulator_index;
+      );
+    );
+  );
+
+  gfx_setfont(MOD_FONT);
+  gfx_set(font_r, font_r, font_r, 0.1 + 0.9 * snap);
+  gfx_measurestr("12", txt_w, txt_h);
+  gfx_x = x + 0.5 * (block_width + block_spacing - txt_w);
+  gfx_printf("12");
+  gfx_setfont(BASE_FONT);
+
+  gfx_setfont(MOD_FONT);
+  gfx_set(font_r, font_r, font_r, 0.1 + 0.9 * randomize);
+  gfx_measurestr("R", txt_w, txt_h);
+  gfx_x = x + 0.5 * (block_width + block_spacing - txt_w);
+  gfx_y = y + h - txt_h - 2;
+  gfx_printf("R");
+  gfx_setfont(BASE_FONT);
+  
+  (mouse_x > x) && y_over && (mouse_x < (x + block_width)) ? (
+    (mouse_y < (y + 0.5 * h)) ? (
+      hinter.updateHintTime("Enable snap");
+      (mouse_cap == 1) && (last_cap == 0) ? (
+        snap = 1.0 - snap;
+      );
+    ) : (
+      hinter.updateHintTime("Randomize pattern every time\nthe sequencer reset.");
+      (mouse_cap == 1) && (last_cap == 0) ? (
+        randomize = 1.0 - randomize;
+      );
+    );
+  );
+  
+  x += block_width + block_spacing;
+  
+  ptr = mem;
+  target = 0;
+  loop(n_segments,
+    current = ptr[];
+    nice_rect(x, y, block_width, h, printed_value, 1, base_r, base_g, base_b);
+    offset = floor(current * h);
+    nice_rect(x, y + h - offset, block_width, offset, printed_value, 1, 1.5 * row_color_r, 1.5 * row_color_g, 1.5 * row_color_b);
+    
+    target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, h));
+    x += block_spacing + block_width;
+    ptr += 1;
+    target = (target + 1) % 4;
+    last = current;
+  );
+  
+  x -= n_segments * (block_width + block_spacing);
+  idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  
+  gfx_y = y;
+  loop(subdiv,
+    gfx_set(1, 1, 1, .02);
+    gfx_rect(x, floor(gfx_y), n_segments * (block_width + block_spacing), 1);
+    gfx_y += h / subdiv;
+  );
+  
+  shift_drag(y_over, me, mem, idx);
+  
+  // Process events
+  (y_over || captured_by == me) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
+    mouse_cap == 1 ? (
+      mem[idx] = snap ? ceil(subdiv * (1.0 - clamp((mouse_y - y) / h, 0, 1))) / subdiv : mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
+      captured_by = me;
+      drag_mode = DRAG_BLOCK;
+    ) : (
+      (captured_by == me) && (drag_mode == DRAG_BLOCK) ? release_drag();
+    );
+  );
+  
+  y += h + block_spacing;
+);
+
+draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
+gfx_set(1, 1, 1, .1);
+gfx_x = 150 * (1+scaling);
+gfx_y = 30 * (1+scaling);
+gfx_printf("v0.76");
+
+scope_w = ceil((block_width + block_spacing) * 33);
+scope_h = 35 * (1 + scaling);
+
+gfx_x = grid_origin_x + label_width + block_width + block_spacing;
+gfx_y = grid_origin_y;
+gfx_blit(draw_scope(scope_w, scope_h), 1, 0);
+
+grid_origin_y += 40 * (1 + scaling);
+x_current = grid_origin_x;
+y_current = grid_origin_y;
+
+select_colormap(16);
+
+y_s = y_current;
+y_current = process_effect_row(6, 24, record_values, x_current, y_current, "Record Sample", 8, 8, "Record to a sample that can be played back");
+gfx_setfont(BETA_FONT, "Arial", 10 * (1 + scaling));
+gfx_set(1, 1, 1, 1);
+gfx_x = x_current;
+gfx_y = y_current - block_width;
+gfx_printf(" BETA");
+y_current = process_effect_row(5, 25, playback_values, x_current, y_current, "Play Sample", 8, 7, "Playback from recorded sample.");
+gfx_setfont(BETA_FONT, "Arial", 10 * (1 + scaling));
+gfx_set(1, 1, 1, 1);
+gfx_x = x_current;
+gfx_y = y_current - block_width;
+gfx_printf(" BETA");
+y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.\n\nNote that the first block cannot be removed.");
+y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", slowdown_scaling == 0 ? 24 : 4, 11, "Slow down playback.");
+y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", timeline_tapestop ? TAPESTOP_MAX : 1, 19, "Tape stop effect.");
+y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", 6, 13, "Retrigger last block N times.");
+y_current = process_effect_row(4, 5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
+
+function draw_effect(row, effect_idx)
+(
+  effect_idx == 1 ? ( process_effect_row(row, 12, pitch_shifter_values, x_current, y_current, "Pitch Shifter", 1, 21, "Apply a pitch shifter.")
+  ) : ( effect_idx == 2 ) ? ( y_current = process_effect_row(row, 9, degrade_values, x_current, y_current, "Degrade", 1, 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.")
+  ) : ( effect_idx == 3 ) ? ( y_current = process_effect_row(row, 7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
+  ) : ( effect_idx == 4 ) ? ( y_current = process_effect_row(row, 6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
+  ) : ( effect_idx == 5 ) ? ( y_current = process_effect_row(row, 8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
+  ) : ( effect_idx == 6 ) ? ( y_current = process_effect_row(row, 11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20, "Apply a pitched delay effect");
+  ) : ( effect_idx == 7 ) ? ( y_current = process_effect_row(row, 20, modulation_fx_values, x_current, y_current, "Modulation FX", 1, 22, "Modulation effects");
+  ) : ( effect_idx == 8 ) ? ( y_current = process_effect_row(row, 21, filt2_values, x_current, y_current, "Filter 2", 1, 23, "Filter 2");
+  ) : ( effect_idx == 9 ) ? ( y_current = process_effect_row(row, 22, delay_values, x_current, y_current, "Delay", 1, 24, "Delay");
+  ) : ( effect_idx == 10 ) ? ( y_current = process_effect_row(row, 23, chorus_values, x_current, y_current, "Chorus", 1, 9, "Chorus");
+  );
+);
+
+y_current = draw_effect(7, effect1);
+y_current = draw_effect(8, effect2);
+y_current = draw_effect(9, effect3);
+y_current = draw_effect(10, effect4);
+y_current = draw_effect(11, effect5);
+y_current = draw_effect(12, effect6);
+y_current = draw_effect(13, effect7);
+y_current = draw_effect(14, effect8);
+y_current = draw_effect(15, effect9);
+y_current = draw_effect(16, effect10);
+
+modrow1.randomize = randomizing_modulator_a;
+y_current = modrow1.process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
+randomizing_modulator_a = modrow1.randomize;
+mod2_color_r = row_color_r * 2;
+mod2_color_g = row_color_g * 2;
+mod2_color_b = row_color_b * 2;
+mod2_color_a = 1.0;
+
+modrow2.randomize = randomizing_modulator_b;
+y_current = modrow2.process_modulation_row(14, 3, 51, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
+randomizing_modulator_b = modrow2.randomize;
+mod3_color_r = row_color_r * 2;
+mod3_color_g = row_color_g * 2;
+mod3_color_b = row_color_b * 2;
+mod3_color_a = 1.0;
+
+gfx_set(0, 0, 0, .6);
+gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_point + 1) - 2, grid_origin_y, (n_segments - loop_point) * (block_width + block_spacing) + 1, y_current - grid_origin_y);
+
+handle_effect_drag(fixed_effects, free_effects);
+
+gfx_set(1, 1, 1, .1);
+gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
+
+// Control strip
+function selection_button(me, cx, cy, width, height, label, br, bg, bb, hint)
+local(over)
+global(gfx_x, gfx_y, base_r, base_g, base_b, mouse_x, mouse_y, mouse_cap, last_cap,
+       hinter.updateHintTime)
+instance(value)
+(
+  value == (me >= 0 ? me : 1) ? (
+    br *= 2;
+    bg *= 2;
+    bb *= 2;
+  );
+  
+  over = (mouse_x > cx) && (mouse_x < (cx + width)) && (mouse_y > cy) && (mouse_y < (cy + height));
+  
+  hint > -1 && over ? (
+    hinter.updateHintTime(hint);
+  );
+  
+  nice_rect_color(cx, cy, width, height, label, br, bg, bb, 2 * br, 2 * bg, 2 * bb);
+  (last_cap & 1 == 0) && 
+  (mouse_cap & 1 == 1) && 
+  over ? 
+  (
+    value = me >= 0 ? me : 1 - value;
+  );
+  
+  cx += width + 2;
+);
+nice_rect_color(grid_origin_x, y_current, scope_w + label_width - 3, block_width, 0, 0.2*base_r, 0.2 * base_g, 0.2 * base_b, 2 * base_r, 2*base_g, 2*base_b);
+
+ctrl_spacing = 0.5 * block_width;
+
+time_mode.value = time_mode;
+cx = grid_origin_x + 2;
+cx = time_mode.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
+cx = time_mode.selection_button(2, cx, y_current + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
+cx = time_mode.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1, "Run sequencer in MIDI mode.\nPattern resets on incoming MIDI note.");
+time_mode = time_mode.value;
+
+tempo_sync_envelopes.value = tempo_sync_envelopes;
+cx += ctrl_spacing;
+cx = tempo_sync_envelopes.selection_button(0, cx, y_current + 2, 2 * block_width, block_width - 4, "Time", 0.2, 0.1, 0.05, "Show envelope times in milliseconds.");
+cx = tempo_sync_envelopes.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, "Beats", 0.2, 0.1, 0.05, "Show envelope times in beats.");
+
+tempo_sync_envelopes != tempo_sync_envelopes.value ? (
+  tempo_sync_envelopes = tempo_sync_envelopes.value;
+  convert_tempos(tempo_sync_envelopes);
+);
+
+pattern_toggle.value = -1;
+cx += ctrl_spacing;
+cx = pattern_toggle.selection_button(0, cx, y_current + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
+cx = pattern_toggle.selection_button(1, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index");
+cx = pattern_toggle.selection_button(2, cx, y_current + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
+
+cx = midi_rec_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, identify_note(midi_note_pattern_select), 0.3, 0.1, 0.05, "Set reference note used for pattern selection via MIDI.\n\nOnce clicked this button lights up and the plugin listens\nfor an incoming MIDI note. This note is then set as the\nreference note.\n\nAny subsequent note will compute a pattern index to jump to\nassuming the reference note to correspond to pattern zero.");
+
+cx += ctrl_spacing;
+
+cx = pattern_toggle.selection_button(5, cx, y_current + 2, block_width, block_width - 4, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
+cx = pattern_toggle.selection_button(6, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length");
+cx = pattern_toggle.selection_button(7, cx, y_current + 2, block_width, block_width - 4, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
+
+cx += ctrl_spacing;
+
+cx = pattern_toggle.selection_button(8, cx, y_current + 2, block_width, block_width - 4, "-", 0.16, 0.1, 0.425, "Decrease speed.");
+cx = pattern_toggle.selection_button(9, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed");
+cx = pattern_toggle.selection_button(10, cx, y_current + 2, block_width, block_width - 4, "+", 0.16, 0.1, 0.425, "Increase speed.");
+
+
+cx = pattern_toggle.selection_button(3, cx + ctrl_spacing, y_current + 2, 2 * block_width, block_width - 4, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
+cx = pattern_toggle.selection_button(4, cx, y_current + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
+pattern_toggle.value == 0 ? ( 
+  current_pattern_index -= 1;
+  current_pattern_index < 0 ? (
+    current_pattern_index = max_stored_patterns - 1;
+  );
+  
+  slider_automate(current_pattern_index);  
+) 
+: ( pattern_toggle.value == 2 ) ? (
+  current_pattern_index += 1;
+  ( current_pattern_index >= max_stored_patterns ) ? (
+    current_pattern_index = 0;
+  );
+  
+  slider_automate(current_pattern_index);
+) 
+: ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
+( pattern_toggle.value == 4 ) ? ( paste_pattern() ) :
+( pattern_toggle.value == 5 ) ? ( loop_point = min(loop_point + 1, 32); ) :
+( pattern_toggle.value == 7 ) ? ( loop_point = max(loop_point - 1, 2); ) :
+( pattern_toggle.value == 10 ) ? ( current_speed = min(current_speed + 1, 16); slider_automate(1); ) :
+( pattern_toggle.value == 8 ) ? ( current_speed = max(current_speed - 1, 1); slider_automate(1); );
+
+cx += ctrl_spacing;
+cx = retrig_toggle.selection_button(0, cx, y_current + 2, 2.5 * block_width, block_width - 4, "Legato", 0.12, 0.15, 0.22, "Draw legato blocks.\n\nLegato blocks work differently from retriggered\nblocks. The exact effect depends on the effect\nrow.\n\nFor retrigger, legato will space the retriggers \nout over the entire block whereas retrigger mode \nwill place the number of retriggers on each block.\n\nFor tapestop, the stopping is reset for each \nnode when using retriggered \nblocks.\n\nFor envelope-based effects, legato mode does not\nrestart the envelope, whereas retriggered mode\ndoes.");
+cx = retrig_toggle.selection_button(1, cx, y_current + 2, 2.5 * block_width, block_width - 4, "Retrig", 0.12, 0.15, 0.22, "Draw retriggered blocks.\n\nLegato blocks work differently from retriggered\nblocks. The exact effect depends on the effect\nrow.\n\nFor retrigger, legato will space the retriggers \nout over the entire block whereas retrigger mode \nwill place the number of retriggers on each block.\n\nFor tapestop, the stopping is reset for each \nnode when using retriggered \nblocks.\n\nFor envelope-based effects, legato mode does not\nrestart the envelope, whereas retriggered mode\ndoes.");
+
+cx += ctrl_spacing;
+
+cx = randomize_toggle.selection_button(-1, cx, y_current + 2, 3.85 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
+
+y_current += block_width;
+
+
+render_time += .025;
+
+style = 1;
+xs = 10;
+ys = 10;
+
+knobSize = 35*(1+scaling);
+knobSpacing = .7 * knobSize;
+
+buttonSize = floor(.3 * knobSpacing);
+panelY = y_current - 32 * (1+scaling);
+panelPad = 6;
+panelHeight = 3.2 * knobSize;
+
+dial_animation = 0;
+
+cX = x_current;
+cY = y_current + 2.25 * knobSize;
+
+dial_animation = 1;
+function drawAndProcess(cX, cY, knobSize, label, description, current, modifier1, modifier2, modifier3)
+instance(vel, mod1, mod2, default, slider_idx, value, scale, min_value, newValue)
+global(mouse_x, mouse_y, mouse_cap,
+       dial_animation, bipolar, activeModifier,
+       dial_position_color_r, dial_position_color_g, dial_position_color_b
+       mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a,
+       mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a,
+       mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a,
+       current_mod1, current_mod2, dragging)
+local(norm_current)
+(
+  this.drawKnob(cX, cY, knobSize, label, description, 1.0);
+  
+  dial_animation ? (
+    norm_current = (current - min_value) / scale;
+    this.knob_draw_modifier(norm_current - value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -0.1);
+    this.knob_draw_modifier(norm_current - value, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, 0.1);
+  );
+  
+  modifier1 ? this.knob_draw_modifier(vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  modifier2 ? this.knob_draw_modifier(mod1, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  modifier3 ? this.knob_draw_modifier(mod2, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+   
+  activeModifier == 3 ? (
+    this.knob_modifier_processMouse(0, mod2) ? ( mod2 = newValue; update_current_levels(); dragging = 1; );
+  ) : activeModifier == 2 ? ( 
+    this.knob_modifier_processMouse(0, mod1) ? ( mod1 = newValue; update_current_levels(); dragging = 1; );
+  ) : activeModifier == 1 ? ( 
+    this.knob_modifier_processMouse(0, vel) ? ( vel = newValue; update_current_levels(); dragging = 1; );
+  ) : (
+    this.knob_processMouse(mouse_x, mouse_y, mouse_cap, (default - min_value)/scale ) ? (
+      slider_idx > 0 ? (
+        slider(slider_idx) = scale * value + min_value;
+        slider_automate(slider(slider_idx));
+      );
+      update_current_levels();
+      dragging = 1;
+    );
+  );
+);
+
+function pitch_label(label, midi_pitch, note_fractional)
+local()
+global()
+(
+  note_fractional > 0.025 ? (
+    sprintf(label, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
+  ) : (
+    sprintf(label, "%s", identify_note(midi_pitch));
+  );
+);
+  
+dragging = 0;
+set_row_color(selected_row);
+  
+function time_func_draw(func, x, y, w, h)
+global(dial_position_color_r, dial_position_color_g, dial_position_color_b,
+       gfx_x, gfx_y)
+local(s, ds, cx, cy, ly, ww, hh, v)
+(
+  cx = x;
+  ds = 1.0 / w;
+  s = 0;
+  gfx_set(0, 0, 0, 0.7);
+  gfx_rect(x, y, w, h);
+  
+  gfx_set(dial_position_color_r, dial_position_color_g, dial_position_color_b, 0.5);
+  gfx_line(x, y, x + w, y);
+  gfx_line(x, y + 0.5 * h, x + w, y + 0.5 * h);
+  gfx_line(x, y + 0.25 * h, x + w, y + 0.25 * h);
+  gfx_line(x, y + 0.75 * h, x + w, y + 0.75 * h);
+  gfx_line(x, y + h, x + w, y + h);
+  
+  gfx_set(dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0);
+
+  ly = y;
+  loop(w,
+    v = time_func(func, s) / (2*s);
+    cy = y + h * v;
+//    cy = min(y + h, max(y, cy));
+    s += ds;
+    gfx_line(cx, ly, cx + 1, cy);
+    gfx_line(cx, ly - 1, cx + 1, cy - 1);
+    cx += 1;
+    ly = cy;
+  );
+  
+  gfx_set(dial_position_color_r + 0.2, dial_position_color_g + 0.2, dial_position_color_b, 1.0);
+  gfx_setfont(13, "Arial", 9);
+  gfx_measurestr("0x", ww, hh);
+  gfx_x = x + w - ww - 2;
+  gfx_y = y;
+  gfx_printf("1x");
+  gfx_x = x + w - ww - 2;
+  gfx_y = y + 0.5 * h - 0.5 * hh;
+  gfx_printf("0x");
+  gfx_x = x + w - ww - 2;
+  gfx_y = y + h - hh;
+  gfx_printf("-1x");
+);
+
+function drawBuf(idx, x, y, w, h)
+global(samplelocs, row_color_r, row_color_g, row_color_b, gfx_x, gfx_y, SAMPLE_FONT)
+local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
+(
+  gfx_set(0, 0, 0, 0.8);
+  gfx_rect(x, y, w, h);
+  gfx_set(row_color_r, row_color_g, row_color_b, 0.23);
+  gfx_line(x, y, x + w, y);
+  gfx_line(x, y + h, x + w, y + h);
+  
+  gfx_set(0, 1, 0, 1);
+
+  gfx_set(0.1, 0.1, 0.1, 0.7);
+  gfx_setfont(SAMPLE_FONT, "Arial", h);
+  sprintf(16, "%d", idx + 1);
+  gfx_measurestr(16, ww, hh);
+  
+  gfx_x = x - 0.5 * ww + 0.5 * w;
+  gfx_y = y;
+  gfx_printf(16);
+  
+  length_in_samples = samplelocs[idx][] - samplelocs[idx];
+  len = max(0, floor((length_in_samples - 1) / 2));
+  ptr = samplelocs[idx] + 1;
+  step = floor(len / w);
+  gfx_set(row_color_r, row_color_g, row_color_b, 0.7);
+  xp = x;
+  ym = y + 0.5 * h;
+  hh = 0.5 * h;
+  
+  loop(w,
+    maxacc = 0;
+    minacc = 0;
+    loop(step,
+      maxacc = max(ptr[], maxacc);
+      minacc = min(ptr[], minacc);
+      ptr += 2;
+    );
+    maxacc = min(1.0, maxacc);
+    minacc = max(-1.0, minacc);
+    gfx_line(xp, ym + hh * minacc, xp, ym + hh * maxacc);
+    xp += 1;
+  );
+);
+
+( (selected_details == 24) || (selected_details == 25) ) ? (
+  nextPanel = drawPanel(s_SAMPLE, cX, cY - 1.5 * knobSize, 37*knobSpacing, panelHeight, chorus_enabled);
+  cX += 0.5 * knobSpacing;
+  
+  sample_idx = 0;
+  loop(8,
+    drawBuf(sample_idx, cX, cY - 0.9 * knobSize, 2.75 * knobSize, 2 * knobSize);
+    cX += 2.85 * knobSize;
+    sample_idx += 1;
+  );
+
+  storeSamplesToggle.label = " Don't save";
+  storeSamplesToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.8 * knobSize, 0.15*knobSize, 0.15*knobSize, do_not_store_samples, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Don't store samples with preset.");
+  do_not_store_samples = storeSamplesToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+) : (selected_details == 2 ) ? (
+  nextPanel = drawPanel(s_SLOWDOWN, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, slowdown_enabled);
+  cX += 2 * knobSpacing;
+  gfx_setfont(KNOB_FONT);
+  slowdownModeToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, 1.0 - slowdown_scaling, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Step in semitones.\n\nWhen activated, slowdown will go in\nsteps of a single semitone.\nWhen disabled, it'll go ratio-metrically.");
+  slowdown_scaling = 1.0 - slowdownModeToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  playheadDry.knob_set_display(DB_SLIDER, slowdown_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, slowdown_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
+) : ( selected_details == 4 ) ? (
+  nextPanel = drawPanel(s_RETRIGGER, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, retrigger_enabled);
+  cX += 2 * knobSpacing;
+  gfx_setfont(KNOB_FONT);
+  playheadDry.knob_set_display(DB_SLIDER, retrigger_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, retrigger_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
+) : ( selected_details == 5 ) ? (
+  nextPanel = drawPanel(s_REVERSE, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, reverse_enabled);
+  cX += 2 * knobSpacing;
+  gfx_setfont(KNOB_FONT);
+  playheadDry.knob_set_display(DB_SLIDER, reverse_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, reverse_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  cX += 2.5*knobSize;
+) : (selected_details == 21) ? (
+  // Filter 2
+  nextPanel = drawPanel(s_FILTER2, cX, cY - 1.5 * knobSize, 26.5*knobSpacing, panelHeight, filter2_enabled);
+  cX += 2 * knobSpacing;
+  cX += knobSize;
+  gfx_setfont(KNOB_FONT);
+  y_move = .45 * knobSize;
+  ww = 1.5*knobSize;
+  hh = .35 * knobSize;
+  y_ref = cY - 0.9*knobSize - 1;
+  
+  drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, -filter2_type, "2-pole linear state variable filter (12 dB/oct).") ? filter2_type = 0;
+  drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, -filter2_type, "4-pole linear state variable filter (12 dB/oct)") ? filter2_type = 2;
+  drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, -filter2_type, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).") ? filter2_type = 8;
+  drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, -filter2_type, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).") ? filter2_type = 9;
+  drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, -filter2_type, "2-pole linear state variable filter where\nthe approximate resonance is rectified.") ? filter2_type = 14;
+  
+  drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, -filter2_type, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).") ? filter2_type = 1;
+  drawSelectionButton("MS-20A", cX - .25*knobSize, y_ref + 1*y_move, ww, hh, 6, -filter2_type, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).") ? filter2_type = 6;
+  drawSelectionButton("Moog", cX - .25*knobSize, y_ref + 2*y_move, ww, hh, 3, -filter2_type, "Moog emulation (24 dB/oct).") ? filter2_type = 3;
+  drawSelectionButton("Ladder", cX - .25*knobSize, y_ref + 3*y_move, ww, hh, 4, -filter2_type, "Ladder filter with two stages (12 dB/oct).") ? filter2_type = 4;
+  drawSelectionButton("303", cX - .25*knobSize, y_ref + 4*y_move, ww, hh, 5, -filter2_type, "Blaukraut's 303 filter emulation") ? filter2_type = 5;
+  
+  drawSelectionButton("nlSVF2p", cX + 1.5*knobSize, y_ref + 0*y_move, ww, hh, 10, -filter2_type, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.") ? filter2_type = 10;
+  drawSelectionButton("nlSVF4p", cX + 1.5*knobSize, y_ref + 1*y_move, ww, hh, 11, -filter2_type, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.") ? filter2_type = 11;
+  drawSelectionButton("Steiner", cX + 1.5*knobSize, y_ref + 2*y_move, ww, hh, 15, -filter2_type, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.") ? filter2_type = 15;
+  drawSelectionButton("SteinerA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 16, -filter2_type, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.") ? filter2_type = 16;
+  drawSelectionButton("Bent", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 17, -filter2_type, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.") ? filter2_type = 17;
+  
+  cX += 4.25*knobSize;
+  driveKnob2.knob_set_display(DB_SLIDER, filter2_enabled);
+  driveKnob2.drawAndProcess(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", current_drive2, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  cutoffKnob2.knob_set_display(FREQ_SLIDER, filter2_enabled);
+  cutoffKnob2.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", filter2.current_cutoff, 1, 1, 1);
+  
+  filterOnOffToggle2.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, filter_on_off2, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Turn filter on and off.\n\nEnabling this will bypass the filter when there is no block.");
+  filter_on_off2 = filterOnOffToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5*knobSize;
+  cutoffEndKnob2.knob_set_display(FREQ_SLIDER, filter2_enabled);
+  cutoffEndKnob2.drawAndProcess(cX, cY, knobSize, "Cutoff End", "Filter Cutoff", filter2.current_cutoff, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  resonanceKnob2.knob_set_display(NORMALIZED_SLIDER, filter2_enabled);
+  resonanceKnob2.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", current_resonance2, 1, 1, 1);
+   
+  cX += knobSize*2.7;
+  morphKnob2.knob_set_display("", filter2_enabled);
+  morphKnob2.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", current_morph2, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * filter2_enabled);
+  drawKnobLabels(knobSize*1.25, 0, "LP");
+  drawKnobLabels(knobSize*1.25, 1/4, "BP");
+  drawKnobLabels(knobSize*1.25, 2/4, "HP");
+  drawKnobLabels(knobSize*1.25, 3/4, "BR");
+  drawKnobLabels(knobSize*1.25, 4/4, "LP");
+  
+  cX += knobSize * 2;
+  nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, filter2_enabled);
+  
+  cX += knobSize * 1.35;
+  cutoffAttackKnob2.knob_set_display(ATTACK_SLIDER, filter2_enabled);
+  cutoffAttackKnob2.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_cutoff_atk2, 1, 1, 1);
+
+  cX += knobSize*2.5;
+  cutoffDecayKnob2.knob_set_display(DECAY_SLIDER, filter2_enabled);
+  cutoffDecayKnob2.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_cutoff_decay2, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  cutoffSustainKnob2.knob_set_display(NORMALIZED_SLIDER, filter2_enabled);
+  cutoffSustainKnob2.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_cutoff_sustain2, 1, 1, 1);
+) : (selected_details == 7) ? (
+  // Filter
+  nextPanel = drawPanel(s_FILTER, cX, cY - 1.5 * knobSize, 26.5*knobSpacing, panelHeight, filter_enabled);
+  cX += 2 * knobSpacing;
+  cX += knobSize;
+  gfx_setfont(KNOB_FONT);
+  y_move = .45 * knobSize;
+  ww = 1.5*knobSize;
+  hh = .35 * knobSize;
+  FILTER_SELECT_BUTTON = 25;
+  y_ref = cY - 0.9*knobSize - 1;
+  drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON, "2-pole linear state variable filter (12 dB/oct).");
+  drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON, "4-pole linear state variable filter (12 dB/oct)");
+  drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, FILTER_SELECT_BUTTON, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).");
+  drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, FILTER_SELECT_BUTTON, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).");
+  drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, FILTER_SELECT_BUTTON, "2-pole linear state variable filter where\nthe approximate resonance is rectified.");
+  
+  drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, FILTER_SELECT_BUTTON, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).");
+  drawSelectionButton("MS-20A", cX - .25*knobSize, y_ref + 1*y_move, ww, hh, 6, FILTER_SELECT_BUTTON, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).");
+  drawSelectionButton("Moog", cX - .25*knobSize, y_ref + 2*y_move, ww, hh, 3, FILTER_SELECT_BUTTON, "Moog emulation (24 dB/oct).");
+  drawSelectionButton("Ladder", cX - .25*knobSize, y_ref + 3*y_move, ww, hh, 4, FILTER_SELECT_BUTTON, "Ladder filter with two stages (12 dB/oct).");
+  drawSelectionButton("303", cX - .25*knobSize, y_ref + 4*y_move, ww, hh, 5, FILTER_SELECT_BUTTON, "Blaukraut's 303 filter emulation");
+  
+  drawSelectionButton("nlSVF2p", cX + 1.5*knobSize, y_ref + 0*y_move, ww, hh, 10, FILTER_SELECT_BUTTON, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+  drawSelectionButton("nlSVF4p", cX + 1.5*knobSize, y_ref + 1*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+  drawSelectionButton("Steiner", cX + 1.5*knobSize, y_ref + 2*y_move, ww, hh, 15, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.");
+  drawSelectionButton("SteinerA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 16, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.");
+  drawSelectionButton("Bent", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 17, FILTER_SELECT_BUTTON, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.");
+  
+  cX += 4.25*knobSize;
+  driveKnob.knob_set_display(DB_SLIDER, filter_enabled);
+  driveKnob.drawAndProcess(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", current_drive, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  cutoffKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
+  cutoffKnob.drawAndProcess(cX, cY, knobSize, "Cutoff Start", "Filter Cutoff", filter.current_cutoff, 1, 1, 1);
+  
+  filterOnOffToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, filter_on_off, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Turn filter on and off.\n\nEnabling this will bypass the filter when there is no block.");
+  filter_on_off = filterOnOffToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5*knobSize;
+  cutoffEndKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
+  cutoffEndKnob.drawAndProcess(cX, cY, knobSize, "Cutoff End", "Filter Cutoff", filter.current_cutoff, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  resonanceKnob.knob_set_display(NORMALIZED_SLIDER, filter_enabled);
+  resonanceKnob.drawAndProcess(cX, cY, knobSize, "Resonance", "Filter Resonance", current_resonance, 1, 1, 1);
+   
+  cX += knobSize*2.7;
+  morphKnob.knob_set_display("", filter_enabled);
+  morphKnob.drawAndProcess(cX, cY, knobSize, "Morph", "Filter Morph", current_morph, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * filter_enabled);
+  drawKnobLabels(knobSize*1.25, 0, "LP");
+  drawKnobLabels(knobSize*1.25, 1/4, "BP");
+  drawKnobLabels(knobSize*1.25, 2/4, "HP");
+  drawKnobLabels(knobSize*1.25, 3/4, "BR");
+  drawKnobLabels(knobSize*1.25, 4/4, "LP");
+  
+  cX += knobSize * 2;
+  nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.25*knobSpacing, panelHeight, filter_enabled);
+  
+  cX += knobSize * 1.35;
+  cutoffAttackKnob.knob_set_display(ATTACK_SLIDER, filter_enabled);
+  cutoffAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_cutoff_atk, 1, 1, 1);
+
+  cX += knobSize*2.5;
+  cutoffDecayKnob.knob_set_display(DECAY_SLIDER, filter_enabled);
+  cutoffDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_cutoff_decay, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  cutoffSustainKnob.knob_set_display(NORMALIZED_SLIDER, filter_enabled);
+  cutoffSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_cutoff_sustain, 1, 1, 1);
+) : ( selected_details == 6 ) ? (
+  // Gate
+  nextPanel = drawPanel(s_GATE, cX, cY - 1.5 * knobSize, 18.25*knobSpacing, panelHeight, gate_enabled);
+  cX += knobSize * 1.35;
+  gateStart.knob_set_display(DB_SLIDER, gate_enabled);
+  gateStart.drawAndProcess(cX, cY, knobSize, "Closed Level", "Gain when gate is closed.", current_gate, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  gateEnd.knob_set_display(DB_SLIDER, gate_enabled);
+  gateEnd.drawAndProcess(cX, cY, knobSize, "Open Level", "Gain level when gate is open.", current_gate, 1, 1, 1);
+  
+  cX += 2.5*knobSize;  
+  gateAttackKnob.knob_set_display(ATTACK_SLIDER, gate_enabled);
+  gateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_gate_atk, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  gateDecayKnob.knob_set_display(DECAY_SLIDER, gate_enabled );
+  gateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_gate_decay, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  gateSustainKnob.knob_set_display(NORMALIZED_SLIDER, gate_enabled);
+  gateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_gate_sustain, 1, 1, 1);
+) : ( selected_details == 8 ) ? (
+  // Reverb
+  nextPanel = drawPanel(s_REVERB, cX, cY - 1.5 * knobSize, 29*knobSpacing, panelHeight, reverb_enabled);
+  
+  cX += knobSize * 1.35;
+  verbDiffusionKnob.knob_set_display("", reverb_enabled);
+  verbDiffusionKnob.drawAndProcess(cX, cY, knobSize, "Diffusion", "Reverb Diffusion", current_verb_diffusion, 1, 1, 1);
+
+  cX += 2.5*knobSize;
+  verbDecayKnob.knob_set_display("", reverb_enabled);
+  verbDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Reverb decay", current_verb_decay, 1, 1, 1);
+  
+  cX += 2.5 * knobSize;
+  verbModDepthKnob.knob_set_display("", reverb_enabled);
+  verbModDepthKnob.drawAndProcess(cX, cY, knobSize, "Mod Depth", "Modulation depth", current_verb_mod_depth, 1, 1, 1);
+  
+  cX += 2.5 * knobSize;
+  verbModRateKnob.knob_set_display("", reverb_enabled);
+  verbModRateKnob.drawAndProcess(cX, cY, knobSize, "Mod rate", "Mod rate", current_verb_mod_rate, 1, 1, 1);
+
+  cX += 2.5*knobSize;
+  verbLowPassKnob.knob_set_display(FREQ_SLIDER, reverb_enabled);
+  verbLowPassKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter Cutoff inside the feedback loop", current_verb_lowpass, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  verbHighPassKnob.knob_set_display(FREQ_SLIDER, reverb_enabled);
+  verbHighPassKnob.drawAndProcess(cX, cY, knobSize, "Highpass", "Filter Cutoff", current_verb_highpass, 1, 1, 1);
+
+  cX += 2.5*knobSize;
+  verbDry.knob_set_display(DB_SLIDER, reverb_enabled);
+  verbDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", current_verb_dry, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  verbWet.knob_set_display(DB_SLIDER, reverb_enabled);
+  verbWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", current_verb_wet, 1, 1, 1);
+
+  cX += knobSize*1.75;
+  nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.125*knobSpacing, panelHeight, reverb_enabled);
+  
+  cX += 1.35*knobSize;  
+  verbGateAttackKnob.knob_set_display(ATTACK_SLIDER, reverb_enabled);
+  verbGateAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_verb_gate_atk, 1, 1, 1);
+  
+  verbGateOut.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, post_gate, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Apply gate post-reverb.\n\nEnabling this will apply the envelope before and after the reverb.\nDisabling it will apply the envelope only pre-reverb.");
+  post_gate = verbGateOut.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+   
+  cX += knobSize*2.5;
+  verbGateDecayKnob.knob_set_display(ATTACK_SLIDER, reverb_enabled);
+  verbGateDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_verb_gate_decay, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  verbGateSustainKnob.knob_set_display(NORMALIZED_SLIDER, reverb_enabled);
+  verbGateSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_verb_gate_sustain, 1, 1, 1);
+) : ( selected_details == 9 ) ? (
+  // Degrade
+  min_degrade = 3;
+  nextPanel = drawPanel(s_DEGRADE, cX, cY - 1.5 * knobSize, 14.75*knobSpacing, panelHeight, degrade_enabled);
+  
+  cX += knobSize * 1.35;
+  bitrateKnob.knob_set_display(SCALED_SLIDER, degrade_enabled);
+  bitrateKnob.drawAndProcess(cX, cY, knobSize, "Bit rate", "Bit rate", current_bitrate, 1, 1, 1);
+
+  cX += 2.5*knobSize;
+  samplerateKnob.knob_set_display(FREQ_SLIDER, degrade_enabled);
+  samplerateKnob.drawAndProcess(cX, cY, knobSize, "Sample rate", "Sample rate", current_samplerate, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  satKnob.knob_set_display(satKnob.value < .00001 ? "OFF" : DB_SLIDER, degrade_enabled);
+  satKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Saturation.", current_saturate, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  degradeMix.knob_set_display(NORMALIZED_SLIDER, degrade_enabled);
+  degradeMix.drawAndProcess(cX, cY, knobSize, "Dry/Wet", "Degrade mix.", current_degrade_mix, 1, 1, 1);  
+  
+) : ( selected_details == 10 ) ? (
+  // Tape stop
+  min_degrade = 3;
+  nextPanel = drawPanel(s_TAPESTOP, cX, cY - 1.5 * knobSize, 23.75*knobSpacing, panelHeight, tapestop_enabled);
+  
+  cX += knobSize * 1.35;
+  tapestopSpeedKnob.knob_set_display(DECAY_SLIDER, tapestop_enabled);
+  tapestopSpeedKnob.drawAndProcess(cX, cY, knobSize, "Time", "How fast does the tape stop", current_tapestop_decay, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  playheadDry.knob_set_display(DB_SLIDER, tapestop_enabled);
+  playheadDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_dry, 1, 1, 1);
+  cX += 2.5*knobSize;
+    
+  playheadWet.knob_set_display(DB_SLIDER, tapestop_enabled);
+  playheadWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.\n\nNote that this parameter is shared\nbetween all playhead-based effects.", current_playhead_wet, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+
+  tapeStopToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, advanced_tapestop, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Curve controls for tape stop.");
+  advanced_tapestop = tapeStopToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  sprintf(CUSTOM_SLIDER, "%d", tapestopShapeKnob.value * tapestopShapeKnob.scale + 1);
+  timeline_tapestop ? (
+    tapestopShapeKnob.mod1 = 0;
+    tapestopShapeKnob.mod2 = 0;
+    tapestopShapeKnob.knob_set_display(CUSTOM_SLIDER, tapestop_enabled && advanced_tapestop);
+    tapestopShapeKnob.drawAndProcess(cX, cY, knobSize, "Shape", "Tapestop modulation shape.", current_tapestop_shape, 0, 0, 0);
+  ) : (
+    tapestopShapeKnob.knob_set_display(CUSTOM_SLIDER, tapestop_enabled && advanced_tapestop);
+    tapestopShapeKnob.drawAndProcess(cX, cY, knobSize, "Shape", "Tapestop modulation shape.", current_tapestop_shape, 1, 1, 1);
+  );
+
+  tapeStopTimeline.drawToggle(cX + knobSize - 1, cY - knobSize, 0.15*knobSize, 0.15*knobSize, timeline_tapestop, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Set shape on the timeline.");
+  timeline_tapestop = tapeStopTimeline.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+       
+  cX += 2.5*knobSize;
+  tapestopDepthKnob.knob_set_display(NORMALIZED_SLIDER, tapestop_enabled && advanced_tapestop);
+  tapestopDepthKnob.drawAndProcess(cX, cY, knobSize, "Strength", "Modulation depth.", current_tapestop_depth, 1, 1, 1);
+
+  cX += 1.5*knobSize;  
+  time_func_draw(tapestopShapeKnob.value * tapestopShapeKnob.scale, cX, cY - 0.75 * knobSize, knobSize * 3.25, knobSize * 2);
+) : ( selected_details == 11 ) ? (
+  // Tonal delay
+  min_degrade = 3;
+  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 25.5*knobSpacing, panelHeight, karplus_enabled);
+  
+  cX += knobSize * 1.35;
+  midi_pitch = 45 - 12 + 48 * karplusPitchKnob.value;
+  snap_karplus ? midi_pitch = floor(midi_pitch);
+  note_fractional = midi_pitch - floor(midi_pitch);
+  
+  activeModifier == 0 ? (
+    (karplusPitchKnob.mod1 != 0) || (karplusPitchKnob.mod2 != 0) ? (
+      m_pitch = 45 - 12 + 48 * current_karplus_pitch;
+      snap_karplus ? m_pitch = floor(m_pitch);
+      m_fractional = m_pitch - floor(m_pitch);
+      sprintf(CUSTOM_SLIDER, "%s\n%s", pitch_label(60, midi_pitch, note_fractional), pitch_label(61, m_pitch, m_fractional));
+    ) : (
+      pitch_label(CUSTOM_SLIDER, midi_pitch, note_fractional);
+    );
+  ) : ( activeModifier == 2 ) ? (
+    m_pitch = 45 - 12 + 48 * (karplusPitchKnob.value + karplusPitchKnob.mod1);
+    snap_karplus ? m_pitch = floor(m_pitch);
+    m_fractional = m_pitch - floor(m_pitch);
+    sprintf(CUSTOM_SLIDER, "%s\n%s", pitch_label(60, midi_pitch, note_fractional), pitch_label(61, m_pitch, m_fractional));
+  ) : ( activeModifier == 3 ) ? (
+    m_pitch = 45 - 12 + 48 * (karplusPitchKnob.value + karplusPitchKnob.mod2);
+    snap_karplus ? m_pitch = floor(m_pitch);
+    m_fractional = m_pitch - floor(m_pitch);
+    sprintf(CUSTOM_SLIDER, "%s\n%s", pitch_label(60, midi_pitch, note_fractional), pitch_label(61, m_pitch, m_fractional));
+  );
+  
+  karplusPitchKnob.knob_set_display(CUSTOM_SLIDER, karplus_enabled);
+  karplusPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_karplus_pitch, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * karplus_enabled);
+  drawKnobLabels(knobSize*1.25, 0, "A1");
+  drawKnobLabels(knobSize*1.25, 1/4, "A2");
+  drawKnobLabels(knobSize*1.25, 2/4, "A3");
+  drawKnobLabels(knobSize*1.25, 3/4, "A4");
+  drawKnobLabels(knobSize*1.25, 1, "A5");
+  
+  pitchSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_karplus, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Snap pitch to full semitones.");
+  snap_karplus = pitchSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += knobSize * 2.5;
+  karplusFeedback.knob_set_display("", karplus_enabled);
+  karplusFeedback.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", current_karplus_feedback, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  karplusCutoffKnob.knob_set_display(FREQ_SLIDER, karplus_enabled);
+  karplusCutoffKnob.drawAndProcess(cX, cY, knobSize, "Damping", "Filter cutoff of the filter in the feedback path.", current_karplus_cutoff, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  karplusVoicesKnob.knob_set_display(sprintf(CUSTOM_SLIDER, "%d", floor(1 + 4 * karplusVoicesKnob.value)), karplus_enabled);
+  karplusVoicesKnob.drawAndProcess(cX, cY, knobSize, "Voices", "Number of voices.", current_karplus_voices, 1, 1, 1);
+
+  cX += knobSize * 2.5;
+  karplusDetune.knob_set_display("", karplus_enabled && karplusVoicesKnob.value > 0.25);
+  karplusDetune.drawAndProcess(cX, cY, knobSize, "Detune", "Voice detuning.", current_karplus_detune, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  karplusDry.knob_set_display(DB_SLIDER, karplus_enabled);
+  karplusDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry level when delay is active.", current_karplus_dry, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  karplusWet.knob_set_display(DB_SLIDER, karplus_enabled);
+  karplusWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when delay is active.", current_karplus_wet, 1, 1, 1);
+) : ( selected_details == 12 ) ? (
+  // Pitch shifter
+  min_degrade = 3;
+  nextPanel = drawPanel(s_PITCH, cX, cY - 1.5 * knobSize, 14.125*knobSpacing, panelHeight, pitch_shifter_enabled);
+  
+  cX += knobSize * 1.35;
+  shifterSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_shifter, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Snap pitch to full semitones.");
+  snap_shifter = shifterSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  shifterPitchKnob.knob_set_display(snap_shifter ? ROUNDED_PITCH_SLIDER : PITCH_SLIDER, pitch_shifter_enabled);
+  shifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_pitch_shifter_pitch, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * pitch_shifter_enabled);
+  drawKnobLabels(knobSize*1.25, 0, "-2");
+  drawKnobLabels(knobSize*1.25, 1/4, "-1");
+  drawKnobLabels(knobSize*1.25, 2/4, "0");
+  drawKnobLabels(knobSize*1.25, 3/4, "+1");
+  drawKnobLabels(knobSize*1.25, 1, "+2");
+  
+  cX += 2.5*knobSize;
+  shifterDry.knob_set_display(DB_SLIDER, pitch_shifter_enabled);
+  shifterDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", current_shifter_dry, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  shifterWet.knob_set_display(DB_SLIDER, pitch_shifter_enabled);
+  shifterWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", current_shifter_wet, 1, 1, 1);
+  
+  cx += 1.5 * knobSize;
+  shifterSelect.value = shifter_mode;
+  shifterSelect.selection_button(0, cX, cY - .7 * knobSize, 2.5 * block_width, block_width - 4, "Transients", edge_r, edge_g, edge_b, "Uses shorter window sizes.");
+  shifterSelect.selection_button(1, cX, cY + .3 * knobSize, 2.5 * block_width, block_width - 4, "Melody", edge_r, edge_g, edge_b, "Uses longer window sizes.\nLeads to better phase alignment, but poor transient preservation.");
+  shifter_mode = shifterSelect.value;
+) : ( selected_details == 20 ) ? (
+  // Modulation FX
+  min_degrade = 3;
+  nextPanel = drawPanel(s_MODFX, cX, cY - 1.5 * knobSize, 14.75*knobSpacing, panelHeight, modulation_enabled);
+  
+  cX += knobSize * 1.35;
+  midi_pitch = (45 + 36 * current_modulator_pitch);
+  snap_karplus ? midi_pitch = floor(midi_pitch);
+  note_fractional = midi_pitch - floor(midi_pitch);
+  
+  snap_modulator < 0.025 ? (
+    sprintf(CUSTOM_SLIDER, "%s (+%.1f)", identify_note(midi_pitch), note_fractional);
+  ) : (
+    identify_note(midi_pitch);
+  );
+  
+  modulatorPitch.knob_set_display(CUSTOM_SLIDER, modulation_enabled);
+  modulatorPitch.drawAndProcess(cX, cY, knobSize, "Pitch", "", current_modulator_pitch, 1, 1, 1);
+  
+  modulatorPitchSnapToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, snap_modulator, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Snap pitch to full semitones.");
+  snap_modulator = modulatorPitchSnapToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5*knobSize;
+  modulatorOffset.knob_set_display(NORMALIZED_SLIDER, modulation_enabled);
+  modulatorOffset.drawAndProcess(cX, cY, knobSize, "RM / AM", "Modulator offset.\n\nThis interpolates between ring modulation and amplitude modulation.", current_modulator_offset, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  modulatorPhase.knob_set_display(NORMALIZED_SLIDER, modulation_enabled);
+  modulatorPhase.drawAndProcess(cX, cY, knobSize, "L/R Phase", "Phase difference modulator between left and right.", current_modulator_phase, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  modulatorWet.knob_set_display(NORMALIZED_SLIDER, modulation_enabled);
+  modulatorWet.drawAndProcess(cX, cY, knobSize, "Dry/Wet", "Modulator mix.", current_modulator_wet, 1, 1, 1);
+  
+  cX += knobSize*1.75;
+  nextPanel = drawPanel(s_ENVELOPE, cX, cY - 1.5 * knobSize, 11.125*knobSpacing, panelHeight, modulation_enabled);
+  
+  cX += 1.35*knobSize;
+  modulatorAttackKnob.knob_set_display(ATTACK_SLIDER, modulation_enabled);
+  modulatorAttackKnob.drawAndProcess(cX, cY, knobSize, "Attack", "Envelope Attack", current_modulator_atk, 1, 1, 1);
+  
+  modResetPhaseKnob.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, modulation_reset_phase, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g*2, row_color_b, toggle_a, "Reset phase of the modulator on block-on.");
+  modulation_reset_phase = modResetPhaseKnob.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += knobSize*2.5;
+  modulatorDecayKnob.knob_set_display(ATTACK_SLIDER, modulation_enabled);
+  modulatorDecayKnob.drawAndProcess(cX, cY, knobSize, "Decay", "Envelope Decay", current_modulator_decay, 1, 1, 1);
+  
+  cX += knobSize*2.5;
+  modulatorSustainKnob.knob_set_display(NORMALIZED_SLIDER, modulation_enabled);
+  modulatorSustainKnob.drawAndProcess(cX, cY, knobSize, "Sustain", "Envelope Sustain", current_modulator_sustain, 1, 1, 1);
+) : ( selected_details == 22 ) ? (
+  // Delay
+  min_degrade = 3;
+  nextPanel = drawPanel(s_DELAY, cX, cY - 1.5 * knobSize, 25.5*knobSpacing, panelHeight, delay_enabled);
+  
+  cX += knobSize * 1.35;
+  delayTimeKnob.knob_set_display(delay_time_string(delayTimeKnob.value), delay_enabled);
+  delayTimeKnob.drawAndProcess(cX, cY, knobSize, "Time", "Delay time.", current_delay_time, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  delayFeedbackKnob.knob_set_display("", delay_enabled);
+  delayFeedbackKnob.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", current_delay_feedback, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  delayCutoffLPKnob.knob_set_display(FREQ_SLIDER, delay_enabled);
+  delayCutoffLPKnob.drawAndProcess(cX, cY, knobSize, "Lowpass", "Filter cutoff of the filter in the feedback path.", current_delay_cutoff_lp, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  delayCutoffHPKnob.knob_set_display(FREQ_SLIDER, delay_enabled);
+  delayCutoffHPKnob.drawAndProcess(cX, cY, knobSize, "Highpass", "Filter cutoff of the filter in the feedback path.", current_delay_cutoff_hp, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  delaySatKnob.knob_set_display(delaySatKnob.value < .00001 ? "OFF" : DB_SLIDER, delay_enabled);
+  delaySatKnob.drawAndProcess(cX, cY, knobSize, "Saturation", "Saturation.", current_delay_sat, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  delayDryKnob.knob_set_display(DB_SLIDER, delay_enabled);
+  delayDryKnob.drawAndProcess(cX, cY, knobSize, "Dry", "Dry level when delay is active.", current_delay_dry, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  delayWetKnob.knob_set_display(DB_SLIDER, delay_enabled);
+  delayWetKnob.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when delay is active.", current_delay_wet, 1, 1, 1);
+  
+  delayGainToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, delay_gain_mode, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Enabling this will make the delay chain always\noutput, but make the blocks determine whether audio\nshould be allowed into the delay chain.");
+  delay_gain_mode = delayGainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+) : ( selected_details == 23 ) ? (
+  // Chorus
+  min_degrade = 3;
+  nextPanel = drawPanel(s_CHORUS, cX, cY - 1.5 * knobSize, 21.75*knobSpacing, panelHeight, chorus_enabled);
+  
+  cX += knobSize * 1.35;
+  chorusDepthKnob.knob_set_display(DEPTH_SLIDER, chorus_enabled);
+  chorusDepthKnob.drawAndProcess(cX, cY, knobSize, "Depth", "Level of delay line modulation.", current_chorus_depth, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  chorusSpeedKnob.knob_set_display("", chorus_enabled);
+  chorusSpeedKnob.drawAndProcess(cX, cY, knobSize, "Speed", "Speed of delay line modulation.", current_chorus_speed, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  chorusVoicesKnob.knob_set_display(sprintf(CUSTOM_SLIDER, "%d", floor(1 + 3 * current_chorus_voices)), chorus_enabled);
+  chorusVoicesKnob.drawAndProcess(cX, cY, knobSize, "Voices", "Number of voices.", current_chorus_voices, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  chorusFeedbackKnob.knob_set_display("", chorus_enabled);
+  chorusFeedbackKnob.drawAndProcess(cX, cY, knobSize, "- Feedback +", "Feedback.\n\nNegative feedback leads to pipe-like sounds.\nPositive feedback to string like sounds.", current_chorus_feedback, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  chorusDryKnob.knob_set_display(DB_SLIDER, chorus_enabled);
+  chorusDryKnob.drawAndProcess(cX, cY, knobSize, "Dry", "Dry level when chorus is active.", current_chorus_dry, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  chorusWetKnob.knob_set_display(DB_SLIDER, chorus_enabled);
+  chorusWetKnob.drawAndProcess(cX, cY, knobSize, "Wet", "Wet level when chorus is active.", current_chorus_wet, 1, 1, 1);
+);
+
+hinter.drawHint_draw();
+
+last_cap = mouse_cap;
+gfx_setcursor(current_cursor, "arrow");
+
+critical_error ? (
+  gfx_set(1, 0, 0, 1);
+  gfx_setfont(5, "Arial", 55);
+  gfx_x = 35;
+  gfx_y = 45;
+  gfx_printf("CRITICAL ERROR LOADING PRESET!");
+  gfx_x = 35;
+  gfx_y += 55;
+  gfx_printf("PLEASE NOTIFY ME OF THIS");
+);
+

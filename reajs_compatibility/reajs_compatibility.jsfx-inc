@@ -1,0 +1,74 @@
+
+desc:ReaJS compatibility description
+version: 0.01
+author: Joep Vanlier
+changelog: 
+about: 
+ReaJS Compatibility File.
+-------------------------
+
+This file emulates fft_real. However, considering that normally fft_real needs half the 
+space to operate, there is a catch. You need twice the memory to work with. You need to make 
+sure that you leave an fft sized block empty between where you'd normally use fft_real and ifft_real.
+
+Copyright (C) 2021 Joep Vanlier
+License: MIT
+
+@init
+reaJS_compatibility_mode = 1;
+
+function fft_real(fftLoc, N)
+  local(ptr_slow, ptr_fast)
+  global()
+  instance()
+  (
+    // Restride with empty imaginary component
+    ptr_slow = fftLoc + N - 1;
+    ptr_fast = fftLoc + 2 * N - 2;
+    loop(N,
+      ptr_fast[] = 2 * ptr_slow[];
+      ptr_fast[1] = 0;
+      ptr_fast -= 2;
+      ptr_slow -= 1;
+    );
+    
+    // Normal FFT.
+    fft(fftLoc, N);
+    fft_permute(fftLoc, N);
+    
+    // Convert to what you'd expect the output of fft_real to be.
+    fft_ipermute(fftLoc, N / 2);
+  );
+
+function ifft_real(fftLoc, N)
+  local(ptr_slow, ptr_fast)
+  global()
+  instance()
+  (
+    // Undo the fftreal permutation.
+    fft_permute(fftLoc, N / 2);
+ 
+    // Reassemble the full spectrum taking into account the symmetry 
+    // one would expect from a real spectrum. Re[f(w)] = Re[f(-w)] and Im[f(w)] = -Im[f(-w)]
+    ptr_slow = fftLoc + 2;
+    ptr_fast = fftLoc + 2 * N - 2;
+    loop(N / 2,
+      ptr_fast[] = ptr_slow[];
+      ptr_fast[1] = - ptr_slow[1];
+      ptr_fast -= 2;
+      ptr_slow += 2;
+    );
+    
+    fft_ipermute(fftLoc, N);
+    ifft(fftLoc, N);
+    
+    // fft produces real and imaginary result. Just drop the imaginary result.
+    ptr_slow = fftLoc;
+    ptr_fast = fftLoc;
+    loop(N,
+      ptr_slow[] = ptr_fast[];
+      ptr_fast += 2;
+      ptr_slow += 1;
+    );
+  );     
+            
