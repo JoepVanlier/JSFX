@@ -30,7 +30,7 @@ The plugins won't show up until you refresh your FX list or restart reaper.
 
 Note that everything is permissively licensed, but if you use some of the code in your own works, I'd appreciate a mention. Thanks!
 
-#### What if I want to use the plugins in another DAW?
+## What if I want to use the plugins in another DAW?
 
 If you're on Windows, you can use ReaJS: https://www.reaper.fm/reaplugs/
 Note however, that while some plugins will just work, for others you have to install their ReaJS compatibility version.
