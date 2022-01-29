@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.9
+version: 5.0.10
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Remove center line for spectrum. Make sure sonogram continues drawing in diff mode.
+changelog: Allow disabling time plot grid completely. Improve time plot visualization. Add option to show all channels in time plot.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -43,7 +43,7 @@ slider25:1<0,1,1>-Ch15
 slider26:1<0,1,1>-Ch16
 slider27:1<0,1,1>-Sum
 slider28:-1<-1,1,16>-Channel
-slider29:0<1,0,2{Sample,Sonogram,Off}>-Sonogram
+slider29:0<1,0,3{Sonogram,Sample,Sample all,Off}>Sonogram
 slider30:5000<10,45000,100>-SonoScale
 slider31:.5<0.1,3,.03>-SignalScale
 slider32:6<0,7,1{viridis,viridisinv,magma,magmainv,inferno,infernoinv,plasma,plasmainv}>-colormap2
@@ -673,9 +673,18 @@ function scope.drawGrid(xp, yp, wp, hp, scaling)
     ) );
 );
   
-function scope.drawSignal( xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb)
+function get_color(ch, col)
+local(cidx, cref)
+global(slider8)
+(
+  cref = (10000 + 100*floor(slider8));
+  cidx = 3 * ch + col;
+  cref[cidx]
+);
+  
+function scope.drawSignal_legacy(xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb, fill)
   instance(w, h, x, y, dx, last, xcoord, hh, sig)
-  globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl)
+  globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl, slider39)
 (
   w = wp;
   h = hp;
@@ -685,7 +694,7 @@ function scope.drawSignal( xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb
   last = scaling * ( rpos[] );
   xcoord = x;
   
-  scope.drawGrid(xp, yp, wp, hp, scaling);
+  slider39 ? scope.drawGrid(xp, yp, wp, hp, scaling);
   
   x = xp;
   y = yp;
@@ -701,7 +710,47 @@ function scope.drawSignal( xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb
   );
 );
 
-function scope.drawMovingSignal( xp, yp, wp, hp, rpos, endpos, startpos, scaling, sampleSize, rr, gg, bb)
+function scope.drawSignal(xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb, fill)
+  instance(w, h, x, y, dx, xcoord, hh)
+  globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl, slider39, slider37)
+  local(mn, mx, val, last_min, last_max)
+(
+  w = wp;
+  h = hp;
+  hh = 0.5 * h;
+   
+  slider39 ? scope.drawGrid(xp, yp, wp, hp, scaling);
+  
+  x = xp;
+  y = yp;
+  gfx_r=rr; gfx_g=gg; gfx_b=bb;
+  dx = sampleSize / w;
+  xcoord = x;
+  loop(w,
+    mn = 1000000;
+    mx = -1000000;
+    loop(dx,
+      val = scaling * rpos[]; rpos += 1;
+      (val > 1.0) ? val = 1.0 : ( val < -1.0 ? val = -1.0 );
+      mx = max(mx, val);
+      mn = min(mn, val);
+    );
+    mn = y + hh * mn + hh;
+    mx = y + hh * mx + hh;
+    (fill == 1) ? (
+      gfx_a=slider37;
+      gfx_line(xcoord, mn, xcoord, mx);
+    );
+    gfx_a = 0.85;
+    gfx_line(xcoord - 1, last_min, xcoord, mn);
+    gfx_line(xcoord - 1, last_max, xcoord, mx);
+    xcoord += 1;
+    last_min = mn;
+    last_max = mx;
+  );
+);
+
+function scope.drawMovingSignal_legacy( xp, yp, wp, hp, rpos, endpos, startpos, scaling, sampleSize, rr, gg, bb, fill)
   instance(w, h, x, y, dx, last, xcoord, hh, sig)
   globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl)
 (
@@ -730,6 +779,50 @@ function scope.drawMovingSignal( xp, yp, wp, hp, rpos, endpos, startpos, scaling
     rpos = ( rpos > endpos ) ? startpos : rpos + 1;
   );
 );
+
+
+function scope.drawMovingSignal( xp, yp, wp, hp, rpos, endpos, startpos, scaling, sampleSize, rr, gg, bb, fill)
+  instance(w, h, x, y, dx, xcoord, hh, val, mn, mx, last_min, last_max)
+  globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl, slider37)
+(
+  hh = 0.5 * h;
+  scope.drawGrid(xp, yp, wp, hp, scaling);
+  
+  x = xp;
+  y = yp;
+  w = wp;
+  h = hp;
+    
+  gfx_r=rr; gfx_g=gg; gfx_b=bb; gfx_a=slider37;
+  dx = sampleSize / w;
+  xcoord = x;
+  rpos = rpos + 1;
+  loop(w,
+    mn = 1000000;
+    mx = -1000000;
+    loop(dx,
+      val = scaling * rpos[];
+      rpos = ( rpos > endpos ) ? startpos : rpos + 1;
+      (val > 1.0) ? val = 1.0 : ( val < -1.0 ? val = -1.0 );
+      mx = max(mx, val);
+      mn = min(mn, val);
+    );
+    
+    mn = y + hh * mn + hh;
+    mx = y + hh * mx + hh;
+    (fill == 1) ? (
+      gfx_a=slider37;
+      gfx_line(xcoord, mn, xcoord, mx);
+    );
+    gfx_a = 0.85;
+    gfx_line(xcoord - 1, last_min, xcoord, mn);
+    gfx_line(xcoord - 1, last_max, xcoord, mx);
+    xcoord += 1;
+    last_min = mn;
+    last_max = mx;
+  );
+);
+
 
 function hit(xp,yp,cm) 
   instance(w,h,x,y) 
@@ -776,7 +869,6 @@ function checkChannelButtons()
     
   chA.hit_button(mouse_x,mouse_y,200) ? ( showA=!showA; slider_automate(showA); );
   chB.hit_button(mouse_x,mouse_y,200) ? ( showB=!showB; slider_automate(showB); );
-  
   hit > 0;
 );
 
@@ -1542,7 +1634,7 @@ instance()
 
     slider29 == 0 && cap_last_y != mouse_y ) ? (
       sonogram.hit_button(mouse_x,mouse_y,-1) ? ( slider32 = cycle_slider(slider32, 0, 7, 1);
-    );  
+    );
   );
 ) : (
   ( zoomMode == 1 ) ? (
@@ -1700,9 +1792,8 @@ instance()
           );
          
          channels_button.hit_button(mouse_x,mouse_y,-1) ? ( slider41=!slider41; slider_automate(slider41); old_w = 0; ) :
-         
-         sonogram.hit_button(mouse_x,mouse_y,8+slider29);
-         
+         sonogram.hit_button(mouse_x,mouse_y,slider29 == 0 ? 8 : 9);
+
          checkChannelButtons() ? : 
                  slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateSliders = 1; old_w = 0) :
                  slider42 == 0 ? floor_button.hit_button(mouse_x,mouse_y,1);
@@ -1721,10 +1812,10 @@ instance()
                  slider42 == 0 ? background_button.hit_button(mouse_x,mouse_y,30);                 
                  slider42 == 0 ? sonoScale.hit_button(mouse_x,mouse_y,10) ? :
                  slider42 == 0 ? smoothing_type.hit_button(mouse_x,mouse_y,45);
-                
+
                  (      // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position 
-                    slider42 == 0 ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0) :
-                    slider42 == 0 ? sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>2?slider29=0; slider_automate(slider29); old_w = 0 ):
+                    (slider42 == 0) ? sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>3?slider29=0; slider_automate(slider29); old_w = 0 ):
+                    (slider42 == 0) ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0) :
                     drawHz = 1;
                 )                
           );
@@ -2101,14 +2192,14 @@ function DrawButtons()
 
       slider39 == 1 ? ( postOptions = gridAlpha_button.draw_button_fixedWidth(gfx_w-10, postOptions+buttonPad, hideTxtW, sprintf(#,"^ Alpha: %.1f ^" ,slider40)) );
       
-      postSono = sonogram_button.draw_button_fixedWidth(gfx_w-10, postOptions + 4*buttonPad, hideTxtW, slider29==1?">>   Hide   >>" : slider29==0?"<    Time    >" : "<  Sonogram  |");
+      postSono = sonogram_button.draw_button_fixedWidth(gfx_w-10, postOptions + 4*buttonPad, hideTxtW, slider29==2?">>   Hide   >>" : slider29==1?"< Time (all) >" : slider29==0?"<    Time    >" : "<  Sonogram  |");
       slider29 == 0 ? ( sonoLog.draw_button2_fixedWidth(gfx_w-10, postSono+buttonPad, hideTxtW, "Log(Sonogram)", slider33, 0, 0, 0, -1) );
     );
 );
 
 function updateSpectralBounds()
 (
-  slider29 == 2 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
+  slider29 == 3 ? sono_size = 0 : sono_size = sono_frac*gfx_h;
 
   // SET THE OFFSETS HERE
   spectrum_yoffset = 25 * (1 - hideUI) * (1 - micro_view);
@@ -2224,7 +2315,6 @@ instance()
         processFFT(rpos[], fftw[], ibuf[], shft[], hsiz[], ccolor[0], ccolor[1], ccolor[2], 1, 1);
       );
     );
-    
     rpos     += 1;
     fftw     += 1;
     ibuf     += 1;
@@ -2366,7 +2456,7 @@ mouse_cap > 0 ? (
     loop(fftsize*.5+1,window[i-=1]*=pwr);
     integrate_sc=1;
   );
-
+  
   displayMode == 0 ? drawSpectra(recpositions, fftworkspaces, integrate_bufs, shifts, histsizes)
   : displayMode == 1 ? drawDifferenceSpectra(recpositions, fftworkspaces, integrate_bufs, shifts, histsizes);
   
@@ -2388,13 +2478,57 @@ mouse_cap > 0 ? (
   
   gfx_x = 0;
   gfx_y = gfx_h-sono_yoffset_bottom-sono_size;
-  ( slider29 == 1 ) ? (
+  ( slider29 == 2 ) ? (
+    isActive = activechannels;
+  
+    // Find any active channel to use as a reference point
+    idx = 0;
+    loop(maxchannels,
+      (isActive[idx]) ? reference_chan = idx;
+      idx += 1;
+    );
+    
+    /*showSum ? (
+      ( slider34 == 0 ) ? (
+        relative_position = shifts[reference_chan] - recpositions[reference_chan];
+        cpos = sumposr + relative_position;
+        cpos = (cpos < sumshr) ? (cpos + sumhsr - sumshr) : cpos;
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 2);
+        relative_position = shifts[reference_chan] - recpositions[reference_chan];
+        cpos = sumposl + relative_position;
+        cpos = (cpos < sumshl) ? (cpos + sumhsl - sumshl) : cpos;
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 2);
+      ) : (
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 2);
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposl, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 2);
+      );
+    );*/
+    
+    // Draw all time tracks
+    idx = 0;
+    refpoint = recpositions[reference_chan];
+    loop(maxchannels,
+      (isActive[]) ? (
+        ( slider34 == 0 ) ? (
+          relative_position = shifts[reference_chan] - recpositions[reference_chan]; /* Forced resync */
+          cpos = recpositions[idx] + relative_position;
+          cpos = (cpos < shifts[idx]) ? (cpos + histsizes[idx] - shifts[idx]) : cpos;
+          scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, histsizes[idx], shifts[idx], slider31, histsizes[0] - shifts[0], get_color(idx, 0), get_color(idx, 1), get_color(idx, 2), 1);
+        ) : (
+          relative_position = refpoint - recpositions[reference_chan]; /* Forced resync */
+          scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, recpositions[idx] + relative_position, histsizes[idx], shifts[idx], slider31, histsizes[0] - shifts[0], get_color(idx, 0), get_color(idx, 1), get_color(idx, 2), 1);
+        );
+      );
+      isActive += 1;
+      idx += 1;
+    );
+  ) : ( slider29 == 1 ) ? (
     // Time window
     ( selected > -1 ) ? (
       ( slider34 == 0 ) ? (
-        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, shifts[selected], slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );  
+        scope.drawSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, shifts[selected], slider31, histsizes[0] - shifts[0], get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1);
       ) : (
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, recpositions[selected], histsizes[selected], shifts[selected], slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );  
+        scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, recpositions[selected], histsizes[selected], shifts[selected], slider31, histsizes[0] - shifts[0], get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1);
       );
 
       gfx_r=gfx_g=gfx_b=1.0-bgColor;
@@ -2403,13 +2537,12 @@ mouse_cap > 0 ? (
       !micro_view ? gfx_printf( "Ch %d", selected + 1 );
     ) : (
       ( slider34 == 0 ) ? (
-        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshl, slider31, histsizes[0] - shifts[0], cref[4], cref[5], cref[6] );  
-        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshr, slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );
+        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 1);
+        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 1);
       ) : (
-        sll = sumposl; srr= sumposr;
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sll, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], cref[4], cref[5], cref[6] );
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, srr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], cref[], cref[1], cref[2] );
-      );    
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 1);
+        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposl, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 1);
+      );
     
       gfx_r=gfx_g=gfx_b=1.0-bgColor;      
       gfx_y = gfx_h-sono_yoffset_bottom-sono_size + 5;
