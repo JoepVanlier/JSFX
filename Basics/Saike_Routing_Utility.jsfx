@@ -1,0 +1,807 @@
+desc:Saike Monitor Routing Utility [ALPHA]
+tags: Routing utility
+version: 0.01
+author: Joep Vanlier
+changelog: initial commit
+license: MIT
+Special thanks goes out to Audbol for ideation / testing.
+options:no_meter
+
+slider1:gain1_db=0<-45,15,.001>-gain 1 (dB)
+slider2:gain2_db=0<-45,15,.001>-gain 2 (dB)
+slider3:gain3_db=0<-45,15,.001>-gain 3 (dB)
+slider4:swap_lr=0<0,1,{Off,On}>-Swap LR
+slider5:mid_side=0<0,2,{Normal,Mid,Side}>-Mid side switch
+slider6:dim=0<0,1,1{Off,On}>-Dim
+
+slider7:monitor_a_active=0<0,1,1{Off,On}>-Monitor A
+slider8:monitor_a_delay=0<0,20,0.001>-Delay Monitor A [ms]
+slider9:monitor_a_output_chan=0<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Output channel A
+slider10:monitor_a_trim=0<-12,0,.0001>-Monitor A trim
+
+slider11:monitor_b_active=0<0,1,1{Off,On}>-Monitor B
+slider12:monitor_b_delay=0<0,20,0.001>-Delay Monitor B [ms]
+slider13:monitor_b_output_chan=1<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Output channel B
+slider14:monitor_b_trim=0<-12,0,.0001>-Monitor B trim
+
+slider15:monitor_c_active=0<0,1,1{Off,On}>-Monitor C
+slider16:monitor_c_delay=0<0,20,0.001>-Delay Monitor C [ms]
+slider17:monitor_c_output_chan=2<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Output channel C
+slider18:monitor_c_trim=0<-12,0,.0001>-Monitor C trim
+
+slider19:headphones_active=0<0,1,1{Off,On}>-Headphones
+slider20:headphones_output_chan=3<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Headphones output channel
+slider21:headphones_trim=0<-12,0,.0001>-Headphones trim
+
+slider22:subwoofer_active=0<0,1,1{Off,On}>-Subwoofer
+slider23:subwoofer_delay=0<0,20,0.001>-Delay Sub [ms]
+slider24:subwoofer_crossover=80<10,200,1>-Subwoofer crossover
+slider25:subwoofer_output_chan=4<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Subwoofer output channel
+slider26:subwoofer_trim=0<-12,0,.0001>-Subwoofer trim
+
+slider27:overall_gain_db=0<-80,0,.0001>-Main gain
+slider28:all_muted=0<0,1,1{Off,On}>-Mute all
+
+in_pin:daw input left
+in_pin:daw input right
+in_pin:pc input left
+in_pin:pc input right
+in_pin:misc input left
+in_pin:misc input right
+out_pin:left output 1
+out_pin:right output 1
+out_pin:left output 2
+out_pin:right output 2
+out_pin:left output 3
+out_pin:right output 3
+out_pin:left output 4
+out_pin:right output 4
+out_pin:left output 5
+out_pin:right output 5
+out_pin:left output 6
+out_pin:right output 6
+
+@init
+dbl_click_speed = .2;
+function init_knob(_minimum, _maximum, _default, _slider_idx)
+instance(minimum, maximum, default, slider_idx)
+global()
+(
+  minimum = _minimum;
+  maximum = _maximum;
+  default = _default;
+  slider_idx = _slider_idx;
+);
+
+overall_gain.init_knob(-80, 0, 0, 27);
+
+input1.gain_knob.init_knob(-45, 15, 0, 1);
+input2.gain_knob.init_knob(-45, 15, 0, 2);
+input3.gain_knob.init_knob(-45, 15, 0, 3);
+
+output1.gain_knob.init_knob(-12, 0, 0, 10);
+output2.gain_knob.init_knob(-12, 0, 0, 14);
+output3.gain_knob.init_knob(-12, 0, 0, 18);
+output4.gain_knob.init_knob(-12, 0, 0, 21);
+output5.gain_knob.init_knob(-12, 0, 0, 26);
+
+output1.delay_knob.init_knob(0, 20, 0, 8);
+output2.delay_knob.init_knob(0, 20, 0, 12);
+output3.delay_knob.init_knob(0, 20, 0, 16);
+output5.delay_knob.init_knob(0, 20, 0, 23);
+
+output5.crossover.init_knob(10, 200, 80, 24); /* Crossover */
+
+function reset_font()
+(
+  gfx_setfont(1, "Verdana", ui_w / 40);
+);
+
+function hinter.sethint(label)
+instance(hint_time, hint_label, was_over)
+global(delta_time)
+(
+  hint_label = label;
+  hint_time += delta_time;
+  was_over = 1;
+);
+
+function hinter.drawhint()
+instance(hint_time, hint_label, was_over)
+global(gfx_x, gfx_y, gfx_w, gfx_h, mouse_x, mouse_y)
+local(w, h)
+(
+  !was_over ? hint_time = 0;
+  was_over = 0;
+
+  ( hint_time > 2.5 ) ? (
+    gfx_setfont(7, "Arial", 12);
+    gfx_measurestr(hint_label, w, h);
+      
+    gfx_x = mouse_x+15;
+    gfx_y = mouse_y+15;
+    ( gfx_x > 0.5*gfx_w ) ? gfx_x = mouse_x - w - 8;
+    ( gfx_y > 0.5*gfx_h ) ? gfx_y = mouse_y - h - 8;
+
+    gfx_set( 0.05, 0.05, 0.1, .8 );
+    gfx_rect(gfx_x-2, gfx_y-2, w+4, h+4);
+    gfx_set( .7, .7, .7, 1 );      
+    gfx_printf(hint_label);
+  );
+  reset_font();
+);
+
+function draw_knob(x, y, r, label, hint)
+instance(minimum, maximum, default, slider_idx, lx, ly, last_click)
+local(dx, dy, rr, relative_position, ang, over, irange, speed, new_value)
+global(gfx_x, gfx_y, captured, last_cap, mouse_cap, mouse_x, mouse_y, last_mouse_y, dbl_click_speed, hinter.sethint)
+(
+  dx = mouse_x - x;
+  dy = mouse_y - y;
+  over = dx * dx + dy * dy < r * r;
+
+  rr = 1;
+  loop(5,
+    gfx_set(0.3 * rr, 0.3 * rr, 0.4 * rr, 1.0);
+    gfx_circle(x, y, r * rr, 1);
+    rr *= 0.96;
+  );
+
+  gfx_set(0, 0, 0, 0.2);
+  gfx_circle(x, y, r+1, 0);
+  gfx_set(0, 0, 0, 0.05);
+  gfx_circle(x, y, 0.82 * r, 0);
+  gfx_circle(x, y, 0.82 * r + 1, 0);
+  
+  gfx_set(0.0, 0.3, 0.4, 1.0);
+  irange = 1.0 / (maximum - minimum);
+  relative_position = (slider(slider_idx) - minimum) * irange;
+  
+  gfx_set(0, 0, 0, 0.65);
+  ang = 0.75 + 1.5 * relative_position;
+  gfx_circle(x + 0.7 * r * cos($pi * ang), y + 0.7 * r * sin($pi * ang), 0.1 * r, 1);
+  
+  gfx_set(0.1, 0.1, 0.2, 0.9);
+  gfx_x = x - r;
+  gfx_y = y - r;
+  sprintf(2, label, slider(slider_idx));
+  gfx_drawstr(2, 5, x + r, y + r);
+
+  (mouse_cap & 1) ? (
+    (last_cap & 1 == 0) ? (
+      over ? (
+        ((time_precise() - last_click) < dbl_click_speed) ? (
+          slider(slider_idx) = default;
+        ) : (
+          last_click = time_precise();
+          captured = slider_idx;      
+        );
+      );
+    ) : ( captured == slider_idx ) ? (
+      speed = 0.002;
+      (mouse_cap & 4 > 0) ? speed *= 0.5;
+      (mouse_cap & 8 > 0) ? speed *= 0.25;
+      dy = last_mouse_y - mouse_y;
+      new_value = min(max(slider(slider_idx) + speed * dy * (maximum - minimum), minimum), maximum);
+      slider(slider_idx) = new_value;
+    );
+  ) : (
+    over ? hinter.sethint(hint);
+  );
+);
+
+
+// Maximal delay line length (don't use plugin on systems with > 96 kHz sampling rate)
+BUFFERSIZE = 20 * 96000 * 2 / 1000;
+
+function init_buffer(n_mem)
+global(BUFFERSIZE)
+local()
+instance(ptr, last, mem)
+(
+  mem = n_mem;
+  (ptr < mem) ? ptr = mem;
+  
+  last = n_mem + BUFFERSIZE;
+  n_mem + BUFFERSIZE;
+);
+
+function sample(l, r, read_offset)
+global()
+local(read_ptr)
+instance(ptr, last, mem, l_read, r_read)
+(
+  read_ptr = ptr - read_offset;
+  (read_ptr < mem) ? read_ptr += (last - mem);
+
+  ptr[] = l;
+  ptr[1] = r;
+  ptr += 2;
+  (ptr >= last) ? ptr = mem;
+  
+  l_read = read_ptr[];
+  r_read = read_ptr[1];
+);
+
+function init_LR2(freq)
+  global(srate)
+  local(f0, ct, st, div)
+  instance(k, a1, a2, a3)
+  (
+    f0 = tan($pi * freq / srate);
+    k = sqrt(2); /* Note the different peak resonance because we're combining 2 SVFs into the Linkwitz-Riley structure */
+
+    ct = cos(f0);
+    st = sin(f0);
+    div = 1.0 / (1.0 + k * st * ct);
+    a1 = ct * ct * div;
+    a2 = st * ct * div;
+    a3 = st * st * div;
+  );
+
+function reset_LR()
+  global()
+  local()
+  instance(ic1eq, ic2eq, ic3eq, ic4eq, ic5eq, ic6eq, k, a1, a2, a3)
+  (
+    ic1eq = ic2eq = 0;  
+  );  
+
+function eval_LRLP(v0)
+  global()
+  local(v1, v2, v3)
+  instance(ic3eq, ic4eq, k, a1, a2, a3)
+  (
+    v3 = v0 - ic4eq;
+    v1 = a1 * ic3eq + a2 * v3;
+    v2 = ic4eq + a2 * ic3eq + a3 * v3;
+    ic3eq = 2*v1 - ic3eq;
+    ic4eq = 2*v2 - ic4eq;
+    
+    v2
+  );
+
+function eval_LR2(v0)
+  global()
+  local(v1, v2, v3, all)
+  instance(ic1eq, ic2eq, k, a1, a2, a3, hp, lp)
+  (
+    v3 = v0 - ic2eq;
+    v1 = a1 * ic1eq + a2 * v3;
+    v2 = ic2eq + a2 * ic1eq + a3 * v3;
+    ic1eq = 2*v1 - ic1eq;
+    ic2eq = 2*v2 - ic2eq;    
+    
+    all = v0 - 2 * k * v1;
+
+    lp = this.eval_LRLP(v2); 
+    hp = all - lp;
+  );  
+
+function resetFilters()
+global()
+local()
+instance(
+  LF1, LF2,            /* Lowpass left */
+  RF1, RF2,            /* Lowpass right */
+)
+(
+  LF1.ic1eq = LF1.ic2eq = LF1.ic3eq = LF1.ic4eq = 0;
+  LF2.ic1eq = LF2.ic2eq = LF2.ic3eq = LF2.ic4eq = 0;
+  RF1.ic1eq = RF1.ic2eq = RF1.ic3eq = RF1.ic4eq = 0;
+  RF2.ic1eq = RF2.ic2eq = RF2.ic3eq = RF2.ic4eq = 0;
+);
+
+// Make sure the delay is the same on all bands (identical number of filters)
+function splitBands(sl, sr)
+local()
+global()
+instance(
+  LF1, RF1,
+)
+(
+  LF1.eval_LR2(sl);
+  RF1.eval_LR2(sr);
+);
+
+function updateCoeffs()
+local()
+global(x_over)
+instance(
+  last_x_over,
+  LF1, RF1,
+  updateRequired
+)
+(
+  updateRequired = last_x_over != x_over;
+  updateRequired ? ( 
+    last_x_over = x_over;
+      
+    LF1.init_LR2(x_over);
+    RF1.k  = LF1.k;
+    RF1.a1 = LF1.a1;
+    RF1.a2 = LF1.a2;
+    RF1.a3 = LF1.a3;
+  );
+  updateRequired
+);
+
+gain1 = 10^(gain1_db/20);
+gain2 = 10^(gain2_db/20);
+gain3 = 10^(gain3_db/20);
+sum_gain = 10^(overall_gain_db/20);
+
+ma_trim = 10^(monitor_a_trim/20);
+mb_trim = 10^(monitor_b_trim/20);
+mc_trim = 10^(monitor_c_trim/20);
+head_trim = 10^(headphones_trim/20);
+sub_trim = 10^(subwoofer_trim/20);
+
+freemem = 0;
+freemem = monitor_a.init_buffer(freemem);
+freemem = monitor_b.init_buffer(freemem);
+freemem = monitor_c.init_buffer(freemem);
+freemem = sub.init_buffer(freemem);
+spls = freemem;
+
+@slider
+
+@block
+x_over = subwoofer_crossover;
+dgain1 = (10^(gain1_db/20) - gain1) / samplesblock;
+dgain2 = (10^(gain2_db/20) - gain2) / samplesblock;
+dgain3 = (10^(gain3_db/20) - gain3) / samplesblock;
+dsum_gain = (10^(overall_gain_db/20) - sum_gain) / samplesblock;
+
+ma_trim = 10^(monitor_a_trim/20);
+mb_trim = 10^(monitor_b_trim/20);
+mc_trim = 10^(monitor_c_trim/20);
+head_trim = 10^(headphones_trim/20);
+sub_trim = 10^(subwoofer_trim/20);
+
+halflife = 30 * 0.001;
+k_decay = log(2) / halflife;
+time_constant = (1.0 - k_decay / srate);
+
+halflife = 30 * 0.001;
+k_decay = log(2) / halflife;
+time_constant_gain = k_decay / srate;
+ms_rate = srate * 0.001;
+
+@sample
+current_monitor_a_delay += time_constant_gain * (monitor_a_delay - current_monitor_a_delay);
+current_monitor_b_delay += time_constant_gain * (monitor_b_delay - current_monitor_b_delay);
+current_monitor_c_delay += time_constant_gain * (monitor_c_delay - current_monitor_c_delay);
+current_subwoofer_delay += time_constant_gain * (subwoofer_delay - current_subwoofer_delay);
+
+monitor_a_delay_samples = 2 * floor(current_monitor_a_delay * ms_rate);
+monitor_b_delay_samples = 2 * floor(current_monitor_b_delay * ms_rate);
+monitor_c_delay_samples = 2 * floor(current_monitor_c_delay * ms_rate);
+subwoofer_delay_samples = 2 * floor(current_subwoofer_delay * ms_rate);
+
+spl0 *= gain1;
+spl1 *= gain1;
+spl2 *= gain2;
+spl3 *= gain2;
+spl4 *= gain3;
+spl5 *= gain3;
+
+m_spl0 = max(spl0, time_constant * m_spl0);
+m_spl1 = max(spl1, time_constant * m_spl1);
+m_spl2 = max(spl2, time_constant * m_spl2);
+m_spl3 = max(spl3, time_constant * m_spl3);
+m_spl4 = max(spl4, time_constant * m_spl4);
+m_spl5 = max(spl5, time_constant * m_spl5);
+
+mix_left = spl0 + spl2 + spl4;
+mix_right = spl1 + spl3 + spl5;
+
+mix_left *= sum_gain;
+mix_right *= sum_gain;
+
+swap_lr ? (
+  tmp = mix_right;
+  mix_right = mix_left;
+  mix_left = tmp;
+);
+
+(mid_side == 1) ? (
+  mix_left = mix_right = 0.5 * (mix_left + mix_right);
+) : (mid_side == 2) ? (
+  mix_left = mix_right = 2.0 * (mix_left - mix_right);
+);
+
+current_dim += time_constant_gain * ((1.0 - 0.822172059 * dim) * (1 - all_muted) - current_dim);
+mix_left *= current_dim;
+mix_right *= current_dim;
+
+headphone_left = mix_left;
+headphone_right = mix_right;
+
+// Make sure we actually wait until the _gain_ is zero, and not
+// immediately kill the crossover when the user deselects the button.
+// We wouldn't want nasty clicks going over the sub.
+(subwoofer_gain > 0.000001) ? (
+  bands.updateCoeffs();
+  bands.splitBands(mix_left, mix_right);
+  
+  mix_left = bands.LF1.hp * subwoofer_gain + (1.0 - subwoofer_gain) * mix_left;
+  mix_right = bands.RF1.hp * subwoofer_gain + (1.0 - subwoofer_gain) * mix_right;
+  sub.sample(bands.LF1.lp, bands.RF1.lp, subwoofer_delay_samples);
+) : (
+  sub.sample(0, 0, subwoofer_delay);
+);
+
+monitor_a.sample(mix_left, mix_right, monitor_a_delay_samples);
+monitor_b.sample(mix_left, mix_right, monitor_b_delay_samples);
+monitor_c.sample(mix_left, mix_right, monitor_c_delay_samples);
+
+// Output routing
+spl0 = spl1 = spl2 = spl3 = spl4 = spl5 = spl6 = spl7 = spl8 = spl9 = spl10 = spl11 = spl12 = 0;
+
+current_gain_a += time_constant_gain * (monitor_a_active * ma_trim - current_gain_a);
+current_gain_b += time_constant_gain * (monitor_b_active * mb_trim - current_gain_b);
+current_gain_c += time_constant_gain * (monitor_c_active * mc_trim - current_gain_c);
+headphone_gain += time_constant_gain * (headphones_active * head_trim - headphone_gain);
+subwoofer_gain += time_constant_gain * (subwoofer_active * sub_trim * (1.0 - headphones_active) - subwoofer_gain);
+
+mon_a_l = monitor_a.l_read * current_gain_a;
+mon_a_r = monitor_a.r_read * current_gain_a;
+mon_b_l = monitor_b.l_read * current_gain_b;
+mon_b_r = monitor_b.r_read * current_gain_b;
+mon_c_l = monitor_c.l_read * current_gain_c;
+mon_c_r = monitor_c.r_read * current_gain_c;
+head_l = headphone_left * headphone_gain;
+head_r = headphone_right * headphone_gain;
+sub_l = sub.l_read * subwoofer_gain;
+sub_r = sub.r_read * subwoofer_gain;
+
+m_mon_a_l = max(mon_a_l, time_constant * m_mon_a_l);
+m_mon_a_r = max(mon_a_r, time_constant * m_mon_a_r);
+m_mon_b_l = max(mon_b_l, time_constant * m_mon_b_l);
+m_mon_b_r = max(mon_b_r, time_constant * m_mon_b_r);
+m_mon_c_l = max(mon_c_l, time_constant * m_mon_c_l);
+m_mon_c_r = max(mon_c_r, time_constant * m_mon_c_r);
+m_head_l = max(head_l, time_constant * m_head_l);
+m_head_r= max(head_r, time_constant * m_head_r);
+m_sub_l = max(sub_l, time_constant * m_sub_l);
+m_sub_r= max(sub_r, time_constant * m_sub_r);
+
+spl(2 * monitor_a_output_chan) += mon_a_l;
+spl(2 * monitor_a_output_chan + 1) += mon_a_r;
+spl(2 * monitor_b_output_chan)+= mon_b_l;
+spl(2 * monitor_b_output_chan + 1) += mon_b_r;
+spl(2 * monitor_c_output_chan)+= mon_c_l;
+spl(2 * monitor_c_output_chan + 1) += mon_c_r;
+spl(2 * headphones_output_chan) += head_l;
+spl(2 * headphones_output_chan + 1) += head_r;
+spl(2 * subwoofer_output_chan)+= sub_l;
+spl(2 * subwoofer_output_chan + 1) += sub_r;
+
+gain1 += dgain1;
+gain2 += dgain2;
+gain3 += dgain3;
+sum_gain += dsum_gain;
+
+@gfx 1055 577
+gfx_set(0.1, 0.1, 0.14, 1.0);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+ui_w = gfx_w;
+ui_h = 0.5 * gfx_w;
+
+x_pad = 0.025;
+y_pad = 0.04;
+
+function channel_lut(idx)
+global()
+local()
+(
+  (idx == 0) ? ("1-2")
+  : (idx == 1) ? ("3-4")
+  : (idx == 2) ? ("5-6")
+  : (idx == 3) ? ("7-8")
+  : (idx == 4) ? ("9-10")
+  : (idx == 5) ? ("11-12")
+);
+
+function menu_lut(idx)
+global()
+local()
+(
+  (idx == 0) ? ("!1-2|3-4|5-6|7-8|9-10|11-12")
+  : (idx == 1) ? ("1-2|!3-4|5-6|7-8|9-10|11-12")
+  : (idx == 2) ? ("1-2|3-4|!5-6|7-8|9-10|11-12")
+  : (idx == 3) ? ("1-2|3-4|5-6|!7-8|9-10|11-12")
+  : (idx == 4) ? ("1-2|3-4|5-6|7-8|!9-10|11-12")
+  : (idx == 5) ? ("1-2|3-4|5-6|7-8|9-10|!11-12")
+);
+
+function in_rect(x, y, w, h)
+local()
+global(mouse_x, mouse_y)
+(
+  (mouse_x > x) && 
+  (mouse_x < (x+w)) &&
+  (mouse_y > y) && 
+  (mouse_y < (y+h))
+);
+
+function basic_rect(x, y, w, h)
+global(ui_w, ui_h, gfx_x, gfx_y)
+local()
+(
+  gfx_set(0.17, 0.17, 0.23, 1.0);
+  gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 5, 1);
+);
+
+function font_color()
+global()
+local()
+(
+  gfx_set(0.8, 0.8, 0.8, 1.0);
+);
+
+function button(x, y, w, h, label, justify, highlighted, hint)
+global(ui_w, ui_h, gfx_x, gfx_y, gfx_mode, mouse_cap, last_cap, hinter.sethint)
+local(sw, sh, ii, over)
+(
+  gfx_set(0.27, 0.27, 0.3, 1.0);
+  gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 5, 1);
+  
+  highlighted ? (
+    ii = 1;
+    gfx_mode = 1;
+    loop(5,
+      highlighted == 1 ? (
+        gfx_set(0.9, 0.4, 0.4, 0.7 / (1 + ii));
+      ) : (
+        gfx_set(0.5, 0.3, 0.3, 0.7 / (1 + ii));
+      );
+      gfx_rect(x * ui_w - ii, y * ui_h - ii, w * ui_w + 2 * ii, h * ui_h + 2 * ii, 5, 1);
+      ii *= 1.8;
+    );
+    gfx_mode = 0;
+    gfx_set(1.0, 0.6, 0.4, 0.5);
+    gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 0, 1);
+    gfx_set(0.3, 0.6, 0.4, 0.2);
+    gfx_rect(x * ui_w + 1, y * ui_h + 1, w * ui_w - 2, h * ui_h - 2, 0, 1);
+  );
+  
+  font_color();
+  gfx_measurestr(label, sw, sh);
+  gfx_x = x * ui_w;
+  gfx_y = y * ui_h;
+  gfx_drawstr(label, justify, (x + w) * ui_w, (y + h) * ui_h);
+  
+  over = in_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h);
+  ((mouse_cap == 0) && over) ? hinter.sethint(hint);
+  (last_cap == 0) && (mouse_cap & 1) && over
+);
+
+function draw_scope(x, y, w, h, signal_left, signal_right, step)
+local(l_sig, r_sig, min_range, max_range, a, b, xc, dbc)
+global(gfx_x, gfx_y, ui_w)
+(
+  x = floor(x); y = floor(y); w = floor(w); h = ceil(h / 2) * 2 - 1;
+  
+  l_sig = abs(signal_left) > 0 ? 20.0 * log10(signal_left) : -10000;
+  r_sig = abs(signal_right) > 0 ? 20.0 * log10(signal_right) : -10000;
+  
+  gfx_set(0, 0, 0, 0.3);
+  gfx_rect(x, y, w, h);
+  
+  min_range = -64;
+  max_range = 0;
+  
+  w -= 1;
+  a = 1.0 / (max_range - min_range);
+  b = - min_range * a;
+  
+  xc = 1;
+  loop(min(w * (a * l_sig + b), w) / 2,
+    gfx_set(1.0, 1.0 - a * xc * 0.33, 0.28 - a * 0.28 * xc, 0.7);
+    gfx_line(x + xc, y + 0.5 * h - 2, x + xc, y + 2);
+    xc += 2;
+  );
+  
+  xc = 1;
+  loop(min(w * (a * r_sig + b), w) / 2,
+    gfx_set(1.0, 1.0 - a * xc * 0.33, 0.28 - a * 0.28 * xc, 0.7);
+    gfx_line(x + xc, y + 0.5 * h + 2, x + xc, y + h - 3);
+    xc += 2;
+  );
+  
+  dbc = - step;
+  xc = x + w - w * a * step;
+  gfx_setfont(4, "Arial", floor(ui_w / 80));
+  loop(floor((max_range - min_range) / step),
+    sprintf(2, "%d", dbc);
+    gfx_x = xc - 1 - w;
+    gfx_y = y - 1;
+    gfx_set(0.0, 0.0, 0.0, 1.0);
+    gfx_drawstr(2, 5, xc+w, y+h);
+    gfx_x = xc + 1 - w;
+    gfx_y = y;
+    gfx_set(0.0, 0.0, 0.0, 1.0);
+    gfx_drawstr(2, 5, xc+w, y+h);
+    gfx_x = xc - w;
+    gfx_y = y;
+    gfx_line(xc - 1, y + 0.75 * h + 2, xc - 1, y + h - 2);
+    gfx_line(xc - 1, y + 0.25 * h - 2, xc - 1, y + 1);
+    gfx_set(1.0, 1.0, 1.0, 0.6);
+    gfx_drawstr(2, 5, xc+w, y+h);
+    gfx_line(xc, y + 0.75 * h + 2, xc, y + h - 2);
+    gfx_line(xc, y + 0.25 * h - 2, xc, y + 1);
+    
+    xc -= w * step * a;
+    dbc -= step;
+  );
+  gfx_setfont(1);
+);
+
+function input_rect(x, y, w, h, label, input, signal_left, signal_right)
+global(ui_w, ui_h, gfx_x, gfx_y)
+local()
+(
+  basic_rect(x, y, w, h);
+  font_color();
+  gfx_x = x * ui_w + 0.05 * w * ui_w;
+  gfx_y = y * ui_h + 0.15 * h * ui_h;
+  gfx_printf(label);
+  
+  gfx_x = x * ui_w + 0.05 * w * ui_w;
+  gfx_y = y * ui_h + 0.4 * h * ui_h;
+  gfx_printf("Input %s", channel_lut(input));
+  
+  draw_scope(x * ui_w + 0.05 * w * ui_w, y * ui_h + 0.7 * h * ui_h, 0.9 * w * ui_w, 0.15 * h * ui_h, signal_left, signal_right, 6);
+  
+  gfx_setfont(3, "Arial", 15);
+  this.gain_knob.draw_knob(x * ui_w + 0.8 * w * ui_w, y * ui_h + h * 0.35 * ui_h, 0.11 * h * ui_w, "%.1f dB", "Adjust gain");
+  reset_font();
+);
+
+function output_rect(x, y, w, h, label, output, signal_left, signal_right)
+global(ui_w, ui_h, gfx_x, gfx_y, last_cap, mouse_cap)
+local(font_w, font_h, xp, yp, wp, hp, selection)
+(
+  basic_rect(x, y, w, h);
+  font_color();
+  gfx_x = x * ui_w + 0.05 * w * ui_w - 3;
+  gfx_y = y * ui_h + 0.11 * h * ui_h;
+  gfx_printf(label);
+  
+  sprintf(1, "Out %s", channel_lut(slider(output)));
+  gfx_measurestr(1, font_w, font_h);
+  xp = floor(x * ui_w + 0.05 * w * ui_w + 0.5);
+  yp = floor(y * ui_h + 0.85 * h * ui_h - font_h + 0.5);
+  wp = font_w + 6;
+  hp = font_h;
+  gfx_x = xp; gfx_y = yp;
+  gfx_printf(1);
+  gfx_roundrect(xp - 3, yp, wp, hp, 5, 1);
+  
+  in_rect(xp, yp, wp, hp) ? (
+    gfx_rect(xp - 2, yp + 1, wp - 1, hp - 1, 5, 1);
+    gfx_set(0, 0, 0, 1.0);
+    gfx_x = xp; gfx_y = yp;
+    gfx_printf(1);
+    (((last_cap & 2) == 0) && ((mouse_cap & 2) == 2)) ?
+    (
+      selection = gfx_showmenu(menu_lut(slider(output)));
+      selection ? (
+        slider(output) = selection - 1;
+      );
+    );
+  );
+  xp = gfx_x + 0.01 * ui_w;
+  draw_scope(xp, y * ui_h + 0.55 * h * ui_h, x + 0.965 * ui_w - xp, 0.275 * h * ui_h, signal_left, signal_right, 12);
+  
+  gfx_setfont(3, "Arial", 10);
+  this.gain_knob.draw_knob(x * ui_w + 0.9 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%.1f dB", "Adjust gain");
+  
+  this.delay_knob.slider_idx > 0 ? (
+    this.delay_knob.draw_knob(x * ui_w + 0.75 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d ms", "Adjust output delay");
+  );
+
+  this.crossover.slider_idx > 0 ? (
+    this.crossover.draw_knob(x * ui_w + 0.60 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d Hz", "Adjust crossover frequency");
+  );
+  
+//  gain_knob, delay_knob and crossover
+  reset_font();
+);
+
+function set_active_monitor(idx)
+(
+  ((mouse_cap & 8) == 0) ? (
+    slider(7) = 0;
+    slider(11) = 0;
+    slider(15) = 0;
+    slider(19) = 0;
+  );
+  slider(idx) = 1;
+);
+
+function center_rect(x, y, w, h, label, input)
+global(ui_w, ui_h, gfx_x, gfx_y,
+       swap_lr, mid_side, dim, all_muted,
+       monitor_a_active, monitor_b_active, monitor_c_active,
+       headphones_active, subwoofer_active,
+       overall_gain.draw_knob)
+local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
+(
+  basic_rect(x, y, w, h);
+
+  button_w = 0.2 * w;
+  button_h = 0.25 * w;
+  pad = 0.05 * w;
+  
+  row_y = 1/6 * h - button_h;
+  n_buttons = 3;
+  row_width = n_buttons * button_w + (n_buttons - 1) * pad;
+  side_pad = 0.5 * (w - row_width);
+  
+  /* Basic controls */
+  button(x + side_pad, y + row_y, button_w, button_h, "Swap\nL - R", 1, swap_lr, "Swap left and right channel") ? (swap_lr = 1 - swap_lr);
+  button(
+    x + side_pad + button_w + pad,
+    y + row_y,
+    button_w,
+    button_h,
+    (mid_side == 1) ? "[Mid]\nSide" 
+    : (mid_side == 2) ? "Mid\n[Side]"
+    : "Mid\nSide",
+    1,
+    mid_side > 0,
+    "Toggle mid/side monitoring"
+  ) ? (
+    mid_side += 1;
+    (mid_side > 2) ? mid_side = 0;
+  );
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Dim", 5, dim, "Reduce volume by 15 dB") ? (dim = 1 - dim);
+  
+  /* Monitor select */
+  row_y = (5 / 6 - 1 / 12) * h - 0.5 * button_h;
+  button(x + side_pad, y + row_y, button_w, button_h, "Mon A", 5, monitor_a_active, "Route to monitor A") ? set_active_monitor(7);
+  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Mon B", 5, monitor_b_active, "Route to monitor B") ? set_active_monitor(11);
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Mon C", 5, monitor_c_active, "Route to monitor C") ? set_active_monitor(15);
+  
+  /* Other select */
+  row_y = (5 / 6 + 1 / 12) * h - 0.5 * button_h;
+  button(x + side_pad, y + row_y, button_w, button_h, "Head\nphone", 1, headphones_active, "Route to headphones") ? set_active_monitor(19);
+  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Sub", 5, subwoofer_active ? (headphones_active ? 2 : 1) : 0, "Split subwoofer into separate band\nAutomatically disabled when using headphones.\n") ? ( subwoofer_active = 1 - subwoofer_active; );
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Mute", 5, all_muted, "Mute everything") ? ( all_muted = 1 - all_muted; );
+  
+  radius = 1/4 * w * ui_w;
+  overall_gain.draw_knob(x + 0.5 * ui_w, y + 0.44 * ui_h, radius, "%.1f dB", "Adjust gain");
+  
+  gfx_x = x * ui_w + 0.05 * w * ui_w;
+  gfx_y = y * ui_h + 0.4 * h * ui_h;
+);
+
+side_width = 0.25;
+
+hh = (1 - 2 * y_pad - 2 * y_pad) / 3;
+input1.input_rect(x_pad, y_pad, side_width, hh, "DAW input", 0, m_spl0, m_spl1);
+input2.input_rect(x_pad, 2 * y_pad + hh, side_width, hh, "PC input", 1, m_spl2, m_spl3);
+input3.input_rect(x_pad, 3 * y_pad + 2 * hh, side_width, hh, "Misc input", 2, m_spl4, m_spl5);
+
+hh = (1 - 2 * y_pad - 4 * y_pad) / 5;
+dy = y_pad + hh;
+output1.output_rect(1 - x_pad - side_width, y_pad, side_width, hh, "Mon A", 9, m_mon_a_l, m_mon_a_r);
+output2.output_rect(1 - x_pad - side_width, y_pad + dy, side_width, hh, "Mon B", 13, m_mon_b_l, m_mon_b_r);
+output3.output_rect(1 - x_pad - side_width, y_pad + 2 * dy, side_width, hh, "Mon C", 17, m_mon_c_l, m_mon_c_r);
+output4.output_rect(1 - x_pad - side_width, y_pad + 3 * dy, side_width, hh, "Headphones", 20, m_head_l, m_head_r);
+output5.output_rect(1 - x_pad - side_width, y_pad + 4 * dy, side_width, hh, "Subwoofer", 25, m_sub_l, m_sub_r);
+
+center_rect(2 * x_pad + side_width, y_pad, 1 - 2 * side_width - 4 * x_pad, 1 - 2 * y_pad, "OK", 0);
+
+last_cap = mouse_cap;
+((mouse_cap & 1 == 0) && (mouse_cap & 2 == 0)) ? captured = 0;
+
+last_mouse_y = mouse_y;
+hinter.drawhint();
+tick = time_precise();
+delta_time = tick - last_tick;
+last_tick = tick;
