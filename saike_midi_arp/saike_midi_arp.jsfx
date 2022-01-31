@@ -1,0 +1,531 @@
+desc:Saike ARP (beta)
+tags: midi arpeggiator
+version: 0.01
+author: Joep Vanlier
+changelog: initial commit
+license: MIT
+options:no_meter
+
+// Considerations
+// We should keep track of notes in flight. If the user lets go of a note in flight
+// then we should terminate it (optionally)!
+// Different ways to distribute notes over the scale (repeat if empty slots are available, voice steal or not).
+
+// When a note is turned on, we schedule it being turned off already.
+// If the input is lifted before that time, we should terminate it early.
+
+// Per arp level we should have a list of notes in flight so we can kill them in flight.
+// Note that this is at most 1 note (thankfully!).
+
+slider1:current_speed=4<1,16,1>Current speed
+slider2:current_pattern_index=0<0,63,1>Current pattern
+slider3:polyphony=5<0,12,1>Max Polyphony
+slider4:poly_mode=0<0,5,1,{No extend,Repeat,Back_Forth}>Poly Mode
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_arp_midi_handling.jsfx-inc
+import saike_midi_arp_pattern_handling.jsfx-inc
+import saike_midi_arp_gfx_funcs.jsx-inc
+
+@init
+max_segments = 64;
+max_notes = 12;
+max_octaves = 5;
+max_lines = 5 * 12;
+max_stored_patterns = 64;
+initialize_patterns();
+
+n_segments == 0 ? n_segments = 32;
+loop_point == 0 ? loop_point = 32;
+
+DRAG_STRING = 50;
+DRAG_BLOCK = 1;
+DRAG_NUDGE = 2;
+DRAG_EFFECT = 3;
+DRAG_EFFECT_2 = 4;
+DRAG_SOLO = 5;
+DRAG_MODSIZE = 6;
+
+sample_clock = 0;
+pattern_change = 1;
+current_sample = 0;
+
+/* Allocate memory */
+freemem = 0;
+freemem = (midimem = freemem) + 32768;
+freemem = (note_history = freemem) + 32768;
+freemem = (shuffle_buffer = freemem) + max_segments;
+freemem = (order_mem = freemem) + max_segments;
+freemem = midi.init_midi(freemem);
+freemem = (current_arp = freemem) + 128;
+memset(current_arp, 0, 128);
+
+function setup_theme()
+(
+  base_r = .1;
+  base_g = .1;
+  base_b = .1;
+  
+  size_factor = gfx_h / 665;
+  size_factor = min(size_factor, gfx_w / 910);
+  
+  scaling = gfx_ext_retina == 2 ? 1 : 0;
+  scaling = min(scaling, size_factor - 1);
+  //scaling = 1.3; // REMOVE BEFORE FLIGHT
+  fontscaling = scaling;
+  
+  BASE_FONT = 1;
+  gfx_setfont(BASE_FONT, "Arial", 16 * (1 + fontscaling));
+  font_r = .8;
+  font_g = .7;
+  font_b = .8;
+  
+  BAND_FONT = 5;
+  gfx_setfont(BAND_FONT, "Arial", floor(16 * (1+fontscaling)));
+  
+  KNOB_FONT = 6;
+  gfx_setfont(KNOB_FONT, "Arial", floor(14 * (1+fontscaling)));
+  
+  KNOB_FONT2 = 7;
+  gfx_setfont(KNOB_FONT2, "Arial", floor(13 * (1+fontscaling)));
+  
+  HINT_FONT = 8;
+  gfx_setfont(HINT_FONT, "Arial", floor(13 * (1+fontscaling)));
+  
+  TOGGLE_FONT = 9;
+  gfx_setfont(TOGGLE_FONT, "Arial", floor(13 * (1+fontscaling)));
+  
+  MOD_FONT = 10;
+  gfx_setfont(MOD_FONT, "Arial", floor(12 * (1+fontscaling)));
+  
+  SAMPLE_FONT = 11;
+  BETA_FONT = 12;
+
+  style == 0 ? (
+    font_color_r = .7;
+    font_color_g = .6;
+    font_color_b = .8;
+  ) : (
+    font_color_r = .7;
+    font_color_g = .7;
+    font_color_b = .7;
+  );
+  dial_animation = 1;
+  dial_position_color_r = 0.2;
+  dial_position_color_g = 0.7;
+  dial_position_color_b = 0.4;
+  
+  font_color_a = 1;
+  knob_font_color_r = 0.9;
+  knob_font_color_g = 0.9;
+  knob_font_color_b = 0.8;
+  knob_font_color_a = 1;
+  edge_r = 39/255 * .5;
+  edge_g = 39/255 * .5;
+  edge_b = 41/255 * .5;
+  edge_a = 1.0;
+  
+  edge_font_r = 0.9;
+  edge_font_g = 0.9;
+  edge_font_b = 0.8;
+  
+  widget_r = 35/255;
+  widget_g = 155/255;
+  widget_b = 30/255;
+  widget_a = 1.0;
+  toggle_r = .5;
+  toggle_g = 1.6;
+  toggle_b = .5;
+  toggle_a = 1.0;
+);
+setup_theme();
+
+grid_origin_x = 5 * (1 + scaling);
+grid_origin_y = 5 * (1 + scaling);
+//label_width = floor(50 * (1 + scaling));
+//block_width = floor(22.83 * (1 + scaling));
+//block_spacing = floor(1 * (1 + scaling));
+
+block_width = floor(25 * (1 + scaling));
+block_spacing = floor(2 * (1 + scaling));
+label_width = 2 * block_width;
+
+@serialize
+writing = file_avail(0) < 0;
+file_var(0, file_version);
+serialize_patterns(writing, file_version);
+
+file_version = 1;
+
+@slider
+
+@block
+function update_time_info()
+(
+  samples_per_beat = (srate * 60) / tempo / current_speed;
+  loop_length = loop_point * samples_per_beat;
+  pattern_length = n_segments * samples_per_beat;
+  to_index = n_segments / pattern_length;
+  from_beat = 60 * srate / tempo;
+);
+
+update_time_info();
+loaded_pattern = -1;
+pattern_update();
+midi.midi_block();
+
+@sample
+function assign_notes(arp_mem, poly_mode)
+local(idx, idx2, dir)
+instance(notes_on, active_note_mem)
+global()
+(
+  idx = 0;
+  (poly_mode == 0) ? (
+    // No extend
+    loop(notes_on,
+      arp_mem[idx] = active_note_mem[idx];
+      idx += 1;
+    );
+    loop(12 - notes_on,
+      arp_mem[idx] = 0;
+      idx += 1;
+    );
+  ) : (poly_mode == 1) ? (
+    // Repeat
+    idx = 0;
+    idx2 = 0;
+    loop(12,
+      arp_mem[idx] = active_note_mem[idx2];
+      idx += 1; idx2 += 1;
+      (idx2 == notes_on) ? idx2 = 0;
+    );
+  ) : (
+    // Back_Forth
+    idx = 0;
+    idx2 = 0;
+    dir = 1;
+    loop(12,
+      arp_mem[idx] = active_note_mem[idx2];
+      idx += 1; idx2 += dir;
+      (idx2 == notes_on - 1) ? (dir = -dir);
+      (idx2 == 0) ? (dir = -dir);
+    );
+  );
+  
+//  
+);
+midi.curSample += 1;
+midi.notes_remain ? (
+  midi.midi_sample();
+  midi.assign_notes(current_arp, poly_mode);
+);
+
+pattern_update();
+
+current_sample += 1;
+current_sample > loop_length ? 
+(
+  while(
+    current_sample -= loop_length;
+    current_sample > loop_length
+  );
+);
+sequencer_index = floor(to_index * current_sample);
+
+@gfx
+current_cursor = randomize_toggle.value ? 32515 : 32512;
+
+function mouse_wheel_values(mem, idx, n_segments, max_value)
+local(start_idx, end_idx, ptr, old, value)
+global(mouse_wheel)
+(
+  (mouse_wheel != 0) ? (
+    //idx += 1;
+    abs(mem[idx]) > 0 ? (
+      start_idx = idx;
+  
+      // Is it a start point? Check if it's a continuation of a block. If so seek backwards to the start
+      mem[start_idx] < 0 ? (
+        while((mem[start_idx] < 0) && (start_idx > 0))
+        (
+          start_idx -= 1;
+        );
+      );
+      
+      end_idx = idx + 1;
+      while((mem[end_idx] < 0) && (end_idx < n_segments))
+      (
+        end_idx += 1;
+      );
+      
+      ptr = mem + start_idx;
+      loop(end_idx - start_idx,
+        old = ptr[];
+        value = abs(old) + sign(mouse_wheel);
+        value = min(max(1, value), max_value);
+        ptr[] = sign(old) * value;
+        ptr += 1;
+      );
+    );
+    mouse_wheel = 0;
+  );
+);
+
+function release_drag()
+global(drag_mode, captured_by, dragging)
+local()
+(
+  dragging = drag_mode = captured_by = 0;
+);
+
+function shift_drag(y_over, me, mem, idx)
+global(loop_point, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
+       shift_ref, dragging, captured_by, drag_mode, idx_ref,
+       DRAG_NUDGE)
+local(shift)
+(
+  // Shift row
+  y_over && (idx >= 0) && (idx <= loop_point) ? (
+    (mouse_cap & 16) == 16 ? (
+      current_cursor = 32644;
+      (mouse_cap == (1 + 16)) ? (
+        // ALT + DRAG
+        (last_cap & 1 == 0) ? (
+          captured_by = me;
+          dragging = 1;
+          drag_mode = DRAG_NUDGE;
+          idx_ref = idx;
+        );
+      );
+    );
+  );
+  
+  // Shifting rows ...
+  (drag_mode == DRAG_NUDGE) && (captured_by == me) ? (
+    (mouse_cap & 1 == 0) ? (
+      release_drag();
+    ) : (
+      shift = idx - idx_ref;
+      
+      last_shift = max(last_shift, shift);
+      // It's a rotate!
+      //   ... albeit a very inefficient one.
+      loop(abs(shift),
+        shift > 0 ? (
+          shuffle_buffer[0] = mem[loop_point - 1];
+          memcpy(shuffle_buffer + 1, mem, loop_point - 1);
+        ) : ( shift < 0 ) ? (
+          shuffle_buffer[loop_point - 1] = mem[0];
+          memcpy(shuffle_buffer, mem + 1, loop_point - 1);
+        );
+        memcpy(mem, shuffle_buffer, loop_point);
+      );
+      
+      idx_ref = idx;
+    );
+  );
+);
+
+function process_effect_row(row_index, me, mem, x, y, label, max_value, hint)
+global(label_width, block_width, block_spacing, selected_details,
+       nice_rect, scaling,
+       n_segments, potato,
+       font_r, font_g, font_b,
+       gfx_x, gfx_y,
+       BASE_FONT
+       mouse_wheel, mouse_cap, mouse_x, mouse_y,
+       last_cap, captured_by,
+       hinter.updateHintTime,
+       retrig_toggle.value
+       base_r, base_g, base_b,
+       row_color_r, row_color_g, row_color_b, printed_value,
+       start_idx, selected_row, dragging, drag_mode, current_cursor, drag_row_index, drag_color_idx, DRAG_STRING, drag_ref_x, drag_ref_y,
+       DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO,
+       randomize_toggle.value)
+local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
+(
+  set_row_color(row_index);
+  nice_rect(x, y, label_width - 1, block_width, 0, row_color_r * .8, row_color_g * .8, row_color_b * .8);
+  ptr = mem;
+  
+  // Are we selected?
+  (selected_details == me) ? (
+    selected_row = row_index;
+    gfx_set(1.0, 1.0, 1.0, 0.15 + 0.1 * sin(3*time_precise()));
+    gfx_rect(x, y, label_width, block_width);
+  );
+  
+  gfx_set(font_r, font_r, font_r, 1.0);
+  gfx_setfont(BASE_FONT);
+  gfx_measurestr(label, txt_w, txt_h);
+  gfx_x = x - 0.5 * (txt_w - label_width);
+  gfx_y = y - 0.5 * (txt_h - block_width);
+  gfx_printf(label);
+  
+  // Move to the actual sequencer cols
+  x += label_width;
+  
+  ptr = mem;
+  target = 0;
+  connect_size = 2 * (1 + scaling);
+  loop(n_segments,
+    current = ptr[];
+    abs(current) > 0 ? (
+      active_r = row_color_r;
+      active_g = row_color_g;
+      active_b = row_color_b;
+      printed_value = max_value > 1 ? abs(current) : 0;
+    ) : (
+      active_r = base_r;
+      active_g = base_g;
+      active_b = base_b;
+      printed_value = 0;
+    );
+    (abs(last) == abs(current)) && (current < 0) ? (
+      nice_rect(x, y, block_width, block_width, printed_value, active_r, active_g, active_b);
+      connecting_rect(x - connect_size, y + 1, 2 * connect_size, block_width - 1, printed_value, active_r, active_g, active_b);
+    ) : (
+      nice_rect(x, y, block_width, block_width, printed_value, active_r, active_g, active_b);
+    );
+    target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, block_width));
+    x += block_spacing + block_width;
+    ptr += 1;
+    target = (target + 1) % 4;
+    last = current;
+  );
+  
+  y_over = (mouse_y > y) && (mouse_y < (y + block_width));
+  
+  mouse_x < x && y_over ? hinter.updateHintTime(hint);
+  
+  (captured_by == me) ? dragging = 1;
+  
+  // Process events
+  x -= n_segments * (block_width + block_spacing);
+  idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  
+  shift_drag(y_over, me, mem, idx);
+  
+  // Allow increasing / decreasing value by mouse_wheel
+  y_over && (idx > 0 && idx < n_segments) ? (
+    mouse_wheel_values(mem, idx, n_segments, max_value);
+  );
+ 
+  // Drag out new items
+  (mouse_cap == 1 || mouse_cap == 2 || mouse_cap == 5) ? (
+    // Not captured, start dragging.
+    (last_cap == 0) ? (
+      // Are we in the positional columns?
+      y_over && (mouse_x > x) && (mouse_x < (x + (n_segments + 1) * (block_width + block_spacing))) ? (
+        // Start dragging a region
+        start_idx = idx;
+        drag_mode = DRAG_BLOCK;
+        ((mouse_cap & 1) > 0) ? captured_by = me : captured_by = -me;
+      ) : (
+        y_over ? (
+          (mouse_x < x) ? (
+            (randomize_toggle.value) ? (
+              // Randomize drag
+              randomize_row(mem, n_segments, max_value);
+            ) : (
+              // Select the lane and potentially reorder things
+              selected_details = me;
+              captured_by = me;
+              drag_mode = DRAG_EFFECT;
+              sprintf(DRAG_STRING, "%s", label);
+              drag_row_index = floor(mouse_y / (block_width + block_spacing));
+              drag_color_idx = row_index;
+              drag_ref_x = mouse_x;
+              drag_ref_y = mouse_y;
+            );
+          );
+        );
+      );
+    ) : ( me == abs(captured_by) ) ? (
+      captured_by > 0 ? gfx_set(0, 0, 1, .1) : gfx_set(1, 0, 0, .1);
+      ptr = max(min(start_idx, idx), 0);
+      idx = min(max(start_idx, idx), n_segments - 1);
+      gfx_rect(x + (block_width + block_spacing) * ptr, y, (idx - ptr + 1) * (block_width + block_spacing), block_width, 1);
+      
+      gfx_set(0, 0, 0, .6);
+      mouse_cap == 5 ? gfx_rect(x + (block_width + block_spacing) * ptr + 2, y + 2, (idx - ptr + 1) * (block_width + block_spacing) - 4, block_width - 4, 1);
+    );
+  ) : (
+    ( (abs(captured_by) == me) && (drag_mode == DRAG_BLOCK) ) ? (
+      // We dragged an area
+      ptr = max(min(start_idx, idx), 0);
+      idx = min(max(start_idx, idx), n_segments - 1);
+      start_idx = ptr;
+      // Left or right mouse drag
+      captured_by > 0 ? (
+        target = ((last_cap & 4) > 0) ? 0 : abs(mem[ptr]) + 1;
+        target > max_value ? target = max_value;
+      ) : (
+        target = abs(mem[ptr]) - 1;
+        target < 0 ? target = 0; // max_value;
+      );
+      // Negative values mean a continuation
+      mem[ptr] = target;
+      ptr += 1;
+      target = retrig_toggle.value ? target : - target;
+      loop(idx - start_idx,
+        mem[ptr] = target;
+        ptr += 1;
+      );
+      
+      mem[ptr] = abs(mem[ptr]); /* TODO: Add bound verification here for last sample */
+      release_drag();
+    );
+    
+    (drag_mode == DRAG_SOLO) ? (
+      release_drag();
+    );
+  );
+  
+  y += block_width + block_spacing;
+);
+
+x = grid_origin_x;
+yc = grid_origin_y;
+row_idx = 0;
+select_colormap(polyphony);
+loop(polyphony,
+  label = identify_note(current_arp[polyphony - row_idx - 1]);
+  yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (polyphony - row_idx - 1) * max_segments, x, yc, label, 1, "");
+  row_idx += 1;
+);
+
+gfx_set(0, 0, 0, .6);
+gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_point + 1) - 2, grid_origin_y, (n_segments - loop_point) * (block_width + block_spacing) + 1, y_current - grid_origin_y);
+
+gfx_set(1, 1, 1, .1);
+gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat), grid_origin_y, block_width, yc - 4 * block_spacing);
+
+last_cap = mouse_cap;
+gfx_setcursor(current_cursor, "arrow");
+
+critical_error ? (
+  gfx_set(1, 0, 0, 1);
+  gfx_setfont(5, "Arial", 55);
+  gfx_x = 35;
+  gfx_y = 45;
+  gfx_printf("CRITICAL ERROR LOADING PRESET!");
+  gfx_x = 35;
+  gfx_y += 55;
+  gfx_printf("PLEASE NOTIFY ME OF THIS");
+);
+
+gfx_y = 0.5 * gfx_h;
+gfx_x = 0;
+gfx_set(1, 1, 1, 1);
+idx = 0;
+loop(midi.notes_on + 2,
+  gfx_printf("%d  ", midi.active_note_mem[idx]);
+  idx += 1;
+);
+

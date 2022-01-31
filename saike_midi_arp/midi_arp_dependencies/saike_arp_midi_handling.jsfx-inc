@@ -1,0 +1,121 @@
+@init
+function identify_note(midi_pitch)
+local(octave, note, note_label)
+global(CUSTOM_SLIDER)
+(
+  (midi_pitch > 0) ? (
+    octave = floor((midi_pitch - 12) / 12);
+    note = (midi_pitch - 21) % 12;
+    note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
+    sprintf(CUSTOM_SLIDER, "%s%d", note_label, octave)
+  ) : "";
+);
+
+
+function init_midi(freemem)
+instance(note_mem, active_note_mem, max_notes)
+(
+  max_notes = 512;
+  freemem = (note_mem = freemem) + 1024;
+  freemem = (active_note_mem = freemem) + 1024;
+  freemem
+);
+
+
+function midi_block()
+global()
+instance(note_next, note_mem, notes_remain, curSample, note_ptr)
+local(offset, msg1, msg2, msg3, note_on, note_off, mwCC)
+(
+  note_ptr = note_mem;
+  while (midirecv(offset,msg1,msg2,msg3)) (
+    note_on = msg1>$x8F&&msg1<$xA0 && msg3!=0;
+    note_off = (msg1>$x7F&&msg1<$x90) || (msg1>$x89&&msg1<$xA0 && msg3==0);
+    mwCC = (msg1>$xAF&&msg1<$xC0);
+        
+    note_on ? (
+      note_ptr[] = offset;
+      note_ptr += 1;
+      note_ptr[] = msg3;
+      note_ptr += 1;
+      note_ptr[] = msg2;
+      note_ptr += 1;
+    ) : ( note_off ) ? (
+      note_ptr[] = offset;
+      note_ptr += 1;
+      note_ptr[] = -1;
+      note_ptr += 1;
+      note_ptr[] = msg2;
+      note_ptr += 1;
+    );
+  );
+  note_ptr[]       = -1337;     // Signal end of note buffer
+  note_ptr         = note_mem;
+  curSample       = -1;        // Current sample in block
+  notes_remain    = 1;         // End of the note buffer?
+  note_next       = note_ptr[];
+);
+
+// Put in loop with
+// midi.notes_remain
+function midi_sample()
+instance(note_next, curSample, note_ptr, notes_remain, notes_on, note, velocity,
+         active_note_mem, cur_cc, cc_target, max_notes)
+local(i)
+global()
+(
+  // Take notes from the stack until we hit the end marker -1
+  while(note_next == curSample) (
+    note_ptr += 1;
+    (note_ptr[] > 0) ? ( // note-on
+      notes_on = notes_on + 1;
+      velocity = note_ptr[]/127;
+      note_ptr += 1;
+      note = note_ptr[];
+      
+      // Add note to list of active notes
+      active_note_mem[notes_on - 1] = note;
+    ) : (note_ptr[] == -1) ? ( // note-off
+      notes_on = notes_on - 1;
+      notes_on = max(0, notes_on);
+      note_ptr += 1;
+      note = note_ptr[];
+      
+      i = -1;
+      while(
+        i += 1;
+        (active_note_mem[i] != note) && (i < 30)
+      );
+
+      // Memcpy is undefined for overlapping buffers.
+      loop(max_notes,
+        active_note_mem[i] = active_note_mem[i+1];
+        i += 1;
+      );
+      notes_on > 0 ? (
+        note != active_note_mem[notes_on-1] ? (
+          note = active_note_mem[notes_on-1];
+        );
+      );
+    ) : (note_ptr[] == -2) ? ( // CC
+      note_ptr += 1;
+      // msg3
+      cur_cc = note_ptr[];
+      
+      note_ptr += 1;
+      // msg2
+      cur_cc == 1 ? (
+        cc_target = note_ptr[]/128;
+      )
+    );
+    note_ptr += 1;
+    
+    // Avoid constantly dereferencing by picking up the next one
+    note_next = note_ptr[];
+    notes_remain = note_next != -1337;
+  );
+);
+
+
+
+//midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
