@@ -1,8 +1,8 @@
 desc:Saike ARP (beta)
 tags: midi arpeggiator
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: initial commit
+changelog: add preliminary midi output
 license: MIT
 options:no_meter
 
@@ -29,9 +29,48 @@ out_pin:right output
 
 import saike_arp_midi_handling.jsfx-inc
 import saike_midi_arp_pattern_handling.jsfx-inc
-import saike_midi_arp_gfx_funcs.jsx-inc
+import saike_midi_arp_gfx_funcs.jsfx-inc
 
 @init
+function assign_notes(arp_mem, poly_mode)
+local(idx, idx2, dir)
+instance(notes_on, active_note_mem)
+global()
+(
+  idx = 0;
+  (poly_mode == 0) ? (
+    // No extend
+    loop(notes_on,
+      arp_mem[idx] = active_note_mem[idx];
+      idx += 1;
+    );
+    loop(12 - notes_on,
+      arp_mem[idx] = 0;
+      idx += 1;
+    );
+  ) : (poly_mode == 1) ? (
+    // Repeat
+    idx = 0;
+    idx2 = 0;
+    loop(12,
+      arp_mem[idx] = active_note_mem[idx2];
+      idx += 1; idx2 += 1;
+      (idx2 == notes_on) ? idx2 = 0;
+    );
+  ) : (
+    // Back_Forth
+    idx = 0;
+    idx2 = 0;
+    dir = 1;
+    loop(12,
+      arp_mem[idx] = active_note_mem[idx2];
+      idx += 1; idx2 += dir;
+      (idx2 == notes_on - 1) ? (dir = -dir);
+      (idx2 == 0) ? (dir = -dir);
+    );
+  );
+);
+
 max_segments = 64;
 max_notes = 12;
 max_octaves = 5;
@@ -62,7 +101,8 @@ freemem = (shuffle_buffer = freemem) + max_segments;
 freemem = (order_mem = freemem) + max_segments;
 freemem = midi.init_midi(freemem);
 freemem = (current_arp = freemem) + 128;
-memset(current_arp, 0, 128);
+freemem = (notes_in_flight = freemem) + 128;
+midi.assign_notes(current_arp, poly_mode);
 
 function setup_theme()
 (
@@ -179,46 +219,6 @@ pattern_update();
 midi.midi_block();
 
 @sample
-function assign_notes(arp_mem, poly_mode)
-local(idx, idx2, dir)
-instance(notes_on, active_note_mem)
-global()
-(
-  idx = 0;
-  (poly_mode == 0) ? (
-    // No extend
-    loop(notes_on,
-      arp_mem[idx] = active_note_mem[idx];
-      idx += 1;
-    );
-    loop(12 - notes_on,
-      arp_mem[idx] = 0;
-      idx += 1;
-    );
-  ) : (poly_mode == 1) ? (
-    // Repeat
-    idx = 0;
-    idx2 = 0;
-    loop(12,
-      arp_mem[idx] = active_note_mem[idx2];
-      idx += 1; idx2 += 1;
-      (idx2 == notes_on) ? idx2 = 0;
-    );
-  ) : (
-    // Back_Forth
-    idx = 0;
-    idx2 = 0;
-    dir = 1;
-    loop(12,
-      arp_mem[idx] = active_note_mem[idx2];
-      idx += 1; idx2 += dir;
-      (idx2 == notes_on - 1) ? (dir = -dir);
-      (idx2 == 0) ? (dir = -dir);
-    );
-  );
-  
-//  
-);
 midi.curSample += 1;
 midi.notes_remain ? (
   midi.midi_sample();
@@ -227,6 +227,7 @@ midi.notes_remain ? (
 
 pattern_update();
 
+current_sample = beat_position * from_beat;
 current_sample += 1;
 current_sample > loop_length ? 
 (
@@ -235,7 +236,36 @@ current_sample > loop_length ?
     current_sample > loop_length
   );
 );
-sequencer_index = floor(to_index * current_sample);
+sequencer_index = floor(to_index * (current_sample + 1));
+
+(sequencer_index != last_sequencer_index) ? (
+  last_sequencer_index = sequencer_index;
+  current_pattern = pattern_buffer + current_pattern_index * pattern_size;
+  
+  idx = 0;
+  loop(polyphony,
+    current_row = current_pattern + idx * max_segments;
+    (current_row[sequencer_index] == 0) ? (
+      // No note / Terminate one if it is playing
+      (notes_in_flight[idx] > 0) ? (
+        midisend(0, $x80, notes_in_flight[idx], 0);
+        notes_in_flight[idx] = 0;
+      );
+    ) : (current_row[sequencer_index] == 1) ? (
+      // If something playing, stop before starting new note
+      (notes_in_flight[idx] > 0) ? (
+        midisend(0, $x80, notes_in_flight[idx], 0);
+        notes_in_flight[idx] = 0;
+      );
+      // Start new note
+      (current_arp[idx] > 0) ? (
+        midisend(0, $x90, current_arp[idx], 127);
+        notes_in_flight[idx] = current_arp[idx];
+      );
+    );
+    idx += 1;
+  );
+);
 
 @gfx
 current_cursor = randomize_toggle.value ? 32515 : 32512;
@@ -529,3 +559,10 @@ loop(midi.notes_on + 2,
   idx += 1;
 );
 
+gfx_y = 0.6 * gfx_h;
+gfx_x = 0;
+idx = 0;
+loop(10,
+  gfx_printf("%d  ", notes_in_flight[idx]);
+  idx += 1;
+);
