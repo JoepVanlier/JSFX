@@ -1,8 +1,8 @@
 desc:Saike ARP (beta)
 tags: midi arpeggiator
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: add preliminary midi output
+changelog: add tool row
 license: MIT
 options:no_meter
 
@@ -17,10 +17,10 @@ options:no_meter
 // Per arp level we should have a list of notes in flight so we can kill them in flight.
 // Note that this is at most 1 note (thankfully!).
 
-slider1:current_speed=4<1,16,1>Current speed
-slider2:current_pattern_index=0<0,63,1>Current pattern
+slider1:current_speed=4<1,16,1>-Current speed
+slider2:current_pattern_index=0<0,63,1>-Current pattern
 slider3:polyphony=5<0,12,1>Max Polyphony
-slider4:poly_mode=0<0,5,1,{No extend,Repeat,Back_Forth}>Poly Mode
+slider4:poly_mode=0<0,5,1,{No extend,Repeat,Back_Forth}>-Poly Mode
 
 in_pin:left input
 in_pin:right input
@@ -227,7 +227,8 @@ midi.notes_remain ? (
 
 pattern_update();
 
-current_sample = beat_position * from_beat;
+time_mode == 0 ? current_sample = beat_position * from_beat;
+
 current_sample += 1;
 current_sample > loop_length ? 
 (
@@ -536,6 +537,74 @@ gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_poi
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat), grid_origin_y, block_width, yc - 4 * block_spacing);
 
+
+
+
+
+ctrl_spacing = 1;
+
+time_mode.value = time_mode;
+cx = grid_origin_x + 2;
+cx = time_mode.selection_button(0, cx, yc + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
+cx = time_mode.selection_button(2, cx, yc + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
+cx = time_mode.selection_button(1, cx, yc + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1, "Run sequencer in MIDI mode.\nPattern resets on incoming MIDI note.");
+time_mode = time_mode.value;
+
+poly_mode.value = poly_mode;
+cx += ctrl_spacing;
+cx = poly_mode.selection_button(0, cx, yc + 2, 3 * block_width, block_width - 4, "No Extend", 0.2, 0.1, 0.05, "Show envelope times in milliseconds.");
+cx = poly_mode.selection_button(1, cx, yc + 2, 3 * block_width, block_width - 4, "Repeat", 0.2, 0.1, 0.05, "Show envelope times in beats.");
+cx = poly_mode.selection_button(2, cx, yc + 2, 3 * block_width, block_width - 4, "Bidirectional", 0.2, 0.1, 0.05, "Show envelope times in beats.");
+poly_mode = poly_mode.value;
+
+pattern_toggle.value = -1;
+cx += ctrl_spacing;
+cx = pattern_toggle.selection_button(0, cx, yc + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
+cx = pattern_toggle.selection_button(1, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index");
+cx = pattern_toggle.selection_button(2, cx, yc + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
+
+cx += ctrl_spacing;
+
+cx = pattern_toggle.selection_button(5, cx, yc + 2, block_width, block_width - 4, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
+cx = pattern_toggle.selection_button(6, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length");
+cx = pattern_toggle.selection_button(7, cx, yc + 2, block_width, block_width - 4, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
+
+cx += ctrl_spacing;
+
+cx = pattern_toggle.selection_button(8, cx, yc + 2, block_width, block_width - 4, "-", 0.16, 0.1, 0.425, "Decrease speed.");
+cx = pattern_toggle.selection_button(9, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed");
+cx = pattern_toggle.selection_button(10, cx, yc + 2, block_width, block_width - 4, "+", 0.16, 0.1, 0.425, "Increase speed.");
+
+
+cx = pattern_toggle.selection_button(3, cx + ctrl_spacing, yc + 2, 2 * block_width, block_width - 4, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
+cx = pattern_toggle.selection_button(4, cx, yc + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
+pattern_toggle.value == 0 ? ( 
+  current_pattern_index -= 1;
+  current_pattern_index < 0 ? (
+    current_pattern_index = max_stored_patterns - 1;
+  );
+  
+  slider_automate(current_pattern_index);  
+) 
+: ( pattern_toggle.value == 2 ) ? (
+  current_pattern_index += 1;
+  ( current_pattern_index >= max_stored_patterns ) ? (
+    current_pattern_index = 0;
+  );
+  
+  slider_automate(current_pattern_index);
+) 
+: ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
+( pattern_toggle.value == 4 ) ? ( paste_pattern() ) :
+( pattern_toggle.value == 5 ) ? ( loop_point = min(loop_point + 1, 32); ) :
+( pattern_toggle.value == 7 ) ? ( loop_point = max(loop_point - 1, 2); ) :
+( pattern_toggle.value == 10 ) ? ( current_speed = min(current_speed + 1, 16); slider_automate(1); ) :
+( pattern_toggle.value == 8 ) ? ( current_speed = max(current_speed - 1, 1); slider_automate(1); );
+
+cx += ctrl_spacing;
+
+cx = randomize_toggle.selection_button(-1, cx, yc + 2, 3.85 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
+
 last_cap = mouse_cap;
 gfx_setcursor(current_cursor, "arrow");
 
@@ -550,6 +619,7 @@ critical_error ? (
   gfx_printf("PLEASE NOTIFY ME OF THIS");
 );
 
+/*
 gfx_y = 0.5 * gfx_h;
 gfx_x = 0;
 gfx_set(1, 1, 1, 1);
@@ -566,3 +636,4 @@ loop(10,
   gfx_printf("%d  ", notes_in_flight[idx]);
   idx += 1;
 );
+*/
