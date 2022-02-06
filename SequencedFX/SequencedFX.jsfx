@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.78
+version: 0.79
 author: Joep Vanlier
-changelog: Double pitch shifter memory buffer (old reajs compatibility).
+changelog: Add experimental modulation depth on Karplus delay. Allow dragging numeric values more quickly.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -101,6 +101,7 @@ DRAG_EFFECT = 3;
 DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
 DRAG_MODSIZE = 6;
+DRAG_SETTING = 7;
 loaded_pattern = -1;
 TAPESTOP_MAX = 10;
 
@@ -555,6 +556,9 @@ function update_current_levels()
   current_chorus_dry = chorusDryKnob.getCurrentValue();
   current_chorus_wet = chorusWetKnob.getCurrentValue();
   current_chorus_speed = chorusSpeedKnob.getCurrentValue();
+  
+  current_karplus_mod_depth = karplusModDepthKnob.getCurrentValue();
+  current_karplus_mod_rate = karplusModRateKnob.getCurrentValue();
 );
 
 function init_controls()
@@ -644,6 +648,9 @@ function init_controls()
   chorusDryKnob.init_knob(96, -48, 0, 0.0);
   chorusWetKnob.init_knob(96, -48, 0, 0.0);
   chorusSpeedKnob.init_knob(1, 0, 0, 0.5);
+  
+  karplusModDepthKnob.init_knob(0.8, 0, 0, 0);
+  karplusModRateKnob.init_knob(2, 0, 0, 0);
   
   update_current_levels();
 );
@@ -1427,6 +1434,9 @@ advanced_tapestop = 1 - legacy_tapestop;
   file_var(0, timeline_tapestop);
 );
 
+karplusModDepthKnob.serialize_knob();
+karplusModRateKnob.serialize_knob();
+
 update_current_levels();
 version = CURRENT_VERSION; // Update to current version
 
@@ -1691,16 +1701,17 @@ instance(verb_drymul, verb_wetmul)
 );
 
 function process_karplus(current_karplus_pitch, ssl, ssr)
-instance(coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain, l_karplus, r_karplus, kpl, kpr)
-local(lk, rk, v, y, omega, omega_fundamental, max_fb, f0, sin_omega,
-      midi_pitch, current_pitch, )
+instance(t, coeff, ls, rs, karplus_offset, fb, shift, fb_current, cutoff_current, current_wet_gain, current_dry_gain, l_karplus, r_karplus, kpl, kpr, omega_fundamental)
+local(lk, rk, v, y, omega, max_fb, f0, sin_omega,
+      midi_pitch, current_pitch)
 global(current_karplus_feedback, current_karplus_cutoff,
        current_karplus_wet, current_karplus_dry, log10d20_conversion,
        srate,
        bigger_update,
        igain,
        snap_karplus,
-       karplus_target
+       karplus_target,
+       karplus_mod,
        )
 (
   bigger_update ? (
@@ -1737,8 +1748,8 @@ global(current_karplus_feedback, current_karplus_cutoff,
     shift = - shift / omega_fundamental;
   );
   
-  lk = l_karplus.readBuffer(karplus_offset - 2 + shift);
-  rk = r_karplus.readBuffer(karplus_offset - 2 + shift);
+  lk = l_karplus.readBuffer(karplus_offset * karplus_mod - 2 + shift);
+  rk = r_karplus.readBuffer(karplus_offset * karplus_mod - 2 + shift);
 
   v = coeff*(lk - ls);
   y = v + ls;
@@ -1755,6 +1766,9 @@ global(current_karplus_feedback, current_karplus_cutoff,
 
   l_karplus.writeBuffer(ssl * current_wet_gain + kpl);
   r_karplus.writeBuffer(ssr * current_wet_gain + kpr);
+  
+  kpl += ssl;
+  kpr += ssr;
   
   kpl *= igain;
   kpr *= igain;
@@ -2365,6 +2379,9 @@ function do_effect(effect_idx)
     reverb_enabled ? verb.process_verb();
   ) : ( effect_idx == 6 ) ? (
     karplus_enabled ? (
+      karplus_mod_time += 0.25 * current_karplus_mod_rate * karplus.omega_fundamental;
+      karplus_mod = 1.0 + 0.1 * current_karplus_mod_depth * sin(karplus_mod_time);
+    
       karplus.process_karplus(current_karplus_pitch, ssl, ssr);
       kpl = karplus.kpl;
       kpr = karplus.kpr;
@@ -3308,7 +3325,7 @@ instance(start_idx, h, subdiv, snap, randomize)
   shift_drag(y_over, me, mem, idx);
   
   // Process events
-  (y_over || captured_by == me) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
+  (y_over || captured_by == me) && (drag_mode == DRAG_BLOCK || drag_mode == 0) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
     mouse_cap == 1 ? (
       mem[idx] = snap ? ceil(subdiv * (1.0 - clamp((mouse_y - y) / h, 0, 1))) / subdiv : mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
       captured_by = me;
@@ -3438,6 +3455,56 @@ instance(value)
   
   cx += width + 2;
 );
+
+// Drag button
+// Drag button
+function drag_button(me, cx, cy, width, height, label, br, bg, bb, hint, DRAG_SETTING)
+local(over)
+global(gfx_x, gfx_y, base_r, base_g, base_b, mouse_x, mouse_y, mouse_cap, last_cap, drag_mode, selected_drag_button,
+       hinter.updateHintTime)
+instance(value, ly, change, _change)
+(
+  value == (me >= 0 ? me : 1) ? (
+    br *= 2;
+    bg *= 2;
+    bb *= 2;
+  );
+  
+  over = (mouse_x > cx) && (mouse_x < (cx + width)) && (mouse_y > cy) && (mouse_y < (cy + height));
+  
+  hint > -1 && over ? (
+    hinter.updateHintTime(hint);
+  );
+  
+  nice_rect_color(cx, cy, width, height, label, br, bg, bb, 2 * br, 2 * bg, 2 * bb);
+  (mouse_cap & 1 == 1) ? (
+    (last_cap & 1 == 0) ? (
+      over ? (
+        drag_mode = DRAG_SETTING;
+        selected_drag_button = me;
+        value = me;
+        ly = mouse_y;
+      );
+    ) : (
+      (drag_mode == DRAG_SETTING) && (selected_drag_button == me) ? (
+        value = me;
+        _change += 0.1 * (ly - mouse_y);
+        change = floor(_change);
+        _change -= change;
+        ly = mouse_y;
+      );
+    );
+  ) : (
+    (drag_mode == DRAG_SETTING) && (selected_drag_button == me) ? (
+      drag_mode = 0;
+      selected_drag_button = 0;
+    );
+  );
+
+  cx += width + 2;
+);
+
+
 nice_rect_color(grid_origin_x, y_current, scope_w + label_width - 3, block_width, 0, 0.2*base_r, 0.2 * base_g, 0.2 * base_b, 2 * base_r, 2*base_g, 2*base_b);
 
 ctrl_spacing = 0.5 * block_width;
@@ -3462,7 +3529,7 @@ tempo_sync_envelopes != tempo_sync_envelopes.value ? (
 pattern_toggle.value = -1;
 cx += ctrl_spacing;
 cx = pattern_toggle.selection_button(0, cx, y_current + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
-cx = pattern_toggle.selection_button(1, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index");
+cx = pattern_toggle.drag_button(1, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
 cx = pattern_toggle.selection_button(2, cx, y_current + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
 
 cx = midi_rec_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, block_width - 4, identify_note(midi_note_pattern_select), 0.3, 0.1, 0.05, "Set reference note used for pattern selection via MIDI.\n\nOnce clicked this button lights up and the plugin listens\nfor an incoming MIDI note. This note is then set as the\nreference note.\n\nAny subsequent note will compute a pattern index to jump to\nassuming the reference note to correspond to pattern zero.");
@@ -3470,13 +3537,13 @@ cx = midi_rec_toggle.selection_button(1, cx, y_current + 2, 2 * block_width, blo
 cx += ctrl_spacing;
 
 cx = pattern_toggle.selection_button(5, cx, y_current + 2, block_width, block_width - 4, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
-cx = pattern_toggle.selection_button(6, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length");
+cx = pattern_toggle.drag_button(6, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length", DRAG_SETTING);
 cx = pattern_toggle.selection_button(7, cx, y_current + 2, block_width, block_width - 4, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
 
 cx += ctrl_spacing;
 
 cx = pattern_toggle.selection_button(8, cx, y_current + 2, block_width, block_width - 4, "-", 0.16, 0.1, 0.425, "Decrease speed.");
-cx = pattern_toggle.selection_button(9, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed");
+cx = pattern_toggle.drag_button(9, cx, y_current + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
 cx = pattern_toggle.selection_button(10, cx, y_current + 2, block_width, block_width - 4, "+", 0.16, 0.1, 0.425, "Increase speed.");
 
 
@@ -3487,22 +3554,23 @@ pattern_toggle.value == 0 ? (
   current_pattern_index < 0 ? (
     current_pattern_index = max_stored_patterns - 1;
   );
-  
-  slider_automate(current_pattern_index);  
-) 
-: ( pattern_toggle.value == 2 ) ? (
+  slider_automate(2);  
+) : ( pattern_toggle.value == 2 ) ? (
   current_pattern_index += 1;
   ( current_pattern_index >= max_stored_patterns ) ? (
     current_pattern_index = 0;
   );
-  
-  slider_automate(current_pattern_index);
-) 
-: ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
+  slider_automate(2);
+) : ( pattern_toggle.value == 1 ) ? (
+  current_pattern_index = max(min(current_pattern_index + pattern_toggle.change, max_stored_patterns), 0);
+  slider_automate(2);  
+) : ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
 ( pattern_toggle.value == 4 ) ? ( paste_pattern() ) :
 ( pattern_toggle.value == 5 ) ? ( loop_point = min(loop_point + 1, 32); ) :
+( pattern_toggle.value == 6 ) ? ( loop_point = max(min(loop_point + pattern_toggle.change, 32), 2); ) :
 ( pattern_toggle.value == 7 ) ? ( loop_point = max(loop_point - 1, 2); ) :
 ( pattern_toggle.value == 10 ) ? ( current_speed = min(current_speed + 1, 16); slider_automate(1); ) :
+( pattern_toggle.value == 9 ) ? ( current_speed = max(min(current_speed + pattern_toggle.change, 16), 1); slider_automate(1);) :
 ( pattern_toggle.value == 8 ) ? ( current_speed = max(current_speed - 1, 1); slider_automate(1); );
 
 cx += ctrl_spacing;
@@ -4019,7 +4087,7 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
 ) : ( selected_details == 11 ) ? (
   // Tonal delay
   min_degrade = 3;
-  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 25.5*knobSpacing, panelHeight, karplus_enabled);
+  nextPanel = drawPanel(s_KARPLUS, cX, cY - 1.5 * knobSize, 32.5*knobSpacing, panelHeight, karplus_enabled);
   
   cX += knobSize * 1.35;
   midi_pitch = 45 - 12 + 48 * karplusPitchKnob.value;
@@ -4075,6 +4143,14 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   cX += knobSize * 2.5;
   karplusDetune.knob_set_display("", karplus_enabled && karplusVoicesKnob.value > 0.25);
   karplusDetune.drawAndProcess(cX, cY, knobSize, "Detune", "Voice detuning.", current_karplus_detune, 1, 1, 1);
+
+  cX += knobSize * 2.5;
+  karplusModDepthKnob.knob_set_display(SCALED_SLIDER, karplus_enabled);
+  karplusModDepthKnob.drawAndProcess(cX, cY, knobSize, "Mod Depth [B]", "Modulation Depth (experimental).", current_karplus_mod_depth, 1, 1, 1);
+  
+  cX += knobSize * 2.5;
+  karplusModRateKnob.knob_set_display(SCALED_SLIDER, karplus_enabled);
+  karplusModRateKnob.drawAndProcess(cX, cY, knobSize, "Mod Rate [B]", "Modulation Rate (experimental).", current_karplus_mod_rate, 1, 1, 1);
   
   cX += 2.5*knobSize;
   karplusDry.knob_set_display(DB_SLIDER, karplus_enabled);
