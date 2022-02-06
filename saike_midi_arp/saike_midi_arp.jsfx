@@ -1,8 +1,8 @@
 desc:Saike ARP (beta)
 tags: midi arpeggiator
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: add tool row
+changelog: Add extra octave as option. Allow quickly dragging numeric values.
 license: MIT
 options:no_meter
 
@@ -21,6 +21,7 @@ slider1:current_speed=4<1,16,1>-Current speed
 slider2:current_pattern_index=0<0,63,1>-Current pattern
 slider3:polyphony=5<0,12,1>Max Polyphony
 slider4:poly_mode=0<0,5,1,{No extend,Repeat,Back_Forth}>-Poly Mode
+slider5:extra_octaves=0<0,2,1>Extra octaves
 
 in_pin:left input
 in_pin:right input
@@ -32,6 +33,8 @@ import saike_midi_arp_pattern_handling.jsfx-inc
 import saike_midi_arp_gfx_funcs.jsfx-inc
 
 @init
+gfx_ext_retina = 1;
+MAX_POLYPHONY = 12;
 function assign_notes(arp_mem, poly_mode)
 local(idx, idx2, dir)
 instance(notes_on, active_note_mem)
@@ -88,6 +91,7 @@ DRAG_EFFECT = 3;
 DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
 DRAG_MODSIZE = 6;
+DRAG_SETTING = 7;
 
 sample_clock = 0;
 pattern_change = 1;
@@ -181,18 +185,14 @@ function setup_theme()
   toggle_g = 1.6;
   toggle_b = .5;
   toggle_a = 1.0;
+  
+  grid_origin_x = 5 * (1 + scaling);
+  grid_origin_y = 5 * (1 + scaling);
+  block_width = floor(25 * (1 + scaling));
+  block_spacing = floor(2 * (1 + scaling));
+  label_width = 2 * block_width;
 );
 setup_theme();
-
-grid_origin_x = 5 * (1 + scaling);
-grid_origin_y = 5 * (1 + scaling);
-//label_width = floor(50 * (1 + scaling));
-//block_width = floor(22.83 * (1 + scaling));
-//block_spacing = floor(1 * (1 + scaling));
-
-block_width = floor(25 * (1 + scaling));
-block_spacing = floor(2 * (1 + scaling));
-label_width = 2 * block_width;
 
 @serialize
 writing = file_avail(0) < 0;
@@ -239,36 +239,62 @@ current_sample > loop_length ?
 );
 sequencer_index = floor(to_index * (current_sample + 1));
 
-(sequencer_index != last_sequencer_index) ? (
-  last_sequencer_index = sequencer_index;
-  current_pattern = pattern_buffer + current_pattern_index * pattern_size;
-  
-  idx = 0;
-  loop(polyphony,
-    current_row = current_pattern + idx * max_segments;
-    (current_row[sequencer_index] == 0) ? (
-      // No note / Terminate one if it is playing
-      (notes_in_flight[idx] > 0) ? (
-        midisend(0, $x80, notes_in_flight[idx], 0);
-        notes_in_flight[idx] = 0;
+function process_sequence(current_pattern_index)
+local(current_pattern, idx, current_idx, audio_octave, current_row, new_note)
+global(
+  pattern_buffer,
+  extra_octaves,
+  polyphony,
+  sequencer_index,
+  last_sequencer_index,
+  pattern_size,
+  max_segments,
+  MAX_POLYPHONY,
+  notes_in_flight,
+  current_arp,
+  )
+(
+  (sequencer_index != last_sequencer_index) ? (
+    last_sequencer_index = sequencer_index;
+    current_pattern = pattern_buffer + current_pattern_index * pattern_size;
+    
+    audio_octave = 0;
+    loop(extra_octaves + 1,
+      idx = 0;
+      loop(polyphony,
+        current_row = current_pattern + (idx + MAX_POLYPHONY * audio_octave) * max_segments;
+        current_idx = idx + MAX_POLYPHONY * audio_octave;
+        
+        (current_row[sequencer_index] == 0) ? (
+          // No note / Terminate one if it is playing
+          (notes_in_flight[current_idx] > 0) ? (
+            midisend(0, $x80, notes_in_flight[current_idx], 0);
+            notes_in_flight[current_idx] = 0;
+          );
+        ) : (current_row[sequencer_index] == 1) ? (
+          // If something playing, stop before starting new note
+          (notes_in_flight[current_idx] > 0) ? (
+            midisend(0, $x80, notes_in_flight[current_idx], 0);
+            notes_in_flight[current_idx] = 0;
+          );
+          // Start new note
+          (current_arp[idx] > 0) ? (
+            new_note = current_arp[idx] + 12 * audio_octave;
+            midisend(0, $x90, new_note, 127);
+            notes_in_flight[current_idx] = new_note;
+          );
+        );
+        idx += 1;
       );
-    ) : (current_row[sequencer_index] == 1) ? (
-      // If something playing, stop before starting new note
-      (notes_in_flight[idx] > 0) ? (
-        midisend(0, $x80, notes_in_flight[idx], 0);
-        notes_in_flight[idx] = 0;
-      );
-      // Start new note
-      (current_arp[idx] > 0) ? (
-        midisend(0, $x90, current_arp[idx], 127);
-        notes_in_flight[idx] = current_arp[idx];
-      );
+      audio_octave += 1;
     );
-    idx += 1;
   );
 );
 
+process_sequence(current_pattern_index);
+
 @gfx
+setup_theme();
 current_cursor = randomize_toggle.value ? 32515 : 32512;
 
 function mouse_wheel_values(mem, idx, n_segments, max_value)
@@ -523,12 +549,22 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
 
 x = grid_origin_x;
 yc = grid_origin_y;
+select_colormap(polyphony * (extra_octaves + 1));
+
+octave = 0;
 row_idx = 0;
-select_colormap(polyphony);
-loop(polyphony,
-  label = identify_note(current_arp[polyphony - row_idx - 1]);
-  yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (polyphony - row_idx - 1) * max_segments, x, yc, label, 1, "");
-  row_idx += 1;
+loop(extra_octaves + 1,
+  c_idx = 0;
+  current_octave = extra_octaves - octave;
+  loop(polyphony,
+    note = current_arp[polyphony - c_idx - 1];
+    label = identify_note(note > 0 ? note + 12 * current_octave : 0);
+    yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 1, "");
+    row_idx += 1;
+    c_idx += 1;
+  );
+  octave += 1;
+  yc += 3;
 );
 
 gfx_set(0, 0, 0, .6);
@@ -560,19 +596,19 @@ poly_mode = poly_mode.value;
 pattern_toggle.value = -1;
 cx += ctrl_spacing;
 cx = pattern_toggle.selection_button(0, cx, yc + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
-cx = pattern_toggle.selection_button(1, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index");
+cx = pattern_toggle.drag_button(1, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
 cx = pattern_toggle.selection_button(2, cx, yc + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
 
 cx += ctrl_spacing;
 
 cx = pattern_toggle.selection_button(5, cx, yc + 2, block_width, block_width - 4, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
-cx = pattern_toggle.selection_button(6, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length");
+cx = pattern_toggle.drag_button(6, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length", DRAG_SETTING);
 cx = pattern_toggle.selection_button(7, cx, yc + 2, block_width, block_width - 4, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
 
 cx += ctrl_spacing;
 
 cx = pattern_toggle.selection_button(8, cx, yc + 2, block_width, block_width - 4, "-", 0.16, 0.1, 0.425, "Decrease speed.");
-cx = pattern_toggle.selection_button(9, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed");
+cx = pattern_toggle.drag_button(9, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
 cx = pattern_toggle.selection_button(10, cx, yc + 2, block_width, block_width - 4, "+", 0.16, 0.1, 0.425, "Increase speed.");
 
 
@@ -583,22 +619,24 @@ pattern_toggle.value == 0 ? (
   current_pattern_index < 0 ? (
     current_pattern_index = max_stored_patterns - 1;
   );
-  
-  slider_automate(current_pattern_index);  
-) 
-: ( pattern_toggle.value == 2 ) ? (
+  slider_automate(2);  
+) : ( pattern_toggle.value == 1 ) ? (
+  current_pattern_index = max(min(current_pattern_index += pattern_toggle.change, max_stored_patterns), 0);
+  slider_automate(2);
+) : ( pattern_toggle.value == 2 ) ? (
   current_pattern_index += 1;
   ( current_pattern_index >= max_stored_patterns ) ? (
     current_pattern_index = 0;
   );
-  
-  slider_automate(current_pattern_index);
-) 
+  slider_automate(2);
+)
 : ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
 ( pattern_toggle.value == 4 ) ? ( paste_pattern() ) :
 ( pattern_toggle.value == 5 ) ? ( loop_point = min(loop_point + 1, 32); ) :
+( pattern_toggle.value == 6 ) ? ( loop_point = max(min(loop_point + pattern_toggle.change, 32), 2); ) :
 ( pattern_toggle.value == 7 ) ? ( loop_point = max(loop_point - 1, 2); ) :
 ( pattern_toggle.value == 10 ) ? ( current_speed = min(current_speed + 1, 16); slider_automate(1); ) :
+( pattern_toggle.value == 9 ) ? ( current_speed = max(min(current_speed + pattern_toggle.change, 16), 1); slider_automate(1);) :
 ( pattern_toggle.value == 8 ) ? ( current_speed = max(current_speed - 1, 1); slider_automate(1); );
 
 cx += ctrl_spacing;
@@ -637,3 +675,4 @@ loop(10,
   idx += 1;
 );
 */
+
