@@ -1,8 +1,8 @@
 desc:Saike Monitor Routing Utility [ALPHA]
 tags: Routing utility
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: initial commit
+changelog: Add option to control with mousewheel. Add mute/solo buttons. Allow setting no channel for an output, disabling its controls.
 license: MIT
 Special thanks goes out to Audbol for ideation / testing.
 options:no_meter
@@ -16,31 +16,38 @@ slider6:dim=0<0,1,1{Off,On}>-Dim
 
 slider7:monitor_a_active=0<0,1,1{Off,On}>-Monitor A
 slider8:monitor_a_delay=0<0,20,0.001>-Delay Monitor A [ms]
-slider9:monitor_a_output_chan=0<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Output channel A
+slider9:monitor_a_output_chan=0<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Output channel A
 slider10:monitor_a_trim=0<-12,0,.0001>-Monitor A trim
 
 slider11:monitor_b_active=0<0,1,1{Off,On}>-Monitor B
 slider12:monitor_b_delay=0<0,20,0.001>-Delay Monitor B [ms]
-slider13:monitor_b_output_chan=1<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Output channel B
+slider13:monitor_b_output_chan=1<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Output channel B
 slider14:monitor_b_trim=0<-12,0,.0001>-Monitor B trim
 
 slider15:monitor_c_active=0<0,1,1{Off,On}>-Monitor C
 slider16:monitor_c_delay=0<0,20,0.001>-Delay Monitor C [ms]
-slider17:monitor_c_output_chan=2<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Output channel C
+slider17:monitor_c_output_chan=2<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Output channel C
 slider18:monitor_c_trim=0<-12,0,.0001>-Monitor C trim
 
 slider19:headphones_active=0<0,1,1{Off,On}>-Headphones
-slider20:headphones_output_chan=3<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Headphones output channel
+slider20:headphones_output_chan=3<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Headphones output channel
 slider21:headphones_trim=0<-12,0,.0001>-Headphones trim
 
 slider22:subwoofer_active=0<0,1,1{Off,On}>-Subwoofer
 slider23:subwoofer_delay=0<0,20,0.001>-Delay Sub [ms]
 slider24:subwoofer_crossover=80<10,200,1>-Subwoofer crossover
-slider25:subwoofer_output_chan=4<0,5,1{1-2,3-4,5-6,7-8,9-10,11-12}>-Subwoofer output channel
+slider25:subwoofer_output_chan=4<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Subwoofer output channel
 slider26:subwoofer_trim=0<-12,0,.0001>-Subwoofer trim
 
-slider27:overall_gain_db=0<-80,0,.0001>-Main gain
+slider27:overall_gain_db=0<-60,5,.0001>-Main gain
 slider28:all_muted=0<0,1,1{Off,On}>-Mute all
+
+slider29:mute_in1=0<0,1,1>-Mute input 1
+slider30:mute_in2=0<0,1,1>-Mute input 2
+slider31:mute_in3=0<0,1,1>-Mute input 3
+slider32:solo_in1=0<0,1,1>-Solo input 1
+slider33:solo_in2=0<0,1,1>-Solo input 2
+slider34:solo_in3=0<0,1,1>-Solo input 3
 
 in_pin:daw input left
 in_pin:daw input right
@@ -73,7 +80,7 @@ global()
   slider_idx = _slider_idx;
 );
 
-overall_gain.init_knob(-80, 0, 0, 27);
+overall_gain.init_knob(-60, 5, 0, 27);
 
 input1.gain_knob.init_knob(-45, 15, 0, 1);
 input2.gain_knob.init_knob(-45, 15, 0, 2);
@@ -131,20 +138,51 @@ local(w, h)
   reset_font();
 );
 
-function draw_knob(x, y, r, label, hint)
+function draw_knob(x, y, r, label, hint, fancy, enabled)
 instance(minimum, maximum, default, slider_idx, lx, ly, last_click)
-local(dx, dy, rr, relative_position, ang, over, irange, speed, new_value)
-global(gfx_x, gfx_y, captured, last_cap, mouse_cap, mouse_x, mouse_y, last_mouse_y, dbl_click_speed, hinter.sethint)
+local(dx, dy, rr, relative_position, ang, over, irange, speed, new_value, cc)
+global(gfx_x, gfx_y, captured, last_cap, mouse_cap, mouse_x, mouse_y, mouse_wheel, last_mouse_y, dbl_click_speed, hinter.sethint)
 (
   dx = mouse_x - x;
   dy = mouse_y - y;
   over = dx * dx + dy * dy < r * r;
 
-  rr = 1;
-  loop(5,
-    gfx_set(0.3 * rr, 0.3 * rr, 0.4 * rr, 1.0);
-    gfx_circle(x, y, r * rr, 1);
-    rr *= 0.96;
+  fancy ? (
+    cc = 15;
+    loop(10,
+      gfx_set(0.3, 0.2 + 0.025 * cc, 0.48, 0.33 / cc);
+      gfx_circle(x, y, r * (1 + 0.01 * cc), 1);
+      cc *= 0.75;
+    );
+  );
+  
+  irange = 1.0 / (maximum - minimum);
+  relative_position = (slider(slider_idx) - minimum) * irange;
+  ang = 0.75 + 1.5 * relative_position;
+  
+  fancy ? (
+    cc = 4;
+    loop(10,
+      gfx_set(0.7, 0.7 + 0.025 * cc, 1.0, 1.0);
+      gfx_arc(x, y, ceil(r * (1 + 0.01 * cc)), 1.25 * $pi, (ang + 0.5) * $pi, ang, 1);
+      cc *= 0.9;
+    );
+  );
+
+  enabled ? (
+    rr = 1;
+    loop(5,
+      gfx_set(0.3 * rr, 0.3 * rr, 0.4 * rr, 1.0);
+      gfx_circle(x, y, r * rr, 1);
+      rr *= 0.96;
+    );
+  ) : (
+    rr = 1;
+    loop(5,
+      gfx_set(0.25  * rr, 0.25 * rr, 0.3 * rr, 1.0);
+      gfx_circle(x, y, r * rr, 1);
+      rr *= 0.96;
+    );  
   );
 
   gfx_set(0, 0, 0, 0.2);
@@ -153,19 +191,29 @@ global(gfx_x, gfx_y, captured, last_cap, mouse_cap, mouse_x, mouse_y, last_mouse
   gfx_circle(x, y, 0.82 * r, 0);
   gfx_circle(x, y, 0.82 * r + 1, 0);
   
-  gfx_set(0.0, 0.3, 0.4, 1.0);
-  irange = 1.0 / (maximum - minimum);
-  relative_position = (slider(slider_idx) - minimum) * irange;
   
   gfx_set(0, 0, 0, 0.65);
   ang = 0.75 + 1.5 * relative_position;
   gfx_circle(x + 0.7 * r * cos($pi * ang), y + 0.7 * r * sin($pi * ang), 0.1 * r, 1);
   
-  gfx_set(0.1, 0.1, 0.2, 0.9);
-  gfx_x = x - r;
-  gfx_y = y - r;
-  sprintf(2, label, slider(slider_idx));
-  gfx_drawstr(2, 5, x + r, y + r);
+  enabled ? (
+    gfx_set(1.0, 1.0, 1.0, 0.9);
+    gfx_x = x - r;
+    gfx_y = y - r;
+    sprintf(2, label, slider(slider_idx));
+    gfx_drawstr(2, 5, x + r, y + r);
+  );
+  
+  over ? (
+    (abs(mouse_wheel) > 0) ? (
+      speed = 0.0002;
+      (mouse_cap & 4 > 0) ? speed *= 0.5;
+      (mouse_cap & 8 > 0) ? speed *= 0.25;
+      new_value = min(max(slider(slider_idx) + speed * mouse_wheel * (maximum - minimum), minimum), maximum);
+      slider(slider_idx) = new_value;
+      mouse_wheel = 0;
+    );
+  );
 
   (mouse_cap & 1) ? (
     (last_cap & 1 == 0) ? (
@@ -368,6 +416,25 @@ k_decay = log(2) / halflife;
 time_constant_gain = k_decay / srate;
 ms_rate = srate * 0.001;
 
+active1 = 1.0;
+active2 = 1.0;
+active3 = 1.0;
+any_solo = solo_in1 || solo_in2 || solo_in3;
+any_solo ? (
+  active1 = active2 = active3 = 0.0;
+  solo_in1 ? active1 = 1.0;
+  solo_in2 ? active2 = 1.0;
+  solo_in3 ? active3 = 1.0;
+) : (
+  mute_in1 ? active1 = 0.0;
+  mute_in2 ? active2 = 0.0;
+  mute_in3 ? active3 = 0.0;
+);
+
+(active1 == 0) ? dgain1 = - gain1 / samplesblock;
+(active2 == 0) ? dgain2 = - gain2 / samplesblock;
+(active3 == 0) ? dgain3 = - gain3 / samplesblock;
+
 @sample
 current_monitor_a_delay += time_constant_gain * (monitor_a_delay - current_monitor_a_delay);
 current_monitor_b_delay += time_constant_gain * (monitor_b_delay - current_monitor_b_delay);
@@ -467,16 +534,26 @@ m_head_r= max(head_r, time_constant * m_head_r);
 m_sub_l = max(sub_l, time_constant * m_sub_l);
 m_sub_r= max(sub_r, time_constant * m_sub_r);
 
-spl(2 * monitor_a_output_chan) += mon_a_l;
-spl(2 * monitor_a_output_chan + 1) += mon_a_r;
-spl(2 * monitor_b_output_chan)+= mon_b_l;
-spl(2 * monitor_b_output_chan + 1) += mon_b_r;
-spl(2 * monitor_c_output_chan)+= mon_c_l;
-spl(2 * monitor_c_output_chan + 1) += mon_c_r;
-spl(2 * headphones_output_chan) += head_l;
-spl(2 * headphones_output_chan + 1) += head_r;
-spl(2 * subwoofer_output_chan)+= sub_l;
-spl(2 * subwoofer_output_chan + 1) += sub_r;
+monitor_a_output_chan < 6 ? (
+  spl(2 * monitor_a_output_chan) += mon_a_l;
+  spl(2 * monitor_a_output_chan + 1) += mon_a_r;
+);
+monitor_b_output_chan < 6 ? (
+  spl(2 * monitor_b_output_chan)+= mon_b_l;
+  spl(2 * monitor_b_output_chan + 1) += mon_b_r;
+);
+monitor_c_output_chan < 6 ? (
+  spl(2 * monitor_c_output_chan)+= mon_c_l;
+  spl(2 * monitor_c_output_chan + 1) += mon_c_r;
+);
+headphones_output_chan < 6 ? (
+  spl(2 * headphones_output_chan) += head_l;
+  spl(2 * headphones_output_chan + 1) += head_r;
+);
+subwoofer_output_chan < 6 ? (
+  spl(2 * subwoofer_output_chan)+= sub_l;
+  spl(2 * subwoofer_output_chan + 1) += sub_r;
+);
 
 gain1 += dgain1;
 gain2 += dgain2;
@@ -486,6 +563,23 @@ sum_gain += dsum_gain;
 @gfx 1055 577
 gfx_set(0.1, 0.1, 0.14, 1.0);
 gfx_rect(0, 0, gfx_w, gfx_h);
+
+horizon = 0.5 * gfx_h;
+ys += 0.01;
+ys > 1.0 ? ys -= 1.0;
+yc = ys;
+loop(15,
+  yy = horizon + 0.5 * gfx_h * yc * yc * yc;
+  gfx_set(0.4, 0.4, 1, 1);
+  gfx_line(0, yy, gfx_w, yy);
+  gfx_set(0.4, 0.4, 1, 0.6);
+  gfx_line(0, yy + 1, gfx_w, yy + 1);
+  gfx_set(0.4, 0.4, 1, 0.2);
+  gfx_line(0, yy + 2, gfx_w, yy + 2);
+  
+  yc += 0.1;
+  yc > 1.0 ? yc -= 1.0;
+);
 
 ui_w = gfx_w;
 ui_h = 0.5 * gfx_w;
@@ -503,18 +597,20 @@ local()
   : (idx == 3) ? ("7-8")
   : (idx == 4) ? ("9-10")
   : (idx == 5) ? ("11-12")
+  : (idx == 6) ? ("-")
 );
 
 function menu_lut(idx)
 global()
 local()
 (
-  (idx == 0) ? ("!1-2|3-4|5-6|7-8|9-10|11-12")
-  : (idx == 1) ? ("1-2|!3-4|5-6|7-8|9-10|11-12")
-  : (idx == 2) ? ("1-2|3-4|!5-6|7-8|9-10|11-12")
-  : (idx == 3) ? ("1-2|3-4|5-6|!7-8|9-10|11-12")
-  : (idx == 4) ? ("1-2|3-4|5-6|7-8|!9-10|11-12")
-  : (idx == 5) ? ("1-2|3-4|5-6|7-8|9-10|!11-12")
+  (idx == 0) ? ("!1-2|3-4|5-6|7-8|9-10|11-12|None")
+  : (idx == 1) ? ("1-2|!3-4|5-6|7-8|9-10|11-12|None")
+  : (idx == 2) ? ("1-2|3-4|!5-6|7-8|9-10|11-12|None")
+  : (idx == 3) ? ("1-2|3-4|5-6|!7-8|9-10|11-12|None")
+  : (idx == 4) ? ("1-2|3-4|5-6|7-8|!9-10|11-12|None")
+  : (idx == 5) ? ("1-2|3-4|5-6|7-8|9-10|!11-12|None")
+  : (idx == 6) ? ("1-2|3-4|5-6|7-8|9-10|11-12|!None")
 );
 
 function in_rect(x, y, w, h)
@@ -531,7 +627,7 @@ function basic_rect(x, y, w, h)
 global(ui_w, ui_h, gfx_x, gfx_y)
 local()
 (
-  gfx_set(0.17, 0.17, 0.23, 1.0);
+  gfx_set(0.17, 0.17, 0.23, 0.95);
   gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 5, 1);
 );
 
@@ -542,33 +638,41 @@ local()
   gfx_set(0.8, 0.8, 0.8, 1.0);
 );
 
-function button(x, y, w, h, label, justify, highlighted, hint)
-global(ui_w, ui_h, gfx_x, gfx_y, gfx_mode, mouse_cap, last_cap, hinter.sethint)
-local(sw, sh, ii, over)
+function button(x, y, w, h, label, justify, highlighted, hint, enabled)
+global(ui_w, ui_h, gfx_x, gfx_y, gfx_mode, mouse_cap, gfx_a, last_cap, hinter.sethint)
+local(sw, sh, ii, over, hr, hg, hb)
 (
-  gfx_set(0.27, 0.27, 0.3, 1.0);
+  enabled ? (
+    gfx_set(0.27, 0.27, 0.3, 1.0);
+  ) : (
+    gfx_set(0.2, 0.2, 0.25, 1.0);
+  );
   gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 5, 1);
   
-  highlighted ? (
+  enabled && highlighted ? (
     ii = 1;
     gfx_mode = 1;
     loop(5,
       highlighted == 1 ? (
-        gfx_set(0.9, 0.4, 0.4, 0.7 / (1 + ii));
-      ) : (
-        gfx_set(0.5, 0.3, 0.3, 0.7 / (1 + ii));
+        gfx_set(0.9, 0.4, 0.4, 0.7 / (1 + 0.5 * ii * ii));
+      ) : (highlighted == 2) ? (
+        gfx_set(0.5, 0.3, 0.3, 0.7 / (1 + 0.5 * ii * ii));
+      ) : (highlighted == 3) ? (
+        gfx_set(0.6, 1.0, 0.7, 0.4 / (1 + 0.5 * ii * ii));
       );
       gfx_rect(x * ui_w - ii, y * ui_h - ii, w * ui_w + 2 * ii, h * ui_h + 2 * ii, 5, 1);
-      ii *= 1.8;
+      ii *= 1.68;
     );
     gfx_mode = 0;
-    gfx_set(1.0, 0.6, 0.4, 0.5);
+    //gfx_set(1.0, 0.6, 0.4, 0.5);
     gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 0, 1);
     gfx_set(0.3, 0.6, 0.4, 0.2);
     gfx_rect(x * ui_w + 1, y * ui_h + 1, w * ui_w - 2, h * ui_h - 2, 0, 1);
   );
   
   font_color();
+  !enabled ? gfx_a *= 0.50;
+  
   gfx_measurestr(label, sw, sh);
   gfx_x = x * ui_w;
   gfx_y = y * ui_h;
@@ -576,11 +680,30 @@ local(sw, sh, ii, over)
   
   over = in_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h);
   ((mouse_cap == 0) && over) ? hinter.sethint(hint);
-  (last_cap == 0) && (mouse_cap & 1) && over
+  (last_cap == 0) && (mouse_cap & 1) && over && enabled
+);
+
+function db_to_color(db)
+local(lv)
+global()
+(
+  db < -30 ? (
+    gfx_set(1, 1, 0, 0.85);
+  ) : (db < -18) ? (
+    // yellow to green
+    lv = - (db + 18) / (30 - 18);
+    gfx_set(lv, 1, .3, 0.85);
+  ) : (db < 0) ? (
+    gfx_set(.3, 1, .3, 0.85);
+    // green
+  ) : (db > 0) ? (
+     // red
+     gfx_set(1, 0.3, 0.3, 0.85);
+  );
 );
 
 function draw_scope(x, y, w, h, signal_left, signal_right, step)
-local(l_sig, r_sig, min_range, max_range, a, b, xc, dbc)
+local(l_sig, r_sig, min_range, max_range, a, b, xc, dbc, to_db)
 global(gfx_x, gfx_y, ui_w)
 (
   x = floor(x); y = floor(y); w = floor(w); h = ceil(h / 2) * 2 - 1;
@@ -591,28 +714,31 @@ global(gfx_x, gfx_y, ui_w)
   gfx_set(0, 0, 0, 0.3);
   gfx_rect(x, y, w, h);
   
-  min_range = -64;
-  max_range = 0;
+  min_range = -36;
+  max_range = 6;
   
   w -= 1;
   a = 1.0 / (max_range - min_range);
   b = - min_range * a;
+  to_db = (max_range - min_range) / w;
   
   xc = 1;
   loop(min(w * (a * l_sig + b), w) / 2,
-    gfx_set(1.0, 1.0 - a * xc * 0.33, 0.28 - a * 0.28 * xc, 0.7);
+    //gfx_set(1.0, 1.0 - a * xc * 0.33, 0.28 - a * 0.28 * xc, 0.7);
+    db_to_color(to_db * xc + min_range);
     gfx_line(x + xc, y + 0.5 * h - 2, x + xc, y + 2);
     xc += 2;
   );
   
   xc = 1;
   loop(min(w * (a * r_sig + b), w) / 2,
-    gfx_set(1.0, 1.0 - a * xc * 0.33, 0.28 - a * 0.28 * xc, 0.7);
+    //gfx_set(1.0, 1.0 - a * xc * 0.33, 0.28 - a * 0.28 * xc, 0.7);
+    db_to_color(to_db * xc + min_range);
     gfx_line(x + xc, y + 0.5 * h + 2, x + xc, y + h - 3);
     xc += 2;
   );
   
-  dbc = - step;
+  dbc = max_range - step;
   xc = x + w - w * a * step;
   gfx_setfont(4, "Arial", floor(ui_w / 80));
   loop(floor((max_range - min_range) / step),
@@ -640,14 +766,32 @@ global(gfx_x, gfx_y, ui_w)
   gfx_setfont(1);
 );
 
-function input_rect(x, y, w, h, label, input, signal_left, signal_right)
-global(ui_w, ui_h, gfx_x, gfx_y)
-local()
+function input_rect(x, y, w, h, label, input, signal_left, signal_right, mute_slider, solo_slider, active)
+global(ui_w, ui_h, gfx_x, gfx_y, gfx_a, gfx_mode)
+local(cc)
 (
+  active ? (
+    cc = 15;
+    gfx_mode = 1;
+    loop(10,
+      gfx_set(0.6, 0.7 + 0.025 * cc, 1.0, 0.23 / cc);
+      gfx_rect(x * ui_w - cc, y * ui_h - cc, w * ui_w + 2 * cc, h * ui_h + 2 * cc);
+      cc *= 0.75;
+    );
+    gfx_mode = 0;
+  );
+
   basic_rect(x, y, w, h);
+  
+  gfx_set(0, 0, 0, 0.5);
+  gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 0);
+  gfx_set(0.2, 0.2, 0.5, 0.5);  
+  gfx_rect(x * ui_w + 1, y * ui_h + 1, w * ui_w - 2, h * ui_h - 2, 0);
+  
   font_color();
   gfx_x = x * ui_w + 0.05 * w * ui_w;
   gfx_y = y * ui_h + 0.15 * h * ui_h;
+  gfx_a = 0.5 + 0.5 * active;
   gfx_printf(label);
   
   gfx_x = x * ui_w + 0.05 * w * ui_w;
@@ -656,22 +800,48 @@ local()
   
   draw_scope(x * ui_w + 0.05 * w * ui_w, y * ui_h + 0.7 * h * ui_h, 0.9 * w * ui_w, 0.15 * h * ui_h, signal_left, signal_right, 6);
   
+  gfx_setfont(7, "Arial", 17);
+  button(x + 0.84 * w, y + 0.16 * h, w * 0.1, h * 0.15, "M", 5, slider(mute_slider), "Mute channel", 1) ? ( slider_automate(slider(mute_slider) = 1 - slider(mute_slider)); );
+  button(x + 0.84 * w, y + 0.40 * h, w * 0.1, h * 0.15, "S", 5, slider(solo_slider) * 3, "Solo channel", 1) ? ( slider_automate(slider(solo_slider) = 1 - slider(solo_slider)); );
+  
   gfx_setfont(3, "Arial", 15);
-  this.gain_knob.draw_knob(x * ui_w + 0.8 * w * ui_w, y * ui_h + h * 0.35 * ui_h, 0.11 * h * ui_w, "%.1f dB", "Adjust gain");
+  this.gain_knob.draw_knob(x * ui_w + 0.68 * w * ui_w, y * ui_h + h * 0.35 * ui_h, 0.11 * h * ui_w, "%.1f dB", "Adjust gain", 0, active);
   reset_font();
 );
 
-function output_rect(x, y, w, h, label, output, signal_left, signal_right)
-global(ui_w, ui_h, gfx_x, gfx_y, last_cap, mouse_cap)
-local(font_w, font_h, xp, yp, wp, hp, selection)
+function output_rect(x, y, w, h, label, output, signal_left, signal_right, active)
+global(ui_w, ui_h, gfx_x, gfx_y, gfx_a, last_cap, mouse_cap, gfx_mode)
+local(font_w, font_h, xp, yp, wp, hp, selection, cc, output_chan)
 (
+  output_chan = slider(output);
+  
+  (output_chan == 6) ? active = 0;
+
+  active ? (
+    cc = 15;
+    gfx_mode = 1;
+    loop(10,
+      gfx_set(0.6, 0.7 + 0.025 * cc, 1.0, 0.23 / cc);
+      gfx_rect(x * ui_w - cc, y * ui_h - cc, w * ui_w + 2 * cc, h * ui_h + 2 * cc);
+      cc *= 0.75;
+    );
+    gfx_mode = 0;
+  );
+
   basic_rect(x, y, w, h);
+  
+  gfx_set(0, 0, 0, 0.5);
+  gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h, 0);
+  gfx_set(0.2, 0.2, 0.5, 0.5);  
+  (output_chan < 6) ? gfx_rect(x * ui_w + 1, y * ui_h + 1, w * ui_w - 2, h * ui_h - 2, 0);
+  
   font_color();
+  (output_chan < 6) ? gfx_a *= 0.5;
   gfx_x = x * ui_w + 0.05 * w * ui_w - 3;
   gfx_y = y * ui_h + 0.11 * h * ui_h;
-  gfx_printf(label);
-  
-  sprintf(1, "Out %s", channel_lut(slider(output)));
+  gfx_printf(label);  
+
+  sprintf(1, "Out %s", channel_lut(output_chan));
   gfx_measurestr(1, font_w, font_h);
   xp = floor(x * ui_w + 0.05 * w * ui_w + 0.5);
   yp = floor(y * ui_h + 0.85 * h * ui_h - font_h + 0.5);
@@ -695,21 +865,26 @@ local(font_w, font_h, xp, yp, wp, hp, selection)
     );
   );
   xp = gfx_x + 0.01 * ui_w;
-  draw_scope(xp, y * ui_h + 0.55 * h * ui_h, x + 0.965 * ui_w - xp, 0.275 * h * ui_h, signal_left, signal_right, 12);
+  draw_scope(xp, y * ui_h + 0.55 * h * ui_h, x + 0.965 * ui_w - xp, 0.275 * h * ui_h, signal_left * (output_chan < 6), signal_right * (output_chan < 6), 12);
   
-  gfx_setfont(3, "Arial", 10);
-  this.gain_knob.draw_knob(x * ui_w + 0.9 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%.1f dB", "Adjust gain");
+  gfx_setfont(3, "Arial", 13 * ui_w / 1150);
+  this.gain_knob.draw_knob(x * ui_w + 0.9 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%.1f dB", "Adjust gain", 0, output_chan < 6);
   
   this.delay_knob.slider_idx > 0 ? (
-    this.delay_knob.draw_knob(x * ui_w + 0.75 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d ms", "Adjust output delay");
+    this.delay_knob.draw_knob(x * ui_w + 0.75 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d ms", "Adjust output delay", 0, output_chan < 6);
   );
 
   this.crossover.slider_idx > 0 ? (
-    this.crossover.draw_knob(x * ui_w + 0.60 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d Hz", "Adjust crossover frequency");
+    this.crossover.draw_knob(x * ui_w + 0.60 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d Hz", "Adjust crossover frequency", 0, output_chan < 6);
   );
   
 //  gain_knob, delay_knob and crossover
   reset_font();
+  
+  (output_chan == 6) ? (
+    gfx_set(0.1, 0.1, 0.1, 0.2);
+    gfx_rect(x * ui_w, y * ui_h, w * ui_w, h * ui_h);
+  );
 );
 
 function set_active_monitor(idx)
@@ -728,7 +903,9 @@ global(ui_w, ui_h, gfx_x, gfx_y,
        swap_lr, mid_side, dim, all_muted,
        monitor_a_active, monitor_b_active, monitor_c_active,
        headphones_active, subwoofer_active,
-       overall_gain.draw_knob)
+       overall_gain.draw_knob,
+       headphones_output_chan, subwoofer_output_chan,
+       monitor_a_output_chan, monitor_b_output_chan, monitor_c_output_chan)
 local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
 (
   basic_rect(x, y, w, h);
@@ -743,7 +920,7 @@ local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
   side_pad = 0.5 * (w - row_width);
   
   /* Basic controls */
-  button(x + side_pad, y + row_y, button_w, button_h, "Swap\nL - R", 1, swap_lr, "Swap left and right channel") ? (swap_lr = 1 - swap_lr);
+  button(x + side_pad, y + row_y, button_w, button_h, "Swap\nL - R", 1, swap_lr, "Swap left and right channel", 1) ? (swap_lr = 1 - swap_lr);
   button(
     x + side_pad + button_w + pad,
     y + row_y,
@@ -754,27 +931,28 @@ local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
     : "Mid\nSide",
     1,
     mid_side > 0,
-    "Toggle mid/side monitoring"
+    "Toggle mid/side monitoring",
+    1
   ) ? (
     mid_side += 1;
     (mid_side > 2) ? mid_side = 0;
   );
-  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Dim", 5, dim, "Reduce volume by 15 dB") ? (dim = 1 - dim);
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Dim", 5, dim, "Reduce volume by 15 dB", 1) ? (dim = 1 - dim);
   
   /* Monitor select */
   row_y = (5 / 6 - 1 / 12) * h - 0.5 * button_h;
-  button(x + side_pad, y + row_y, button_w, button_h, "Mon A", 5, monitor_a_active, "Route to monitor A") ? set_active_monitor(7);
-  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Mon B", 5, monitor_b_active, "Route to monitor B") ? set_active_monitor(11);
-  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Mon C", 5, monitor_c_active, "Route to monitor C") ? set_active_monitor(15);
+  button(x + side_pad, y + row_y, button_w, button_h, "Mon A", 5, monitor_a_active, "Route to monitor A.\nHold SHIFT to select multiple.", monitor_a_output_chan < 6) ? set_active_monitor(7);
+  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Mon B", 5, monitor_b_active, "Route to monitor B\nHold SHIFT to select multiple.", monitor_b_output_chan < 6) ? set_active_monitor(11);
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Mon C", 5, monitor_c_active, "Route to monitor C\nHold SHIFT to select multiple.", monitor_c_output_chan < 6) ? set_active_monitor(15);
   
   /* Other select */
   row_y = (5 / 6 + 1 / 12) * h - 0.5 * button_h;
-  button(x + side_pad, y + row_y, button_w, button_h, "Head\nphone", 1, headphones_active, "Route to headphones") ? set_active_monitor(19);
-  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Sub", 5, subwoofer_active ? (headphones_active ? 2 : 1) : 0, "Split subwoofer into separate band\nAutomatically disabled when using headphones.\n") ? ( subwoofer_active = 1 - subwoofer_active; );
-  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Mute", 5, all_muted, "Mute everything") ? ( all_muted = 1 - all_muted; );
+  button(x + side_pad, y + row_y, button_w, button_h, "Head\nphone", 1, headphones_active, "Route to headphones\nHold SHIFT to select multiple.", headphones_output_chan < 6) ? set_active_monitor(19);
+  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Sub", 5, subwoofer_active ? (headphones_active ? 2 : 1) : 0, "Split subwoofer into separate band\nAutomatically disabled when using headphones.\n", subwoofer_output_chan < 6) ? ( subwoofer_active = 1 - subwoofer_active; );
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Mute", 5, all_muted, "Mute everything", 1) ? ( all_muted = 1 - all_muted; );
   
   radius = 1/4 * w * ui_w;
-  overall_gain.draw_knob(x + 0.5 * ui_w, y + 0.44 * ui_h, radius, "%.1f dB", "Adjust gain");
+  overall_gain.draw_knob(x + 0.5 * ui_w, y + 0.44 * ui_h, radius, "%.1f dB", "Adjust gain", 1, 1);
   
   gfx_x = x * ui_w + 0.05 * w * ui_w;
   gfx_y = y * ui_h + 0.4 * h * ui_h;
@@ -783,17 +961,17 @@ local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
 side_width = 0.25;
 
 hh = (1 - 2 * y_pad - 2 * y_pad) / 3;
-input1.input_rect(x_pad, y_pad, side_width, hh, "DAW input", 0, m_spl0, m_spl1);
-input2.input_rect(x_pad, 2 * y_pad + hh, side_width, hh, "PC input", 1, m_spl2, m_spl3);
-input3.input_rect(x_pad, 3 * y_pad + 2 * hh, side_width, hh, "Misc input", 2, m_spl4, m_spl5);
+input1.input_rect(x_pad, y_pad, side_width, hh, "DAW input", 0, m_spl0, m_spl1, 29, 32, active1);
+input2.input_rect(x_pad, 2 * y_pad + hh, side_width, hh, "PC input", 1, m_spl2, m_spl3, 30, 33, active2);
+input3.input_rect(x_pad, 3 * y_pad + 2 * hh, side_width, hh, "Misc input", 2, m_spl4, m_spl5, 31, 34, active3);
 
 hh = (1 - 2 * y_pad - 4 * y_pad) / 5;
 dy = y_pad + hh;
-output1.output_rect(1 - x_pad - side_width, y_pad, side_width, hh, "Mon A", 9, m_mon_a_l, m_mon_a_r);
-output2.output_rect(1 - x_pad - side_width, y_pad + dy, side_width, hh, "Mon B", 13, m_mon_b_l, m_mon_b_r);
-output3.output_rect(1 - x_pad - side_width, y_pad + 2 * dy, side_width, hh, "Mon C", 17, m_mon_c_l, m_mon_c_r);
-output4.output_rect(1 - x_pad - side_width, y_pad + 3 * dy, side_width, hh, "Headphones", 20, m_head_l, m_head_r);
-output5.output_rect(1 - x_pad - side_width, y_pad + 4 * dy, side_width, hh, "Subwoofer", 25, m_sub_l, m_sub_r);
+output1.output_rect(1 - x_pad - side_width, y_pad, side_width, hh, "Mon A", 9, m_mon_a_l, m_mon_a_r, monitor_a_active && !all_muted);
+output2.output_rect(1 - x_pad - side_width, y_pad + dy, side_width, hh, "Mon B", 13, m_mon_b_l, m_mon_b_r, monitor_b_active && !all_muted);
+output3.output_rect(1 - x_pad - side_width, y_pad + 2 * dy, side_width, hh, "Mon C", 17, m_mon_c_l, m_mon_c_r, monitor_c_active && !all_muted);
+output4.output_rect(1 - x_pad - side_width, y_pad + 3 * dy, side_width, hh, "Headphones", 20, m_head_l, m_head_r, headphones_active && !all_muted);
+output5.output_rect(1 - x_pad - side_width, y_pad + 4 * dy, side_width, hh, "Subwoofer", 25, m_sub_l, m_sub_r, subwoofer_active && !all_muted);
 
 center_rect(2 * x_pad + side_width, y_pad, 1 - 2 * side_width - 4 * x_pad, 1 - 2 * y_pad, "OK", 0);
 
