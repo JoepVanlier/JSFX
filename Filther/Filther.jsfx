@@ -1,9 +1,9 @@
 //import reajs_compatibility.jsfx-inc.txt
 desc:Filther
 tags: Filther
-version: 3.08
+version: 3.09
 author: Joep Vanlier
-changelog: Workarounds for SSE branch's issues with tan(pi/2).
+changelog: Add option to disable DC correction. Add linear phase DC blocker for FIR mode.
 provides: Filther.jsfx.rpl
 about:
   # Filther
@@ -31,6 +31,7 @@ Copyright (c) 2012 Dominique Wurtz (www.blaukraut.info)
 Karlsen Fast Ladder III
 Copyright (c) Ove Hy Karlsen
 Weeping Demon emulation by Chet Gnegy (https://ccrma.stanford.edu/~chet/)
+FIR DC blocker was based on Yates, R., & Lyons, R. (2008). DC blocker algorithms [DSP Tips & Tricks]. IEEE Signal Processing Magazine, 25(2), 132-134.
 
 Theme attribution:
 FoxAsteria made some of the better lookin' color schemes.
@@ -257,6 +258,8 @@ file_var(0,envWindow2.bidi);
 
 envWindow1.updateTogglesAfterLoad();
 envWindow2.updateTogglesAfterLoad();
+
+file_var(0, dont_correct_dc);
 
 @init
 activeTheme = -1;
@@ -2493,7 +2496,8 @@ function f_trafo_hz(freq)
   instance()
   (
     legacyCutoff ? (
-      ( pow(10, freq) - 1 ) / 9
+      //( pow(10, freq) - 1 ) * 0.11111111111111111111111111111111
+      (exp(2.302585092994045901093613792909309267997741699218750 * freq) - 1) * 0.11111111111111111111111111111111
     ) : (
       //exp( log(20/22050) + freq*(log(1) - log(20/22050)) )
       exp( (1-freq) * log(20/22050) )
@@ -12206,10 +12210,74 @@ function evaluateEnvelope(notesOn)
 //preBufferR    = 400000;
 bufferDist      = 65536;
 
-delay_buf1      = 70 * 65536;
+/*delay_buf1      = 70 * 65536;
 delay_buf2      = delay_buf1 + 500000;
 delay_buf3      = delay_buf2 + 1000000;
-delay_buf4      = delay_buf3 + 1500000;
+delay_buf4      = delay_buf3 + 1500000;*/
+
+delay_buf1      = 70 * 65536;
+delay_buf2      = delay_buf1 + bufferDist;
+delay_buf3      = delay_buf2 + bufferDist;
+delay_buf4      = delay_buf3 + bufferDist;
+
+function init_dc_blocker(freemem)
+local(DC_BLOCK_SIZE)
+instance(ma_delay, ma_delay_end, ma_delay_ptr)
+global()
+(
+  DC_BLOCK_SIZE = 4096 * 4;
+  freemem = (ma_delay = freemem) + DC_BLOCK_SIZE;
+  !ma_delay_ptr ? ma_delay_ptr = ma_delay;
+  ma_delay_end = freemem;
+  
+  freemem += DC_BLOCK_SIZE;
+);
+
+function lin_phase_dc_blocker(ma1_in)
+local(ma1_out, ma2_out, ma3_out, ma4_out,
+      i_length)
+global()
+instance(ma1_out_last, ma2_out_last, ma3_out_last, ma4_out_last,
+         ma_delay, ma_delay_end, ma_delay_ptr, read_loc)
+(
+  i_length = 1 / 1024;
+
+  read_loc = ma_delay_ptr - 1024 * 4;
+  read_loc < ma_delay ? read_loc += (ma_delay_end - ma_delay);
+
+  ma1_out = ma1_out_last + ma1_in - read_loc[];  // Delayed reads from ma1 in delayed
+  ma1_out_last = ma1_out;
+  ma1_out *= i_length;
+  
+  ma2_out = ma2_out_last + ma1_out - read_loc[1];  // Delayed reads from ma2 in delayed
+  ma2_out_last = ma2_out;
+  ma2_out *= i_length;
+  
+  ma3_out = ma3_out_last + ma2_out - read_loc[2];  // Delayed reads from ma3 in delayed
+  ma3_out_last = ma3_out;
+  ma3_out *= i_length;
+  
+  ma4_out = ma4_out_last + ma3_out - read_loc[3];  // Delayed reads from ma4 in delayed
+  ma4_out_last = ma4_out;
+  ma4_out *= i_length;
+  
+  ma_delay_ptr[] = ma1_in;
+  ma_delay_ptr[1] = ma1_out;
+  ma_delay_ptr[2] = ma2_out;
+  ma_delay_ptr[3] = ma3_out;
+  ma_delay_ptr += 4;
+  
+  (ma_delay_ptr >= ma_delay_end) ? ma_delay_ptr -= (ma_delay_end - ma_delay);
+  
+  // Final result is forwarded signal, minus the signal going through the moving average filters.
+  read_loc = ma_delay_ptr - 2 * (1024 - 1) * 4;
+  read_loc < ma_delay ? read_loc += (ma_delay_end - ma_delay);
+  
+  read_loc[] - ma4_out
+);
+
+freemem = fir_dc_block_left.init_dc_blocker(delay_buf4 + bufferDist);
+freemem = fir_dc_block_right.init_dc_blocker(freemem);
 
 sinc_tmp        = 900000;
 sinc_flt        = 910000; // Upsample filters are spaced at 100 difference. There are N filters, with 8 taps per filter.
@@ -12606,6 +12674,7 @@ function updateSliders( hard )
   rms_x4_1.active                 = slider57 & 16 ? 1 : 0;
   rms_x4_2.active                 = slider57 & 32 ? 1 : 0;
   firButton.active                = slider50&1 ? 1 : 0;
+  dcButton.active                 = 1.0 - dont_correct_dc;
   
   lfoResetButton.active           = (slider38&1) ? 1 : 0;
   tempoLFOButton.active           = (slider38&2) ? 1 : 0;
@@ -12874,8 +12943,10 @@ function setupGUI()
 
   inClip.selectionButton(masterPanelX+sliderPad+ + .8*sliderWidth, 3+masterPanelY+.75*sliderPad, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle input clipping");
   outClip.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+1.75*sliderPad+sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Clip",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Toggle output clipping");
+  
   firButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+2.75*sliderPad+2*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "FIR",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable FIR up/downsampling\n(preserves phase but expensive)");
-  polarityButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+3.75*sliderPad+3*sliderHeight, .2*sliderWidth-2*sliderPad, sliderHeight-4, "Ø",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Invert polarity");
+  polarityButton.selectionButton(masterPanelX+sliderPad + .8*sliderWidth, 3+masterPanelY+3.75*sliderPad+3*sliderHeight, .1*sliderWidth-2*sliderPad, sliderHeight-4, "Ø",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Invert polarity");
+  dcButton.selectionButton(masterPanelX+sliderPad + .88*sliderWidth, 3+masterPanelY+3.75*sliderPad+3*sliderHeight, .12*sliderWidth-2*sliderPad, sliderHeight-4, "DC",  selectionbutton_color_r, selectionbutton_color_g, selectionbutton_color_b, selectionbutton_color_a, "Enable DC correction");
 
   filterPanelX = masterPanelX;
   filterPanelY = masterPanelY + masterPanelH + sliderHeight - .5*sliderPad;
@@ -15441,7 +15512,20 @@ UI_Loaded = 0;
 updateSliders();
 updateActiveFilters(1);
 
-@block     
+@block
+  correct_dc_nonlin_phase = 1;
+  correct_dc_fir = 0;
+  
+  // Double negative :(
+  dont_correct_dc ? (
+    correct_dc_nonlin_phase = 0;
+  ) : (
+    FIR_upsampling ? (
+      correct_dc_nonlin_phase = 0;
+      correct_dc_fir = 1;
+    );
+  );
+  
   agc_corr == 0 ? agc_corr = 1;
   israte = 1/srate;
   
@@ -15514,12 +15598,13 @@ updateActiveFilters(1);
     updateActiveFilters(1);
   );
   
- ( pdcDelay != lastpdcDelay ) ?
+  dc_delay = correct_dc_fir ? 2 * (1024 - 1) : 0;
+ ( (pdcDelay + correct_dc_fir) != lastpdcDelay ) ?
   (
-    lastpdcDelay = pdcDelay;
+    lastpdcDelay = pdcDelay + correct_dc_fir;
     pdc_bot_ch=0; 
     pdc_top_ch=2;
-    pdc_delay = pdcDelay;
+    pdc_delay = lastpdcDelay;
   );
   
   dynTargetMode = ( slider45 > 9 && slider45 < 12 ) ? 1 : 0;
@@ -15868,12 +15953,17 @@ updateActiveFilters(1);
   );
   
   // DC correction
-  otm1=0.999*otm1 + sl - itm1;
-  itm1=sl;
-  sl=otm1;
-  otm2=0.999*otm2 + sr - itm2;
-  itm2=sr;
-  sr=otm2;
+  correct_dc_nonlin_phase ? (
+    otm1=0.999*otm1 + sl - itm1;
+    itm1=sl;
+    sl=otm1;
+    otm2=0.999*otm2 + sr - itm2;
+    itm2=sr;
+    sr=otm2;
+  ) : ( correct_dc_fir ) ? (
+    sl = fir_dc_block_left.lin_phase_dc_blocker(sl);
+    sr = fir_dc_block_right.lin_phase_dc_blocker(sr);
+  );
    
   movavgOLN = max(alpha*movavgOLN, -sl);
   movavgOLP = max(alpha*movavgOLP,  sl);
@@ -16579,6 +16669,7 @@ updateActiveFilters(1);
     outClip.selectionButton_draw();
     inertia.selectionButton_draw();
     firButton.selectionButton_draw();
+    dcButton.selectionButton_draw();
     polarityButton.selectionButton_draw();
     overSampling.sliderWidget_draw();
     tempoLFOButton.selectionButton_draw();
@@ -16931,6 +17022,9 @@ updateActiveFilters(1);
             ( slider50 & 1 != firButton.active ) ? ( slider_automate( slider50=slider50 - (slider50&1) + firButton.active; ); forceUpdate = 1; );
             
             polarityButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            
+            dcButton.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
+            dont_correct_dc = 1.0 - dcButton.active;
             
             atk_x4_1.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
             atk_x4_2.selectionButton_processMouse(mouse_x, mouse_y, mouse_cap);
