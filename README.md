@@ -250,6 +250,12 @@ Features
 - Input non-linearity (dist), spectrum non-linearity (ceiling).
 - Dry/Wet controls.
 
+## Routing tool
+
+A small convenience tool for quickly routing monitor configurations. Meant to go on the master monitor FX or master bus. Used for quickly toggling routing to different outputs.
+
+![new_features](https://user-images.githubusercontent.com/19836026/153730739-2e76c95e-73aa-4cee-96f0-6377a3d585ca.gif)
+
 # Squashman - Multiband distortion
 Squashman is a multi-band saturation / distortion plugin that allows modulation of several of its parameters.
 
