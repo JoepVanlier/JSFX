@@ -1,8 +1,8 @@
 desc:Saike ARP (beta)
 tags: midi arpeggiator
-version: 0.06
+version: 0.08
 author: Joep Vanlier
-changelog: Add velocity and modulation rows (not hooked up yet). Add buttons for max poly and extra octaves. Fixed bug which misindicated the loop length.
+changelog: Allow rotating all notes at once.
 license: MIT
 options:no_meter
 
@@ -81,6 +81,7 @@ DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
 DRAG_MODSIZE = 6;
 DRAG_SETTING = 7;
+DRAG_NUDGE_ALL = 8;
 
 sample_clock = 0;
 pattern_change = 1;
@@ -269,7 +270,7 @@ global(
           // Start new note
           (current_arp[idx] > 0) ? (
             new_note = current_arp[idx] + 12 * audio_octave;
-            midisend(0, $x90, new_note, 127);
+            midisend(1, $x90, new_note, 127);
             notes_in_flight[current_idx] = new_note;
           );
         );
@@ -325,19 +326,19 @@ global(mouse_wheel)
 function shift_drag(y_over, me, mem, idx)
 global(loop_point, mouse_cap, last_cap, current_cursor, shuffle_buffer, last_shift,
        shift_ref, dragging, captured_by, drag_mode, idx_ref,
-       DRAG_NUDGE)
+       DRAG_NUDGE, DRAG_NUDGE_ALL)
 local(shift)
 (
   // Shift row
   y_over && (idx >= 0) && (idx <= loop_point) ? (
     (mouse_cap & 16) == 16 ? (
       current_cursor = 32644;
-      (mouse_cap == (1 + 16)) ? (
+      ((mouse_cap & 1 == 1) && (mouse_cap & 16 == 16)) ? (
         // ALT + DRAG
         (last_cap & 1 == 0) ? (
           captured_by = me;
           dragging = 1;
-          drag_mode = DRAG_NUDGE;
+          drag_mode = (mouse_cap & 4 > 0) ? DRAG_NUDGE_ALL : DRAG_NUDGE;
           idx_ref = idx;
         );
       );
@@ -345,7 +346,7 @@ local(shift)
   );
   
   // Shifting rows ...
-  (drag_mode == DRAG_NUDGE) && (captured_by == me) ? (
+  (((drag_mode == DRAG_NUDGE) && (captured_by == me)) || (drag_mode == DRAG_NUDGE_ALL)) ? (
     (mouse_cap & 1 == 0) ? (
       release_drag();
     ) : (
@@ -365,7 +366,7 @@ local(shift)
         memcpy(mem, shuffle_buffer, loop_point);
       );
       
-      idx_ref = idx;
+      (drag_mode != DRAG_NUDGE_ALL) ? idx_ref = idx;
     );
   );
 );
@@ -391,14 +392,7 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   set_row_color(row_index);
   nice_rect(x, y, label_width - 1, block_width, 0, row_color_r * .8, row_color_g * .8, row_color_b * .8);
   ptr = mem;
-  
-  // Are we selected?
-  /*(selected_details == me) ? (
-    selected_row = row_index;
-    gfx_set(1.0, 1.0, 1.0, 0.15 + 0.1 * sin(3*time_precise()));
-    gfx_rect(x, y, label_width, block_width);
-  );*/
-  
+   
   gfx_set(font_r, font_r, font_r, 1.0);
   gfx_setfont(BASE_FONT);
   gfx_measurestr(label, txt_w, txt_h);
@@ -439,6 +433,8 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   );
   
   y_over = (mouse_y > y) && (mouse_y < (y + block_width));
+   
+  y_over ? hinter.updateHintTime("LMB - Create block\nRMB remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all");
    
   (captured_by == me) ? dragging = 1;
   
@@ -646,6 +642,8 @@ loop(extra_octaves + 1,
 select_colormap(1);
 yc = process_modulation_row(0, 0, 50, modulator1_values, x, yc, 2 * block_width, "Mod", "Mod wheel");
 yc = process_modulation_row(1, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
+
+idx_ref = min(floor((mouse_x - (x + label_width)) / (block_width + block_spacing)), n_segments);
 
 gfx_set(0, 0, 0, .6);
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_point) - 2, grid_origin_y, (n_segments - loop_point) * (block_width + block_spacing) + 1, yc - grid_origin_y);
