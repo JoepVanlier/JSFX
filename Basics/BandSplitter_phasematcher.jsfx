@@ -1,8 +1,8 @@
 desc:Saike 4-pole phase matcher for IIR BandSplitter
 tags: phasematcher for bandsplitter
-version: 0.03
+version: 0.04
 author: Joep Vanlier
-changelog: Workaround for SSE branch tan(pi/2) issue.
+changelog: Add 2-pole option to the phase matcher
 provides:
 license: MIT
 
@@ -32,6 +32,7 @@ slider9:Drive4=0<-40,60,.1>-Drive 4 (dB)
 slider10:Drive5=0<-40,60,.1>-Drive 5 (dB)
 
 slider62:masterGainSlider=0<-26,26,.1>-Master Gain
+slider63:band_mode=0<0,1,1{4p,2p}>-Band mode
 
 @init
 /*function fft_real(x,x)
@@ -1395,7 +1396,28 @@ solo5 ? play5 = 1;
       ic6eq = 2*v2 - ic6eq;    
       
       v0 - 2*k*v1
-    );    
+    );
+  
+  function init_AP1(freq)
+    global(srate)
+    instance(k)
+    local(f0, st)
+    (
+      f0 = 0.5 * $pi * exp((1 - freq) * log(20/22050));
+      st = sin(f0);
+      k = st / (st + cos(f0));
+    );
+    
+  function eval_AP1(v0)
+    global()
+    instance(k, state)
+    local(v, y)
+    (
+      v = (v0 - state) * k;
+      y = v + state;
+      state = y + v;
+      y - (v0 - y)
+    );
  
   function resetBands()
   local()
@@ -1431,7 +1453,7 @@ solo5 ? play5 = 1;
   // Make sure the delay is the same on all bands (identical number of filters)
   function splitBands(sl, sr)
   local()
-  global(Cuts)
+  global(Cuts, band_mode)
   instance( LA_F1, LA_F2, LA_F3, LA_F4    /* Allpasses left */
             RA_F1, RA_F2, RA_F3, RA_F4    /* Allpasses right */
             lcuts )
@@ -1441,27 +1463,47 @@ solo5 ? play5 = 1;
       this.resetBands();
     );
     
-    (cuts==0) ? (
-      this.outL = sl;
-      this.outR = sr;
-    ) : (cuts==1) ? (
-      this.outL = LA_F1.eval_LRAP(sl);
-      this.outR = RA_F1.eval_LRAP(sr);
-    ) : (cuts==2) ? (
-      this.outL = LA_F2.eval_LRAP(LA_F1.eval_LRAP(sl));
-      this.outR = RA_F2.eval_LRAP(RA_F1.eval_LRAP(sr));
-    ) : (cuts==3) ? (
-      this.outL = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LA_F1.eval_LRAP(sl)));
-      this.outR = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RA_F1.eval_LRAP(sr)));
-    ) : (cuts==4) ? (
-      this.outL = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LA_F1.eval_LRAP(sl))));
-      this.outR = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RA_F1.eval_LRAP(sr))));
+    band_mode == 0 ? (
+      (cuts==0) ? (
+        this.outL = sl;
+        this.outR = sr;
+      ) : (cuts==1) ? (
+        this.outL = LA_F1.eval_LRAP(sl);
+        this.outR = RA_F1.eval_LRAP(sr);
+      ) : (cuts==2) ? (
+        this.outL = LA_F2.eval_LRAP(LA_F1.eval_LRAP(sl));
+        this.outR = RA_F2.eval_LRAP(RA_F1.eval_LRAP(sr));
+      ) : (cuts==3) ? (
+        this.outL = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LA_F1.eval_LRAP(sl)));
+        this.outR = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RA_F1.eval_LRAP(sr)));
+      ) : (cuts==4) ? (
+        this.outL = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LA_F1.eval_LRAP(sl))));
+        this.outR = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RA_F1.eval_LRAP(sr))));
+      );
+    ) : (
+      (cuts==0) ? (
+        this.outL = sl;
+        this.outR = sr;
+      ) : (cuts==1) ? (
+        this.outL = LA_F1.eval_AP1(sl);
+        this.outR = RA_F1.eval_AP1(sr);
+      ) : (cuts==2) ? (
+        this.outL = LA_F2.eval_AP1(LA_F1.eval_AP1(sl));
+        this.outR = RA_F2.eval_AP1(RA_F1.eval_AP1(sr));
+      ) : (cuts==3) ? (
+        this.outL = LA_F3.eval_AP1(LA_F2.eval_AP1(LA_F1.eval_AP1(sl)));
+        this.outR = RA_F3.eval_AP1(RA_F2.eval_AP1(RA_F1.eval_AP1(sr)));
+      ) : (cuts==4) ? (
+        this.outL = LA_F4.eval_AP1(LA_F3.eval_AP1(LA_F2.eval_AP1(LA_F1.eval_AP1(sl))));
+        this.outR = RA_F4.eval_AP1(RA_F3.eval_AP1(RA_F2.eval_AP1(RA_F1.eval_AP1(sr))));
+      );
     );
   );  
   
   function updateCoeffs()
   local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i)
-  global(Cuts, Freq1, Freq2, Freq3, Freq4, bufferDist, fftCalcSize )
+  global(Cuts, Freq1, Freq2, Freq3, Freq4, bufferDist, fftCalcSize,
+         band_mode, lband_mode)
   instance( F1,  F2,  F3,  F4
             LA_F1, LA_F2, LA_F3, LA_F4    /* Allpasses left */
             RA_F1, RA_F2, RA_F3, RA_F4    /* Allpasses right */
@@ -1475,7 +1517,8 @@ solo5 ? play5 = 1;
         ( lF2 != Freq2 ) ||
         ( lF3 != Freq3 ) ||
         ( lF4 != Freq4 ) ||
-        ( cuts != lcuts ) );
+        ( cuts != lcuts ) || 
+        ( band_mode != lband_mode ));
 
       updateRequired ? (        
         lF1 = Freq1;
@@ -1483,6 +1526,7 @@ solo5 ? play5 = 1;
         lF3 = Freq3;
         lF4 = Freq4;
         lcuts = cuts;
+        lband_mode = band_mode;
       
         F1 = Freq1;
         F2 = Freq1  + Freq2 * (1 - Freq1);
@@ -1491,64 +1535,81 @@ solo5 ? play5 = 1;
           
         (cuts==1) ? (
           // All-passes for maintaining the phase relation between the bands
-          LA_F1.init_LR2(F1);
+          band_mode == 0 ? (
+            LA_F1.init_LR2(F1) 
+          ) : (
+            LA_F1.init_AP1(F1);
+          );
           RA_F1.k  = LA_F1.k;
           RA_F1.a1 = LA_F1.a1;
           RA_F1.a2 = LA_F1.a2;
           RA_F1.a3 = LA_F1.a3;
         ) : (cuts==2) ? (
           // All-passes for maintaining the phase relation between the bands
-          LA_F1.init_LR2(F1);
+          band_mode == 0 ? (
+            LA_F1.init_LR2(F1);
+            LA_F2.init_LR2(F2);
+          ) : (
+            LA_F1.init_AP1(F1);
+            LA_F2.init_AP1(F2);
+          );
           RA_F1.k  = LA_F1.k;
           RA_F1.a1 = LA_F1.a1;
           RA_F1.a2 = LA_F1.a2;
           RA_F1.a3 = LA_F1.a3;
           
-          LA_F2.init_LR2(F2);
           RA_F2.k  = LA_F2.k;
           RA_F2.a1 = LA_F2.a1;
           RA_F2.a2 = LA_F2.a2;
           RA_F2.a3 = LA_F2.a3;
         ) : (cuts == 3) ? (
           // All-passes for maintaining the phase relation between the bands
-          LA_F1.init_LR2(F1);
+          band_mode == 0 ? (
+            LA_F1.init_LR2(F1);
+            LA_F2.init_LR2(F2);
+            LA_F3.init_LR2(F3);
+          ) : (
+            LA_F1.init_AP1(F1);
+            LA_F2.init_AP1(F2);
+            LA_F3.init_AP1(F3);
+          );
           RA_F1.k  = LA_F1.k;
           RA_F1.a1 = LA_F1.a1;
           RA_F1.a2 = LA_F1.a2;
-          RA_F1.a3 = LA_F1.a3;          
-          
-          LA_F2.init_LR2(F2);
+          RA_F1.a3 = LA_F1.a3;
           RA_F2.k  = LA_F2.k;
           RA_F2.a1 = LA_F2.a1;
           RA_F2.a2 = LA_F2.a2;
           RA_F2.a3 = LA_F2.a3;
-          
-          LA_F3.init_LR2(F3);
           RA_F3.k  = LA_F3.k;
           RA_F3.a1 = LA_F3.a1;
           RA_F3.a2 = LA_F3.a2;
           RA_F3.a3 = LA_F3.a3;
         ) : (cuts == 4) ? (
           // All-passes for maintaining the phase relation between the bands
-          LA_F1.init_LR2(F1);
+          band_mode == 0 ? (
+            LA_F1.init_LR2(F1);
+            LA_F2.init_LR2(F2);
+            LA_F3.init_LR2(F3);
+            LA_F4.init_LR2(F4);
+          ) : (
+            LA_F1.init_AP1(F1);
+            LA_F2.init_AP1(F2);
+            LA_F3.init_AP1(F3);
+            LA_F4.init_AP1(F4);
+          );
           RA_F1.k  = LA_F1.k;
           RA_F1.a1 = LA_F1.a1;
           RA_F1.a2 = LA_F1.a2;
           RA_F1.a3 = LA_F1.a3;
-          
-          LA_F2.init_LR2(F2);
           RA_F2.k  = LA_F2.k;
           RA_F2.a1 = LA_F2.a1;
           RA_F2.a2 = LA_F2.a2;
           RA_F2.a3 = LA_F2.a3;
-          
-          LA_F3.init_LR2(F3);
           RA_F3.k  = LA_F3.k;
           RA_F3.a1 = LA_F3.a1;
           RA_F3.a2 = LA_F3.a2;
           RA_F3.a3 = LA_F3.a3;
-          
-          LA_F4.init_LR2(F4);
           RA_F4.k  = LA_F4.k;
           RA_F4.a1 = LA_F4.a1;
           RA_F4.a2 = LA_F4.a2;
@@ -1681,6 +1742,91 @@ solo5 ? play5 = 1;
   spectrumIn.updateBands();
   spectrumIn.drawBands();    
   spectrumIn.fftWindow_processMouse(mouse_x, mouse_y, mouse_cap);  
+
+function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
+  local(ww, hh)
+  instance(x, y, w, h, str, on, invert, label)
+  global(gfx_x, gfx_y, gfx_a, gfx_mode, 
+         TOGGLE_FONT, knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a)
+  (
+    x = _x;
+    y = _y;
+    w = _w;
+    h = _h;
+    on = _on;
+    str = _str;
+
+    gfx_set(0, 0, 0, 0);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(r, g, b, a*.2);
+    gfx_rect(x, y, w, h);
+    
+    gfx_set(wr, wg, wb, wa);
+    gfx_line(x, y, x+w, y);
+    gfx_line(x, y, x, y+h);
+    gfx_line(x+w, y, x+w, y+h);
+    gfx_line(x, y+h, x+w, y+h);
+
+    ( label ) ? (
+      gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a);
+      gfx_setfont(TOGGLE_FONT);
+      gfx_measurestr(label, ww, hh);
+      gfx_x = floor(x+1.5*w);
+      gfx_y = floor(y-.5*hh+.5*h);
+      gfx_printf(label);
+    );
+    
+    ( (on && !invert) || (!on && invert) ) ? (
+      gfx_set(r, g, b, a);
+      gfx_rect(x, y, w, h);
+      gfx_a *= .6;
+      gfx_rect(x-1, y-1, w+2, h+2);
+      gfx_a *= .6;
+      gfx_rect(x-2, y-2, w+4, h+4);
+      gfx_a *= .6;
+      gfx_rect(x-3, y-3, w+6, h+6);
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 2*max(w,h), 2*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 3*max(w,h), 3*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 4*max(w,h), 4*max(w,h));
+      gfx_a *= .4;
+      gfx_circle(x+.5*w-1, y+.5*h-1, 5*max(w,h), 5*max(w,h));
+    );
+  );
+
+  function processMouseToggle(mx, my, mousecap)
+    instance(x, y, w, h, on, lastleft, str)
+    local(left, slack, over)
+    global(hinter.updateHintTime, comboboxOpen)
+    (
+      !comboboxOpen ? (
+        slack = 5;
+        left = mousecap & 1;
+        
+        over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
+        
+        over ? (
+          ( (left == 1) && (lastleft == 0) ) ?  (
+            on = 1 - on;
+          );
+          hinter.updateHintTime(str);
+        );
+        
+        lastleft = left;
+      );
+      
+      on
+    );
+
+  fourpole.drawToggle(20, 20, 10, 10, band_mode == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Use 4 pole 24 dB/oct filters");
+  fourpole.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? band_mode = 0;
+  fourpole.label = "4p";
+  twopole.drawToggle(60, 20, 10, 10, band_mode == 1, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Use 2 pole 12 dB/oct filters");
+  twopole.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? band_mode = 1;
+  twopole.label = "2p";
 
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
