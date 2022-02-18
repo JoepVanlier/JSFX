@@ -1,8 +1,8 @@
 desc:Saike 4-pole BandSplitter
 tags: bandsplitter
-version: 0.12
+version: 0.13
 author: Joep Vanlier
-changelog: Add higher quality modes to FIR filter.
+changelog: Add 2-pole option.
 provides:
   BandJoiner.jsfx
   BandSplitter_phasematcher.jsfx
@@ -45,6 +45,7 @@ slider60:FIR_quality=0<0,2,{Normal,High,Ultra}>-FIR Quality
 slider61:FIR=0<0,1,1>-FIR mode
 
 slider62:masterGainSlider=0<-26,26,.1>-Master Gain
+slider63:band_mode=0<0,1,1{4p,2p}>-Band mode
 
 @init
 /*function fft_real(x, x)
@@ -1474,12 +1475,12 @@ solo5 ? play5 = 1;
 
 @sample
   function init_LR2(freq)
-    global(srate)
+    global(srate, band_mode)
     local(f0, ct, st, div)
     instance(k, a1, a2, a3)
     (
       f0 = .5 * $pi * exp( (1-freq) * log(20/22050) );
-      k = sqrt(2); /* Note the different peak resonance because we're combining 2 SVFs into the Linkwitz-Riley structure */
+      k = band_mode == 0 ? sqrt(2) : 2; /* Note the different peak resonance because we're combining 2 SVFs into the Linkwitz-Riley structure */
 
       ct = cos(f0);
       st = sin(f0);
@@ -1500,7 +1501,7 @@ solo5 ? play5 = 1;
   function eval_LRLP(v0)
     global()
     local(v1, v2, v3)
-    instance(ic3eq, ic4eq, k, a1, a2, a3)
+    instance(ic3eq, ic4eq, a1, a2, a3)
     (
       v3 = v0 - ic4eq;
       v1 = a1 * ic3eq + a2 * v3;
@@ -1523,8 +1524,8 @@ solo5 ? play5 = 1;
       ic6eq = 2*v2 - ic6eq;    
       
       v0 - 2*k*v1
-    );    
-
+    );
+    
   function eval_LR2(v0)
     global()
     local(v1, v2, v3, all)
@@ -1534,13 +1535,49 @@ solo5 ? play5 = 1;
       v1 = a1 * ic1eq + a2 * v3;
       v2 = ic2eq + a2 * ic1eq + a3 * v3;
       ic1eq = 2*v1 - ic1eq;
-      ic2eq = 2*v2 - ic2eq;    
+      ic2eq = 2*v2 - ic2eq;
       
       all = v0 - 2 * k * v1;
  
       lp = this.eval_LRLP(v2); 
       hp = all - lp;
-    );  
+    );
+    
+  function eval_LR1(v0)
+    global()
+    local(v1, v2, v3)
+    instance(ic1eq, ic2eq, k, a1, a2, a3, hp, lp)
+    (
+      v3 = v0 - ic2eq;
+      v1 = a1 * ic1eq + a2 * v3;
+      v2 = ic2eq + a2 * ic1eq + a3 * v3;
+      ic1eq = 2*v1 - ic1eq;
+      ic2eq = 2*v2 - ic2eq;
+ 
+      lp = v2;
+      hp = v0 - k * v1 - lp;
+    );
+    
+  function init_AP1(freq)
+    global(srate)
+    instance(k)
+    local(f0, st)
+    (
+      f0 = 0.5 * $pi * exp((1 - freq) * log(20/22050));
+      st = sin(f0);
+      k = st / (st + cos(f0));
+    );
+    
+  function eval_AP1(v0)
+    global()
+    instance(k, state)
+    local(v, y)
+    (
+      v = (v0 - state) * k;
+      y = v + state;
+      state = y + v;
+      y - (v0 - y)
+    );
   
   function resetBands()
   local()
@@ -1588,7 +1625,7 @@ solo5 ? play5 = 1;
   // Make sure the delay is the same on all bands (identical number of filters)
   function splitBands(sl, sr)
   local()
-  global(Cuts, FIR)
+  global(Cuts, FIR, band_mode, lband_mode)
   instance( LF1, LF2, LF3, LF4            /* Lowpass left */
             LA_F2,                        /* Allpass frequency 2 left */
             LA_F3, LA_F3_2,               /* Allpass frequency 3 left */
@@ -1604,77 +1641,154 @@ solo5 ? play5 = 1;
       this.resetBands();
     );
     
-    (cuts==0) ? (
-      b1.inL = sl;
-      b1.inR = sr;
-    ) : (cuts==1) ? (
-      LF1.eval_LR2(sl);
-      b1.inL = LF1.lp;
-      b2.inL = LF1.hp;
+    band_mode == 0 ? (
+      // 4p filters
+      (cuts==0) ? (
+        b1.inL = sl;
+        b1.inR = sr;
+      ) : (cuts==1) ? (
+        LF1.eval_LR2(sl);
+        b1.inL = LF1.lp;
+        b2.inL = LF1.hp;
+          
+        RF1.eval_LR2(sr);
+        b1.inR = RF1.lp;
+        b2.inR = RF1.hp;
+      ) : (cuts==2) ? (
+        LF1.eval_LR2(sl);
+        b1.inL   = LA_F2.eval_LRAP(LF1.lp);
+          
+        LF2.eval_LR2(LF1.hp);
+        b2.inL   = LF2.lp;
+        b3.inL   = LF2.hp;
+          
+        RF1.eval_LR2(sr);
+        b1.inR   = RA_F2.eval_LRAP(RF1.lp);
+          
+        RF2.eval_LR2(RF1.hp);
+        b2.inR   = RF2.lp;
+        b3.inR   = RF2.hp;
+      ) : (cuts == 3) ? (
+        LF1.eval_LR2(sl);
+        b1.inL   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
+          
+        LF2.eval_LR2(LF1.hp);
+        b2.inL   = LA_F3_2.eval_LRAP(LF2.lp);
+          
+        LF3.eval_LR2(LF2.hp);
+        b3.inL   = LF3.lp;
+        b4.inL   = LF3.hp;
+          
+        RF1.eval_LR2(sr);
+        b1.inR   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
         
-      RF1.eval_LR2(sr);
-      b1.inR = RF1.lp;
-      b2.inR = RF1.hp;
-    ) : (cuts==2) ? (
-      LF1.eval_LR2(sl);
-      b1.inL   = LA_F2.eval_LRAP(LF1.lp);
+        RF2.eval_LR2(RF1.hp);
+        b2.inR   = RA_F3_2.eval_LRAP(RF2.lp);
         
-      LF2.eval_LR2(LF1.hp);
-      b2.inL   = LF2.lp;
-      b3.inL   = LF2.hp;
+        RF3.eval_LR2(RF2.hp);
+        b3.inR   = RF3.lp;
+        b4.inR   = RF3.hp;
+      ) : (cuts == 4) ? (
+        LF1.eval_LR2(sl);
+        b1.inL   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
         
-      RF1.eval_LR2(sr);
-      b1.inR   = RA_F2.eval_LRAP(RF1.lp);
+        LF2.eval_LR2(LF1.hp);
+        b2.inL   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
+          
+        LF3.eval_LR2(LF2.hp);
+        b3.inL   = LA_F4_3.eval_LRAP(LF3.lp);
+          
+        LF4.eval_LR2(LF3.hp);
+        b4.inL   = LF4.lp;
+        b5.inL   = LF4.hp;
+          
+        RF1.eval_LR2(sr);
+        b1.inR   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
+          
+        RF2.eval_LR2(RF1.hp);
+        b2.inR   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
+          
+        RF3.eval_LR2(RF2.hp);
+        b3.inR   = RA_F4_3.eval_LRAP(RF3.lp);
+          
+        RF4.eval_LR2(RF3.hp);
+        b4.inR   = RF4.lp;
+        b5.inR   = RF4.hp;
+      );
+    ) : (
+      // 2p filters
+      (cuts==0) ? (
+        b1.inL = sl;
+        b1.inR = sr;
+      ) : (cuts==1) ? (
+        LF1.eval_LR1(sl);
+        b1.inL = LF1.lp;
+        b2.inL = - LF1.hp;
+          
+        RF1.eval_LR1(sr);
+        b1.inR = RF1.lp;
+        b2.inR = - RF1.hp;
+      ) : (cuts==2) ? (
+        LF1.eval_LR1(sl);
+        b1.inL   = LA_F2.eval_AP1(LF1.lp);
+          
+        LF2.eval_LR1(LF1.hp);
+        b2.inL   = -LF2.lp;
+        b3.inL   = LF2.hp;
+            
+        RF1.eval_LR1(sr);
+        b1.inR   = RA_F2.eval_AP1(RF1.lp);
+            
+        RF2.eval_LR1(RF1.hp);
+        b2.inR   = -RF2.lp;
+        b3.inR   = RF2.hp;
+      ) : (cuts == 3) ? (
+        LF1.eval_LR1(sl);
+        b1.inL   = LA_F3.eval_AP1(LA_F2.eval_AP1(LF1.lp));
+          
+        LF2.eval_LR1(LF1.hp);
+        b2.inL   = - LA_F3_2.eval_AP1(LF2.lp);
         
-      RF2.eval_LR2(RF1.hp);
-      b2.inR   = RF2.lp;
-      b3.inR   = RF2.hp;
-    ) : (cuts == 3) ? (
-      LF1.eval_LR2(sl);
-      b1.inL   = LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp));
+        LF3.eval_LR1(LF2.hp);
+        b3.inL   = LF3.lp;
+        b4.inL   = - LF3.hp;
+          
+        RF1.eval_LR1(sr);
+        b1.inR   = RA_F3.eval_AP1(RA_F2.eval_AP1(RF1.lp));
         
-      LF2.eval_LR2(LF1.hp);
-      b2.inL   = LA_F3_2.eval_LRAP(LF2.lp);
+        RF2.eval_LR1(RF1.hp);
+        b2.inR   = - RA_F3_2.eval_AP1(RF2.lp);
         
-      LF3.eval_LR2(LF2.hp);
-      b3.inL   = LF3.lp;
-      b4.inL   = LF3.hp;
+        RF3.eval_LR1(RF2.hp);
+        b3.inR   = RF3.lp;
+        b4.inR   = - RF3.hp;
+      ) : (cuts == 4) ? (
+        LF1.eval_LR1(sl);
+        b1.inL   = LA_F4.eval_AP1(LA_F3.eval_AP1(LA_F2.eval_AP1(LF1.lp)));
         
-      RF1.eval_LR2(sr);
-      b1.inR   = RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp));
-      
-      RF2.eval_LR2(RF1.hp);
-      b2.inR   = RA_F3_2.eval_LRAP(RF2.lp);
-      
-      RF3.eval_LR2(RF2.hp);
-      b3.inR   = RF3.lp;
-      b4.inR   = RF3.hp;
-    ) : (cuts == 4) ? (
-      LF1.eval_LR2(sl);
-      b1.inL   = LA_F4.eval_LRAP(LA_F3.eval_LRAP(LA_F2.eval_LRAP(LF1.lp)));
-      
-      LF2.eval_LR2(LF1.hp);
-      b2.inL   = LA_F4_2.eval_LRAP(LA_F3_2.eval_LRAP(LF2.lp));
-        
-      LF3.eval_LR2(LF2.hp);
-      b3.inL   = LA_F4_3.eval_LRAP(LF3.lp);
-        
-      LF4.eval_LR2(LF3.hp);
-      b4.inL   = LF4.lp;
-      b5.inL   = LF4.hp;
-        
-      RF1.eval_LR2(sr);
-      b1.inR   = RA_F4.eval_LRAP(RA_F3.eval_LRAP(RA_F2.eval_LRAP(RF1.lp)));
-        
-      RF2.eval_LR2(RF1.hp);
-      b2.inR   = RA_F4_2.eval_LRAP(RA_F3_2.eval_LRAP(RF2.lp));
-        
-      RF3.eval_LR2(RF2.hp);
-      b3.inR   = RA_F4_3.eval_LRAP(RF3.lp);
-        
-      RF4.eval_LR2(RF3.hp);
-      b4.inR   = RF4.lp;
-      b5.inR   = RF4.hp;
+        LF2.eval_LR1(LF1.hp);
+        b2.inL   = - LA_F4_2.eval_AP1(LA_F3_2.eval_AP1(LF2.lp));
+          
+        LF3.eval_LR1(LF2.hp);
+        b3.inL   = LA_F4_3.eval_AP1(LF3.lp);
+          
+        LF4.eval_LR1(- LF3.hp);
+        b4.inL   = LF4.lp;
+        b5.inL   = - LF4.hp;
+          
+        RF1.eval_LR1(sr);
+        b1.inR   = RA_F4.eval_AP1(RA_F3.eval_AP1(RA_F2.eval_AP1(RF1.lp)));
+          
+        RF2.eval_LR1(RF1.hp);
+        b2.inR   = - RA_F4_2.eval_AP1(RA_F3_2.eval_AP1(RF2.lp));
+          
+        RF3.eval_LR1(RF2.hp);
+        b3.inR   = RA_F4_3.eval_AP1(RF3.lp);
+          
+        RF4.eval_LR1(- RF3.hp);
+        b4.inR   = RF4.lp;
+        b5.inR   = - RF4.hp;
+      );
     );
   );  
   
@@ -1724,7 +1838,7 @@ solo5 ? play5 = 1;
   local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i, M)
   global(Cuts, Freq1, Freq2, Freq3, Freq4, FIR, FIR_quality,
          FIR1, FIR2, FIR3, FIR4, FIR5, bufferDist,
-         firSize, fftCalcSize)
+         firSize, fftCalcSize, band_mode, lband_mode)
   instance( F1,  F2,  F3,  F4
             LF1, LF2, LF3, LF4            /* Lowpass left */
             LA_F2,                        /* Allpass frequency 2 left */
@@ -1747,7 +1861,8 @@ solo5 ? play5 = 1;
         ( lF4 != Freq4 ) ||
         ( cuts != lcuts ) ||
         ( FIR != lFIR ) ||
-        ( FIR_quality != lFIR_quality ));
+        ( FIR_quality != lFIR_quality ) ||
+        ( band_mode != lband_mode ));
 
       updateRequired ? (
         M = 4;
@@ -1755,6 +1870,7 @@ solo5 ? play5 = 1;
         (FIR_quality > 1) ? M *= 2;
         firSize = 512*M;
         fftCalcSize = 1024*M;
+        lband_mode = band_mode;
       
         lF1 = Freq1;
         lF2 = Freq2;
@@ -1787,7 +1903,11 @@ solo5 ? play5 = 1;
           RF2.a2 = LF2.a2;
           RF2.a3 = LF2.a3;
           
-          LA_F2.init_LR2(F2);
+          (band_mode == 0) ? (
+            LA_F2.init_LR2(F2);
+          ) : (
+            LA_F2.init_AP1(F2);
+          );
           RA_F2.k  = LA_F2.k;
           RA_F2.a1 = LA_F2.a1;
           RA_F2.a2 = LA_F2.a2;
@@ -1810,8 +1930,13 @@ solo5 ? play5 = 1;
           RF3.a3 = LF3.a3;
           
           // All-passes for maintaining the phase relation between the bands
-          LA_F2.init_LR2(F2);
-          LA_F3.init_LR2(F3);
+          (band_mode == 0) ? (
+            LA_F2.init_LR2(F2);
+            LA_F3.init_LR2(F3);
+          ) : (
+            LA_F2.init_AP1(F2);
+            LA_F3.init_AP1(F3);
+          );
           
           RA_F3.k   = RA_F3_2.k  = LA_F3_2.k  = LA_F3.k;
           RA_F3.a1  = RA_F3_2.a1 = LA_F3_2.a1 = LA_F3.a1;
@@ -1845,9 +1970,15 @@ solo5 ? play5 = 1;
           RF4.a3 = LF4.a3;
           
           // All-passes for maintaining the phase relation between the bands
-          LA_F2.init_LR2(F2);
-          LA_F3.init_LR2(F3);
-          LA_F4.init_LR2(F4);
+          (band_mode == 0) ? (
+            LA_F2.init_LR2(F2);
+            LA_F3.init_LR2(F3);
+            LA_F4.init_LR2(F4);
+          ) : (
+            LA_F2.init_AP1(F2);
+            LA_F3.init_AP1(F3);
+            LA_F4.init_AP1(F4);
+          );
           
           RA_F4.k  = RA_F4_2.k  = RA_F4_3.k  = LA_F4_2.k  = LA_F4_3.k  = LA_F4.k;
           RA_F4.a1 = RA_F4_2.a1 = RA_F4_3.a1 = LA_F4_2.a1 = LA_F4_3.a1 = LA_F4.a1;
@@ -2044,7 +2175,7 @@ solo5 ? play5 = 1;
       );
     );
   );
-
+  
   spectrumOut.feedSample(.5*out);
   
   /* Uncomment for testing flatness
@@ -2175,6 +2306,13 @@ solo5 ? play5 = 1;
     FIR_UQ.drawToggle(90, 20, 10, 10, FIR_quality == 2, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Ultra quality mode.\n\nHigher quality modes can be useful when using splits\nat very low frequencies. Note that high quality modes\ninduce more latency and require restarting transport\n(press stop and play).");
     FIR_UQ.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? FIR_quality = 2;
   );
+
+  fourpole.drawToggle(20, 40, 10, 10, band_mode == 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Use 4 pole 24 dB/oct filters");
+  fourpole.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? band_mode = 0;
+  fourpole.label = "4p";
+  twopole.drawToggle(60, 40, 10, 10, band_mode == 1, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Use 2 pole 12 dB/oct filters");
+  twopole.processMouseToggle(mouse_x, mouse_y, mouse_cap) ? band_mode = 1;
+  twopole.label = "2p";
   
   
   gfx_x = gfx_y = 30;
