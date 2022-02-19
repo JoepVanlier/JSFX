@@ -1,8 +1,8 @@
 desc:Saike Monitor Routing Utility [ALPHA]
 tags: Routing utility
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: Add right mouse button to exclusively solo a channel.
+changelog: Allow selecting mono/mid target speaker. Show sub-millisecond delay on sub slider. Allow negative delay on delay sliders. Increase precision on delay slider when shift is held.
 license: MIT
 Special thanks goes out to Audbol for ideation / testing.
 options:no_meter
@@ -15,17 +15,17 @@ slider5:mid_side=0<0,2,{Normal,Mid,Side}>-Mid side switch
 slider6:dim=0<0,1,1{Off,On}>-Dim
 
 slider7:monitor_a_active=0<0,1,1{Off,On}>-Monitor A
-slider8:monitor_a_delay=0<0,20,0.001>-Delay Monitor A [ms]
+slider8:monitor_a_delay=0<-10,20,0.001>-Delay Monitor A [ms]
 slider9:monitor_a_output_chan=0<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Output channel A
 slider10:monitor_a_trim=0<-12,0,.0001>-Monitor A trim
 
 slider11:monitor_b_active=0<0,1,1{Off,On}>-Monitor B
-slider12:monitor_b_delay=0<0,20,0.001>-Delay Monitor B [ms]
+slider12:monitor_b_delay=0<-10,20,0.001>-Delay Monitor B [ms]
 slider13:monitor_b_output_chan=1<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Output channel B
 slider14:monitor_b_trim=0<-12,0,.0001>-Monitor B trim
 
 slider15:monitor_c_active=0<0,1,1{Off,On}>-Monitor C
-slider16:monitor_c_delay=0<0,20,0.001>-Delay Monitor C [ms]
+slider16:monitor_c_delay=0<-10,20,0.001>-Delay Monitor C [ms]
 slider17:monitor_c_output_chan=2<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Output channel C
 slider18:monitor_c_trim=0<-12,0,.0001>-Monitor C trim
 
@@ -34,7 +34,7 @@ slider20:headphones_output_chan=3<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Headph
 slider21:headphones_trim=0<-12,0,.0001>-Headphones trim
 
 slider22:subwoofer_active=0<0,1,1{Off,On}>-Subwoofer
-slider23:subwoofer_delay=0<0,20,0.001>-Delay Sub [ms]
+slider23:subwoofer_delay=0<-10,20,0.001>-Delay Sub [ms]
 slider24:subwoofer_crossover=80<10,200,1>-Subwoofer crossover
 slider25:subwoofer_output_chan=4<0,6,1{1-2,3-4,5-6,7-8,9-10,11-12,None}>-Subwoofer output channel
 slider26:subwoofer_trim=0<-12,0,.0001>-Subwoofer trim
@@ -92,10 +92,10 @@ output3.gain_knob.init_knob(-12, 0, 0, 18);
 output4.gain_knob.init_knob(-12, 0, 0, 21);
 output5.gain_knob.init_knob(-12, 0, 0, 26);
 
-output1.delay_knob.init_knob(0, 20, 0, 8);
-output2.delay_knob.init_knob(0, 20, 0, 12);
-output3.delay_knob.init_knob(0, 20, 0, 16);
-output5.delay_knob.init_knob(0, 20, 0, 23);
+output1.delay_knob.init_knob(-10, 20, 0, 8);
+output2.delay_knob.init_knob(-10, 20, 0, 12);
+output3.delay_knob.init_knob(-10, 20, 0, 16);
+output5.delay_knob.init_knob(-10, 20, 0, 23);
 
 output5.crossover.init_knob(10, 200, 80, 24); /* Crossover */
 
@@ -227,8 +227,8 @@ global(gfx_x, gfx_y, captured, last_cap, mouse_cap, mouse_x, mouse_y, mouse_whee
       );
     ) : ( captured == slider_idx ) ? (
       speed = 0.002;
-      (mouse_cap & 4 > 0) ? speed *= 0.5;
-      (mouse_cap & 8 > 0) ? speed *= 0.25;
+      (mouse_cap & 4 > 0) ? speed *= 0.25;
+      (mouse_cap & 8 > 0) ? speed *= 0.025;
       dy = last_mouse_y - mouse_y;
       new_value = min(max(slider(slider_idx) + speed * dy * (maximum - minimum), minimum), maximum);
       slider(slider_idx) = new_value;
@@ -436,10 +436,11 @@ any_solo ? (
 (active3 == 0) ? dgain3 = - gain3 / samplesblock;
 
 @sample
-current_monitor_a_delay += time_constant_gain * (monitor_a_delay - current_monitor_a_delay);
-current_monitor_b_delay += time_constant_gain * (monitor_b_delay - current_monitor_b_delay);
-current_monitor_c_delay += time_constant_gain * (monitor_c_delay - current_monitor_c_delay);
-current_subwoofer_delay += time_constant_gain * (subwoofer_delay - current_subwoofer_delay);
+minimum_delay = min(min(min(monitor_a_delay, monitor_b_delay), monitor_c_delay), subwoofer_delay);
+current_monitor_a_delay += time_constant_gain * (monitor_a_delay - current_monitor_a_delay - minimum_delay);
+current_monitor_b_delay += time_constant_gain * (monitor_b_delay - current_monitor_b_delay - minimum_delay);
+current_monitor_c_delay += time_constant_gain * (monitor_c_delay - current_monitor_c_delay - minimum_delay);
+current_subwoofer_delay += time_constant_gain * (subwoofer_delay - current_subwoofer_delay - minimum_delay);
 
 monitor_a_delay_samples = 2 * floor(current_monitor_a_delay * ms_rate);
 monitor_b_delay_samples = 2 * floor(current_monitor_b_delay * ms_rate);
@@ -474,8 +475,18 @@ swap_lr ? (
 
 (mid_side == 1) ? (
   mix_left = mix_right = 0.5 * (mix_left + mix_right);
+  mid_target == 1 ? (
+    mix_right = 0;
+  ) : ( mid_target == 2 ) ? (
+    mix_left = 0;
+  );  
 ) : (mid_side == 2) ? (
   mix_left = mix_right = 2.0 * (mix_left - mix_right);
+  side_target == 1 ? (
+    mix_right = 0;
+  ) : ( side_target == 2 ) ? (
+    mix_left = 0;
+  );
 );
 
 current_dim += time_constant_gain * ((1.0 - 0.822172059 * dim) * (1 - all_muted) - current_dim);
@@ -877,7 +888,7 @@ local(font_w, font_h, xp, yp, wp, hp, selection, cc, output_chan)
   this.gain_knob.draw_knob(x * ui_w + 0.9 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%.1f dB", "Adjust gain", 0, output_chan < 6);
   
   this.delay_knob.slider_idx > 0 ? (
-    this.delay_knob.draw_knob(x * ui_w + 0.75 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%d ms", "Adjust output delay", 0, output_chan < 6);
+    this.delay_knob.draw_knob(x * ui_w + 0.75 * w * ui_w, y * ui_h + h * 0.275 * ui_h, 0.1 * h * ui_w, "%.2fms", "Adjust output delay", 0, output_chan < 6);
   );
 
   this.crossover.slider_idx > 0 ? (
@@ -905,14 +916,15 @@ function set_active_monitor(idx)
 );
 
 function center_rect(x, y, w, h, label, input)
-global(ui_w, ui_h, gfx_x, gfx_y,
+global(ui_w, ui_h, gfx_x, gfx_y, mouse_cap,
        swap_lr, mid_side, dim, all_muted,
        monitor_a_active, monitor_b_active, monitor_c_active,
        headphones_active, subwoofer_active,
        overall_gain.draw_knob,
        headphones_output_chan, subwoofer_output_chan,
-       monitor_a_output_chan, monitor_b_output_chan, monitor_c_output_chan)
-local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
+       monitor_a_output_chan, monitor_b_output_chan, monitor_c_output_chan,
+       side_target, mid_target)
+local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y, menu_str)
 (
   basic_rect(x, y, w, h);
 
@@ -927,8 +939,26 @@ local(radius, button_w, button_h, pad, n_buttons, row_width, side_pad, row_y)
   
   /* Basic controls */
   button(x + side_pad, y + row_y, button_w, button_h, "Swap\nL - R", 1, swap_lr, "Swap left and right channel", 1) ? (swap_lr = 1 - swap_lr);
-  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Mono", 5, mid_side == 1, "Mono", 1) ? (mid_side == 1 ? mid_side = 0 : mid_side = 1);
-  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Side", 5, mid_side == 2, "Side", 1) ? (mid_side == 2 ? mid_side = 0 : mid_side = 2);
+  button(x + side_pad + button_w + pad, y + row_y, button_w, button_h, "Mono", 5, mid_side == 1, "Mono", 1) ? (
+    (mouse_cap & 1) == 1 ? (
+      mid_side == 1 ? mid_side = 0 : mid_side = 1;
+    ) : (
+      menu_str = mid_target == 0 ? "!To both|To left|To right"
+      : mid_target == 1 ? "To both|!To left|To right"
+      : "To both|To left|!To right";
+      mid_target = gfx_showmenu(menu_str) - 1;
+    )
+  );
+  button(x + side_pad + 2 * button_w + 2 * pad, y + row_y, button_w, button_h, "Side", 5, mid_side == 2, "Side", 1) ? (
+    (mouse_cap & 1) == 1 ? (
+      (mid_side == 2 ? mid_side = 0 : mid_side = 2);
+    ) : (
+      menu_str = side_target == 0 ? "!To both|To left|To right"
+      : side_target == 1 ? "To both|!To left|To right"
+      : "To both|To left|!To right";
+      side_target = gfx_showmenu(menu_str) - 1;
+    )
+  );
   button(x + side_pad + 3 * button_w + 3 * pad, y + row_y, button_w, button_h, "Dim", 5, dim, "Reduce volume by 15 dB", 1) ? (dim = 1 - dim);
 
   button_w = 0.2 * w;
