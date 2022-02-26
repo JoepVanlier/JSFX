@@ -1,0 +1,307 @@
+desc:Lava Reverb (Saike) [BETA]
+tags: reverb
+version: 0.01
+author: Joep Vanlier
+changelog: First commit
+license: MIT
+provides: Lava_Dependencies/*
+slider1:diffusion=0.6<0,1,0.00001>diffusion
+slider2:current_verb_decay=0.8<0,.95,0.00001>verb_decay
+slider3:verb_mod_depth=0.1<0,1,0.00001>mod_depth
+slider4:current_verb_mod_rate=0.3<0,1,0.00001>mod_rate
+slider5:current_verb_lowpass=1<0,1,0.00001>lowpass
+slider6:current_verb_highpass=0<0,1,0.00001>highpass
+slider7:shimmer=0.2<0,0.4,.001>shimmer
+slider8:drop_mode=0<0,2,1{Off,Water,Ice}>drop mode
+slider9:drops=0<0,1,.001>drop frequency
+slider10:nonlinearity=0<0,1,.001>non-linearity
+slider11:wet=0.25<0,1,.00001>dry/wet
+slider12:algorithm=0<0,1,4{Abyss,Lava1,Cold,Ethereal,Metallic}>Algorithm
+slider13:eq_curve=0<0,14,1>Curve
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_lava_pitchlib.jsfx-inc
+import saike_lava_delays.jsfx-inc
+import saike_lava_verb.jsfx-inc
+import saike_lava_cabs.jsfx-inc
+
+@init
+bigger_update = 1;
+
+function process_verb()
+local()
+global(ssl, ssr, algorithm,
+      abyss.update_reverb_settings, abyss.eval_reverb,
+      abyss.out_left, abyss.out_right,
+      worp.worp_update_settings, worp.eval_worp, worp.eval_thin, worp.worp_metallic_settings, worp.eval_worp_eth,
+      worp.out_left, worp.out_right, worp.eval_metallic,
+      bigger_update,
+      current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass,
+      )
+instance(verb_drymul, verb_wetmul)
+(
+  bigger_update ? (
+    abyss.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    worp.worp_update_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    (algorithm == 4) ? worp.worp_metallic_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    bigger_update = 0;
+  );
+
+  (algorithm == 0) ? (
+    abyss.eval_reverb(ssl, ssr);
+    ssl = abyss.out_left;
+    ssr = abyss.out_right;
+  ) : (algorithm == 1) ? (
+    worp.eval_worp(ssl, ssr);
+    ssl = worp.out_left;
+    ssr = worp.out_right;
+  ) : ( algorithm == 2 ) ? (
+    worp.eval_thin(ssl, ssr);
+    ssl = worp.out_left;
+    ssr = worp.out_right;
+  ) : ( algorithm == 3 ) ? (
+    worp.eval_worp_eth(ssl, ssr);
+    ssl = worp.out_left;
+    ssr = worp.out_right;
+  ) : ( algorithm == 4 ) ? (
+    worp.eval_metallic(ssl, ssr);
+    ssl = worp.out_left;
+    ssr = worp.out_right;
+  );
+);
+
+function alloc_shifter(freemem, pitch_block_size)
+instance(fftmem1, fftmem2, pitch_shift_buffer)
+local()
+global()
+(
+  freemem = (fftmem1 = freemem) + pitch_block_size;
+  freemem = (fftmem2 = freemem) + pitch_block_size;
+  freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+  freemem
+);
+
+function update_shifter()
+global()
+local(shifter_buffer_size, transition_region)
+instance(pitch_shift_buffer, fftmem1, fftmem2)
+(
+  transition_region = 4096; //1024?
+  shifter_buffer_size = 4 * transition_region;
+  this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+);
+
+function noise_gen(dt)
+instance(timeleft, d0, d1, d2, d3, w_noise, p_noise)
+global()
+local(t, t2, a0, a1, a2, a3)
+(
+  timeleft <= 0 ? (
+    d3 = d2;
+    d2 = d1;
+    d1 = d0;
+    d0 = 2.0 * (rand()-0.5);
+    d0 *= d0 * d0;
+    d0 *= d0 * d0;
+    
+    timeleft = timeleft + 1.0;
+  );
+  
+  // Cubic interpolation
+  t = 1.0 - timeleft;
+  t2 = t * t;
+  a0 = d0 - d1 - d3 + d2;
+  a1 = d3 - d2 - a0;
+  a2 = d1 - d3;
+  a3 = d2;
+  
+  timeleft -= dt;
+  
+  (a0*t*t2+a1*t2+a2*t+a3);
+);
+
+function init_linearSVF_absolute(f0, res)
+global(srate)
+local(g)
+instance(f0, ic1eq, ic2eq, k, a1, a2, a3, gnorm)
+(
+  g = tan($pi * f0 / srate);
+  k = 2 - 2*res;
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+  gnorm = sqrt(1 - res*res);
+);
+
+function eval_linearSVF_BP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3, gnorm)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;
+  v1 * gnorm
+);
+
+function update_sparkle_filter()
+instance(decay)
+global(srate, drops, rtime)
+(
+  rtime = (0.2 - 0.199 * drops) * (1 + rand());
+  decay = 1.0 + log(0.5) / rtime / srate;
+);
+
+
+function sparklefilter(x)
+instance(decay, vol, proba)
+local(out, fnext, ic1eq, ic2eq)
+global()
+(
+  out = 0;
+  proba = 1;
+  
+  // Wait for next blip!
+  (vol < .001) ? (
+    vol = 0.75;
+    (rand() < proba) ? (
+      this.update_sparkle_filter();
+      fnext = rand();
+      fnext = 440*2^(60*fnext/12);
+      ic1eq = ic2eq = 0;
+      this.init_linearSVF_absolute(fnext, .99);
+    );
+    
+    out = 0
+  ) : (
+    out = vol * this.eval_linearSVF_BP(x);
+    vol *= decay;
+  );
+  
+  out
+);
+
+n_particles = 2000;
+
+freemem = 0;
+freemem = abyss.init_reverb(freemem);
+freemem = (particles = freemem) + n_particles * 2;
+
+pitch_block_size = 4*4096; /* We have 64 blocks of this */
+freemem = shifter.alloc_shifter(freemem, pitch_block_size);
+freemem = shifter_up.alloc_shifter(freemem, pitch_block_size);
+freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
+
+shifter.update_shifter();
+shifter_up.update_shifter();
+shifter_shimmer.update_shifter();
+
+freemem = worp.init_worp(freemem);
+
+semitones = 12;
+shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+semitones = -11.9 + .1 * 0.52;
+shifter.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+semitones = 11.9 + .1 * 0.48;
+shifter_up.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+function init_particles(loc, n_particles)
+local(ptr, mag, ph)
+global()
+(
+  ptr = loc;
+  loop(n_particles,
+    mag = .4*rand();
+    ph = 2 * $pi * rand();
+  
+    ptr[] = sin(ph) * mag;
+    ptr += 1;
+    ptr[] = cos(ph) * mag;
+    ptr += 1;
+  );
+);
+
+init_particles(particles, n_particles);
+
+current_verb_diffusion = diffusion;
+current_verb_mod_depth = verb_mod_depth;
+
+@slider
+
+@block
+noise_rate = - log(.1) / (.001 * 600) / srate;  // 600 ms
+
+sparkle_left.update_sparkle_filter();
+sparkle_right.update_sparkle_filter();
+
+@sample
+current_verb_diffusion = 0.999 * current_verb_diffusion + 0.001 * diffusion;
+current_verb_mod_depth = 0.999 * current_verb_mod_depth + 0.001 * verb_mod_depth;
+
+sample_clock += 1;
+(sample_clock % 8) == 0 ? bigger_update = 1;
+
+(shimmer > 0) ? (
+  ssl = spl0 * (1.0 - shimmer) + shimmer * shifter_shimmer.outR;
+  ssr = spl1 * (1.0 - shimmer) + shimmer * shifter_shimmer.outL;
+) : (
+  ssl = spl0;
+  ssr = spl1;
+);
+
+(drop_mode == 2) ? (
+  ssl += sparkle_l;
+  ssr += sparkle_r;
+);
+
+shifter_up.pitchShifterUpdate(ssl, ssr);
+
+algorithm < 3 ? (
+  shifter.pitchShifterUpdate(ssl, ssr);
+  ssl += shifter.outL;
+  ssr += shifter.outR;
+);
+shifter_level = 0.1 + 0.4 * (algorithm > 0) * max(0, (shimmer - 0.2));
+ssl += shifter_level * shifter_up.outL;
+ssr += shifter_level * shifter_up.outR;
+ssl /= 2.1;
+ssr /= 2.1;
+
+process_verb();
+
+(drop_mode == 1) ? (
+  sparkle_l = sparkle_left.sparklefilter(ssl);
+  sparkle_r = sparkle_right.sparklefilter(ssr);
+  ssl += sparkle_l;
+  ssr += sparkle_r;
+) : ( drop_mode == 2 ) ? (
+  sparkle_l = sparkle_left.sparklefilter(spl0);
+  sparkle_r = sparkle_right.sparklefilter(spl1);
+);
+
+current_nonlinearity = 0.999 * current_nonlinearity + 0.001 * nonlinearity;
+(current_nonlinearity > 0) ? (
+  nl = exp(4*current_nonlinearity);
+  ssl = tanh(ssl * nl) / nl;
+  ssr = tanh(ssr * nl) / nl;
+);
+
+eq_curve > 0 ? (
+  cab.update_cabs(eq_curve, ssl, ssr);
+  ssl = cab.outL;
+  ssr = cab.outR;
+);
+
+spl0 = ssl * wet + spl0 * (1 - wet);
+spl1 = ssr * wet + spl1 * (1 - wet);
+
+shimmer ? shifter_shimmer.pitchShifterUpdate(ssl, ssr);
+
+@gfx
+
