@@ -1,9 +1,14 @@
-desc:Saike ARP (beta)
+desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.08
+version: 0.09
 author: Joep Vanlier
-changelog: Allow modulating
+changelog: Add optional velocity and mod wheel modulations.
 license: MIT
+provides:
+  midi_arp_dependencies/*
+about:
+  # A small utility JSFX to arpeggiate midi chords.
+  Program patterns and play chords. The JSFX will then play the notes according to that note pattern.
 options:no_meter
 
 slider1:current_speed=4<1,16,1>-Current speed
@@ -11,10 +16,10 @@ slider2:current_pattern_index=0<0,63,1>-Current pattern
 slider3:polyphony=5<1,12,1>-Max Polyphony
 slider4:poly_mode=0<0,5,1,{No extend,Repeat,Back_Forth}>-Poly Mode
 slider5:extra_octaves=0<0,2,1>-Extra octaves
-slider6:min_vel=0<0,127,1>Minimum Velocity
-slider7:max_vel=127<0,127,1>Maximum Velocity
-slider8:min_modwheel=0<0,127,1>Minimum Modwheel
-slider9:max_modwheel=127<0,127,1>Maximum Modwheel
+slider6:min_vel=1<0,127,1>-Minimum Velocity
+slider7:max_vel=127<0,128,1>-Maximum Velocity
+slider8:min_modwheel=1<0,127,1>-Minimum Modwheel
+slider9:max_modwheel=127<0,128,1>-Maximum Modwheel
 
 in_pin:left input
 in_pin:right input
@@ -193,7 +198,9 @@ writing = file_avail(0) < 0;
 file_var(0, file_version);
 serialize_patterns(writing, file_version);
 file_var(0, loop_point);
-file_version = 1;
+file_var(0, enable_vel);
+file_var(0, enable_mod);
+file_version = 2;
 
 @slider
 
@@ -250,6 +257,7 @@ global(
   modulator2_values,
   min_vel, max_vel,
   min_modwheel, max_modwheel,
+  enable_vel, enable_mod
   )
 (
   (sequencer_index != last_sequencer_index) ? (
@@ -257,10 +265,12 @@ global(
     current_pattern = pattern_buffer + current_pattern_index * pattern_size;
     
     // Read velocities and mw
-    mod = modulator1_values[sequencer_index] * (max_modwheel - min_modwheel) + min_modwheel;
-    vel = modulator2_values[sequencer_index] * (max_vel - min_vel) + min_vel;
+    vel = enable_vel ? modulator2_values[sequencer_index] * (max_vel - min_vel) + min_vel : 127;
     
-    midisend(0, $xB0, 1, mod);
+    enable_mod ? (
+      mod = modulator1_values[sequencer_index] * (max_modwheel - min_modwheel) + min_modwheel;
+      midisend(0, $xB0, 1, mod);
+    );
     
     audio_octave = 0;
     loop(extra_octaves + 1,
@@ -297,7 +307,7 @@ global(
 
 process_sequence(current_pattern_index);
 
-@gfx
+@gfx 919 302
 setup_theme();
 current_cursor = randomize_toggle.value ? 32515 : 32512;
 
@@ -654,8 +664,34 @@ loop(extra_octaves + 1,
 );
 
 select_colormap(1);
-yc = process_modulation_row(0, 0, 50, modulator1_values, x, yc, 2 * block_width, "Mod", "Mod wheel");
-yc = process_modulation_row(1, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
+enable_mod ? (
+  yc = process_modulation_row(0, 0, 50, modulator1_values, x, yc, 2 * block_width, "Mod", "Mod wheel");
+  mod_drag.value = -1;
+  mod_drag.drag_button(93, x + 1, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", min_modwheel), row_color_r, row_color_g, row_color_b, "Minimum modwheel (drag to change)", DRAG_SETTING);
+  mod_drag.drag_button(94, x + block_width, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", max_modwheel), row_color_r, row_color_g, row_color_b, "Maximum modwheel (drag to change)", DRAG_SETTING);
+  (mod_drag.value == 93) ? (
+    min_modwheel = min(128, max(0, min_modwheel + 2 * mod_drag.change));
+    slider_automate(8);
+  ) : (mod_drag.value == 94) ? (
+    max_modwheel = min(128, max(0, max_modwheel + 2 * mod_drag.change));
+    slider_automate(9);
+  );
+  mod_drag.change = 0;  
+);
+enable_vel ? (
+  yc = process_modulation_row(1, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
+  vel_drag.value = -1;
+  vel_drag.drag_button(91, x + 1, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", min_vel), row_color_r, row_color_g, row_color_b, "Minimum velocity (drag to change)", DRAG_SETTING);
+  vel_drag.drag_button(92, x + block_width, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", max_vel), row_color_r, row_color_g, row_color_b, "Maximum velocity (drag to change)", DRAG_SETTING);
+  (vel_drag.value == 91) ? (
+    min_vel = min(128, max(0, min_vel + 2 * vel_drag.change));
+    slider_automate(6);
+  ) : (vel_drag.value == 92) ? (
+    max_vel = min(128, max(0, max_vel + 2 * vel_drag.change));
+    slider_automate(7);
+  );
+  vel_drag.change = 0;
+);
 
 idx_ref = min(floor((mouse_x - (x + label_width)) / (block_width + block_spacing)), n_segments);
 
@@ -670,47 +706,57 @@ ctrl_spacing = 1;
 
 time_mode.value = time_mode;
 cx = grid_origin_x + 2;
-cx = time_mode.selection_button(0, cx, yc + 2, 2 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
-cx = time_mode.selection_button(2, cx, yc + 2, 2 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
-cx = time_mode.selection_button(1, cx, yc + 2, 2 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1, "Run sequencer in MIDI mode.\nPattern resets on incoming MIDI note.");
+cx = time_mode.selection_button(0, cx, yc + 2, 1.9 * block_width, block_width - 4, "Host", 0.05, 0.2, 0.1, "Run sequencer based on host\nplayback position.");
+cx = time_mode.selection_button(2, cx, yc + 2, 1.9 * block_width, block_width - 4, "Free", 0.05, 0.2, 0.1, "Run sequencer in free running mode.\nSequencer resets when playback is reset\nor when seeking to new position.");
+cx = time_mode.selection_button(1, cx, yc + 2, 1.9 * block_width, block_width - 4, "MIDI", 0.05, 0.2, 0.1, "Run sequencer in MIDI mode.\nPattern resets on incoming MIDI note.");
 time_mode = time_mode.value;
 
 poly_mode.value = poly_mode;
 cx += ctrl_spacing;
-cx = poly_mode.selection_button(0, cx, yc + 2, 2.25 * block_width, block_width - 4, "Once", 0.2, 0.1, 0.05, "Don't repeat notes.");
-cx = poly_mode.selection_button(1, cx, yc + 2, 2.25 * block_width, block_width - 4, "Repeat", 0.2, 0.1, 0.05, "Repeat notes to fill polyphony.");
-cx = poly_mode.selection_button(2, cx, yc + 2, 2.25 * block_width, block_width - 4, "Bidi", 0.2, 0.1, 0.05, "Repeat notes bidirectionally to fill polyphony.");
+cx = poly_mode.selection_button(0, cx, yc + 2, 1.9 * block_width, block_width - 4, "Once", 0.2, 0.1, 0.05, "Don't repeat notes.");
+cx = poly_mode.selection_button(1, cx, yc + 2, 2.1 * block_width, block_width - 4, "Repeat", 0.2, 0.1, 0.05, "Repeat notes to fill polyphony.");
+cx = poly_mode.selection_button(2, cx, yc + 2, 1.9 * block_width, block_width - 4, "Bidi", 0.2, 0.1, 0.05, "Repeat notes bidirectionally to fill polyphony.");
 poly_mode = poly_mode.value;
 
 pattern_toggle.value = -1;
 cx += ctrl_spacing;
 cx = pattern_toggle.selection_button(0, cx, yc + 2, block_width, block_width - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
-cx = pattern_toggle.drag_button(1, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
+cx = pattern_toggle.drag_button(1, cx, yc + 2, 1.2 * block_width, block_width - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
 cx = pattern_toggle.selection_button(2, cx, yc + 2, block_width, block_width - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
 
 cx += ctrl_spacing;
 
 cx = pattern_toggle.selection_button(5, cx, yc + 2, block_width, block_width - 4, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
-cx = pattern_toggle.drag_button(6, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length", DRAG_SETTING);
+cx = pattern_toggle.drag_button(6, cx, yc + 2, 1.2 * block_width, block_width - 4, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length", DRAG_SETTING);
 cx = pattern_toggle.selection_button(7, cx, yc + 2, block_width, block_width - 4, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
 
 cx += ctrl_spacing;
 
 cx = pattern_toggle.selection_button(8, cx, yc + 2, block_width, block_width - 4, "-", 0.16, 0.1, 0.425, "Decrease speed.");
-cx = pattern_toggle.drag_button(9, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
+cx = pattern_toggle.drag_button(9, cx, yc + 2, 1.2 * block_width, block_width - 4, sprintf(3, "%d", current_speed), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
 cx = pattern_toggle.selection_button(10, cx, yc + 2, block_width, block_width - 4, "+", 0.16, 0.1, 0.425, "Increase speed.");
 
 cx = pattern_toggle.selection_button(3, cx + ctrl_spacing, yc + 2, 2 * block_width, block_width - 4, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
 cx = pattern_toggle.selection_button(4, cx, yc + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
 
 cx += ctrl_spacing;
-cx = randomize_toggle.selection_button(-1, cx, yc + 2, 3.85 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
+cx = randomize_toggle.selection_button(-1, cx, yc + 2, 3.35 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
 
 cx += ctrl_spacing;
-cx = pattern_toggle.drag_button(11, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", polyphony), 0.36, 0.1, 0.225, "Max polyphony.\n\nThis determines how many rows each octave will have.", DRAG_SETTING);
+cx = pattern_toggle.drag_button(11, cx, yc + 2, 1.2 * block_width, block_width - 4, sprintf(3, "%d", polyphony), 0.36, 0.1, 0.225, "Max polyphony.\n\nThis determines how many rows each octave will have.", DRAG_SETTING);
 
 cx += ctrl_spacing;
-cx = pattern_toggle.drag_button(12, cx, yc + 2, 1.5 * block_width, block_width - 4, sprintf(3, "%d", extra_octaves), 0.16, 0.3, 0.225, "Extra octaves.\n\nThis determines how many extra octaves will be displayed.\nThese can be used to sequence notes one or two octaves\nup from what is being played.", DRAG_SETTING);
+cx = pattern_toggle.drag_button(12, cx, yc + 2, 1.2 * block_width, block_width - 4, sprintf(3, "%d", extra_octaves), 0.16, 0.3, 0.225, "Extra octaves.\n\nThis determines how many extra octaves will be displayed.\nThese can be used to sequence notes one or two octaves\nup from what is being played.", DRAG_SETTING);
+
+cx += ctrl_spacing;
+
+vel_active.value = enable_vel;
+cx = vel_active.selection_button(-1, cx, yc + 2, 1.65 * block_width, block_width - 4, "Vel", 0.05, 0.2, 0.1, "Add row for programming velocity.");
+enable_vel = vel_active.value;
+
+mod_active.value = enable_mod;
+cx = mod_active.selection_button(-1, cx, yc + 2, 1.65 * block_width, block_width - 4, "Mod", 0.05, 0.2, 0.1, "Add row for programming mod wheel.");
+enable_mod = mod_active.value;
 
 pattern_toggle.value == 0 ? ( 
   current_pattern_index -= 1;
