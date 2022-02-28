@@ -1,0 +1,490 @@
+@init
+function init_fmem(freemem, num_x, num_y, img)
+instance(vx, vy, last_vx, last_vy, dens, last_dens, nx, ny, pressure, divergence, target)
+local(block, idx)
+global()
+(
+  // If you want to render to an offscreen buffer, specify a value to img
+  target = img;
+  nx = num_x;
+  ny = num_y;
+  block = nx * ny;
+  freemem = (vx = freemem) + block;
+  freemem = (vy = freemem) + block;
+  freemem = (last_vx = freemem) + block;
+  freemem = (last_vy = freemem) + block;
+  freemem = (dens = freemem) + block;
+  freemem = (last_dens = freemem) + block;
+  freemem = (pressure = freemem) + block;
+  freemem = (divergence = freemem) + block;
+  
+  (img > 0) ? (
+    gfx_setimgdim(img, nx, ny);
+    gfx_set(1, 1, 1, 1);
+    gfx_rect(0, 0, nx, ny);
+  );
+  
+  freemem
+);
+
+function turbulence(speed)
+instance(nx, ny, last_vx)
+local(idx)
+global()
+(
+  idx = 0;
+  loop(nx * ny,
+    last_vx[idx] = (idx % 2) * speed;
+    idx += 1;
+  );
+);
+
+function nuke2(speed)
+instance(nx, ny, last_vx, last_vy)
+local(idx)
+global()
+(
+  idx = 0;
+  loop(nx * ny,
+    last_vx[idx] = (rand() - 0.5) * speed;
+    last_vy[idx] = (rand() - 0.5) * speed;
+    idx += 1;
+  );
+);
+
+function line()
+instance(nx, ny, last_dens)
+local(idx)
+global()
+(
+  idx = 0;
+  loop(ny,
+    last_dens[nx * idx + 2] = 1;
+    last_dens[nx * idx + 3] = 0.5;
+    idx += 1;
+  );
+);
+
+function boundary_condition(nx, ny, type, target)
+local(idx, i)
+global()
+(
+  i = 1;
+  loop(nx - 1,
+    //target[i] = (type == 2) ? - target[i + nx] : target[i + nx];  /* Something amiss here */
+    target[i] = 0;
+    target[i + nx * (ny - 1)] = (type == 2) ? - target[i + nx * (ny - 2)] : target[i + nx * (ny - 2)];
+    i += 1;
+  );
+  i = 1;
+  loop(ny - 1,
+    target[nx * i] = (type == 1) ? - target[nx * i + 1] : target[nx * i + 1];
+    target[nx - 1 + nx * i] = (type == 1) ? - target[nx - 2 + nx * i] : target[nx - 2 + nx * i];
+    i += 1;
+  );
+  target[0] = 0.5 * (target[1] + target[nx]);
+  target[nx - 1] = 0.5 * (target[nx - 2] + target[2 * nx - 1]);
+  target[nx * (ny - 1)] = 0.5 * (target[nx * (ny - 1) + 1] + target[nx * (ny - 1) - nx]);
+  target[nx * (ny - 1) + nx - 1] = 0.5 * (target[nx * (ny - 1) + nx - 2] + target[nx * (ny - 1) - 1]);
+);
+
+
+function diffuse(nx, ny, to, from, diffusion_constant, dt, boundary_condition)
+local(iters, i, j, idx, rate, norm)
+global()
+(
+  iters = 4;
+  rate = dt * diffusion_constant * nx * ny;
+  norm = 1 / (1 + 4 * rate);
+  
+  loop(iters,
+    j = 1;
+    loop(ny - 1,
+      i = 1;
+      loop(nx - 1,
+        idx = i + nx * j;
+        to[idx] = (from[idx] + rate * (to[idx - 1] + to[idx + 1] + to[idx - nx] + to[idx + nx])) * norm;
+        i += 1;
+      );
+      j += 1;
+    );
+    boundary_condition(nx, ny, boundary_condition, to);
+  );
+);
+
+function advect(nx, ny, to, from, vx, vy, dt, boundary_type)
+local(dtn, i, j, x, y, idx_x, idx_y, s0, s1, t0, t1, idx)
+global()
+(
+  boundary_condition(nx, ny, boundary_type, to);
+  boundary_condition(nx, ny, boundary_type, to);
+
+  dtn = dt * nx;
+  j = 1;
+  loop(ny - 1,
+    i = 1;
+    loop(nx - 1,
+      idx = i + nx * j;
+      x = i - dtn * vx[idx];
+      y = j - dtn * vy[idx];
+      (x < 0.5) ? x += nx;
+      (y < 0.5) ? y += ny;
+      (x > (nx + 0.5)) ? x -= nx;
+      (y > (ny + 0.5)) ? y -= ny;
+      idx_x = floor(x);
+      idx_y = floor(y);
+      
+      // bilinear interp
+      s1 = x - idx_x;
+      s0 = 1.0 - s1;
+      t1 = y - idx_y;
+      t0 = 1.0 - t1;
+      
+      to[idx] =
+        s0 * (t0 * from[idx_x + nx * idx_y] + t1 * from[idx_x + nx * (idx_y + 1)]) +
+        s1 * (t0 * from[idx_x + 1 + nx * idx_y] + t1 * from[idx_x + 1 + nx * (idx_y + 1)]);
+      
+      i += 1;
+    );
+    
+    j += 1;
+  );
+  
+  boundary_condition(nx, ny, boundary_type, to);
+  boundary_condition(nx, ny, boundary_type, to);
+);
+
+function darken_density(factor)
+local(idx)
+global()
+instance(nx, ny, last_dens)
+(
+  idx = 0;
+  loop(nx*ny,
+    last_dens[idx] *= factor;
+    idx += 1;
+  );
+);
+
+function vorticity_confinement(nx, ny, vx, vy, curl, vorticity)
+local(i, j, x, y, idx, dx, dy, inverse_magnitude, h)
+global()
+(
+  vorticity /= nx;
+  j = 1;
+  loop(ny - 1,
+    i = 1;
+    loop(nx - 1,
+      idx = i + nx * j;
+      curl[idx] = (vy[idx + 1] - vy[idx - 1] - (vx[idx + nx] - vx[idx - nx]));
+      i += 1;
+    );
+    j += 1;
+  );
+  
+  j = 1;
+  loop(ny - 1,
+    i = 1;
+    loop(nx - 1,
+      idx = i + nx * j;
+      // Normalized vorticity vector field
+      dx = (abs(curl[idx + 1]) - abs(curl[idx - 1]));
+      dy = (abs(curl[idx + nx]) - abs(curl[idx - nx]));
+      inverse_magnitude = 1.0 / (dx * dx + dy * dy + 0.00001);
+      
+      // Restore some vorticity
+      vx[idx] += vorticity * dy * curl[idx] * inverse_magnitude;
+      vy[idx] += vorticity * dx * curl[idx] * inverse_magnitude;
+      i += 1;
+    );
+    j += 1;
+  );
+  
+  boundary_condition(nx, ny, 1, vx);
+  boundary_condition(nx, ny, 2, vy);
+);
+
+function remove_divergence(nx, ny, vx, vy, pressure, divergence)
+local(idx, h, iters, i, j)
+global()
+(
+  iters = 12;
+  h = 1/nx;
+  j = 1;
+  loop(ny - 1,
+    i = 1;
+    loop(nx - 1,
+      idx = i + nx * j;
+      divergence[idx] = - 0.5 * h * (vx[idx + 1] - vx[idx - 1] + vy[idx + nx] - vy[idx - nx]);
+      pressure[idx] = 0;
+      i += 1;
+    );
+    j += 1;
+  );
+  
+  boundary_condition(nx, ny, 0, divergence);
+  boundary_condition(nx, ny, 0, pressure);
+  
+  loop(iters,
+    j = 1;
+    loop(ny - 1,
+      i = 1;
+      loop(nx - 1,
+        idx = i + nx * j;
+        pressure[idx] = (divergence[idx] + pressure[idx - 1] + pressure[idx + 1] + pressure[idx - nx] + pressure[idx + nx]) * 0.25;
+        i += 1;
+      );
+      j += 1;
+    );
+    boundary_condition(nx, ny, 0, pressure);
+  );
+
+  j = 1;
+  loop(ny,
+    i = 1;
+    loop(nx,
+      idx = i + nx * j;
+      vx[idx] -= 0.5 * (pressure[idx + 1] - pressure[idx - 1]) * nx; // Div by h
+      vy[idx] -= 0.5 * (pressure[idx + nx] - pressure[idx - nx]) * nx;
+      i += 1;
+    );
+    j += 1;
+  );
+  boundary_condition(nx, ny, 1, vx);
+  boundary_condition(nx, ny, 2, vy);
+);
+
+function set_output(_x, _y, _w, _h)
+global()
+instance(x, y, w, h)
+(
+  x = _x; y = _y; w = _w; h = _h;
+);
+
+function draw_field(field)
+instance(x, y, w, h, nx, ny)
+local(value, cx, cy, idx_x, idx_y, step_x, step_y)
+global()
+(
+  cx = x; cy = y;
+  step_x = w / nx;
+  step_y = h / ny;
+  idx_x = 0;
+  loop(nx,
+    cy = y;
+    idx_y = 0;
+    loop(ny,
+      value = min(2 * field[idx_x + nx * idx_y], 1);
+      gfx_set(value, 0.1, value, 1.0);
+      gfx_rect(cx, cy, step_x + 1, step_y + 1);
+      cy += step_y;
+      idx_y += 1;
+    );
+    cx += step_x;
+    idx_x += 1;
+  );
+);
+
+function blackbody(temperature)
+global()
+local(red, green, blue)
+(
+  red = temperature < 66 ? 1 : 1.2929 * ((temperature - 60)^-0.1332047592);
+  red = max(min(red, 1), 0);
+  green = (temperature <= 66) ? 0.39 * log(temperature) - 0.632 : 1.130 * ((temperature - 60) ^ -0.0755148492);
+  green = max(min(green, 1), 0);
+  blue = temperature >= 66 ? 255 : (temperature <= 19) ? 0 : 0.543 * log(temperature - 10) - 1.196;
+  blue = max(min(blue, 1), 0);
+  red *= min(temperature * .1, 1);
+  green *= min(temperature * .1, 1);
+  blue *= min(temperature * .1, 1);
+  gfx_set(red, green, blue);
+);
+
+
+function blackbody_pixel(temperature)
+global()
+local(red, green, blue)
+(
+  red = temperature < 66 ? 1 : 1.2929 * ((temperature - 60)^-0.1332047592);
+  red = max(min(red, 1), 0);
+  green = (temperature <= 66) ? 0.39 * log(temperature) - 0.632 : 1.130 * ((temperature - 60) ^ -0.0755148492);
+  green = max(min(green, 1), 0);
+  blue = temperature >= 66 ? 255 : (temperature <= 19) ? 0 : 0.543 * log(temperature - 10) - 1.196;
+  blue = max(min(blue, 1), 0);
+  red *= min(temperature * .1, 1);
+  green *= min(temperature * .1, 1);
+  blue *= min(temperature * .1, 1);
+  gfx_setpixel(red, green, blue);
+);
+
+
+function draw_fields(field1, field2)
+instance(x, y, w, h, nx, ny)
+local(value, cx, cy, idx_x, idx_y, step_x, step_y, vx, vy)
+global()
+(
+  cx = x; cy = y;
+  step_x = w / nx;
+  step_y = h / ny;
+  idx_x = 0;
+  loop(nx,
+    cy = y;
+    idx_y = 0;
+    loop(ny,
+      vx = field1[idx_x + nx * idx_y];
+      vy = field2[idx_x + nx * idx_y];
+      blackbody(1000 * 100 * vx * vx + vy * vy);
+      gfx_rect(cx, cy, step_x + 1, step_y + 1);
+      cy += step_y;
+      idx_y += 1;
+    );
+    cx += step_x;
+    idx_x += 1;
+  );
+);
+
+function draw_velocity(field1, field2)
+instance(x, y, w, h, nx, ny)
+local(value, cx, cy, idx_x, idx_y, step_x, step_y)
+global()
+(
+  cx = x; cy = y;
+  step_x = w / nx;
+  step_y = h / ny;
+  idx_x = 0;
+  loop(nx,
+    cy = y;
+    idx_y = 0;
+    loop(ny,
+      gfx_set(min(10 * abs(field1[idx_x + nx * idx_y]), 1), min(10 * abs(field2[idx_x + nx * idx_y]), 1), 0.0, 1.0);
+      gfx_rect(cx, cy, step_x + 1, step_y + 1);
+      cy += step_y;
+      idx_y += 1;
+    );
+    cx += step_x;
+    idx_x += 1;
+  );
+);
+
+function draw_to_field(field, x_pos, y_pos, value)
+instance(x, y, w, h, nx, ny)
+local(x_idx, y_idx)
+global()
+(
+  x_idx = nx * (x_pos - x) / w;
+  y_idx = floor(ny * (y_pos - y) / h);
+  (x_idx > 1) && (y_idx < nx) && (x_idx < (nx - 1)) && (y_idx < (ny - 1)) ? (
+    field[x_idx + y_idx * nx] = value;
+    field[x_idx + y_idx * nx + 1] = .5 * value;
+    field[x_idx + y_idx * nx + nx] = .5 * value;
+    field[x_idx + y_idx * nx - 1] = .5 * value;
+    field[x_idx + y_idx * nx - nx] = .5 * value;
+  );
+);
+
+function circle_to_field(field, x_center, y_center, r, value)
+instance(x, y, w, h, nx, ny)
+local(x_idx, y_idx, x_pos, y_pos, i, di)
+global()
+(
+  i = 2.0 * $pi * rand();
+  di = 0.5 * $pi / 30;
+    loop(40,
+    x_pos = x_center + r * w * sin(i);
+    y_pos = y_center + r * h * cos(i);
+    x_idx = nx * (x_pos - x) / w;
+    y_idx = floor(ny * (y_pos - y) / h);
+    (x_idx > 1) && (y_idx < nx) && (x_idx < (nx - 1)) && (y_idx < (ny - 1)) ? (
+      field[x_idx + y_idx * nx] = value;
+      field[x_idx + 1 + y_idx * nx] = value * 0.5;
+      field[x_idx + (y_idx + 1) * nx] = value * 0.5;
+      field[x_idx - 1 + y_idx * nx] = value * 0.5;
+      field[x_idx + (y_idx - 1) * nx] = value * 0.5;
+    );
+    i += di;
+  );
+);
+
+function draw_field_fast(field)
+instance(nx, ny)
+local(i, j, value)
+global(gfx_x, gfx_y)
+(
+  j = 0;
+  loop(ny,
+    i = 0;
+    loop(nx,
+      value = min(field[], 1);
+      gfx_x = i; gfx_y = j;
+//      gfx_setpixel(value, 0, value);
+//      gfx_setpixel(value, value*value, value - value*value);
+      blackbody_pixel(100 * value*value*value * value*value*value);
+      i += 1;
+      field += 1;
+    );
+    j += 1;
+  );
+);
+
+function draw_fast(field)
+local()
+global(gfx_mode, gfx_dest, gfx_a, gfx_x, gfx_y, gfx_w, gfx_h)
+instance(nx, ny, x, y, w, h, img)
+(
+  gfx_mode = 0; gfx_dest = img;
+  gfx_setimgdim(img, nx, ny);
+  gfx_set(1, 1, 1, 1);
+  this.draw_field_fast(field);
+  
+  gfx_dest = -1;
+  gfx_a = 1;
+  
+  gfx_set(1, 1, 1, 1);
+  gfx_x = x;
+  gfx_y = y;
+  gfx_a = 0.3;
+  gfx_blit(img, w/nx, 0);
+  loop(5,
+    gfx_x = x; gfx_y = y;
+    gfx_blurto(w, h);
+  );
+  
+  gfx_mode = 1;
+  gfx_a = 1;
+  gfx_x = x; gfx_y = y;
+  gfx_dest = -1;
+  gfx_blit(img, w/nx, 0);
+);
+
+function simulate(dt)
+instance(vx, vy, last_vx, last_vy, dens, last_dens, nx, ny, pressure, divergence)
+local(tmp, diffusion_constant, viscosity, vorticity)
+global()
+(
+//  diffusion_constant = 0.000001;
+  diffusion_constant = 0.00001;
+  vorticity = 0.05;
+  viscosity = 0;
+  // Dye
+  advect(nx, ny, dens, last_dens, last_vx, last_vy, dt, 0);
+  diffusion_constant ? (
+    diffuse(nx, ny, last_dens, dens, diffusion_constant, dt, 0);
+  ) : (
+    tmp = dens; dens = last_dens; last_dens = tmp;
+  );
+  
+  // Velocity
+  advect(nx, ny, vx, last_vx, last_vx, last_vy, dt, 1);
+  advect(nx, ny, vy, last_vy, last_vx, last_vy, dt, 2);
+  remove_divergence(nx, ny, vx, vy, pressure, divergence);
+  viscosity ? (
+    diffuse(nx, ny, last_vx, vx, viscosity, dt, 1);
+    diffuse(nx, ny, last_vy, vy, viscosity, dt, 2);
+  ) : (
+    tmp = vx; vx = last_vx; last_vx = tmp;
+    tmp = vy; vy = last_vy; last_vy = tmp;
+  );
+  vorticity ? vorticity_confinement(nx, ny, last_vx, last_vy, pressure, vorticity); // Curl is stored in pressure mem
+  remove_divergence(nx, ny, last_vx, last_vy, pressure, divergence);
+);
