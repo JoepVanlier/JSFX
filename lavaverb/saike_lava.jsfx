@@ -5,6 +5,7 @@ author: Joep Vanlier
 changelog: Add glyph/algorithm selector
 license: MIT
 provides: Lava_Dependencies/*
+options:maxmem=4000000
 slider1:diffusion=0.6<0,1,0.00001>-diffusion
 slider2:current_verb_decay=0.8<0,.95,0.00001>-verb_decay
 slider3:verb_mod_depth=0.1<0,1,0.00001>-mod_depth
@@ -16,7 +17,7 @@ slider8:drop_mode=2<0,2,1{Off,Water,Ice}>-drop mode
 slider9:drops=0<0,1,.001>-drop frequency
 slider10:nonlinearity=0<0,1,.001>-non-linearity
 slider11:wet=0.25<0,1,.00001>dry/wet
-slider12:algorithm=0<0,1,4{Abyss,Lava1,Cold,Ethereal,Metallic}>-Algorithm
+slider12:algorithm=0<0,1,4{Abyss,Lava1,Cold,Ethereal,Metallic}>Algorithm
 slider13:eq_curve=0<0,14,1>Curve
 
 in_pin:left input
@@ -27,6 +28,7 @@ out_pin:right output
 import saike_lava_pitchlib.jsfx-inc
 import saike_lava_delays.jsfx-inc
 import saike_lava_verb.jsfx-inc
+import saike_fft_verb.jsfx-inc
 import saike_lava_cabs.jsfx-inc
 import saike_lava_fluid.jsfx-inc
 import saike_lava_gfx.jsfx-inc
@@ -57,16 +59,21 @@ global(ssl, ssr, algorithm,
       worp.out_left, worp.out_right, worp.eval_metallic,
       bigger_update,
       current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass,
+      shimmer, drops,
+      stft_verb.stft_reverb_settings,
+      stft_verb.process_stft_verb,
+      stft_verb.out_left, stft_verb.out_right,
       )
 instance(verb_drymul, verb_wetmul)
 (
   bigger_update ? (
     abyss.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
     worp.worp_update_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
-    (algorithm == 4) ? worp.worp_metallic_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    //(algorithm == 4) ? worp.worp_metallic_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
+    (algorithm == 4) ? stft_verb.stft_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass, shimmer, drops);
     bigger_update = 0;
   );
-
+  
   (algorithm == 0) ? (
     abyss.eval_reverb(ssl, ssr);
     ssl = abyss.out_left;
@@ -84,9 +91,12 @@ instance(verb_drymul, verb_wetmul)
     ssl = worp.out_left;
     ssr = worp.out_right;
   ) : ( algorithm == 4 ) ? (
-    worp.eval_metallic(ssl, ssr);
+    /*worp.eval_metallic(ssl, ssr);
     ssl = worp.out_left;
-    ssr = worp.out_right;
+    ssr = worp.out_right;*/
+    stft_verb.process_stft_verb(ssl, ssr);
+    ssl = stft_verb.out_left;
+    ssr = stft_verb.out_right;
   );
 );
 
@@ -219,6 +229,10 @@ shifter_shimmer.update_shifter();
 
 freemem = worp.init_worp(freemem);
 
+freemem = stft_verb.init_stft_verb_mem(freemem);
+
+freemem += 32768; /* Padding */
+
 freemem = fsim.init_fmem(freemem, 150, 150, 1);
 
 initialized = 0;
@@ -236,6 +250,8 @@ current_verb_mod_depth = verb_mod_depth;
 @slider
 
 @block
+stft_verb.block_stft_verb();
+
 noise_rate = - log(.1) / (.001 * 600) / srate;  // 600 ms
 
 sparkle_left.update_sparkle_filter();
@@ -336,21 +352,8 @@ fsim.circle_to_field(fsim.last_vy, 0.5 * gfx_w, 0.5 * gfx_h, 0.33 + 0.02 * rand(
 
 fsim.darken_density(0.9975);
 
-//(mouse_cap & 1 > 0) ? (fsim.line(); fsim.turbulence(0.2););
-//(mouse_cap & 2 > 0) ? fsim.nuke2(0.1);
-
 fsim.simulate(1.0);
 fsim.draw_fast(fsim.dens);
-
-/*
-i = 0;
-loop(5,
-  blackbody(80 - 10 * i);
-  gfx_circle(0.5 * gfx_w, 0.5 * gfx_h, 0.33 * gfx_w - 0.5*i, 0);
-  gfx_circle(0.5 * gfx_w, 0.5 * gfx_h, 0.33 * gfx_w + 0.5*i, 0);
-  i += 1;
-);
-*/
 
 function current_pos(idx)
 local(n, cp, radius)

@@ -1,0 +1,333 @@
+-- Based on the STFT-Based Effect Template by Geraintluff
+
+@init
+function init_stft_verb_mem(freemem)
+instance(
+  buffer_index, buffer_length,
+  fft_buffer, window_buffer, nrg, icemem,
+  input_buffer, output_buffer, delay_line
+)
+local(MAX_FFT_SIZE)
+global(srate)
+(
+  MAX_FFT_SIZE = 32768;
+  
+  /* There's some additional padding so that we don't have to range check when octaving */
+  freemem = (fft_buffer = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (window_buffer = freemem) + MAX_FFT_SIZE * 2;
+  freemem = (nrg = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (icemem = freemem) + MAX_FFT_SIZE * 4;
+  
+  buffer_length = srate;
+  buffer_index = 0;
+  freemem = (input_buffer = freemem) + buffer_length * 2;
+  freemem = (output_buffer = freemem) + buffer_length * 2;
+  freemem = (delay_line = freemem) + buffer_length * 2;
+  freemem
+);
+
+function block_stft_verb()
+instance(fft_buffer, fft_size, prev_fft_size, fft_interval, fft_scaling_factor, window_buffer, fft_size_index)
+local(overlap_factor, i, r)
+global()
+(
+  overlap_factor = 6;
+  fft_size = 256 << fft_size_index;
+  fft_interval = fft_size / overlap_factor;
+  fft_scaling_factor = 1.0 / overlap_factor / fft_size;
+  
+  fft_size != prev_fft_size ? (
+    prev_fft_size = fft_size;
+    // Fill window buffer
+    i = 0;
+    loop(fft_size,
+      r = (i + 0.5) / fft_size;
+      window_buffer[i] = (0.5 - 0.5 * cos(2 * $pi * r)) / sqrt(0.375);
+      i += 1;
+    );
+  );
+);
+
+function stft_reverb_settings(diffusion, decay, depth, freq, lowpass, highpass, shimmer, drops)
+instance(
+  time_constant,
+  noise_mode,     /* Chirp level */
+  pitch,          /* Pitch */
+  shine_diff,     /* Shine diffusion */
+  ice, ice_panned,
+  ice_balance, ice_sharp, /* Defaults 0.5, 1 */
+  octaver,
+  buffer_mode,
+  adaptiveness,
+  
+  fft_size_index,
+)
+global()
+local()
+(
+  time_constant = - 2 * decay;
+  octaver = shimmer;//2.5 * shimmer;
+  fft_size_index = 7-1;
+  adaptiveness = 0;
+  shine_diff = 0;
+  pitch = -1;
+  ice = drops;
+  buffer_mode = 1;
+);
+
+
+/*
+slider1:fft_size_index=7<0,7,1{256,512,1024,2048,4096,8192,16384,32768>FFT size
+slider2:time_constant=-1.5<-2,0,.01>-Timescale
+slider3:octaver=0.3<0,1,.001>-Shine
+slider4:adaptiveness=0<0,1,1>-Adaptiveness
+slider7:shine_diff=0<0,1,0.0001>-Shine diffusion
+slider8:pitch=0<-1,0,0.0001>-Pitch
+slider9:ice_balance=0.5<0,1,1>-Ice balance
+slider10:ice=0.6<0,1,.00001>-Ice
+slider11:ice_panned=1<0,1,1>-IcePanned
+slider12:ice_sharp=1<0,2,1>-IceSharpness
+slider13:noise_mode=0<0,5,.001>-Noise mode
+slider18:buffer_mode=1<0,1,1>-Buffer mode
+*/
+
+function process_stft_segment(fft_buffer, fft_size)
+global(
+)
+instance(
+  nrg, octaver, diffusion, icemem, displacement, differential,
+  
+  time_constant,
+  noise_mode,     /* Chirp level */
+  pitch,          /* Pitch */
+  shine_diff,     /* Shine diffusion */
+  ice, ice_panned,
+  ice_balance, ice_sharp, /* Defaults 0.5, 1 */
+  
+  buffer_mode,
+  adaptiveness,
+)
+local(
+  fft_bin, fft_bin2, a,  /* Iterators */
+  displacement, /* Pitch displacement handling */
+  magnitude_left, magnitude_right,     /* Spectral magnitude */
+  left_real, left_imag, right_real, right_imag,
+  g_rand1, g_rand2, g_rand3, g_rand4, tmp, /* Random numbers */
+  mL, mR, phaseL, phaseR,  /* Output variables */
+  ice_width, verb_level, ice_level,  /* Intermediate for balance between ice and verb */
+  sd, /* Related to shine smoothing (shine_diff) */
+  ts, k, atk, /* Swell dynamics related */
+)
+(
+  fft_bin = 0; // FFT bin number
+  
+  ts = min(0, time_constant * (1 - adaptiveness * differential));
+  k = exp(2.302585092994045 * ts);
+  atk = 10 * k;
+  
+  g_rand1 = rand();
+  g_rand2 = g_rand1 * rand();
+  g_rand3 = exp(-2.302585092994045 * (1.0 + noise_mode));
+  
+  phaseL = rand() * 2 * $pi;
+  phaseR = rand();
+  
+  sd = 2 * 0.4 * shine_diff;
+  
+  ice_balance < 0.5 ? (
+    verb_level = 1.0;
+    ice_level = 2.0 * ice_balance;
+  ) : (
+    verb_level = 1.0 - 2.0 * (ice_balance - 0.5);
+    ice_level = 1.0;
+  );
+  
+  loop(fft_size/2,
+    fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
+
+    // Unfold complex spectrum into two real spectra
+    left_real = fft_buffer[2*fft_bin] + fft_buffer[2*fft_bin2];
+    left_imag = fft_buffer[2*fft_bin + 1] - fft_buffer[2*fft_bin2 + 1];
+    right_real = fft_buffer[2*fft_bin + 1] + fft_buffer[2*fft_bin2 + 1];
+    right_imag = -fft_buffer[2*fft_bin] + fft_buffer[2*fft_bin2];
+    
+    magnitude_left = sqrt(left_real * left_real + left_imag * left_imag);
+    magnitude_right = sqrt(right_real * right_real + right_imag * right_imag);
+ 
+    // The actual dynamical model
+    buffer_mode ? (
+      mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], 5 * magnitude_left);
+      mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], 5 * magnitude_right);
+      
+      icemem[2*fft_bin] = (1 - k) * icemem[2*fft_bin];
+      icemem[2*fft_bin + 1] = (1 - k) * icemem[2*fft_bin + 1];
+    ) : (
+      mL = nrg[2*fft_bin]    += atk * magnitude_left - k*nrg[2*fft_bin];
+      mR = nrg[2*fft_bin+1]  += atk * magnitude_right - k*nrg[2*fft_bin+1];
+
+      icemem[2*fft_bin] -= k * icemem[2*fft_bin];
+      icemem[2*fft_bin + 1] -= k * icemem[2*fft_bin + 1];
+    );
+    
+    displacement = 2*floor(pitch * fft_bin);
+    2*fft_bin - displacement < fft_size/2 ? (
+      mL = nrg[2*fft_bin - displacement] * verb_level + icemem[2 * fft_bin - displacement] * ice_level;
+      mR = nrg[2*fft_bin - displacement + 1] * verb_level + icemem[2 * fft_bin - displacement + 1] * ice_level;
+    ) : (
+      mL = 0.5 * nrg[2 * fft_bin] + icemem[2 * fft_bin];
+      mR = 0.5 * nrg[2 * fft_bin + 1] + icemem[2 * fft_bin + 1];
+    );
+    
+    (noise_mode > 0.5) ? (
+      phaseL += sin(g_rand3 * fft_bin + g_rand1) * 2.0 * $pi;
+      phaseR += sin(g_rand3 * fft_bin + g_rand2) * 2.0 * $pi;
+    ) : (
+      phaseL = 2.0 * $pi * rand();
+      phaseR = 2.0 * $pi * rand();
+    );
+    
+    left_real = cos(phaseL) * mL;
+    left_imag = sin(phaseL) * mL;
+    right_real = cos(phaseR) * mR;
+    right_imag = sin(phaseR) * mR;
+    
+    // Re-fold back into complex spectrum
+    fft_buffer[2 * fft_bin] = (left_real - right_imag) * 0.5;
+    fft_buffer[2 * fft_bin + 1] = (left_imag + right_real) * 0.5;
+    fft_buffer[2 * fft_bin2] = (left_real + right_imag) * 0.5;
+    fft_buffer[2 * fft_bin2 + 1] = (-left_imag + right_real) * 0.5;
+
+    fft_bin += 1;
+  );
+  
+  loop(2,
+    ice_width = - 5.0 * 10^ice_sharp; 
+    ice ? (
+      fft_bin = 0;
+      g_rand1 = 2*(1 + floor(rand() * 2));
+      g_rand2 = 0.01 * fft_size + rand() * fft_size/2;
+      g_rand4 = g_rand3 = 150 * rand() * k * ice;
+      
+      ice_panned ? (
+        tmp = rand();
+        g_rand3 = g_rand3 * sqrt(1.0 - tmp);
+        g_rand4 = g_rand4 * sqrt(tmp);      
+      ) : (
+        g_rand3 = 0.5;
+        g_rand4 = 0.5;
+      );
+      tmp = 0;
+      
+      loop(fft_size/2,
+        a = g_rand1 * fft_bin;
+        icemem[a]      = icemem[a] + g_rand3*nrg[2*fft_bin] * tmp;
+        icemem[a + 1]  = icemem[a + 1] + g_rand4*nrg[2*fft_bin + 1] * tmp;
+        tmp            = g_rand2 - fft_bin;
+        tmp            = ice_width * tmp * tmp;
+        tmp            = exp(tmp / fft_size);
+        fft_bin += 1;
+      );
+    );
+  );
+  
+  octaver ? (
+    fft_bin = 0; 
+    loop(fft_size/2,
+      a = rand() - 0.5;
+      a *= a*a;
+      a = 4 * (fft_bin * (1 + sd * a));
+      nrg[a]      = nrg[a] + octaver*k*nrg[2*fft_bin];
+      nrg[a + 1]  = nrg[a + 1] + octaver*k*nrg[2*fft_bin + 1];
+      fft_bin += 1;
+    );
+  );
+  
+  /* Avoid HF buildup over the edge */
+  fft_bin = fft_size/4;
+  loop(fft_size/4,
+    a = 4*fft_bin;
+    nrg[a]      = nrg[a] - k * nrg[a];
+    nrg[a + 1]  = nrg[a + 1] - k * nrg[a + 1];
+    fft_bin += 1;
+  );
+);
+
+function fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor)
+local(bi, i, i2)
+global()
+(
+  // Copy input to buffer
+  bi = buffer_index - fft_size + 1;
+  i = 0;
+  loop(fft_size,
+    i2 = bi + i;
+    i2 < 0 ? i2 += buffer_length;
+  
+    fft_buffer[2 * i] = input_buffer[2 * i2] * window_buffer[i];
+    fft_buffer[2 * i + 1] = input_buffer[2 * i2 + 1] * window_buffer[i];
+  
+    i += 1;
+  );
+  
+  // Process buffer
+  fft(fft_buffer, fft_size);
+  fft_permute(fft_buffer, fft_size);
+);
+
+
+function process_stft_verb(in0, in1)
+local(i, bi, i2)
+global()
+instance(
+  input_buffer,
+  output_buffer,
+  buffer_index,
+  output_index,
+  fft_counter, fft_interval,
+  fft_buffer,
+  buffer_length,
+  window_buffer,
+  fft_size,
+  fft_scaling_factor,
+  out_left,
+  out_right,
+  )
+(
+  input_buffer[buffer_index * 2] = in0;
+  input_buffer[buffer_index * 2 + 1] = in1;
+  
+  fft_counter += 1;
+  fft_counter >= fft_interval ? (
+    fft_counter = 0;
+    fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor);
+    this.process_stft_segment(fft_buffer, fft_size);
+  
+    fft_ipermute(fft_buffer, fft_size);
+    ifft(fft_buffer, fft_size);
+  
+    // Add to output
+    bi = buffer_index - fft_size + 1;
+    i = 0;
+    loop(fft_size,
+      i2 = bi + i;
+      (i2 < 0) ? i2 += buffer_length;
+  
+      output_buffer[2 * i2] += fft_buffer[2 * i] * window_buffer[i] * fft_scaling_factor;
+      output_buffer[2 * i2 + 1] += fft_buffer[2 * i + 1] * window_buffer[i] * fft_scaling_factor;
+  
+      i += 1;
+    );
+  );
+  
+  output_index = buffer_index - fft_size;
+  output_index < 0 ? output_index += buffer_length;
+  
+  out_left = output_buffer[output_index * 2];
+  out_right = output_buffer[output_index * 2 + 1];
+  
+  output_buffer[output_index * 2] = 0;
+  output_buffer[output_index * 2 + 1] = 0;
+  
+  buffer_index = (buffer_index + 1) % buffer_length;
+);
+
