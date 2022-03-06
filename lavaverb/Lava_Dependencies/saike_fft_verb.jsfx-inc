@@ -48,8 +48,9 @@ global()
   );
 );
 
-function stft_reverb_settings(diffusion, decay, depth, freq, lowpass, highpass, shimmer, drops)
+function stft_reverb_settings(diff, decay, depth, freq, lowpass, highpass, shimmer, drops)
 instance(
+  diffusion,
   time_constant,
   noise_mode,     /* Chirp level */
   pitch,          /* Pitch */
@@ -59,12 +60,15 @@ instance(
   octaver,
   buffer_mode,
   adaptiveness,
+  lp,
+  hp,
   
   fft_size_index,
 )
 global()
 local()
 (
+  diffusion = diff;
   time_constant = - 2 * decay;
   octaver = shimmer;//2.5 * shimmer;
   fft_size_index = 7-1;
@@ -73,6 +77,8 @@ local()
   pitch = -1;
   ice = drops;
   buffer_mode = 1;
+  lp = lowpass;
+  hp = highpass;
 );
 
 
@@ -97,12 +103,14 @@ global(
 instance(
   nrg, octaver, diffusion, icemem, displacement, differential,
   
+  diffusion,
   time_constant,
   noise_mode,     /* Chirp level */
   pitch,          /* Pitch */
   shine_diff,     /* Shine diffusion */
   ice, ice_panned,
   ice_balance, ice_sharp, /* Defaults 0.5, 1 */
+  lp, hp,
   
   buffer_mode,
   adaptiveness,
@@ -142,6 +150,7 @@ local(
     ice_level = 1.0;
   );
   
+  displacement = 2^(- pitch);
   loop(fft_size/2,
     fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
 
@@ -168,22 +177,36 @@ local(
       icemem[2*fft_bin] -= k * icemem[2*fft_bin];
       icemem[2*fft_bin + 1] -= k * icemem[2*fft_bin + 1];
     );
+
+    a = 2 * floor(displacement * fft_bin);
+    (a < fft_size) ? (
+      mL = 0.5 * nrg[a] * verb_level;
+      mR = 0.5 * nrg[a + 1] * verb_level;
+    ) : (
+      mL = 0.5 * nrg[2 * fft_bin];
+      mR = 0.5 * nrg[2 * fft_bin + 1];
+    );
     
-    displacement = 2*floor(pitch * fft_bin);
-    2*fft_bin - displacement < fft_size/2 ? (
-      mL = nrg[2*fft_bin - displacement] * verb_level + icemem[2 * fft_bin - displacement] * ice_level;
-      mR = nrg[2*fft_bin - displacement + 1] * verb_level + icemem[2 * fft_bin - displacement + 1] * ice_level;
+    /*displacement = 2*floor(-2 * fft_bin);
+    (2*fft_bin - displacement < fft_size/2) ? (
+      mL = 0.5 * nrg[2*fft_bin - displacement] * verb_level + icemem[2 * fft_bin - displacement] * ice_level;
+      mR = 0.5 * nrg[2*fft_bin - displacement + 1] * verb_level + icemem[2 * fft_bin - displacement + 1] * ice_level;
     ) : (
       mL = 0.5 * nrg[2 * fft_bin] + icemem[2 * fft_bin];
       mR = 0.5 * nrg[2 * fft_bin + 1] + icemem[2 * fft_bin + 1];
-    );
+    );*/
     
     (noise_mode > 0.5) ? (
       phaseL += sin(g_rand3 * fft_bin + g_rand1) * 2.0 * $pi;
       phaseR += sin(g_rand3 * fft_bin + g_rand2) * 2.0 * $pi;
     ) : (
-      phaseL = 2.0 * $pi * rand();
-      phaseR = 2.0 * $pi * rand();
+      diffusion < 1 ? (
+        phaseL = atan2(left_imag, left_real) + 2.0 * $pi * rand() * diffusion;
+        phaseR = atan2(right_imag, right_real) + 2.0 * $pi * rand() * diffusion;
+      ) : (
+        phaseL = 2.0 * $pi * rand() * diffusion;
+        phaseR = 2.0 * $pi * rand() * diffusion;
+      );
     );
     
     left_real = cos(phaseL) * mL;
