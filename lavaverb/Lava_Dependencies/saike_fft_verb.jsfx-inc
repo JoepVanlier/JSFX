@@ -48,7 +48,7 @@ global()
   );
 );
 
-function stft_reverb_settings(diff, decay, depth, freq, lowpass, highpass, shimmer, drops)
+function stft_reverb_settings(diff, decay, depth, new_pitch, lowpass, highpass, shimmer, drops)
 instance(
   diffusion,
   time_constant,
@@ -61,11 +61,11 @@ instance(
   buffer_mode,
   adaptiveness,
   lp,
-  hp,
+  hp1, hp2,
   
   fft_size_index,
 )
-global()
+global(srate)
 local()
 (
   diffusion = diff;
@@ -74,11 +74,12 @@ local()
   fft_size_index = 7-1;
   adaptiveness = 0;
   shine_diff = 0;
-  pitch = -1;
+  pitch = new_pitch;
   ice = drops;
   buffer_mode = 1;
-  lp = lowpass;
-  hp = highpass;
+  lp = 0.5 * srate * exp( (1 - lowpass) * log(20/22050) );
+  hp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - highpass) * log(20/22050) ));
+  hp2.coeff = hp1.coeff;
 );
 
 
@@ -99,6 +100,7 @@ slider18:buffer_mode=1<0,1,1>-Buffer mode
 
 function process_stft_segment(fft_buffer, fft_size)
 global(
+  srate
 )
 instance(
   nrg, octaver, diffusion, icemem, displacement, differential,
@@ -125,6 +127,9 @@ local(
   ice_width, verb_level, ice_level,  /* Intermediate for balance between ice and verb */
   sd, /* Related to shine smoothing (shine_diff) */
   ts, k, atk, /* Swell dynamics related */
+  lp_corner,
+  lp_factor,
+  slope,
 )
 (
   fft_bin = 0; // FFT bin number
@@ -149,6 +154,10 @@ local(
     verb_level = 1.0 - 2.0 * (ice_balance - 0.5);
     ice_level = 1.0;
   );
+  
+  lp_corner = 2 * fft_size * lp / srate;
+  lp_factor = 1;
+  slope = 1.0 - 8.0 / fft_size;
   
   displacement = 2^(- pitch);
   loop(fft_size/2,
@@ -177,7 +186,13 @@ local(
       icemem[2*fft_bin] -= k * icemem[2*fft_bin];
       icemem[2*fft_bin + 1] -= k * icemem[2*fft_bin + 1];
     );
-
+    
+    (fft_bin > lp_corner) ? (
+      lp_factor *= slope;
+      nrg[2 * fft_bin] *= lp_factor;
+      nrg[2 * fft_bin + 1] *= lp_factor;
+    );
+    
     a = 2 * floor(displacement * fft_bin);
     (a < fft_size) ? (
       mL = 0.5 * nrg[a] * verb_level;
@@ -314,6 +329,7 @@ instance(
   fft_scaling_factor,
   out_left,
   out_right,
+  hp1, hp2,
   )
 (
   input_buffer[buffer_index * 2] = in0;
@@ -347,6 +363,9 @@ instance(
   
   out_left = output_buffer[output_index * 2];
   out_right = output_buffer[output_index * 2 + 1];
+  
+  out_left = out_left - hp1.eval_tpt_monopole(out_left);
+  out_right = out_right - hp2.eval_tpt_monopole(out_right);
   
   output_buffer[output_index * 2] = 0;
   output_buffer[output_index * 2 + 1] = 0;
