@@ -233,6 +233,20 @@ Features:
 - Audio rate cutoff modulation.
 - Basic LFO modulation.
 
+## Lava verb (alpha) - Shimmer reverbs
+
+Shimmer reverb with 5 different algorithms intended for very big reverb spaces.
+
+![chooseglyph](https://user-images.githubusercontent.com/19836026/158039155-2fdb0455-a42f-4772-8421-a298faa6d1fc.gif)
+
+Features:
+- 4 time-domain algorithms and 1 STFT-based algorithm for reverberation.
+- Shimmer (through pitch shifting).
+- Saturation.
+- Ice effects.
+- Preset EQ curves.
+- UI with fluid dynamics.
+
 ## SatanVerb - Pitching Reverb
 ![SatanUI](https://i.imgur.com/JLXFrOH.png)
 
