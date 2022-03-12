@@ -1,8 +1,8 @@
-desc:Lava Reverb (Saike) [BETA]
+desc:Lava Reverb (Saike) [ALPHA]
 tags: reverb
-version: 0.04
+version: 0.07
 author: Joep Vanlier
-changelog: Add lowpass/highpass to STFT reverb. Hook up pitch knob to STFT verb. Allow double click.
+changelog: Lock glyph area when dragging a control. Increase FFT size. Add phasey effect for STFT reverb. Show frequency response EQs. Animate all buttons. Set default size.
 license: MIT
 provides: Lava_Dependencies/*
 options:maxmem=4000000
@@ -16,10 +16,11 @@ slider7:shimmer=0.2<0,0.4,.001>-shimmer
 slider8:drop_mode=2<0,2,1{Off,Water,Ice}>-drop mode
 slider9:drops=0<0,1,.001>-drop frequency
 slider10:nonlinearity=0<0,1,.001>-non-linearity
-slider11:wet=0.25<0,1,.00001>dry/wet
-slider12:algorithm=0<0,1,4{Abyss,Lava1,Cold,Ethereal,fft_verb}>Algorithm
-slider13:eq_curve=0<0,14,1>Curve
+slider11:wet=0.25<0,1,.00001>-dry/wet
+slider12:algorithm=0<0,1,4{Abyss,Lava1,Cold,Ethereal,fft_verb}>-Algorithm
+slider13:eq_curve=0<0,14,1>-Curve
 slider14:pitch=-1<-2,-1,1>-Pitch
+slider15:modulation=0<0,400,0.001>-STFT modulation
 
 in_pin:left input
 in_pin:right input
@@ -52,6 +53,7 @@ wetKnob.init_knob(0, 1, 0.25, 11);
 algorithmKnob.init_knob(0, 4, 0, 12);
 eqCurveKnob.init_knob(0, 14, 0, 13);
 pitchKnob.init_knob(-2, 0, -1, 14);
+mod_stft.init_knob(0, 400, 0, 15);
 
 function process_verb()
 local()
@@ -62,7 +64,7 @@ global(ssl, ssr, algorithm,
       worp.out_left, worp.out_right, worp.eval_metallic,
       bigger_update,
       current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass,
-      shimmer, drops, pitch,
+      shimmer, drops, pitch, modulation,
       stft_verb.stft_reverb_settings,
       stft_verb.process_stft_verb,
       stft_verb.out_left, stft_verb.out_right,
@@ -73,7 +75,7 @@ instance(verb_drymul, verb_wetmul)
     abyss.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
     worp.worp_update_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
     //(algorithm == 4) ? worp.worp_metallic_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
-    (algorithm == 4) ? stft_verb.stft_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, pitch, current_verb_lowpass, current_verb_highpass, shimmer, drops);
+    (algorithm == 4) ? stft_verb.stft_reverb_settings(current_verb_diffusion, current_verb_decay, modulation, pitch, current_verb_lowpass, current_verb_highpass, shimmer, drops);
     bigger_update = 0;
   );
   
@@ -236,8 +238,10 @@ freemem = worp.init_worp(freemem);
 freemem = stft_verb.init_stft_verb_mem(freemem);
 
 freemem += 32768; /* Padding */
-
 freemem = fsim.init_fmem(freemem, 150, 150, 1);
+freemem += 32768; /* Padding */
+
+cab_display.init_cab_display(freemem);
 
 initialized = 0;
 
@@ -324,7 +328,7 @@ spl1 = ssr * wet + spl1 * (1 - wet);
 
 shimmer ? shifter_shimmer.pitchShifterUpdate(ssl, ssr);
 
-@gfx
+@gfx 540 540
 gfx_set(0, 0, 0, 0);
 gfx_rect(0, 0, gfx_w, gfx_h);
 
@@ -350,9 +354,9 @@ fsim.draw_to_field(fsim.last_vy, mouse_x, mouse_y, 25 * (mouse_y - ly) / gfx_h +
   fsim.simulate(1.0);
 );
 
-fsim.circle_to_field(fsim.last_dens, 0.5 * gfx_w, 0.5 * gfx_h, 0.33 + 0.03 * rand(), 1.5);
-fsim.circle_to_field(fsim.last_vx, 0.5 * gfx_w, 0.5 * gfx_h, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
-fsim.circle_to_field(fsim.last_vy, 0.5 * gfx_w, 0.5 * gfx_h, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
+fsim.circle_to_field(fsim.last_dens, 0.5 * gfx_w, 0.5 * gfx_w, 0.33 + 0.03 * rand(), 1.5);
+fsim.circle_to_field(fsim.last_vx, 0.5 * gfx_w, 0.5 * gfx_w, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
+fsim.circle_to_field(fsim.last_vy, 0.5 * gfx_w, 0.5 * gfx_w, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
 
 fsim.darken_density(0.9975);
 
@@ -368,23 +372,25 @@ instance()
   radius = 0.33 * gfx_w;
   cp = 2.0 * $pi * idx / n;
   cx = 0.5 * gfx_w + radius * sin(cp);
-  cy = 0.5 * gfx_h - radius * cos(cp);
+  cy = 0.5 * gfx_w - radius * cos(cp);
   
   idx += 1;
 );
 
 function draw_symbol(cx, cy, radius, symbol)
-local(s, i, di)
-global(gfx_x, gfx_y)
+local(s, i, di, value, tmp)
+global(disp_curve, gfx_a, gfx_x, gfx_y, eq_curve, cab_display.update_cab_display, cab_display.plot_cab)
+instance(slider_idx)
 (
   s = cx - radius;
   gfx_x = s;
   gfx_y = cy + 0.5 * radius;
   gfx_set(1, 0.5, 0.2, 1);
+  value = slider(slider_idx);
   
   (symbol == 0) ? (
-    i = - 10;
-    di = 10 / radius;
+    i = - 5 / (0.1 + value);
+    di = - i / radius;
     loop(2 * radius,
       gfx_lineto(s, cy + 0.5 * radius - 1.2 * radius * exp(-0.01 * i * i * radius), 1);
       s += 1;
@@ -392,15 +398,16 @@ global(gfx_x, gfx_y)
     );
   ) : ( symbol == 1 ) ? (
     i = 0;
-    di = 10 / radius;
+    di = 10 / radius / (0.333 + value);
     loop(2 * radius,
-      gfx_lineto(s, cy + 0.5 * radius - 1 * radius * i * exp(- 0.35 * (i)), 1);
+      gfx_lineto(s, cy + 0.5 * radius - 1 * radius * i * exp(- 0.35 * i), 1);
       s += 1;
       i += di;
     );
   ) : ( symbol == 2 ) ? (
     s = 0;
     loop(9,
+      gfx_a = 0.5 + (s < (17 * value) ? 0.5 : 0);
       gfx_line(
         cx - 0.3 * radius * sin(s),
         cy + 0.3 * radius * cos(s), 
@@ -413,8 +420,9 @@ global(gfx_x, gfx_y)
     i = 0;
     di = 32.5 / radius;
     gfx_y = cy;
+    tmp = (0.7 + 0.5 * value);
     loop(2 * radius,
-      gfx_lineto(s, cy - 0.18 * radius * i/radius * sin(0.5 * i), 1);
+      gfx_lineto(s, cy - 0.18 * radius * tmp * i/radius * sin(0.5 * i), 1);
       s += 1;
       i += di;
     );
@@ -422,22 +430,23 @@ global(gfx_x, gfx_y)
     i = 0;
     gfx_y = cy;
     di = 22.5 / radius;
+    tmp = (0.008 + 0.004 * value);
     loop(2 * radius,
-      gfx_lineto(s, cy - 0.45 * radius * sin(0.01 * i * i), 1);
+      gfx_lineto(s, cy - 0.45 * radius * sin(tmp * i * i), 1);
       s += 1;
       i += di;
     );
   ) : ( symbol == 5 ) ? (
-    i = -33;
+    i = - 10 + -23 * value;
     di = 30 / radius;
     gfx_y = cy - 0.9 * 0.5 * radius;
     loop(2 * radius,
-      gfx_lineto(s, cy + 0.9 * radius * max(-0.5, min(0.5, 0.04 * i - 0.5)), 1);
+      gfx_lineto(s, cy + 0.9 * radius * max(-0.5, min(0.6, 0.04 * i - 0.5)), 1);
       s += 1;
       i += di;
     );
   ) : ( symbol == 6 ) ? (
-    i = 0;
+    i = - 23 * value;
     di = 30 / radius;
     gfx_y = cy + 0.9 * 0.5 * radius;
     loop(2 * radius,
@@ -457,9 +466,9 @@ global(gfx_x, gfx_y)
     gfx_arc(floor(cx - 1), cy + 0.25 * radius, 0.32 * radius, 0.5 * $pi, 1.5 * $pi);
   ) : ( symbol == 8 ) ? (
     i = - radius;
-    gfx_y = cy + 0.5 * radius;
+    gfx_y = cy - 0.5 * radius * (tanh(0.2 * i) * value + 0.025 * (1 - value) * i);
     loop(2 * radius,
-      gfx_lineto(s, cy - 0.5 * radius * tanh(0.1 * i), 1);
+      gfx_lineto(s, cy - 0.5 * radius * (tanh(0.2 * i) * value + 0.025 * (1 - value) * i), 1);
       s += 1;
       i += 1;
     );
@@ -482,6 +491,41 @@ global(gfx_x, gfx_y)
     gfx_line(cx - 1, cy + 0.5 * radius, cx - 1, cy + 0.8 * radius);
     gfx_line(cx, cy + 0.5 * radius, cx, cy + 0.8 * radius);
     
+  ) : ( symbol == 10 ) ? (
+    i = 0;
+    gfx_y = cy + 0.45 * radius;
+    di = 22.5 / radius;
+    tmp = (0.004 + 0.00001 * value);
+    loop(2 * radius,
+      gfx_lineto(s, cy + 0.45 * radius - 0.95 * radius * (1 - abs(cos(tmp * i * i))), 1);
+      s += 1;
+      i += di;
+    );
+  ) : ( symbol == 11 ) ? (
+    eq_curve == 0 ? (
+      gfx_x = cx - radius;
+      gfx_y = cy - radius;
+      gfx_drawstr("-", 5, cx + radius, cy + radius);
+    ) : (
+      (disp_curve != eq_curve) ? (
+        disp_curve = eq_curve;
+        cab_display.update_cab_display(eq_curve);
+        cab_display.update_cab_display(eq_curve);
+      );
+      cab_display.plot_cab(cx - radius, cy + 0.5 * radius, 2 * radius, 1 * radius);
+    );
+  ) : ( symbol == 12 ) ? (
+    cy = cy - 0.9 * radius + 1;
+    tmp = floor(1.8 * radius / 8);
+    i = 0;
+    loop(9,
+      gfx_a = 0.3 + (9 * value <= i ? 0.69 : 0);
+      gfx_line(cx - 0.4 * radius, cy, cx - 0.1 * radius, cy);
+      gfx_a = 1.0 - (9 * (1 - value) > i ? 0.69 : 0);
+      gfx_line(cx + 0.4 * radius, cy, cx + 0.1 * radius, cy);
+      cy += tmp;
+      i += 1;
+    );
   );
   
   gfx_set(0, 0, 0, .2);
@@ -494,54 +538,62 @@ inner_radius = 0.7 * radius;
 w_ix = 0;
 w_ix = current_pos(w_ix);
 diffusionKnob.draw_knob(cx, cy, radius, "%0.2f", "Diffusion", 1, 1);
-draw_symbol(cx, cy, inner_radius, 0);
-draw_symbol(cx, cy - 1, inner_radius, 0);
+diffusionKnob.draw_symbol(cx, cy, inner_radius, 0);
+diffusionKnob.draw_symbol(cx, cy - 1, inner_radius, 0);
 w_ix = current_pos(w_ix);
 decayKnob.draw_knob(cx, cy, radius, "%0.2f", "Decay", 1, 1);
-draw_symbol(cx, cy, inner_radius, 1);
-draw_symbol(cx, cy - 1, inner_radius, 1);
+decayKnob.draw_symbol(cx, cy, inner_radius, 1);
+decayKnob.draw_symbol(cx, cy - 1, inner_radius, 1);
 w_ix = current_pos(w_ix);
 shimmerKnob.draw_knob(cx, cy, radius, "%0.2f", "Shimmer", 1, 1);
-draw_symbol(cx, cy, inner_radius, 2);
-draw_symbol(cx, cy - 1, inner_radius, 2);
+shimmerKnob.draw_symbol(cx, cy, inner_radius, 2);
+shimmerKnob.draw_symbol(cx, cy - 1, inner_radius, 2);
 w_ix = current_pos(w_ix);
-modDepthKnob.draw_knob(cx, cy, radius, "%0.2f", "Mod Depth", 1, 1);
-draw_symbol(cx, cy, inner_radius, 3);
-draw_symbol(cx, cy - 1, inner_radius, 3);
+(algorithm == 4 ) ? (
+  mod_stft.draw_knob(cx, cy, radius, "%0.2f", "Phasing effect", 1, 1);
+  mod_stft.draw_symbol(cx, cy, inner_radius, 10);
+  mod_stft.draw_symbol(cx, cy - 1, inner_radius, 10);
+) : (
+  modDepthKnob.draw_knob(cx, cy, radius, "%0.2f", "Mod Depth", 1, 1);
+  modDepthKnob.draw_symbol(cx, cy, inner_radius, 3);
+  modDepthKnob.draw_symbol(cx, cy - 1, inner_radius, 3);
+);
 w_ix = current_pos(w_ix);
 (algorithm == 4) ? (
   pitchKnob.draw_knob(cx, cy, radius, "%0.2f", "Pitch", 1, 1);
-  draw_symbol(cx, cy, inner_radius, 9);
-  draw_symbol(cx, cy - 1, inner_radius, 9);
+  pitchKnob.draw_symbol(cx, cy, inner_radius, 9);
+  pitchKnob.draw_symbol(cx, cy - 1, inner_radius, 9);
 ) : (
   modRateKnob.draw_knob(cx, cy, radius, "%0.2f", "Mod Rate", 1, 1);
-  draw_symbol(cx, cy, inner_radius, 4);
-  draw_symbol(cx, cy - 1, inner_radius, 4);
+  modRateKnob.draw_symbol(cx, cy, inner_radius, 4);
+  modRateKnob.draw_symbol(cx, cy - 1, inner_radius, 4);
 );
 w_ix = current_pos(w_ix);
 lpKnob.draw_knob(cx, cy, radius, "%0.2f", "Lowpass frequency", 1, 1);
-draw_symbol(cx, cy, inner_radius, 5);
-draw_symbol(cx, cy - 1, inner_radius, 5);
+lpKnob.draw_symbol(cx, cy, inner_radius, 5);
+lpKnob.draw_symbol(cx, cy - 1, inner_radius, 5);
 w_ix = current_pos(w_ix);
 hpKnob.draw_knob(cx, cy, radius, "%0.2f", "Highpass frequency", 1, 1);
-draw_symbol(cx, cy, inner_radius, 6);
-draw_symbol(cx, cy - 1, inner_radius, 6);
+hpKnob.draw_symbol(cx, cy, inner_radius, 6);
+hpKnob.draw_symbol(cx, cy - 1, inner_radius, 6);
 w_ix = current_pos(w_ix);
 //dropModeKnob.draw_knob(cx, cy, radius, "%0.2f", "Drop mode", 1, 1);
 //w_ix = current_pos(w_ix);
 dropFreqKnob.draw_knob(cx, cy, radius, "%0.2f", "Drop frequency\n\nHow often a small droplet of sound is added\n", 1, 1);
-draw_symbol(cx, cy, inner_radius, 7);
-draw_symbol(cx, cy - 1, inner_radius, 7);
+dropFreqKnob.draw_symbol(cx, cy, inner_radius, 7);
+dropFreqKnob.draw_symbol(cx, cy - 1, inner_radius, 7);
 w_ix = current_pos(w_ix);
 nonlinearityKnob.draw_knob(cx, cy, radius, "%0.2f", "Nonlinearity", 1, 1);
-draw_symbol(cx, cy, inner_radius, 8);
-draw_symbol(cx, cy - 1, inner_radius, 8);
-w_ix = current_pos(w_ix);
-wetKnob.draw_knob(cx, cy, radius, "%0.2f", "Dry/Wet", 1, 1);
-//w_ix = current_pos(w_ix);
-//algorithmKnob.draw_knob(cx, cy, radius, "%0.2f", "Algorithm", 1, 1);
+nonlinearityKnob.draw_symbol(cx, cy, inner_radius, 8);
+nonlinearityKnob.draw_symbol(cx, cy - 1, inner_radius, 8);
 w_ix = current_pos(w_ix);
 eqCurveKnob.draw_knob(cx, cy, radius, "%0.2f", "Eq Curve", 1, 1);
+eqCurveKnob.draw_symbol(cx, cy, inner_radius, 11);
+eqCurveKnob.draw_symbol(cx, cy - 1, inner_radius, 11);
+w_ix = current_pos(w_ix);
+wetKnob.draw_knob(cx, cy, radius, "%0.2f", "Dry/Wet", 1, 1);
+wetKnob.draw_symbol(cx, cy, inner_radius, 12);
+wetKnob.draw_symbol(cx, cy - 1, inner_radius, 12);
 
 function glyph_line(xc, yc, radius, v1, v2)
 (
@@ -553,9 +605,9 @@ function glyph_line(xc, yc, radius, v1, v2)
 );
 
 dx = mouse_x - 0.5 * gfx_w;
-dy = mouse_y - 0.5 * gfx_h;
-radial_wheel_radius = 0.2 * gfx_h;
-over_center = (dx * dx + dy * dy) < radial_wheel_radius*radial_wheel_radius;
+dy = mouse_y - 0.5 * gfx_w;
+radial_wheel_radius = 0.2 * gfx_w;
+over_center = (captured == 0) && (dx * dx + dy * dy) < radial_wheel_radius*radial_wheel_radius;
 
 visible += 0.3 * (over_center - visible);
 
