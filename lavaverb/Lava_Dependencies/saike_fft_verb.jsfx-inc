@@ -4,7 +4,7 @@
 function init_stft_verb_mem(freemem)
 instance(
   buffer_index, buffer_length,
-  fft_buffer, window_buffer, nrg, icemem,
+  fft_buffer, window_buffer, nrg,
   input_buffer, output_buffer, delay_line
 )
 local(MAX_FFT_SIZE)
@@ -19,7 +19,6 @@ global(srate)
   freemem = (fft_buffer = freemem) + MAX_FFT_SIZE * 4;
   freemem = (window_buffer = freemem) + MAX_FFT_SIZE * 2;
   freemem = (nrg = freemem) + MAX_FFT_SIZE * 4;
-  freemem = (icemem = freemem) + MAX_FFT_SIZE * 4;
   
   buffer_length = srate;
   buffer_index = 0;
@@ -55,11 +54,7 @@ function stft_reverb_settings(diff, decay, depth, new_pitch, lowpass, highpass, 
 instance(
   diffusion,
   time_constant,
-  noise_mode,     /* Chirp level */
   pitch,          /* Pitch */
-  shine_diff,     /* Shine diffusion */
-  ice, ice_panned,
-  ice_balance, ice_sharp, /* Defaults 0.5, 1 */
   octaver,
   buffer_mode,
   adaptiveness,
@@ -69,16 +64,15 @@ instance(
   
   fft_size_index,
 )
-global(srate)
+global(srate, eco)
 local()
 (
   diffusion = diff;
   time_constant = - 2 * decay;
   octaver = shimmer;//2.5 * shimmer;
-  fft_size_index = 7;
+  fft_size_index = 7 - eco;
   adaptiveness = 0;
   pitch = new_pitch;
-  ice = drops;
   buffer_mode = 1;
   modulation = depth;
   lp = 0.5 * srate * exp( (1 - lowpass) * log(20/22050) );
@@ -91,32 +85,31 @@ global(
   srate
 )
 instance(
-  nrg, octaver, diffusion, icemem, displacement, differential, modulation,
+  nrg, differential, modulation,
   
   diffusion,
   time_constant,
-  noise_mode,     /* Chirp level */
   pitch,          /* Pitch */
-  ice, ice_panned,
-  ice_balance, ice_sharp, /* Defaults 0.5, 1 */
   lp, hp,
   
   buffer_mode,
   adaptiveness,
 )
 local(
-  fft_bin, fft_bin2, a,  /* Iterators */
+  fft_bin, tfft_bin2, a, tmp, /* Iterators */
   displacement, /* Pitch displacement handling */
   magnitude_left, magnitude_right,     /* Spectral magnitude */
   left_real, left_imag, right_real, right_imag,
-  g_rand1, g_rand2, g_rand3, g_rand4, tmp, /* Random numbers */
   mL, mR, phaseL, phaseR,  /* Output variables */
-  ice_width, verb_level, ice_level,  /* Intermediate for balance between ice and verb */
-  ts, k, /* Swell dynamics related */
+  ts, k, one_min_k, /* Swell dynamics related */
   lp_corner,
   lp_factor,
   slope,
   mod,
+  tfft_bin,
+  pi_two_diff,
+  
+  y0, y1, y2, b1, ip, w, // Cosine filter setup
 )
 (
   fft_bin = 0; // FFT bin number
@@ -124,70 +117,66 @@ local(
   
   ts = min(0, time_constant * (1 - adaptiveness * differential));
   k = exp(2.302585092994045 * ts);
+  one_min_k = 1.0 - k;
   
-  g_rand1 = rand();
-  g_rand2 = g_rand1 * rand();
-  g_rand3 = exp(-2.302585092994045);
-  
-  phaseL = rand() * 2 * $pi;
-  phaseR = rand();
-   
-  ice_balance < 0.5 ? (
-    verb_level = 1.0;
-    ice_level = 2.0 * ice_balance;
-  ) : (
-    verb_level = 1.0 - 2.0 * (ice_balance - 0.5);
-    ice_level = 1.0;
-  );
-  
+  pi_two_diff = 2.0 * $pi * diffusion;
+
   lp_corner = 2 * fft_size * lp / srate;
   lp_factor = 1;
   slope = 1.0 - 8.0 / fft_size;
   
-  displacement = 2^(- pitch);
+  /* Filter that generates a cosine */
+  w = mod;
+  y0 = 0;
+  b1 = 2.0 * cos(w);
+  ip = 0.5 * $pi;
+  y1 = sin(ip - w);
+  y2 = sin(ip - 2.0 * w);
+  
+  displacement = 2 * 2^(- pitch);
+  a = 0;
+  tfft_bin = 0;
   loop(fft_size/2,
-    fft_bin2 = fft_bin ? (fft_size - fft_bin) : 0;
+    tfft_bin2 = fft_bin ? 2 * (fft_size - fft_bin) : 0;
 
     // Unfold complex spectrum into two real spectra
-    left_real = fft_buffer[2*fft_bin] + fft_buffer[2*fft_bin2];
-    left_imag = fft_buffer[2*fft_bin + 1] - fft_buffer[2*fft_bin2 + 1];
-    right_real = fft_buffer[2*fft_bin + 1] + fft_buffer[2*fft_bin2 + 1];
-    right_imag = -fft_buffer[2*fft_bin] + fft_buffer[2*fft_bin2];
+    left_real = fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    left_imag = fft_buffer[tfft_bin + 1] - fft_buffer[tfft_bin2 + 1];
+    right_real = fft_buffer[tfft_bin + 1] + fft_buffer[tfft_bin2 + 1];
+    right_imag = -fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
     
-    magnitude_left = sqrt(left_real * left_real + left_imag * left_imag);
-    magnitude_right = sqrt(right_real * right_real + right_imag * right_imag);
+    magnitude_left = 5 * sqrt(left_real * left_real + left_imag * left_imag);
+    magnitude_right = 5 * sqrt(right_real * right_real + right_imag * right_imag);
  
-    mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], 5 * magnitude_left);
-    mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], 5 * magnitude_right);
-      
-    icemem[2*fft_bin] = (1 - k) * icemem[2*fft_bin];
-    icemem[2*fft_bin + 1] = (1 - k) * icemem[2*fft_bin + 1];
+    lp_factor *= fft_bin > lp_corner ? slope : 1;
+    nrg[tfft_bin]   = max(one_min_k * nrg[tfft_bin], magnitude_left) * lp_factor;
+    nrg[tfft_bin + 1] = max(one_min_k * nrg[tfft_bin + 1], magnitude_right) * lp_factor;
     
-    (fft_bin > lp_corner) ? (
-      lp_factor *= slope;
-      nrg[2 * fft_bin] *= lp_factor;
-      nrg[2 * fft_bin + 1] *= lp_factor;
-    );
-    
-    a = 2 * floor(displacement * fft_bin);
     (a < fft_size) ? (
-      mL = 0.5 * nrg[a] * verb_level;
-      mR = 0.5 * nrg[a + 1] * verb_level;
+      mL = 0.5 * nrg[a];
+      mR = 0.5 * nrg[a + 1];
     ) : (
-      mL = 0.5 * nrg[2 * fft_bin];
-      mR = 0.5 * nrg[2 * fft_bin + 1];
+      mL = 0.5 * nrg[tfft_bin];
+      mR = 0.5 * nrg[tfft_bin + 1];
     );
+    
     mod ? (
-      mL *= cos(fft_bin * mod);
-      mR *= cos(fft_bin * mod);
+      y0 = b1 * y1 - y2;
+      y2 = y1;
+      y1 = y0;
+    
+      /* Cosine modulation pattern written as filter for performance */
+      tmp = y0;
+      mL *= tmp;
+      mR *= tmp;
     );
     
     diffusion < 0.999 ? (
-      phaseL = atan2(left_imag, left_real) + 2.0 * $pi * rand() * diffusion;
-      phaseR = atan2(right_imag, right_real) + 2.0 * $pi * rand() * diffusion;
+      phaseL = atan2(left_imag, left_real) + pi_two_diff * rand();
+      phaseR = atan2(right_imag, right_real) + pi_two_diff * rand();
     ) : (
-      phaseL = 2.0 * $pi * rand() * diffusion;
-      phaseR = 2.0 * $pi * rand() * diffusion;
+      phaseL = 2.0 * $pi * rand();
+      phaseR = 2.0 * $pi * rand();
     );
     
     left_real = cos(phaseL) * mL;
@@ -196,45 +185,39 @@ local(
     right_imag = sin(phaseR) * mR;
     
     // Re-fold back into complex spectrum
-    fft_buffer[2 * fft_bin] = (left_real - right_imag) * 0.5;
-    fft_buffer[2 * fft_bin + 1] = (left_imag + right_real) * 0.5;
-    fft_buffer[2 * fft_bin2] = (left_real + right_imag) * 0.5;
-    fft_buffer[2 * fft_bin2 + 1] = (-left_imag + right_real) * 0.5;
+    fft_buffer[tfft_bin] = (left_real - right_imag) * 0.5;
+    fft_buffer[tfft_bin + 1] = (left_imag + right_real) * 0.5;
+    fft_buffer[tfft_bin2] = (left_real + right_imag) * 0.5;
+    fft_buffer[tfft_bin2 + 1] = (-left_imag + right_real) * 0.5;
 
     fft_bin += 1;
+    tfft_bin += 2;
+    a += displacement;
   );
-  
-  loop(2,
-    ice_width = - 5.0 * 10^ice_sharp; 
-    ice ? (
-      g_rand1 = 2*(1 + floor(rand() * 2));
-      g_rand2 = 0.01 * fft_size + rand() * fft_size/2;
-      g_rand4 = g_rand3 = 150 * rand() * k * ice;
-      
-      ice_panned ? (
-        tmp = rand();
-        g_rand3 = g_rand3 * sqrt(1.0 - tmp);
-        g_rand4 = g_rand4 * sqrt(tmp);      
-      ) : (
-        g_rand3 = 0.5;
-        g_rand4 = 0.5;
-      );
-      tmp = 0;
-      
-      fft_bin = 0;
-      a = 0;
-      loop(fft_size/2,
-        icemem[a]      = icemem[a] + g_rand3 * nrg[2 * fft_bin] * tmp;
-        icemem[a + 1]  = icemem[a + 1] + g_rand4 * nrg[2 * fft_bin + 1] * tmp;
-        tmp            = g_rand2 - fft_bin;
-        tmp            = ice_width * tmp * tmp;
-        tmp            = exp(tmp / fft_size);
-        fft_bin += 1;
-        a += g_rand1;
-      );
-    );
-  );
-  
+);
+
+function process_stft_segment_effects(fft_buffer, fft_size)
+global(
+  srate
+)
+instance(
+  nrg, octaver, diffusion, differential,
+  time_constant,
+  pitch,          /* Pitch */
+  adaptiveness,
+)
+local(
+  fft_bin, a,  /* Iterators */
+  g_rand1, g_rand2, g_rand3, g_rand4, tmp, /* Random numbers */
+  ts, k, /* Swell dynamics related */
+)
+(
+  g_rand1 = rand();
+  g_rand2 = g_rand1 * rand();
+  g_rand3 = exp(-2.302585092994045);
+  ts = min(0, time_constant * (1 - adaptiveness * differential));
+  k = exp(2.302585092994045 * ts);
+
   octaver ? (
     fft_bin = 0; 
     tmp = octaver * k;
@@ -285,6 +268,7 @@ function process_stft_verb(in0, in1)
 local(i, bi, i2)
 global()
 instance(
+  buffer_ready,
   input_buffer,
   output_buffer,
   buffer_index,
@@ -303,27 +287,40 @@ instance(
   input_buffer[buffer_index * 2] = in0;
   input_buffer[buffer_index * 2 + 1] = in1;
   
-  fft_counter += 1;
-  fft_counter >= fft_interval ? (
-    fft_counter = 0;
-    fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor);
-    this.process_stft_segment(fft_buffer, fft_size);
+  buffer_ready > 0 ? (
+    buffer_ready += 1;
+  );
   
+  // Steps 2-4 are spread over multiple blocks to prevent
+  // all the CPU load from falling on a single block and leading
+  // to stutter.
+  (buffer_ready == 256) ? (
+    this.process_stft_segment(fft_buffer, fft_size);
+  ) : (buffer_ready == 512) ? (
+    this.process_stft_segment_effects(fft_buffer, fft_size);
+  ) : (buffer_ready == 784) ? (
     fft_ipermute(fft_buffer, fft_size);
     ifft(fft_buffer, fft_size);
-  
+  ) : (buffer_ready == 1024) ? (
     // Add to output
     bi = buffer_index - fft_size + 1;
     i = 0;
     loop(fft_size,
       i2 = bi + i;
       (i2 < 0) ? i2 += buffer_length;
-  
       output_buffer[2 * i2] += fft_buffer[2 * i] * window_buffer[i] * fft_scaling_factor;
       output_buffer[2 * i2 + 1] += fft_buffer[2 * i + 1] * window_buffer[i] * fft_scaling_factor;
-  
       i += 1;
     );
+    buffer_ready = 0;
+  );
+  
+  // Once a block is ready, begin processing.
+  fft_counter += 1;
+  fft_counter >= fft_interval ? (
+    fft_counter = 0;
+    fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length, fft_scaling_factor);
+    buffer_ready = 1;
   );
   
   output_index = buffer_index - fft_size;
