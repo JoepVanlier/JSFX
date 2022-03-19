@@ -77,7 +77,6 @@ local()
   octaver = shimmer;//2.5 * shimmer;
   fft_size_index = 7;
   adaptiveness = 0;
-  shine_diff = 0;
   pitch = new_pitch;
   ice = drops;
   buffer_mode = 1;
@@ -86,22 +85,6 @@ local()
   hp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - highpass) * log(20/22050) ));
   hp2.coeff = hp1.coeff;
 );
-
-
-/*
-slider1:fft_size_index=7<0,7,1{256,512,1024,2048,4096,8192,16384,32768>FFT size
-slider2:time_constant=-1.5<-2,0,.01>-Timescale
-slider3:octaver=0.3<0,1,.001>-Shine
-slider4:adaptiveness=0<0,1,1>-Adaptiveness
-slider7:shine_diff=0<0,1,0.0001>-Shine diffusion
-slider8:pitch=0<-1,0,0.0001>-Pitch
-slider9:ice_balance=0.5<0,1,1>-Ice balance
-slider10:ice=0.6<0,1,.00001>-Ice
-slider11:ice_panned=1<0,1,1>-IcePanned
-slider12:ice_sharp=1<0,2,1>-IceSharpness
-slider13:noise_mode=0<0,5,.001>-Noise mode
-slider18:buffer_mode=1<0,1,1>-Buffer mode
-*/
 
 function process_stft_segment(fft_buffer, fft_size)
 global(
@@ -114,7 +97,6 @@ instance(
   time_constant,
   noise_mode,     /* Chirp level */
   pitch,          /* Pitch */
-  shine_diff,     /* Shine diffusion */
   ice, ice_panned,
   ice_balance, ice_sharp, /* Defaults 0.5, 1 */
   lp, hp,
@@ -130,8 +112,7 @@ local(
   g_rand1, g_rand2, g_rand3, g_rand4, tmp, /* Random numbers */
   mL, mR, phaseL, phaseR,  /* Output variables */
   ice_width, verb_level, ice_level,  /* Intermediate for balance between ice and verb */
-  sd, /* Related to shine smoothing (shine_diff) */
-  ts, k, atk, /* Swell dynamics related */
+  ts, k, /* Swell dynamics related */
   lp_corner,
   lp_factor,
   slope,
@@ -143,17 +124,14 @@ local(
   
   ts = min(0, time_constant * (1 - adaptiveness * differential));
   k = exp(2.302585092994045 * ts);
-  atk = 10 * k;
   
   g_rand1 = rand();
   g_rand2 = g_rand1 * rand();
-  g_rand3 = exp(-2.302585092994045 * (1.0 + noise_mode));
+  g_rand3 = exp(-2.302585092994045);
   
   phaseL = rand() * 2 * $pi;
   phaseR = rand();
-  
-  sd = 2 * 0.4 * shine_diff;
-  
+   
   ice_balance < 0.5 ? (
     verb_level = 1.0;
     ice_level = 2.0 * ice_balance;
@@ -179,20 +157,11 @@ local(
     magnitude_left = sqrt(left_real * left_real + left_imag * left_imag);
     magnitude_right = sqrt(right_real * right_real + right_imag * right_imag);
  
-    // The actual dynamical model
-    buffer_mode ? (
-      mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], 5 * magnitude_left);
-      mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], 5 * magnitude_right);
+    mL = nrg[2*fft_bin]   = max((1-k)*nrg[2*fft_bin], 5 * magnitude_left);
+    mR = nrg[2*fft_bin+1] = max((1-k)*nrg[2*fft_bin+1], 5 * magnitude_right);
       
-      icemem[2*fft_bin] = (1 - k) * icemem[2*fft_bin];
-      icemem[2*fft_bin + 1] = (1 - k) * icemem[2*fft_bin + 1];
-    ) : (
-      mL = nrg[2*fft_bin]    += atk * magnitude_left - k*nrg[2*fft_bin];
-      mR = nrg[2*fft_bin+1]  += atk * magnitude_right - k*nrg[2*fft_bin+1];
-
-      icemem[2*fft_bin] -= k * icemem[2*fft_bin];
-      icemem[2*fft_bin + 1] -= k * icemem[2*fft_bin + 1];
-    );
+    icemem[2*fft_bin] = (1 - k) * icemem[2*fft_bin];
+    icemem[2*fft_bin + 1] = (1 - k) * icemem[2*fft_bin + 1];
     
     (fft_bin > lp_corner) ? (
       lp_factor *= slope;
@@ -213,26 +182,12 @@ local(
       mR *= cos(fft_bin * mod);
     );
     
-    /*displacement = 2*floor(-2 * fft_bin);
-    (2*fft_bin - displacement < fft_size/2) ? (
-      mL = 0.5 * nrg[2*fft_bin - displacement] * verb_level + icemem[2 * fft_bin - displacement] * ice_level;
-      mR = 0.5 * nrg[2*fft_bin - displacement + 1] * verb_level + icemem[2 * fft_bin - displacement + 1] * ice_level;
+    diffusion < 0.999 ? (
+      phaseL = atan2(left_imag, left_real) + 2.0 * $pi * rand() * diffusion;
+      phaseR = atan2(right_imag, right_real) + 2.0 * $pi * rand() * diffusion;
     ) : (
-      mL = 0.5 * nrg[2 * fft_bin] + icemem[2 * fft_bin];
-      mR = 0.5 * nrg[2 * fft_bin + 1] + icemem[2 * fft_bin + 1];
-    );*/
-    
-    (noise_mode > 0.5) ? (
-      phaseL += sin(g_rand3 * fft_bin + g_rand1) * 2.0 * $pi;
-      phaseR += sin(g_rand3 * fft_bin + g_rand2) * 2.0 * $pi;
-    ) : (
-      diffusion < 1 ? (
-        phaseL = atan2(left_imag, left_real) + 2.0 * $pi * rand() * diffusion;
-        phaseR = atan2(right_imag, right_real) + 2.0 * $pi * rand() * diffusion;
-      ) : (
-        phaseL = 2.0 * $pi * rand() * diffusion;
-        phaseR = 2.0 * $pi * rand() * diffusion;
-      );
+      phaseL = 2.0 * $pi * rand() * diffusion;
+      phaseR = 2.0 * $pi * rand() * diffusion;
     );
     
     left_real = cos(phaseL) * mL;
@@ -252,7 +207,6 @@ local(
   loop(2,
     ice_width = - 5.0 * 10^ice_sharp; 
     ice ? (
-      fft_bin = 0;
       g_rand1 = 2*(1 + floor(rand() * 2));
       g_rand2 = 0.01 * fft_size + rand() * fft_size/2;
       g_rand4 = g_rand3 = 150 * rand() * k * ice;
@@ -267,36 +221,39 @@ local(
       );
       tmp = 0;
       
+      fft_bin = 0;
+      a = 0;
       loop(fft_size/2,
-        a = g_rand1 * fft_bin;
-        icemem[a]      = icemem[a] + g_rand3*nrg[2*fft_bin] * tmp;
-        icemem[a + 1]  = icemem[a + 1] + g_rand4*nrg[2*fft_bin + 1] * tmp;
+        icemem[a]      = icemem[a] + g_rand3 * nrg[2 * fft_bin] * tmp;
+        icemem[a + 1]  = icemem[a + 1] + g_rand4 * nrg[2 * fft_bin + 1] * tmp;
         tmp            = g_rand2 - fft_bin;
         tmp            = ice_width * tmp * tmp;
         tmp            = exp(tmp / fft_size);
         fft_bin += 1;
+        a += g_rand1;
       );
     );
   );
   
   octaver ? (
     fft_bin = 0; 
+    tmp = octaver * k;
+    a = 0;
+    
     loop(fft_size/2,
-      a = rand() - 0.5;
-      a *= a*a;
-      a = 4 * (fft_bin * (1 + sd * a));
-      nrg[a]      = nrg[a] + octaver*k*nrg[2*fft_bin];
-      nrg[a + 1]  = nrg[a + 1] + octaver*k*nrg[2*fft_bin + 1];
-      fft_bin += 1;
+      nrg[a] += tmp * nrg[fft_bin];
+      nrg[a + 1] += tmp * nrg[fft_bin + 1];
+      fft_bin += 2;
+      a += 4;
     );
   );
   
   /* Avoid HF buildup over the edge */
-  fft_bin = fft_size/4;
+  fft_bin = fft_size / 4;
   loop(fft_size/4,
     a = 4*fft_bin;
-    nrg[a]      = nrg[a] - k * nrg[a];
-    nrg[a + 1]  = nrg[a + 1] - k * nrg[a + 1];
+    nrg[a] -= k * nrg[a];
+    nrg[a + 1] -= k * nrg[a + 1];
     fft_bin += 1;
   );
 );
