@@ -1,8 +1,8 @@
 desc:Lava Reverb (Saike) [ALPHA]
 tags: shimmer reverb
-version: 0.12
+version: 0.13
 author: Joep Vanlier
-changelog: Spread CPU cost FFT reverb over multiple samples (helps attain lower latencies). Add economy mode.
+changelog: Add hidden frequency shifter option (outer mouse on shimmer).
 license: MIT
 provides:
   Lava_Dependencies/*
@@ -24,6 +24,7 @@ slider13:eq_curve=0<0,14,1>-Curve
 slider14:pitch=-1<-2,-1,1>-Pitch
 slider15:modulation=0<0,400,0.001>-STFT modulation
 slider16:eco=0<0,1,1>-Economy
+slider17:freq_shift=0<0,1,1>-Frequency Shift
 
 in_pin:left input
 in_pin:right input
@@ -57,6 +58,7 @@ algorithmKnob.init_knob(0, 4, 0, 12);
 eqCurveKnob.init_knob(0, 14, 0, 13);
 pitchKnob.init_knob(-2, 0, -1, 14);
 mod_stft.init_knob(0, 400, 0, 15);
+freqShiftKnob.init_knob(0, 1, 0, 17);
 
 function process_verb()
 local()
@@ -71,6 +73,7 @@ global(ssl, ssr, algorithm,
       stft_verb.stft_reverb_settings,
       stft_verb.process_stft_verb,
       stft_verb.out_left, stft_verb.out_right,
+      frequency_shifter_mode, freq_shift,
       )
 instance(verb_drymul, verb_wetmul)
 (
@@ -78,7 +81,7 @@ instance(verb_drymul, verb_wetmul)
     abyss.update_reverb_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
     worp.worp_update_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
     //(algorithm == 4) ? worp.worp_metallic_settings(current_verb_diffusion, current_verb_decay, current_verb_mod_depth, current_verb_mod_rate, current_verb_lowpass, current_verb_highpass);
-    (algorithm == 4) ? stft_verb.stft_reverb_settings(current_verb_diffusion, current_verb_decay, modulation, pitch, current_verb_lowpass, current_verb_highpass, shimmer, drops);
+    (algorithm == 4) ? stft_verb.stft_reverb_settings(current_verb_diffusion, current_verb_decay, modulation, pitch, current_verb_lowpass, current_verb_highpass, shimmer, drops, frequency_shifter_mode, freq_shift);
     bigger_update = 0;
   );
   
@@ -268,6 +271,10 @@ noise_rate = - log(.1) / (.001 * 600) / srate;  // 600 ms
 sparkle_left.update_sparkle_filter();
 sparkle_right.update_sparkle_filter();
 
+@serialize
+file_var(0, 1); // Version
+file_var(0, frequency_shifter_mode);
+
 @sample
 current_verb_diffusion = 0.999 * current_verb_diffusion + 0.001 * diffusion;
 current_verb_mod_depth = 0.999 * current_verb_mod_depth + 0.001 * verb_mod_depth;
@@ -370,10 +377,10 @@ fsim.draw_fast(fsim.dens);
 
 function current_pos(idx)
 local(n, cp, radius)
-global(cx, cy, ui_size)
+global(cx, cy, ui_size, num_dials)
 instance()
 (
-  n = 11; //13
+  n = num_dials; //13
   radius = 0.33 * ui_size;
   cp = 2.0 * $pi * idx / n;
   cx = 0.5 * ui_size + radius * sin(cp);
@@ -531,6 +538,29 @@ instance(slider_idx)
       s += tmp;
       i += 1;
     );
+  ) : ( symbol == 13 ) ? (
+    i = cx - radius;
+    di = - i * value / radius * 0.3;
+    s = 1;
+    gfx_line(cx - radius, cy + 0.5 * radius, cx + radius, cy + 0.5 * radius, 1);
+    gfx_line(cx - radius, cy + 0.5 * radius, cx + radius, cy + 0.5 * radius, 1);
+    loop(8,
+      gfx_line(i, cy + 0.5 * radius, i, cy + 0.5 * radius - radius * s, 1);    
+      i -= di;
+      s *= 0.7;
+    );
+  ) : ( symbol == 14 ) ? (
+    s = 0;
+    loop(12,
+      gfx_a = 0.5 + (s < (17 * value) ? 0.5 : 0);
+      gfx_line(
+        cx - 0.2 * radius * sin(s),
+        cy + 0.2 * radius * cos(s), 
+        cx - (0.5 + 0.05 * s) * radius * sin(s),
+        cy + (0.5 + 0.03 * s) * radius * cos(s)
+      );
+      s += 0.35 * $pi;
+    );
   );
   
   gfx_set(0, 0, 0, .2);
@@ -541,6 +571,7 @@ reset_font();
 radius = 0.06 * ui_size;
 inner_radius = 0.7 * radius;
 w_ix = 0;
+num_dials = 11 + (frequency_shifter_mode && (algorithm == 4));
 w_ix = current_pos(w_ix);
 diffusionKnob.draw_knob(cx, cy, radius, "%0.2f",
   ((algorithm == 0) || (algorithm == 4)) ? "Diffusion\n\nControls how diffuse the reverb is." : "Diffusion and delay\n\nControls size of the room and how diffuse the reverb is.\nNote that changing this value dynamically will result\nin pitch artefacts.",
@@ -552,9 +583,21 @@ decayKnob.draw_knob(cx, cy, radius, "%0.2f", "Decay\n\nControls how long the rev
 decayKnob.draw_symbol(cx, cy, inner_radius, 1);
 decayKnob.draw_symbol(cx, cy - 1, inner_radius, 1);
 w_ix = current_pos(w_ix);
-shimmerKnob.draw_knob(cx, cy, radius, "%0.2f", "Shimmer\n\nControls how much high frequency content is added.", 1, 1);
-shimmerKnob.draw_symbol(cx, cy, inner_radius, 2);
-shimmerKnob.draw_symbol(cx, cy - 1, inner_radius, 2);
+shimmerKnob.draw_knob(cx,  cy, radius, "%0.2f", "Shimmer\n\nControls how much high frequency content is added.\nOuter mouse toggles between octave (pretty) and\nfrequency shift mode (evil).", 1, 1) ? (
+  ((mouse_cap & 2) && (last_cap == 0)) ? (
+    toggle_freq_shifter = 1;
+  );
+);
+shimmerKnob.draw_symbol(cx, cy, inner_radius, 2 + 12 * ((algorithm == 4) && frequency_shifter_mode));
+shimmerKnob.draw_symbol(cx, cy - 1, inner_radius, 2 + 12 * ((algorithm == 4) && frequency_shifter_mode));
+
+((algorithm == 4) && frequency_shifter_mode)? (
+  w_ix = current_pos(w_ix);
+  freqShiftKnob.draw_knob(cx, cy, radius, "%0.2f", "Shimmer frequency shift.", 1, 1);
+  freqShiftKnob.draw_symbol(cx, cy, inner_radius, 13);
+  freqShiftKnob.draw_symbol(cx, cy - 1, inner_radius, 13);
+);
+
 w_ix = current_pos(w_ix);
 (algorithm == 4 ) ? (
   mod_stft.draw_knob(cx, cy, radius, "%0.2f", "Phasing effect", 1, 1);
@@ -601,6 +644,11 @@ w_ix = current_pos(w_ix);
 wetKnob.draw_knob(cx, cy, radius, "%0.2f", "Dry/Wet", 1, 1);
 wetKnob.draw_symbol(cx, cy, inner_radius, 12);
 wetKnob.draw_symbol(cx, cy - 1, inner_radius, 12);
+
+toggle_freq_shifter ? (
+  frequency_shifter_mode = 1 - frequency_shifter_mode;
+  toggle_freq_shifter = 0;
+);
 
 function glyph_line(xc, yc, radius, v1, v2)
 (

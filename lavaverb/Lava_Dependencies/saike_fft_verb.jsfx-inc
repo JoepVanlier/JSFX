@@ -50,7 +50,7 @@ global()
   );
 );
 
-function stft_reverb_settings(diff, decay, depth, new_pitch, lowpass, highpass, shimmer, drops)
+function stft_reverb_settings(diff, decay, depth, new_pitch, lowpass, highpass, shimmer, drops, shift_mode, shift_freq)
 instance(
   diffusion,
   time_constant,
@@ -61,7 +61,8 @@ instance(
   lp,
   hp1, hp2,
   modulation,
-  
+  frequency_shifter_mode,
+  frequency_shift,
   fft_size_index,
 )
 global(srate, eco)
@@ -78,6 +79,8 @@ local()
   lp = 0.5 * srate * exp( (1 - lowpass) * log(20/22050) );
   hp1.init_tpt_monopole(0.5 * srate * exp( (1.0 - highpass) * log(20/22050) ));
   hp2.coeff = hp1.coeff;
+  frequency_shifter_mode = shift_mode;
+  frequency_shift = shift_freq;
 );
 
 function process_stft_segment(fft_buffer, fft_size)
@@ -198,18 +201,20 @@ local(
 
 function process_stft_segment_effects(fft_buffer, fft_size)
 global(
-  srate
+  srate,
 )
 instance(
   nrg, octaver, diffusion, differential,
   time_constant,
   pitch,          /* Pitch */
   adaptiveness,
+  frequency_shifter_mode, frequency_shift,
 )
 local(
   fft_bin, a,  /* Iterators */
   g_rand1, g_rand2, g_rand3, g_rand4, tmp, /* Random numbers */
   ts, k, /* Swell dynamics related */
+  current_shift, hz_shift,
 )
 (
   g_rand1 = rand();
@@ -223,11 +228,25 @@ local(
     tmp = octaver * k;
     a = 0;
     
-    loop(fft_size/2,
-      nrg[a] += tmp * nrg[fft_bin];
-      nrg[a + 1] += tmp * nrg[fft_bin + 1];
-      fft_bin += 2;
-      a += 4;
+    frequency_shifter_mode ? (
+      // Max shift is 3520 Hz
+      hz_shift = 3520 * exp( (1.0 - frequency_shift) * log(20/3520) );
+      current_shift = 4 * hz_shift * fft_size / srate;
+      current_shift = 2 * floor(current_shift / 2);
+      
+      fft_bin = current_shift + 2;
+      loop(fft_size/2 - current_shift / 2 - 2,
+        nrg[fft_bin] += tmp * nrg[fft_bin - current_shift];
+        nrg[fft_bin + 1] += tmp * nrg[fft_bin + 1 - current_shift]; //524
+        fft_bin += 2;
+      );
+    ) : (
+      loop(fft_size/2,
+        nrg[a] += tmp * nrg[fft_bin];
+        nrg[a + 1] += tmp * nrg[fft_bin + 1];
+        fft_bin += 2; 
+        a += 4;
+      );
     );
   );
   
