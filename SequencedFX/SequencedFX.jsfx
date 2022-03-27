@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.79
+version: 0.81
 author: Joep Vanlier
-changelog: Add experimental modulation depth on Karplus delay. Allow dragging numeric values more quickly.
+changelog: Added frequency shifter.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -71,6 +71,8 @@ slider31:cutoff_atk=0<0,1,0.0001>-Envelope Rise
 slider32:cutoff_decay=0<0,1,0.0001>-Envelope Decay
 slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
 slider34:pitch_shifter_pitch=0<-24,24,.0001>-Pitch Shift
+slider35:freq_shifter_shift=0.5<0,1,0.000001>-Frequency shift
+slider36:freq_shifter_enabled=0<0,1,1>-Frequency Shifter Enabled
 
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:midi_note_pattern_select=120<0,127,1>-First Pattern
@@ -120,7 +122,7 @@ crossfade_samples = 128*2;
 pi_inv_crossfade_samples = $pi / crossfade_samples;
 
 fixed_effects = 8;
-free_effects = 11;
+free_effects = 12;
 function from_order_mem()
 (
   effect1 = order_mem[0];
@@ -133,6 +135,7 @@ function from_order_mem()
   effect8 = order_mem[7];
   effect9 = order_mem[8];
   effect10 = order_mem[9];
+  effect11 = order_mem[10];
 
   effect1 = effect1 ? effect1 : 1;
   effect2 = effect2 ? effect2 : 2;
@@ -144,6 +147,7 @@ function from_order_mem()
   effect8 = effect8 ? effect8 : 8;
   effect9 = effect9 ? effect9 : 9;
   effect10 = effect10 ? effect10 : 10;
+  effect11 = effect11 ? effect11 : 11;
 );
 
 function to_order_mem()
@@ -159,6 +163,7 @@ function to_order_mem()
   order_mem[7] = effect8;
   order_mem[8] = effect9;
   order_mem[9] = effect10;
+  order_mem[10] = effect11;
 );
 
 function time_func(func, t)
@@ -559,6 +564,10 @@ function update_current_levels()
   
   current_karplus_mod_depth = karplusModDepthKnob.getCurrentValue();
   current_karplus_mod_rate = karplusModRateKnob.getCurrentValue();
+  
+  current_freq_shifter_pitch = freqShifterPitchKnob.getCurrentValue();
+  current_freq_shifter_dry = freqShifterDry.getCurrentValue();
+  current_freq_shifter_wet = freqShifterWet.getCurrentValue();
 );
 
 function init_controls()
@@ -652,6 +661,10 @@ function init_controls()
   karplusModDepthKnob.init_knob(0.8, 0, 0, 0);
   karplusModRateKnob.init_knob(2, 0, 0, 0);
   
+  freqShifterPitchKnob.init_knob(1, 0, 35, 0.5);
+  freqShifterDry.init_knob(64, -64, 0, -64);
+  freqShifterWet.init_knob(64, -64, 0, 0);
+  
   update_current_levels();
 );
 
@@ -700,6 +713,7 @@ function pattern_update()
     
     record_values = current_pattern + 16 * max_segments;
     playback_values = current_pattern + 17 * max_segments;
+    freq_pitch_shifter_values = current_pattern + 18 * max_segments;
     
     modulator1_values = current_pattern + 30 * max_segments;
     modulator2_values = current_pattern + 31 * max_segments;
@@ -1064,6 +1078,7 @@ init_playhead();
   current_cutoff_decay = cutoffDecayKnob.getCurrentValue();
   current_cutoff_sustain = cutoffSustainKnob.getCurrentValue();
   current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
+  current_freq_shifter_pitch = freqShifterPitchKnob.getCurrentValue();
 
 @block
 radians_to_dt = 2.0 * $pi / srate;
@@ -1377,6 +1392,10 @@ file_var(0, loop_point);
 
 karplusVoicesKnob.serialize_knob();
 karplusDetune.serialize_knob();
+
+freqShifterPitchKnob.serialize_knob();
+freqShifterDry.serialize_knob();
+freqShifterWet.serialize_knob();
 
 !writing ? (
   idx = 0;
@@ -2055,6 +2074,38 @@ mmsg ? (
   );
 );
 
+function process_freq_shifter()
+instance(current, dry, wet, c_wet, c_dry, c_pitch, shift)
+local()
+global(log10d20_conversion,
+       bigger_update, srate,
+       ssl, ssr,
+       freq_pitch_shifter_target,
+       current_freq_shifter_pitch, current_freq_shifter_dry, current_freq_shifter_wet)
+(
+  current = 0.9992 * current + 0.0008 * freq_pitch_shifter_target;
+
+  current > .000000001 ? (
+    bigger_update ? (
+      c_wet = 0.994 * c_wet + 0.006 * current_freq_shifter_wet;
+      c_dry = 0.994 * c_dry + 0.006 * current_freq_shifter_dry;
+      
+      dry = c_dry == -64 ? 0 : exp(log10d20_conversion * c_dry) * (1.0 - current);
+      wet = c_wet == -64 ? 0 : exp(log10d20_conversion * c_wet) * current;
+      c_pitch = 0.94 * c_pitch + 0.06 * current_freq_shifter_pitch;
+      
+      shift = current_freq_shifter_pitch > 0.5 ? (
+        0.25 * 22050 * exp((2.0 - 2.0 * current_freq_shifter_pitch) * log(1 / srate));
+      ) : (
+        - 0.25 * 22050 * exp((2 * current_freq_shifter_pitch) * log(1 / srate));
+      );
+      this.init_cheapest_freq_shifter(shift);
+    );
+    
+    this.eval_cheapest_freq_shifter(dry, 9 * wet);
+  );
+);
+
 update_time_info();
 target_position += 1; /* Target position moves with the track */
 
@@ -2257,6 +2308,7 @@ jump_schedule.eval_jump();
   
   karplus_target = abs(karplus_values[sequencer_index]);
   pitch_shifter_target = abs(pitch_shifter_values[sequencer_index]);
+  freq_pitch_shifter_target = abs(freq_pitch_shifter_values[sequencer_index]);
   delay_target = abs(delay_values[sequencer_index]);
   chorus_target = abs(chorus_values[sequencer_index]);
   
@@ -2367,7 +2419,7 @@ current_playhead_level > .000000001 ? (
 
 function do_effect(effect_idx)
 (
-  effect_idx == 1 ? (
+  ( effect_idx == 1) ? (
     pitch_shifter_enabled ? process_pitch_shifter();
   ) : ( effect_idx == 2 ) ? (
     degrade_enabled ? process_degrade();
@@ -2427,6 +2479,8 @@ function do_effect(effect_idx)
     delay_enabled ? delay.process_delay();
   ) : ( effect_idx == 10 ) ? (
     chorus_enabled ? chorus.process_chorus();
+  ) : ( effect_idx == 11 ) ? (
+    freq_shifter_enabled ? freqshifter.process_freq_shifter();
   );
 );
 
@@ -2440,11 +2494,12 @@ do_effect(effect7);
 do_effect(effect8);
 do_effect(effect9);
 do_effect(effect10);
+do_effect(effect11);
 
 spl0 = ssl;
 spl1 = ssr;
 
-@gfx 1009 665
+@gfx 1009 695
 current_cursor = randomize_toggle.value ? 32515 : 32512;
 
 function convert_tempos(target_sync_mode)
@@ -2518,7 +2573,7 @@ function setup_theme()
   base_g = .1;
   base_b = .1;
   
-  size_factor = gfx_h / 665; //(665 + (modrow1.h - 2 * block_width) + (modrow2.h - 2 * block_width))
+  size_factor = gfx_h / 695; //(665 + (modrow1.h - 2 * block_width) + (modrow2.h - 2 * block_width))
   size_factor = min(size_factor, gfx_w / 910); // 1009
   
   scaling = gfx_ext_retina == 2 ? 1 : 0;
@@ -2570,6 +2625,7 @@ function setup_theme()
     s_SLOWDOWN = sprintf(78, "SLOWDOWN");
     s_RETRIGGER = sprintf(79, "RETRIGGER");
     s_REVERSE = sprintf(80, "REVERSE");
+    s_FREQ_SHIFT = sprintf(81, "FREQ SHIFTER");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2587,6 +2643,7 @@ function setup_theme()
     s_SLOWDOWN = sprintf(78, "Slowdown");
     s_RETRIGGER = sprintf(79, "Retrigger");
     s_REVERSE = sprintf(80, "Reverse");
+    s_FREQ_SHIFT = sprintf(81, "Frequency shifter");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2604,6 +2661,7 @@ function setup_theme()
     s_SLOWDOWN = sprintf(78, "Slowdown");
     s_RETRIGGER = sprintf(79, "Retrigger");
     s_REVERSE = sprintf(80, "Reverse");
+    s_FREQ_SHIFT = sprintf(81, "Frequency shifter");
   );
 
   style == 0 ? (
@@ -3388,6 +3446,14 @@ function draw_effect(row, effect_idx)
   ) : ( effect_idx == 8 ) ? ( y_current = process_effect_row(row, 21, filt2_values, x_current, y_current, "Filter 2", 1, 23, "Filter 2");
   ) : ( effect_idx == 9 ) ? ( y_current = process_effect_row(row, 22, delay_values, x_current, y_current, "Delay", 1, 24, "Delay");
   ) : ( effect_idx == 10 ) ? ( y_current = process_effect_row(row, 23, chorus_values, x_current, y_current, "Chorus", 1, 9, "Chorus");
+  ) : ( effect_idx == 11 ) ? (
+    y_current = process_effect_row(row, 26, freq_pitch_shifter_values, x_current, y_current, "Frequency shifter", 1, 36, "Frequency shifter");
+    gfx_setfont(BETA_FONT, "Arial", 10 * (1 + scaling));
+    gfx_set(1, 1, 1, 1);
+    gfx_x = x_current - 1;
+    gfx_y = y_current - block_width;
+    gfx_printf(" BETA");
+    gfx_y = y_current;
   );
 );
 
@@ -3401,6 +3467,7 @@ y_current = draw_effect(13, effect7);
 y_current = draw_effect(14, effect8);
 y_current = draw_effect(15, effect9);
 y_current = draw_effect(16, effect10);
+y_current = draw_effect(17, effect11);
 
 modrow1.randomize = randomizing_modulator_a;
 y_current = modrow1.process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
@@ -4191,6 +4258,29 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   shifterSelect.selection_button(0, cX, cY - .7 * knobSize, 2.5 * block_width, block_width - 4, "Transients", edge_r, edge_g, edge_b, "Uses shorter window sizes.");
   shifterSelect.selection_button(1, cX, cY + .3 * knobSize, 2.5 * block_width, block_width - 4, "Melody", edge_r, edge_g, edge_b, "Uses longer window sizes.\nLeads to better phase alignment, but poor transient preservation.");
   shifter_mode = shifterSelect.value;
+) : ( selected_details == 26 ) ? (
+  // Freq shifter
+  nextPanel = drawPanel(s_FREQ_SHIFT, cX, cY - 1.5 * knobSize, 11.125*knobSpacing, panelHeight, freq_shifter_enabled);
+  
+  cX += knobSize * 1.35;
+  print_shift = 
+    current_freq_shifter_pitch > 0.5 ? (
+      0.25 * 22050 * exp((2.0 - 2.0 * current_freq_shifter_pitch) * log(1 / srate));
+    ) : (
+      - 0.25 * 22050 * exp((2 * current_freq_shifter_pitch) * log(1 / srate));
+    );
+  freqShifterPitchKnob.knob_set_display(sprintf(15, "%d Hz", print_shift), freq_shifter_enabled);
+  freqShifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Shift", "Frequency shift", current_freq_shifter_pitch, 1, 1, 1);
+  
+  gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * freq_shifter_enabled);
+  
+  cX += 2.5*knobSize;
+  freqShifterDry.knob_set_display(DB_SLIDER, freq_shifter_enabled);
+  freqShifterDry.drawAndProcess(cX, cY, knobSize, "Dry", "Dry signal level.", current_freq_shifter_dry, 1, 1, 1);
+  
+  cX += 2.5*knobSize;
+  freqShifterWet.knob_set_display(DB_SLIDER, freq_shifter_enabled);
+  freqShifterWet.drawAndProcess(cX, cY, knobSize, "Wet", "Wet signal level.", current_freq_shifter_wet, 1, 1, 1);
 ) : ( selected_details == 20 ) ? (
   // Modulation FX
   min_degrade = 3;
