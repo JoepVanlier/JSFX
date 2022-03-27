@@ -1,8 +1,8 @@
 desc:Saike Reflectosaurus (beta)
 tags: multi-tap delay plugin
-version: 0.103
+version: 0.104
 author: Joep Vanlier
-changelog: Fix bug which resulted in hint label font being huge.
+changelog: Added economy mode for FFT node. Added frequency shifter as send effect.
 license: MIT
 provides:  
   Reflectosaurus_Dependencies/*
@@ -107,11 +107,27 @@ slider63:Inertia=50<0,500,.001>-Inertia
 slider64:WetGain=0<-32,32,.001>-Gain
 
 @init
-nShapers = 11;
+nShapers = 12;
 allow_updates = 1;
 gfx_ext_retina = 1;
 quickSwitch = 1;
 UPDATE_INTERVAL = 4;
+
+
+// Used for A/B testing when a fixed seed is needed.
+/*seed = 0;
+function rand()
+local(a, c, m)
+global(seed)
+instance()
+(
+  m = 2147483648;
+  c = 12345;
+  a = 1103515245;
+//  seed = (a * seed + c) % m;
+  seed
+);*/
+
 
   function init_lpg_time_constants()
   local(lpg_attack, lpg_decay)
@@ -569,30 +585,306 @@ function windowBlock()
       );
     );
 
+
+function window_and_fft()
+instance(fft_mem, fftSize)
+global()
+local()
+(
+  this.windowBlock();
+     
+  // FFT this block
+  fft(fft_mem, fftSize);
+  fft_permute(fft_mem, fftSize);
+);
+
+
+function calc_fft_energy()
+local(magPtr, r1, i1, r2, i2, re1, im1, re2, im2, fwd, bwd)
+global()
+instance(fft_mem, mag_mem, fftSize)
+(
+  magPtr      = mag_mem;
+  re1         = fft_mem[] + fft_mem[];
+  re2         = fft_mem[1] + fft_mem[1];
+  magPtr[]    = re1; magPtr += 1;
+  magPtr[]    = re2; magPtr += 1;
+   
+  // Decompose into magnitude and phase
+  fwd       = 2;
+  bwd       = fftSize;
+  loop(fftSize/2 - 1,
+    bwd = 2*fftSize - fwd;
+    r1  = fft_mem[fwd];
+    i1  = fft_mem[fwd + 1];
+    r2  = fft_mem[bwd];
+    i2  = fft_mem[bwd + 1];
+     
+    re1 = r1 + r2;
+    im1 = i1 - i2;
+    re2 = i1 + i2;
+    im2 = r2 - r1;
+     
+    magPtr[]    = sqrt(re1*re1 + im1*im1); magPtr += 1;
+    magPtr[]    = sqrt(re2*re2 + im2*im2); magPtr += 1;
+    fwd += 2;
+  );
+);
+
+
+function process_nrg()
+instance(
+  fftSize,
+  fft_mem, mag_mem, sharedBuffer,
+  shine, ice, ice_panned,
+  dampFactor, /* Verify that this is used */
+  )
+global(mode /* ??? */)
+local(tmp, i, i2, idamp,
+      fwd,
+      fftPtr, magPtr,
+      g_rand1, g_rand2, g_rand3, g_rand4)
+(
+  shine ? (
+    i = 0; i2 = 0;
+    idamp = shine * (1.0 - dampFactor);
+    loop(fftSize/2 - 1,
+      sharedBuffer[i2]      += idamp*sharedBuffer[i];
+      sharedBuffer[i2 + 1]  += idamp*sharedBuffer[i + 1];
+      i += 2;
+      i2 += 2;
+    );
+  );
+  
+  ice ? (
+    g_rand1 = 2*(1 + floor(rand() * 2));
+    g_rand2 = 0.01 * fftSize + rand() * fftSize/2;
+    g_rand4 = g_rand3 = 100 * rand() * (1.0-dampFactor) * ice;
+    
+    ice_panned ? (
+      tmp = rand();
+      g_rand3 = g_rand3 * sqrt(1.0-tmp);
+      g_rand4 = g_rand4 * sqrt(tmp);      
+    );
+    
+    i = 0;
+    i2 = 0;
+    tmp = 0;
+    loop(fftSize/2,
+      i2 < fftSize ? (
+        sharedBuffer[i2]      = sharedBuffer[i2] + g_rand3*sharedBuffer[2*i] * tmp;
+        sharedBuffer[i2 + 1]  = sharedBuffer[i2 + 1] + g_rand4*sharedBuffer[2*i + 1] * tmp;
+        tmp         = g_rand2 - i;
+        tmp         = -50 * tmp * tmp;
+        tmp         = exp(tmp / fftSize);
+      );
+      i += 1;
+      i2 += g_rand1;
+    );
+  );
+  
+  /////////////////////////////
+  // Perform processing here //
+  /////////////////////////////
+  fftPtr = sharedBuffer;
+  magPtr = mag_mem;
+  
+  loop( fftSize - 1,
+    mode == 1 ? (
+      fftPtr[] = fftPtr[]*dampFactor + magPtr[];
+    ) : (
+      fftPtr[] = max(fftPtr[]*dampFactor, magPtr[]);
+    );
+    fftPtr += 1;
+    magPtr += 1;
+  );      
+  
+  // Add basic verb from magnitude
+  fftPtr = sharedBuffer;
+  magPtr = mag_mem;
+  loop( fftSize - 1,
+    magPtr[] = fftPtr[];
+    fftPtr += 1;
+    magPtr += 1;
+  );
+  
+  /////////////////////////////
+  // End processing here     //
+  /////////////////////////////
+  
+  /* Fix issue with peak near nyquist */
+  fwd = 0;
+  loop(35,
+    mag_mem[fwd] = 0;
+    mag_mem[fftSize-fwd] = 0;
+    fwd += 1;
+  );
+  
+  /* TO DO: Investigate why this peak beyond the end of the buffer affects the FFT */
+  fwd = 0;
+  loop(4,
+    fft_mem[fftSize-fwd] = 0;
+    fft_mem[fftSize+fwd] = 0;
+    fwd += 1;
+  );
+);
+
+function generate_output_buffer()
+local(fwd, bwd,
+      magPtr, phasePtr,
+      ifftSize,
+      cMag, x1, x2, x1sq, x2sq, sqlen, isqlen,
+      ang1, ang2,
+      re1, im1, re2, im2)
+global()
+instance(mag_mem, phase_mem, fft_mem, fftSize)
+(
+  // Spectra at this point are interleaved                
+  // At this point magPtr contains interleaved magnitude  
+  // Phase contains interleaved phases                   
+  //      fft_mem[0] = 0;
+  //      fft_mem[1] = mag_mem[1] * cos(phase_mem[1]);
+   
+  fwd = 0;
+  bwd = fftSize;
+  magPtr = mag_mem;
+  phasePtr = phase_mem;
+  ifftSize = 1/fftSize;
+  ifftSize = .5*ifftSize; /* Normalizing constant */
+  
+  bwd = 2*fftSize;
+  loop(fftSize/2 - 1, 
+    // Spectrum 1
+    cMag        = ifftSize*magPtr[];
+    
+    // Generate random phase angle uniform on the circle without sin/cos (von Neumann1951)
+    // Note that technically for accurate uniformity, we should check whether x1sq+x2sq >= 1 and
+    // reject the sample if it is, but this is omitted. This leads to a slight bias in the angles 
+    // as this will be violated with a probability of 1-(pi/4).
+    x1 = 2 * rand()-1;
+    x2 = 2 * rand()-1;
+    x1sq = x1*x1;
+    x2sq = x2*x2;
+    sqlen = x1sq + x2sq;
+      
+    isqlen = 1.0 / sqlen;
+    ang1 = (x1sq - x2sq) * isqlen;
+    re1 = cMag * ang1; // Real
+    ang2 = (2.0 * x1 * x2) * isqlen;
+    im1 = cMag * ang2; // Imaginary   
+    
+    magPtr += 1;
+      
+    // Spectrum 2
+    cMag        = ifftSize*magPtr[];
+      
+    x1 = 2 * rand()-1;
+    x2 = 2 * rand()-1;
+    x1sq = x1*x1;
+    x2sq = x2*x2;
+    sqlen = x1sq + x2sq;
+        
+    isqlen = 1 / sqlen;
+    ang1 = (x1sq - x2sq) * isqlen;
+    re2 = cMag * ang1; // Real
+    ang2 = (2 * x1 * x2) * isqlen;
+    im2 = cMag * ang2; // Imaginary
+      
+    magPtr += 1;
+    
+    // Multiplex it back into the complex spectrum before backtrafo
+    fft_mem[fwd]      = re1 - im2;  // Real 1
+    fft_mem[bwd]      = re1 + im2;  // Real 2
+    
+    fft_mem[fwd + 1]  = re2 + im1;  // Imag 1
+    fft_mem[bwd + 1]  = re2 - im1;  // Imag 2
+      
+    fwd += 2;
+    bwd -= 2;
+  );
+);
+
+function window_and_ifft()
+local()
+instance(fft_mem, fftSize)
+global()
+(
+  fft_ipermute(fft_mem, fftSize);
+  ifft(fft_mem, fftSize);
+  this.windowBlock();
+);
+
+function write_to_output(outputPtr)
+instance(fft_mem, nSamples, outputBufStart, outputBufEnd, offset)
+local(fftPtr, outPtr)
+global()
+(
+  outPtr = outputPtr + offset;
+  fftPtr = fft_mem;
+  loop(nSamples,
+    ( outPtr > outputBufEnd ) ? outPtr = outputBufStart;
+    
+    outPtr[] += fftPtr[]; outPtr += 1; fftPtr += 1;
+    outPtr[] += fftPtr[]; outPtr += 1; fftPtr += 1;        
+  );
+);
+ 
 /* One overlapping chunk of the convolution */
 function updateVerb(verbOutputPtr, left, right)
-  instance(fft_mem, fft_end, ptr)
-  local()
-  global()
+  instance(fft_mem, nSamples, fft_end, write_mem, proc_mem, ptr, ticker)
+  local(blocksize)
+  global(eco)
   (
-    (ptr >= fft_end) ? (
-      this.processBlockVerb(verbOutputPtr);
-      ptr = fft_mem;
-      //memset(ptr, 0, 65536);
-    );
+    (eco) ? (
+      (ptr >= (write_mem + nSamples)) ? (
+        fft_mem = write_mem;
+        write_mem = proc_mem;
+        proc_mem = fft_mem;
+        this.window_and_fft();
+        ptr = write_mem;
+        ticker = 1;
+      );
+      // Spread out the STFT over multiple blocks
+      (ticker > 0) ? (
+        (ticker == 256) ? (
+          this.calc_fft_energy();
+        ) : (ticker == 512) ? (
+          this.process_nrg();
+        ) : (ticker == 1024) ? (
+          this.generate_output_buffer();
+        ) : (ticker == 1280) ? (
+          this.window_and_ifft();
+        ) : (ticker == 1536) ? (
+          this.write_to_output(verbOutputPtr);
+          ticker = -1;
+        );
       
-    ptr[]  = left;    ptr += 1;
-    ptr[]  = right;   ptr += 1;
+        ticker += 1;
+      );
+      
+      ptr[]  = left;    ptr += 1;
+      ptr[]  = right;   ptr += 1;
+    ) : (
+      fft_mem = write_mem;
+      (ptr >= (fft_mem + nSamples)) ? (
+        this.processBlockVerb(verbOutputPtr);
+        ptr = fft_mem;
+      );
+      
+      ptr[]  = left;    ptr += 1;
+      ptr[]  = right;   ptr += 1;
+    );
   );
     
-function initFFTBuffer(_fft_mem, _nSamples, _fftSize, _mag_mem, _phase_mem)
-  instance(fft_mem, ptr, fft_end, fftSize, nSamples, mag_mem, phase_mem)
+function initFFTBuffer(_fft_mem, _fft_mem2, _nSamples, _fftSize, _mag_mem, _phase_mem)
+  instance(fft_mem, ptr, fftSize, nSamples, mag_mem, phase_mem, write_mem, proc_mem)
   local()
   global()
   (
-    fft_mem   = _fft_mem;
+    write_mem = _fft_mem;
+    proc_mem = _fft_mem2;
+    fft_mem   = proc_mem;
     nSamples  = _nSamples;
-    fft_end   = _fft_mem + _nSamples;
     ptr       = _fft_mem;
     fftSize   = _fftSize;
     mag_mem   = _mag_mem;
@@ -601,7 +893,7 @@ function initFFTBuffer(_fft_mem, _nSamples, _fftSize, _mag_mem, _phase_mem)
     
 function initializeVerb(bufferPos)
   local(fftSize, nSamples, windowType,
-        bufMem, magMem, phaseMem, bufMem2, magMem2, phaseMem2, windowMem, sharedBuffer,
+        bufMem, magMem, phaseMem, bufMem2, magMem2, bufMem3, bufMem4, phaseMem2, windowMem, sharedBuffer,
         bufferDist )
   global()
   instance(verbBuf, verbBuf2, verbOutputPtr, verbOutputBufStart, verbOutputBufEnd)
@@ -623,13 +915,16 @@ function initializeVerb(bufferPos)
     /* Temporary buffer */
     sharedBuffer   = bufferPos + 8*bufferDist;
   
+    bufMem3         = bufferPos + 9*bufferDist;
+    bufMem4         = bufferPos + 10*bufferDist;
+  
     fftSize     = 2048*8*2;
     nSamples    = 1024*8*2;
     windowType  = 0;
 
-    verbBuf.initFFTBuffer(bufMem, nSamples, fftSize, magMem, phaseMem);  
+    verbBuf.initFFTBuffer(bufMem, bufMem3, nSamples, fftSize, magMem, phaseMem);  
     verbBuf.initWindow(windowMem, windowType, nSamples);
-    verbBuf2.initFFTBuffer(bufMem2, nSamples, fftSize, magMem2, phaseMem2); 
+    verbBuf2.initFFTBuffer(bufMem2, bufMem4, nSamples, fftSize, magMem2, phaseMem2); 
     verbBuf2.initWindow(windowMem, windowType, nSamples);
     
     verbOutputBufStart      = verbOutputBufStart;
@@ -645,7 +940,7 @@ function initializeVerb(bufferPos)
     
     verbBuf2.ptr += nSamples/2;
     
-    bufferPos + 9*bufferDist
+    bufferPos + 11*bufferDist
   );
 
 function processVerb(inL, inR)
@@ -1163,6 +1458,8 @@ function updateNodeBlock()
       invdegrade = 1.0/degrade;
     ) : ( rectify == 10 ) ? (
       this.lpg.lpg_init(saturationGain/36);
+    ) : ( rectify == 11 ) ? (
+      this.freq_shifter.init_cheap_freq_shifter(0.25 * srate * exp((1.0 - saturationGain / 36) * log(20/srate)));
     );
     
     pitch ? (
@@ -1391,6 +1688,10 @@ local(factor, t)
       this.lpg.lpg_eval(l, r);
       l = this.lpg.lOut;
       r = this.lpg.rOut;
+    ) : ( rectify == 11 ) ? (
+      this.freq_shifter.eval_cheap_freq_shifter(l, r);
+      l = 8 * this.freq_shifter.outL;
+      r = 8 * this.freq_shifter.outR;
     );
         
     // Re-emphasize after shaper for warmth
@@ -2555,7 +2856,7 @@ function Init()
     freemem = node9.initializeAllpassBuffers(freemem);
     freemem = node10.initializeAllpassBuffers(freemem);
  
-    pitchBlockSize = 4*4096; /* We have 64 blocks of this */
+    pitchBlockSize = 2*4096; /* We have 64 blocks of this */
     freemem = (fftmem1 = freemem) + pitchBlockSize;
     freemem = (fftmem2 = freemem) + pitchBlockSize;
     freemem = (pitchBufferLocation1 = freemem) + pitchBlockSize;
@@ -2707,10 +3008,11 @@ file_var(0, pdcToggle);
 file_var(0, shift_pitch);
 file_var(0, pitch);
 file_var(0, freeNodes);
+file_var(0, eco);
 
 // Some extra padding to make sure that future variables start at zero.
-memset(0,0,100);
-file_mem(0,0,100);
+memset(0,0,99);
+file_mem(0,0,99);
 allow_updates = 1;
 
 updateToSliderNonScaledAll();
@@ -4331,8 +4633,8 @@ function processSettings(cX, cY)
          widget_r, widget_g, widget_b, widget_a,
          toggle_r, toggle_g, toggle_b, toggle_a,
          knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a,
-         panelY, panelPad, panelHeight, compensate_pdc, freeNodes)
-  instance(dcCorrectionToggle, sendSaturationToggle, pdcToggle, clampToggle)
+         panelY, panelPad, panelHeight, compensate_pdc, freeNodes, eco)
+  instance(dcCorrectionToggle, sendSaturationToggle, pdcToggle, clampToggle, ecoToggle)
   (
     gfx_set(edge_r, edge_g, edge_b, edge_a);
     x_start = cX - 2*(1+scaling);
@@ -4342,20 +4644,24 @@ function processSettings(cX, cY)
     drawPanel("SETTINGS", x_start - panelPad, y_start - panelPad, width + panelPad, panelHeight);
 
     dcCorrectionToggle.label = "DC Correction";
-    dcCorrectionToggle.drawToggle(cX+1.9*(1+scaling), cy - 1.2*knobSpacing, buttonSize, buttonSize, dc_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal.\n\nDisable when not needed as it costs CPU.");
+    dcCorrectionToggle.drawToggle(cX+1.9*(1+scaling), cy - 4.5 * buttonSize, buttonSize, buttonSize, dc_correction, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Correct DC of incoming signal.\n\nDisable when not needed as it costs CPU.");
     dc_correction = dcCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     sendSaturationToggle.label = "Saturate sends";
-    sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy - 1.2*buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.\n\nDisable when not needed as it costs CPU.");
+    sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy - 2.0 * buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.\n\nDisable when not needed as it costs CPU.");
     sendSaturation = sendSaturationToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
     pdcToggle.label = "Pitch PDC";
-    pdcToggle.drawToggle(cX+1.9*(1+scaling), cy + 1.9*buttonSize, buttonSize, buttonSize, compensate_pdc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch delay compensation.\n\nWhen enabled, the plugin reports an\napproximate pdc for the global pitch\nshifting.");
+    pdcToggle.drawToggle(cX+1.9*(1+scaling), cy + 0.7 * buttonSize, buttonSize, buttonSize, compensate_pdc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Pitch delay compensation.\n\nWhen enabled, the plugin reports an\napproximate pdc for the global pitch\nshifting.");
     compensate_pdc = pdcToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     clampToggle.label = "Free nodes";
-    clampToggle.drawToggle(cX+1.9*(1+scaling), cy + 5.2*buttonSize, buttonSize, buttonSize, freeNodes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "When enabled, nodes are no longer clamped to the\nvisible X-range, meaning they can be offscreen\nand require a different timing view to see.");
+    clampToggle.drawToggle(cX+1.9*(1+scaling), cy + 3.3*buttonSize, buttonSize, buttonSize, freeNodes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "When enabled, nodes are no longer clamped to the\nvisible X-range, meaning they can be offscreen\nand require a different timing view to see.");
     freeNodes = clampToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+    ecoToggle.label = "Eco FFT verb";
+    ecoToggle.drawToggle(cX+1.9*(1+scaling), cy + 5.8*buttonSize, buttonSize, buttonSize, eco, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "When enabled, the FFT node (reverb mode with\nthe cube)will have a slightly larger pre-delay in\nexchange for a reduction in the jitteriness of CPU\nusage. This can help with stuttery performance\nissues in low latency situations.\n");
+    eco = ecoToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
     
     /*sendSaturationToggle.drawToggle(cX+1.9*(1+scaling), cy + knobSpacing + buttonSize, buttonSize, buttonSize, sendSaturation, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Send saturation.\n\nWhen enabled, this toggle adds a saturator on the sum of\nnode inputs coming from other nodes. This can help stabilize\nsend cycles and/or can be used to add some character.");
     gfx_x = cX + 2*buttonSize + 1;
