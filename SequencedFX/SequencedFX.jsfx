@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.83
+version: 0.84
 author: Joep Vanlier
-changelog: Bump version in UI.
+changelog: Allow region selection and copy pasting. Select with shift + drag. Shift + right mouse then copies the selection after which you can paste with shift + right mouse.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -104,6 +104,7 @@ DRAG_EFFECT_2 = 4;
 DRAG_SOLO = 5;
 DRAG_MODSIZE = 6;
 DRAG_SETTING = 7;
+DRAG_AREA = 20;
 loaded_pattern = -1;
 TAPESTOP_MAX = 10;
 
@@ -689,6 +690,98 @@ function init_playhead()
   amp1 = 0;
 );
 
+FIXED_LINES = 7;
+function fixed_line_idx(idx)
+(
+  // Hardcoded lines that cannot be moved by the user
+  (idx < 1) ? (
+    16 // Record
+  ) : (idx < 2) ? (
+    17 // Playback
+  ) : (idx < 3) ? (
+    0 // Reset
+  ) : (idx < 4) ? (
+    1 // Speed
+  ) : (idx < 5) ? (
+    9 // Tape stop
+  ) : (idx < 6) ? (
+    3 // Retrigger
+  ) : (idx < 7) ? (
+    5 // Reverse
+  );
+);
+
+function free_lines_idx(idx)
+(
+  (idx < 1) ? (
+    11  // pitch shifter
+  ) : (idx < 2) ? (
+    8  // degrader
+  ) : (idx < 3) ? (
+    4  // filter
+  ) : (idx < 4) ? (
+    6 // gate
+  ) : (idx < 5) ? (
+    7 // reverb
+  ) : (idx < 6) ? (
+    10 // karplus
+  ) : (idx < 7) ? (
+    12 // mod
+  ) : (idx < 8) ? (
+    13 // filter2
+  ) : (idx < 9) ? (
+    14 // delay
+  ) : (idx < 10) ? (
+    15 // chorus
+  ) : (idx < 11) ? (
+    18 // freq
+  );
+);
+
+/* Maximum values for each effect */
+function get_max_value(idx)
+(
+  (idx < 1) ? (
+    1 // Reset
+  ) : (idx < 2) ? (
+    slowdown_scaling == 0 ? 24 : 4 // speed values
+  ) : (idx < 3) ? (
+    1 // UNUSED
+  ) : (idx < 4) ? (
+    6  // Retrigger
+  ) : (idx < 5) ? (
+    1 // Filter
+  ) : (idx < 6) ? (
+    1 // Reverse
+  ) : (idx < 7) ? (
+    1 // Gate / Vol Envelope
+  ) : (idx < 8) ? (
+    1 // Reverb
+  ) : (idx < 9) ? (
+    1 // Degrade
+  ) : (idx < 10) ? (
+    timeline_tapestop ? TAPESTOP_MAX : 1 // tapestop
+  ) : (idx < 11) ? (
+    1 // Karplus / Pitched Delay
+  ) : (idx < 12) ? (
+    1 // Pitch shifter
+  ) : (idx < 13) ? (
+    1 // Modulation FX
+  ) : (idx < 14) ? (
+    1 // Filter 2
+  ) : (idx < 15) ? (
+    1 // Delay
+  ) : (idx < 16) ? (
+    1 // Chorus
+  ) : (idx < 17) ? (
+    8 // Record
+  ) : (idx < 18) ? (
+    8
+  ) : (idx < 19) ? (
+    1 // Frequency Shifter
+  );
+);
+
 function pattern_update()
 (
   (loaded_pattern != current_pattern_index) ? (
@@ -985,6 +1078,7 @@ freemem = 0;
 pattern_size = max_segments * max_effects;
 freemem = (pattern_buffer = freemem) + pattern_size * max_stored_patterns;
 freemem = (copy_buffer = freemem) + pattern_size;
+freemem = (selection_buffer = freemem) + pattern_size;
 freemem = (midimem = freemem) + 32768;
 freemem = (note_history = freemem) + 32768;
 midi.initializeMIDI(midimem, note_history, 1, 1);
@@ -3400,7 +3494,7 @@ draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 gfx_set(1, 1, 1, .1);
 gfx_x = 150 * (1+scaling);
 gfx_y = 30 * (1+scaling);
-gfx_printf("v0.83");
+gfx_printf("v0.84");
 
 scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
@@ -3413,41 +3507,42 @@ grid_origin_y += 40 * (1 + scaling);
 x_current = grid_origin_x;
 y_current = grid_origin_y;
 
-select_colormap(16);
+MAX_ROWS = 18;
+select_colormap(MAX_ROWS);
 
 y_s = y_current;
-y_current = process_effect_row(6, 24, record_values, x_current, y_current, "Record Sample", 8, 8, "Record to a sample that can be played back");
+y_current = process_effect_row(6, 24, record_values, x_current, y_current, "Record Sample", get_max_value(16), 8, "Record to a sample that can be played back");
 gfx_setfont(BETA_FONT, "Arial", 10 * (1 + scaling));
 gfx_set(1, 1, 1, 1);
 gfx_x = x_current;
 gfx_y = y_current - block_width;
 gfx_printf(" BETA");
-y_current = process_effect_row(5, 25, playback_values, x_current, y_current, "Play Sample", 8, 7, "Playback from recorded sample.");
+y_current = process_effect_row(5, 25, playback_values, x_current, y_current, "Play Sample", get_max_value(17), 7, "Playback from recorded sample.");
 gfx_setfont(BETA_FONT, "Arial", 10 * (1 + scaling));
 gfx_set(1, 1, 1, 1);
 gfx_x = x_current;
 gfx_y = y_current - block_width;
 gfx_printf(" BETA");
-y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", 1, 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.\n\nNote that the first block cannot be removed.");
-y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", slowdown_scaling == 0 ? 24 : 4, 11, "Slow down playback.");
-y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", timeline_tapestop ? TAPESTOP_MAX : 1, 19, "Tape stop effect.");
-y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", 6, 13, "Retrigger last block N times.");
-y_current = process_effect_row(4, 5, reverse_values, x_current, y_current, "Reverse", 1, 14, "Reverse playhead playing a reversed\nversion of the last block.");
+y_current = process_effect_row(0, 1, reset_values, x_current, y_current, "Reset", get_max_value(0), 10, "Reset the playhead to the current position.\n\nThis is often useful after a slowdown effect to\nmake sure we catch up to the current position.\n\nNote that the first block cannot be removed.");
+y_current = process_effect_row(1, 2, speed_values, x_current, y_current, "Slowdown", get_max_value(1), 11, "Slow down playback.");
+y_current = process_effect_row(2, 10, tapestop_values, x_current, y_current, "Tape Stop", get_max_value(9), 19, "Tape stop effect.");
+y_current = process_effect_row(3, 4, retrig_values, x_current, y_current, "Retrigger", get_max_value(3), 13, "Retrigger last block N times.");
+y_current = process_effect_row(4, 5, reverse_values, x_current, y_current, "Reverse", get_max_value(5), 14, "Reverse playhead playing a reversed\nversion of the last block.");
 
 function draw_effect(row, effect_idx)
 (
-  effect_idx == 1 ? ( process_effect_row(row, 12, pitch_shifter_values, x_current, y_current, "Pitch Shifter", 1, 21, "Apply a pitch shifter.")
-  ) : ( effect_idx == 2 ) ? ( y_current = process_effect_row(row, 9, degrade_values, x_current, y_current, "Degrade", 1, 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.")
-  ) : ( effect_idx == 3 ) ? ( y_current = process_effect_row(row, 7, filt_values, x_current, y_current, "Filter", 1, 16, "Choose from various (non-)linear filters to apply to the audio.");
-  ) : ( effect_idx == 4 ) ? ( y_current = process_effect_row(row, 6, gate_values, x_current, y_current, "Volume Envelope", 1, 15, "Gate the audio.");
-  ) : ( effect_idx == 5 ) ? ( y_current = process_effect_row(row, 8, reverb_values, x_current, y_current, "Reverb", 1, 17, "Apply reverb to the audio.");
-  ) : ( effect_idx == 6 ) ? ( y_current = process_effect_row(row, 11, karplus_values, x_current, y_current, "Pitched Delay", 1, 20, "Apply a pitched delay effect");
-  ) : ( effect_idx == 7 ) ? ( y_current = process_effect_row(row, 20, modulation_fx_values, x_current, y_current, "Modulation FX", 1, 22, "Modulation effects");
-  ) : ( effect_idx == 8 ) ? ( y_current = process_effect_row(row, 21, filt2_values, x_current, y_current, "Filter 2", 1, 23, "Filter 2");
-  ) : ( effect_idx == 9 ) ? ( y_current = process_effect_row(row, 22, delay_values, x_current, y_current, "Delay", 1, 24, "Delay");
-  ) : ( effect_idx == 10 ) ? ( y_current = process_effect_row(row, 23, chorus_values, x_current, y_current, "Chorus", 1, 9, "Chorus");
+  effect_idx == 1 ? ( process_effect_row(row, 12, pitch_shifter_values, x_current, y_current, "Pitch Shifter", get_max_value(11), 21, "Apply a pitch shifter.")
+  ) : ( effect_idx == 2 ) ? ( y_current = process_effect_row(row, 9, degrade_values, x_current, y_current, "Degrade", get_max_value(8), 18, "Apply degradation effects such as bit\nrate reduction, samplerate reduction\nor saturation to the audio.")
+  ) : ( effect_idx == 3 ) ? ( y_current = process_effect_row(row, 7, filt_values, x_current, y_current, "Filter", get_max_value(4), 16, "Choose from various (non-)linear filters to apply to the audio.");
+  ) : ( effect_idx == 4 ) ? ( y_current = process_effect_row(row, 6, gate_values, x_current, y_current, "Volume Envelope", get_max_value(6), 15, "Gate the audio.");
+  ) : ( effect_idx == 5 ) ? ( y_current = process_effect_row(row, 8, reverb_values, x_current, y_current, "Reverb", get_max_value(7), 17, "Apply reverb to the audio.");
+  ) : ( effect_idx == 6 ) ? ( y_current = process_effect_row(row, 11, karplus_values, x_current, y_current, "Pitched Delay", get_max_value(10), 20, "Apply a pitched delay effect");
+  ) : ( effect_idx == 7 ) ? ( y_current = process_effect_row(row, 20, modulation_fx_values, x_current, y_current, "Modulation FX", get_max_value(12), 22, "Modulation effects");
+  ) : ( effect_idx == 8 ) ? ( y_current = process_effect_row(row, 21, filt2_values, x_current, y_current, "Filter 2", get_max_value(13), 23, "Filter 2");
+  ) : ( effect_idx == 9 ) ? ( y_current = process_effect_row(row, 22, delay_values, x_current, y_current, "Delay", get_max_value(14), 24, "Delay");
+  ) : ( effect_idx == 10 ) ? ( y_current = process_effect_row(row, 23, chorus_values, x_current, y_current, "Chorus", get_max_value(15), 9, "Chorus");
   ) : ( effect_idx == 11 ) ? (
-    y_current = process_effect_row(row, 26, freq_pitch_shifter_values, x_current, y_current, "Frequency shifter", 1, 36, "Frequency shifter");
+    y_current = process_effect_row(row, 26, freq_pitch_shifter_values, x_current, y_current, "Frequency shifter", get_max_value(18), 36, "Frequency shifter");
     gfx_setfont(BETA_FONT, "Arial", 10 * (1 + scaling));
     gfx_set(1, 1, 1, 1);
     gfx_x = x_current - 1;
@@ -3469,6 +3564,116 @@ y_current = draw_effect(15, effect9);
 y_current = draw_effect(16, effect10);
 y_current = draw_effect(17, effect11);
 
+
+function handle_drag(grid_origin_x, grid_origin_y, block_width, block_spacing, label_width)
+local(block_step, current_x, current_y, start_x, start_y, end_x, end_y, sel_ptr, bounce,
+      rect_origin_x, rect_origin_y, rect_width, rect_height, max_val)
+instance(xs, ys, xe, ye, area_marked, cx, cy, read_ptr, row)
+global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
+       drag_mode, DRAG_AREA, MAX_ROWS, n_segments, FIXED_LINES,
+       current_pattern, order_mem, selection_buffer, max_segments,
+       animate_copy)
+(
+  gfx_set(1, 1, 1, 1);
+  block_step = block_width + block_spacing;
+  
+  current_x = (mouse_x - (grid_origin_x + label_width + block_step)) / block_step;
+  current_y = (mouse_y - (grid_origin_y)) / block_step;
+
+  ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0)) ? (
+    DRAG_MODE = DRAG_AREA;
+    xs = current_x;
+    ys = current_y;
+    area_marked = 1;
+  );
+  
+  ((mouse_cap == 10) && (last_cap == 0) && area_marked) ? (
+    (area_marked == 1) ? (
+      // Copy to memory
+      area_marked = 2;
+      cy = start_y;
+      sel_ptr = selection_buffer;
+      loop(end_y - start_y,
+        animate_copy = 10;
+        // First effects are fixed, other ones are determined in order_mem
+        row = (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1]);
+        read_ptr = current_pattern + row * max_segments + start_x;
+        loop(end_x - start_x,
+          sel_ptr[] = read_ptr[];
+          sel_ptr += 1;
+          read_ptr += 1;
+        );
+        cy += 1;
+      );
+    ) : (area_marked == 2) ? (
+      // Paste
+      area_marked = 2;
+      cy = current_y;
+      sel_ptr = selection_buffer;
+      loop(min(end_y - start_y, MAX_ROWS - cy + 1),
+        // First effects are fixed, other ones are determined in order_mem
+        row = (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1]);
+        read_ptr = current_pattern + row * max_segments + current_x;
+        cx = current_x;
+        loop(end_x - start_x,
+          max_val = get_max_value(row);
+          (cx < (n_segments - 1)) ? read_ptr[] = min(max_val, max(-max_val, sel_ptr[]));
+          sel_ptr += 1;
+          read_ptr += 1;
+        );
+        cy += 1;
+        cx += 1;
+      );
+    );
+  );
+  
+  drag_mode == DRAG_AREA ? (
+    xe = current_x;
+    ye = current_y;
+    DRAG_MODE = (mouse_cap == 0) ? 0 : DRAG_MODE;
+  );
+  
+  start_x = min(xs, xe);
+  end_x = max(xs, xe);
+  start_y = min(ys, ye);
+  end_y = max(ys, ye);
+  start_x = min(max(0, floor(start_x)), n_segments);
+  end_x = min(max(0, ceil(end_x)), n_segments);
+  start_y = min(max(0, floor(start_y)), MAX_ROWS);
+  end_y = min(max(0, ceil(end_y)), MAX_ROWS);
+  
+  ((area_marked == 1) || (animate_copy > 0)) ? (
+    rect_origin_x = grid_origin_x + label_width + block_step + block_step * start_x;
+    rect_origin_y = grid_origin_y + block_step * start_y;
+    rect_width = block_step * (end_x - start_x);
+    rect_height = block_step * (end_y - start_y);
+  );
+  
+  (area_marked == 1) ? (
+    gfx_set(0.3, 0.3, 1, 0.001);
+    gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 1);
+  
+    gfx_set(0.3, 0.3, 1, 1);
+    gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 0);
+  );
+  (animate_copy > 0) ? (
+    bounce = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
+    gfx_set(0, 0, 0, 0.04 * animate_copy);
+    gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 1);
+    
+    gfx_set(0.3, 0.3, 1, animate_copy / 10);
+    gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 0);
+    animate_copy -= 1;
+    
+    gfx_x = rect_origin_x;
+    gfx_y = rect_origin_y;
+    gfx_set(1, 1, 1, animate_copy / 10);
+    gfx_drawstr("COPIED", 5, rect_origin_x + rect_width, rect_origin_y + rect_height);
+  );
+);
+
+block_selector.handle_drag(grid_origin_x, grid_origin_y, block_width, block_spacing, label_width);
+
 modrow1.randomize = randomizing_modulator_a;
 y_current = modrow1.process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
 randomizing_modulator_a = modrow1.randomize;
@@ -3478,7 +3683,7 @@ mod2_color_b = row_color_b * 2;
 mod2_color_a = 1.0;
 
 modrow2.randomize = randomizing_modulator_b;
-y_current = modrow2.process_modulation_row(14, 3, 51, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
+y_current = modrow2.process_modulation_row(15, 3, 51, modulator2_values, x_current, y_current, 2 * block_width, "Modulator B", "Modulator");
 randomizing_modulator_b = modrow2.randomize;
 mod3_color_r = row_color_r * 2;
 mod3_color_g = row_color_g * 2;
@@ -3492,6 +3697,9 @@ handle_effect_drag(fixed_effects, free_effects);
 
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
+
+
+
 
 // Control strip
 function selection_button(me, cx, cy, width, height, label, br, bg, bb, hint)
