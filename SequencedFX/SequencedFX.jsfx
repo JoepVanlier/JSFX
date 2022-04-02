@@ -2,7 +2,7 @@ desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
 version: 0.85
 author: Joep Vanlier
-changelog: Support copy pasting modulator automation.
+changelog: Support copy pasting modulator automation. Added randomization of selection.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -3575,12 +3575,12 @@ y_current = draw_effect(17, effect11);
 
 function handle_drag(me, grid_origin_x, grid_origin_y, block_width, block_height, block_spacing, label_width, drag, max_rows, row_offset)
 local(block_step, block_step_y, current_x, current_y, start_x, start_y, end_x, end_y, sel_ptr, bounce, bounce_y
-      rect_origin_x, rect_origin_y, rect_width, rect_height, max_val)
+      rect_origin_x, rect_origin_y, rect_width, rect_height, max_val, block_action)
 instance(xs, ys, xe, ye, area_marked, cx, cy, read_ptr, row, active_block)
 global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
        drag_mode, n_segments, FIXED_LINES,
        current_pattern, order_mem, selection_buffer, max_segments,
-       animate_copy)
+       animate_copy, randomize_block)
 (
   gfx_set(1, 1, 1, 1);
   block_step = block_width + block_spacing;
@@ -3597,14 +3597,17 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
     active_block = me;
   );
   
-  ((mouse_cap == 10) && (last_cap == 0) && area_marked && (active_block == me)) ? (
-    (area_marked == 1) ? (
+  block_action = ((mouse_cap == 10) && (last_cap == 0)) || randomize_block;
+  (block_action && area_marked && (active_block == me)) ? (
+    ((area_marked == 1) || randomize_block) ? (
       // Copy to memory
-      area_marked = 2;
+      (!randomize_block) ? (
+        area_marked = 2;
+        animate_copy = 10;
+      );
       cy = start_y;
       sel_ptr = selection_buffer;
       loop(end_y - start_y,
-        animate_copy = 10;
         // First effects are fixed, other ones are determined in order_mem
         row = row_offset ? (
           floor(cy + row_offset)
@@ -3612,10 +3615,23 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
           (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1])
         );
         read_ptr = current_pattern + row * max_segments + start_x;
-        loop(end_x - start_x,
-          sel_ptr[] = read_ptr[];
-          sel_ptr += 1;
-          read_ptr += 1;
+        
+        randomize_block ? (
+          // Randomize this block.
+          // row_offset > 0 is indicative that we are dealing with a modulator
+          max_val = get_max_value(row);
+          (row_offset == 0) ? (
+            randomize_row(read_ptr, end_x - start_x, max_val);
+          ) : (
+            randomize_row_modulator(read_ptr, end_x - start_x);
+          );
+        ) : (
+          // Copy behaviour
+          loop(end_x - start_x,
+            sel_ptr[] = read_ptr[];
+            sel_ptr += 1;
+            read_ptr += 1;
+          );
         );
         cy += 1;
       );
@@ -3633,14 +3649,16 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
         );
         read_ptr = current_pattern + row * max_segments + current_x;
         cx = current_x;
+        max_val = get_max_value(row);
+        
+        // Regular paste behaviour
         loop(end_x - start_x,
-          max_val = get_max_value(row);
-          (cx < (n_segments - 1)) ? read_ptr[] = min(max_val, max(-max_val, sel_ptr[]));
+          (cx < (n_segments)) ? read_ptr[] = min(max_val, max(-max_val, sel_ptr[]));
           sel_ptr += 1;
           read_ptr += 1;
+          cx += 1;
         );
         cy += 1;
-        cx += 1;
       );
     );
   );
@@ -3875,7 +3893,12 @@ cx = retrig_toggle.selection_button(1, cx, y_current + 2, 2.5 * block_width, blo
 
 cx += ctrl_spacing;
 
-cx = randomize_toggle.selection_button(-1, cx, y_current + 2, 3.85 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
+randomize_block = 0;
+cx = randomize_toggle.selection_button(-1, cx, y_current + 2, 3.85 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.\n\nAlternatively, select region with shift + left\nmouse button drag then press this button\nwith shift + left mouse button.");
+((randomize_toggle.value == 1) && (mouse_cap == 9)) ? (
+  randomize_toggle.value = 0;
+  randomize_block = 1;
+);
 
 y_current += block_width;
 
