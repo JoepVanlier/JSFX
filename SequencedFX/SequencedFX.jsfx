@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.84
+version: 0.85
 author: Joep Vanlier
-changelog: Allow region selection and copy pasting. Select with shift + drag. Shift + right mouse then copies the selection after which you can paste with shift + right mouse.
+changelog: Support copy pasting modulator automation.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -105,6 +105,7 @@ DRAG_SOLO = 5;
 DRAG_MODSIZE = 6;
 DRAG_SETTING = 7;
 DRAG_AREA = 20;
+DRAG_MODULATORS = 21;
 loaded_pattern = -1;
 TAPESTOP_MAX = 10;
 
@@ -735,6 +736,10 @@ function free_lines_idx(idx)
     15 // chorus
   ) : (idx < 11) ? (
     18 // freq
+  ) : ( idx < 31 ) ? (
+    30 // modulator A
+  ) : ( idx < 32 ) ? (
+    31 // modulator B
   );
 );
 
@@ -779,6 +784,9 @@ function get_max_value(idx)
     8
   ) : (idx < 19) ? (
     1 // Frequency Shifter
+  ) : (
+    // modulators
+    256
   );
 );
 
@@ -3494,7 +3502,7 @@ draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 gfx_set(1, 1, 1, .1);
 gfx_x = 150 * (1+scaling);
 gfx_y = 30 * (1+scaling);
-gfx_printf("v0.84");
+gfx_printf("v0.85");
 
 scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
@@ -3565,29 +3573,31 @@ y_current = draw_effect(16, effect10);
 y_current = draw_effect(17, effect11);
 
 
-function handle_drag(grid_origin_x, grid_origin_y, block_width, block_spacing, label_width)
-local(block_step, current_x, current_y, start_x, start_y, end_x, end_y, sel_ptr, bounce,
+function handle_drag(me, grid_origin_x, grid_origin_y, block_width, block_height, block_spacing, label_width, drag, max_rows, row_offset)
+local(block_step, block_step_y, current_x, current_y, start_x, start_y, end_x, end_y, sel_ptr, bounce, bounce_y
       rect_origin_x, rect_origin_y, rect_width, rect_height, max_val)
-instance(xs, ys, xe, ye, area_marked, cx, cy, read_ptr, row)
+instance(xs, ys, xe, ye, area_marked, cx, cy, read_ptr, row, active_block)
 global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
-       drag_mode, DRAG_AREA, MAX_ROWS, n_segments, FIXED_LINES,
+       drag_mode, n_segments, FIXED_LINES,
        current_pattern, order_mem, selection_buffer, max_segments,
        animate_copy)
 (
   gfx_set(1, 1, 1, 1);
   block_step = block_width + block_spacing;
+  block_step_y = block_height + block_spacing;
   
   current_x = (mouse_x - (grid_origin_x + label_width + block_step)) / block_step;
-  current_y = (mouse_y - (grid_origin_y)) / block_step;
+  current_y = (mouse_y - (grid_origin_y)) / block_step_y;
 
-  ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0)) ? (
-    DRAG_MODE = DRAG_AREA;
+  ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0) && (current_y < max_rows)) ? (
+    DRAG_MODE = drag;
     xs = current_x;
     ys = current_y;
     area_marked = 1;
+    active_block = me;
   );
   
-  ((mouse_cap == 10) && (last_cap == 0) && area_marked) ? (
+  ((mouse_cap == 10) && (last_cap == 0) && area_marked && (active_block == me)) ? (
     (area_marked == 1) ? (
       // Copy to memory
       area_marked = 2;
@@ -3596,7 +3606,11 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
       loop(end_y - start_y,
         animate_copy = 10;
         // First effects are fixed, other ones are determined in order_mem
-        row = (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1]);
+        row = row_offset ? (
+          floor(cy + row_offset)
+        ) : (
+          (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1])
+        );
         read_ptr = current_pattern + row * max_segments + start_x;
         loop(end_x - start_x,
           sel_ptr[] = read_ptr[];
@@ -3610,9 +3624,13 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
       area_marked = 2;
       cy = current_y;
       sel_ptr = selection_buffer;
-      loop(min(end_y - start_y, MAX_ROWS - cy + 1),
+      loop(min(end_y - start_y, max_rows - cy + 1),
         // First effects are fixed, other ones are determined in order_mem
-        row = (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1]);
+        row = row_offset ? (
+          floor(cy + row_offset)
+        ) : (
+          (cy < FIXED_LINES) ? fixed_line_idx(cy) : free_lines_idx(order_mem[cy - FIXED_LINES - 1])
+        );
         read_ptr = current_pattern + row * max_segments + current_x;
         cx = current_x;
         loop(end_x - start_x,
@@ -3627,53 +3645,57 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
     );
   );
   
-  drag_mode == DRAG_AREA ? (
+  ((drag_mode == drag) && (active_block == me)) ? (
     xe = current_x;
     ye = current_y;
     DRAG_MODE = (mouse_cap == 0) ? 0 : DRAG_MODE;
   );
   
-  start_x = min(xs, xe);
-  end_x = max(xs, xe);
-  start_y = min(ys, ye);
-  end_y = max(ys, ye);
-  start_x = min(max(0, floor(start_x)), n_segments);
-  end_x = min(max(0, ceil(end_x)), n_segments);
-  start_y = min(max(0, floor(start_y)), MAX_ROWS);
-  end_y = min(max(0, ceil(end_y)), MAX_ROWS);
+  (active_block == me) ? (
+    start_x = min(xs, xe);
+    end_x = max(xs, xe);
+    start_y = min(ys, ye);
+    end_y = max(ys, ye);
+    start_x = min(max(0, floor(start_x)), n_segments);
+    end_x = min(max(0, ceil(end_x)), n_segments);
+    start_y = min(max(0, floor(start_y)), max_rows);
+    end_y = min(max(0, ceil(end_y)), max_rows);
   
-  ((area_marked == 1) || (animate_copy > 0)) ? (
-    rect_origin_x = grid_origin_x + label_width + block_step + block_step * start_x;
-    rect_origin_y = grid_origin_y + block_step * start_y;
-    rect_width = block_step * (end_x - start_x);
-    rect_height = block_step * (end_y - start_y);
-  );
-  
-  (area_marked == 1) ? (
-    gfx_set(0.3, 0.3, 1, 0.001);
-    gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 1);
-  
-    gfx_set(0.3, 0.3, 1, 1);
-    gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 0);
-  );
-  (animate_copy > 0) ? (
-    bounce = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
-    gfx_set(0, 0, 0, 0.04 * animate_copy);
-    gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 1);
+    ((area_marked == 1) || (animate_copy > 0)) ? (
+      rect_origin_x = grid_origin_x + label_width + block_step + block_step * start_x;
+      rect_origin_y = grid_origin_y + block_step_y * start_y;
+      rect_width = block_step * (end_x - start_x);
+      rect_height = block_step_y * (end_y - start_y);
+    );
     
-    gfx_set(0.3, 0.3, 1, animate_copy / 10);
-    gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 0);
-    animate_copy -= 1;
+    (area_marked == 1) ? (
+      gfx_set(0.3, 0.3, 1, 0.001);
+      gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 1);
     
-    gfx_x = rect_origin_x;
-    gfx_y = rect_origin_y;
-    gfx_set(1, 1, 1, animate_copy / 10);
-    gfx_drawstr("COPIED", 5, rect_origin_x + rect_width, rect_origin_y + rect_height);
+      gfx_set(0.3, 0.3, 1, 1);
+      gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 0);
+    );
+    (animate_copy > 0) ? (
+      bounce = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
+      bounce_y = 0.25 * block_step_y * cos(- 0.25 * (10 - animate_copy));
+      gfx_set(0, 0, 0, 0.04 * animate_copy);
+      gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce_y, rect_width + 2 * bounce, rect_height + 2 * bounce_y, 1);
+      
+      gfx_set(0.3, 0.3, 1, animate_copy / 10);
+      gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce_y, rect_width + 2 * bounce, rect_height + 2 * bounce_y, 0);
+      animate_copy -= 1;
+      
+      gfx_x = rect_origin_x;
+      gfx_y = rect_origin_y;
+      gfx_set(1, 1, 1, animate_copy / 10);
+      gfx_drawstr("COPIED", 5, rect_origin_x + rect_width, rect_origin_y + rect_height);
+    );
   );
 );
 
-block_selector.handle_drag(grid_origin_x, grid_origin_y, block_width, block_spacing, label_width);
+block_selector.handle_drag(1, grid_origin_x, grid_origin_y, block_width, block_width, block_spacing, label_width, DRAG_AREA, MAX_ROWS, 0);
 
+modulator_origin_y = y_current;
 modrow1.randomize = randomizing_modulator_a;
 y_current = modrow1.process_modulation_row(3, 2, 50, modulator1_values, x_current, y_current, 2 * block_width, "Modulator A", "Modulator");
 randomizing_modulator_a = modrow1.randomize;
@@ -3698,8 +3720,7 @@ handle_effect_drag(fixed_effects, free_effects);
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
-
-
+block_selector.handle_drag(2, grid_origin_x, modulator_origin_y, block_width, 2 * block_width, block_spacing, label_width, DRAG_MODULATORS, 2, 30);
 
 // Control strip
 function selection_button(me, cx, cy, width, height, label, br, bg, bb, hint)
