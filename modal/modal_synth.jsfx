@@ -1,0 +1,119 @@
+desc:Partials
+
+slider1:gain_db=0<-150,12,1>gain (dB)
+slider4:damp=0.1<-2,2,0.0001>Damping
+slider3:relative_position=0.1<0.0001,0.999,0.001>Relative position
+slider5:freq_damp=-3<-6,-1,0.0001>Frequency Dependent Damping
+slider6:inharmonic=-4<-4, 0, 0.0001>Inharmonic
+slider7:stiffness=4.6<0,6,0.0001>Stiffness
+slider8:stiffness_exp=2.3<1,3.0,.0001>Stiffness Exponent
+slider9:include_long=0<0,1,{Off,On}>Include longitudinal modes
+slider10:base_note=0<-12,12,1>Base note
+slider11:force_fb=0<0,15,0.0001>Forced feedback
+slider12:partials=32<16,64,16>Partials
+slider18:midi_input=0<0,1,1{Off,On}>Midi input
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_kp_midi.jsfx-inc
+import saike_modal.jsfx-inc
+
+@init
+freemem = midi.init_midi(freemem);
+
+function update_notes()
+instance(notes_on, active_note_mem)
+global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, srate, pitch)
+local(scaling)
+(
+  // Update note parameters
+  scaling = 440;
+  pitch = scaling * 2 ^ ((active_note_mem[0] - 69) / 12);
+  notes_on ? string1.set_pars(scaling * 2 ^ ((active_note_mem[0] - 69) / 12));
+  notes_on > 1 ? string2.set_pars(scaling * 2 ^ ((active_note_mem[1] - 69) / 12));
+  notes_on > 2 ? string3.set_pars(scaling * 2 ^ ((active_note_mem[2] - 69) / 12));
+  notes_on > 3 ? string4.set_pars(scaling * 2 ^ ((active_note_mem[3] - 69) / 12));
+  notes_on > 4 ? string5.set_pars(scaling * 2 ^ ((active_note_mem[3] - 69) / 12));
+);
+
+@slider
+
+@block
+midi.midi_block();
+
+@sample
+midi.curSample += 1;
+midi_input ? (
+  midi.notes_remain ? (
+    midi.midi_sample();
+    midi.update_notes();
+  );
+);
+
+
+update_global_parameters();
+
+!midi_input ? (
+  mul = pow(2, base_note / 12);
+  string1.set_pars(220/2 * mul);
+  string2.set_pars(329.628/2 * mul);
+  string3.set_pars(261.63 * mul);
+  string4.set_pars(329.628 * mul);
+);
+
+f_hn = 0;
+f_b = 0;
+
+include_long ? (
+  string1.eval_long();
+  string2.eval_long();
+  string3.eval_long();
+  string4.eval_long();
+  string5.eval_long();
+);
+
+midi_input ? (
+  string1.eval_string(midi.notes_on > 0 ? f_h : 0);
+  string2.eval_string(midi.notes_on > 1 ? f_h : 0);
+  string3.eval_string(midi.notes_on > 2 ? f_h : 0);
+  string4.eval_string(midi.notes_on > 3 ? f_h : 0);
+  string5.eval_string(midi.notes_on > 4 ? f_h : 0);
+) : (
+  string1.eval_string(f_h);
+  string2.eval_string(f_h);
+  string3.eval_string(f_h);
+  string4.eval_string(f_h);
+);
+
+hammer = 0;
+
+hammer ? (
+  f_h = (1 + force_fb) * f_hn;
+  f_h += spl0;
+  mh = 4.9;
+  ah = -(1.0/mh) * fdy;
+  vh = vh + (1.0/srate) * ah;
+  yh = yh + (1.0/srate) * vh;
+  dy = - f_h + yh;
+  fdy = ((dy > 0) ? (10^stiffness) * dy^stiffness_exp : 0);
+  f_h = fdy;
+) : (
+  // No hammer
+  delay = 1;
+  delay ? (
+    f_h = (1 + force_fb) * f_hn;
+    f_h += spl0;
+    f_h = -(f_h > 0 ? (10^stiffness) * f_h^stiffness_exp : 0);
+  ) : (
+    f_h = f_delay;
+    f_delay = (1 + force_fb) * f_hn;
+    f_delay += spl0;
+    f_delay = -(f_delay > 0 ? (10^stiffness) * f_delay^stiffness_exp : 0);
+  );
+);
+
+spl0 = spl1 = f_b;
+
