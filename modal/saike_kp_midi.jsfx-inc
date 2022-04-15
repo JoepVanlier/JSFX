@@ -30,12 +30,14 @@ global()
 instance(note_next, note_mem, notes_remain, curSample, note_ptr)
 local(offset, msg1, msg2, msg3, note_on, note_off, mwCC)
 (
+  notes_remain = 0;
   note_ptr = note_mem;
   while (midirecv(offset,msg1,msg2,msg3)) (
     note_on = msg1>$x8F&&msg1<$xA0 && msg3!=0;
     note_off = (msg1>$x7F&&msg1<$x90) || (msg1>$x89&&msg1<$xA0 && msg3==0);
     mwCC = (msg1>$xAF&&msg1<$xC0);
-        
+    
+    notes_remain = 1;
     note_on ? (
       note_ptr[] = offset;
       note_ptr += 1;
@@ -55,7 +57,6 @@ local(offset, msg1, msg2, msg3, note_on, note_off, mwCC)
   note_ptr[]       = -1337;     // Signal end of note buffer
   note_ptr         = note_mem;
   curSample       = -1;        // Current sample in block
-  notes_remain    = 1;         // End of the note buffer?
   note_next       = note_ptr[];
 );
 
@@ -64,20 +65,26 @@ local(offset, msg1, msg2, msg3, note_on, note_off, mwCC)
 function midi_sample()
 instance(note_next, curSample, note_ptr, notes_remain, notes_on, note, velocity,
          active_note_mem, cur_cc, cc_target, max_notes)
-local(i)
-global()
+local(i, found)
+global(lastptr)
 (
   // Take notes from the stack until we hit the end marker -1
   while(note_next == curSample) (
     note_ptr += 1;
     (note_ptr[] > 0) ? ( // note-on
-      notes_on = notes_on + 1;
       velocity = note_ptr[]/127;
       note_ptr += 1;
       note = note_ptr[];
-      
-      // Add note to list of active notes
-      active_note_mem[notes_on - 1] = note;
+      found = 0; i=0;
+      loop(notes_on,
+        (active_note_mem[i] == note) ? found = 1;
+        i += 1;
+      );
+      !found ? (
+        notes_on = notes_on + 1;
+        // Add note to list of active notes
+        active_note_mem[notes_on - 1] = note;
+      );
     ) : (note_ptr[] == -1) ? ( // note-off
       notes_on = notes_on - 1;
       notes_on = max(0, notes_on);
@@ -115,6 +122,7 @@ global()
     
     // Avoid constantly dereferencing by picking up the next one
     note_next = note_ptr[];
+    lastptr = note_next;
     notes_remain = note_next != -1337;
   );
 );
