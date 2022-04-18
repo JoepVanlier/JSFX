@@ -3,9 +3,7 @@ function fft_mem(freemem)
 instance(prev_fft_size, fft_size
          overlap_factor,
          fft_interval,
-         in_fft_mem, out_fft_mem,
-         window_mem,
-         coeff_mem, mix_mem,
+         in_fft_mem, out_fft_mem, window_mem,
          input_mem, output_mem,
          fft_idx, output_idx,
          fft_scaling_factor,
@@ -13,23 +11,22 @@ instance(prev_fft_size, fft_size
 global()
 local(i, r, a0, a1, a2, a3, a4)
 (
-  fft_size = 256;
+  fft_size = 64;
   buffer_size = 65536;
+  
   /* Make sure we start on a boundary */
   freemem = ceil(freemem / 65536) * 65536;
-  freemem = (coeff_mem = freemem) + 2 * fft_size;
-  freemem = (mix_mem = freemem) + fft_size;
   freemem = (in_fft_mem = freemem) + 2 * fft_size;
   freemem = (out_fft_mem = freemem) + 2 * fft_size;
   freemem = (window_mem = freemem) + 2 * fft_size;
   freemem = (input_mem = freemem) + buffer_size;
   freemem = (output_mem = freemem) + buffer_size;
-  overlap_factor = 6;
+  overlap_factor = 4;
   
   output_idx = 0;
   fft_idx = 0;
-  fft_interval = 2 * fft_size/overlap_factor;
-  fft_scaling_factor = 0.5 / overlap_factor/fft_size;
+  fft_interval = 2 * fft_size / overlap_factor;
+  fft_scaling_factor = 1 / overlap_factor / overlap_factor / fft_size;
   
   // Hann
   a0 = 0.5;
@@ -56,103 +53,184 @@ local(i, r, a0, a1, a2, a3, a4)
   freemem
 );
 
-function set_pars_stft(f_0)
-global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, maxbin)
-local(k, f_k, omega_k, advance, bin, irate, partials, damp)
-instance(coeff_mem, mix_mem, win, wout, fft_size, fft_interval, overlap_factor, ticker)
+function string_mem(freemem, _fft_size, _fft_interval, _in_fft_mem, _out_fft_mem)
+instance(
+  max_partial,
+  bin_mem, coeff_mem, mix_mem, state_mem,
+  fft_size, fft_interval,
+  in_fft_mem, out_fft_mem,
+)
+local()
+global()
+(
+  // Allocate memory for this string, note that in and out fft_mem have to be preallocated.
+  
+  max_partial = 1024;
+  freemem = (bin_mem = freemem) + 2 * max_partial;
+  freemem = (coeff_mem = freemem) + 2 * max_partial;
+  freemem = (mix_mem = freemem) + 2 * max_partial;
+  freemem = (state_mem = freemem) + 2 * max_partial;
+  
+  fft_size = _fft_size;
+  fft_interval = _fft_interval;
+  in_fft_mem = _in_fft_mem;
+  out_fft_mem = _out_fft_mem;
+  
+  freemem
+);
+
+function set_pars_stft_basic(f_0)
+global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc)
+instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
 (
   ticker += 1;
   ticker > 256 ? (
     memset(coeff_mem, 0, 2 * fft_size);
     memset(mix_mem, 0, fft_size);
     
-    partials = floor(0.25 * srate / f_0);
+    partials = floor(0.5 * srate / f_0);
     irate = fft_interval / srate;
     
     k = 1;
+    k_inc = 1 + model;
+    idx = 0;
+    num_partials = 0;
     loop(partials,
       f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1));
-      (f_k < 0.5 * srate) ? (
-        omega_k = 2.0 * $pi * f_k;
+      omega_k = 2.0 * $pi * f_k;
+      advance = omega_k * fft_interval / srate;
+      bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+      
+      bin < (2 * fft_size) ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(- (base_damp + f_damp * omega_k) * irate);
         
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+          
+        mix_mem[num_partials] = Adivfs * sin(k * $pi * relative_position) * 100 * (k * soundboard_factor) / f_k;
+        num_partials += 1; idx += 2;
+      );
+      k += k_inc;
+    );
+    ticker = 0;
+  );
+);
+
+
+function set_pars_stft_messy(f_0)
+global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset)
+instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, fft_size);
+    
+    partials = floor(0.5 * srate / f_0);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    offset = 3;
+    loop(partials,
+      loop(2,
+        offset = 3 - offset;
+        f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1)) + offset * (1 + .05 * k * k) * (0.1 + relative_position);
+        omega_k = 2.0 * $pi * f_k;
         advance = omega_k * fft_interval / srate;
         bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
         
-        maxbin = max(maxbin, f_k);
-        damp = exp(- (base_damp + f_damp * omega_k) * irate);
-        coeff_mem[bin] = cos(advance) * damp;
-        coeff_mem[bin + 1] = sin(advance) * damp;
-        
-        mix_mem[0.5 * bin] = 0.000005 * sin(k * $pi * relative_position);// * (k * soundboard_factor);
+        bin < (2 * fft_size) ? (
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + f_damp * omega_k * (1 + f_k / 1000)) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+            
+          mix_mem[num_partials] = Adivfs * ((2 * floor(k / 2) != floor(k)) + 0.08) * 100 * (k * soundboard_factor) / f_k;
+          num_partials += 1; idx += 2;
+        );
       );
-      
       k += 1;
     );
     ticker = 0;
   );
 );
 
-function process_block(in_fft_mem, out_fft_mem)
-instance(fft_size, fft_interval, coeff_mem, mix_mem)
-global(bin, srate, freq, advance)
-local(f_bin, ix)
+function set_pars_stft(f_0)
+local()
+global(model)
+instance()
 (
-  fft_real(in_fft_mem, fft_size * 2);
-  fft_permute(in_fft_mem, fft_size);
- 
-  ix = 0;
-  loop(fft_size,
-    in_fft_mem[2 * ix] *= mix_mem[ix];
-    in_fft_mem[2 * ix + 1] *= mix_mem[ix];
-    ix += 1;
+  (model < 2) ? (
+    this.set_pars_stft_basic(f_0);
+  ) : (
+    this.set_pars_stft_messy(f_0);
   );
-  
-  
-  //convolve_c(out_fft_mem, coeff_mem, fft_size);
-  /*ix = 0;
-  loop(fft_size,
-    out_fft_mem[ix] += in_fft_mem[ix];
-    out_fft_mem[ix + 1] += in_fft_mem[ix + 1];
-    ix += 2;
-  );*/
-  
-  
-  
-  ix = 0;
-  loop(fft_size,
-    in_fft_mem[ix] += coeff_mem[ix] * out_fft_mem[ix] - coeff_mem[ix + 1] * out_fft_mem[ix+1];
-    in_fft_mem[ix+1] += coeff_mem[ix] * out_fft_mem[ix+1] + coeff_mem[ix + 1] * out_fft_mem[ix];
-    ix += 2;
-  );
-  
-  memcpy(out_fft_mem, in_fft_mem, fft_size * 2);
-  
-  
-  fft_ipermute(out_fft_mem, fft_size);
-  ifft_real(out_fft_mem, fft_size * 2);
 );
 
+function process_block(in_fft_mem, out_fft_mem, active)
+instance(fft_size, fft_interval, coeff_mem, mix_mem, state_mem, bin_mem, num_partials)
+global(srate)
+local(f_bin, ix, tix, tmp, bin, coeff_real, coeff_imag, state_real, state_imag)
+(
+  // Update the resonators
+  ix = 0; tix = 0;
+  convolve_c(state_mem, coeff_mem, num_partials);
+  
+  active ? (
+    loop(num_partials,
+      bin = bin_mem[ix];
+      state_mem[tix] += mix_mem[ix] * in_fft_mem[bin];
+      state_mem[tix + 1] += mix_mem[ix] * in_fft_mem[bin + 1];
+      
+      ix += 1; tix += 2;
+    );
+  );
+
+  ix = 0; tix = 0;
+  loop(num_partials,
+    bin = bin_mem[ix];
+    out_fft_mem[bin] += state_mem[tix];
+    out_fft_mem[bin + 1] += state_mem[tix + 1];
+    ix += 1; tix += 2;
+  );
+);
+
+
 function read_block(input_mem, input_idx, fft_loc, window_ptr, len, buffer_size)
-local()
+local(fft_ptr)
 instance()
 global()
 (
   input_idx -= len;
+  fft_ptr = fft_loc;
   input_idx < 0 ? input_idx += buffer_size;
   loop(len,
     input_idx == buffer_size ? input_idx = 0;
-    fft_loc[] = input_mem[input_idx] * window_ptr[];
+    fft_ptr[] = input_mem[input_idx] * window_ptr[];
     window_ptr += 1;
     input_idx += 1;
-    fft_loc += 1;
+    fft_ptr += 1;
   );
+  
+  fft_real(fft_loc, len);
+  fft_permute(fft_loc, len / 2);
 );
+
 
 function write_block(output_mem, output_idx, fft_ptr, window_ptr, len, buffer_size)
 local()
 instance()
 global()
 (
+  fft_ipermute(fft_ptr, len / 2);
+  ifft_real(fft_ptr, len);
+
   loop(len,
     (output_idx == buffer_size) ? output_idx = 0;
     output_mem[output_idx] += fft_ptr[] * window_ptr[];
@@ -162,37 +240,71 @@ global()
   );
 );
 
-function eval_string_stft(f_h)
-instance(fft_idx,
-         in_fft_mem, out_fft_mem, window_mem,
-         fft_interval, fft_size, 
-         input_mem, output_mem, buffer_size,
-         input_idx, output_idx,
-         f_hn, f_b)
+
+function read_stft(f_h)
+local()
 global()
-local(tmp)
+instance(
+  f_hn, f_b,
+  fft_idx, fft_interval,
+  input_mem, input_idx,
+  in_fft_mem, out_fft_mem, window_mem,
+  fft_size, buffer_size
+)
 (
   f_hn = f_b = 0;
   input_idx == buffer_size ? input_idx = 0;
   input_mem[input_idx] = f_h;
-
-  (fft_idx >= fft_interval) ? (
-    fft_idx = 0;
+  
+  (fft_idx == fft_interval) ? (
     read_block(input_mem, input_idx, in_fft_mem, window_mem, fft_size * 2, buffer_size);
-    this.process_block(in_fft_mem, out_fft_mem);
-    write_block(output_mem, output_idx, out_fft_mem, window_mem, fft_size * 2, buffer_size);
-    tmp = in_fft_mem;
-    in_fft_mem = out_fft_mem;
-    out_fft_mem = tmp;
+    memset(out_fft_mem, 0, fft_size * 2);
+    //memcpy(out_fft_mem, in_fft_mem, fft_size * 2);
   );
+  
+  input_idx += 1;
+);
 
+
+function write_stft()
+local()
+global()
+instance(
+  f_hn, f_b,
+  fft_idx, fft_interval,
+  output_mem, output_idx,
+  out_fft_mem, window_mem,
+  fft_size, buffer_size,
+)
+(
+  (fft_idx == fft_interval) ? (
+    write_block(output_mem, output_idx, out_fft_mem, window_mem, fft_size * 2, buffer_size);
+    fft_idx = 0;
+  );
+  
   output_idx == buffer_size ? output_idx = 0;
   f_hn = f_b = output_mem[output_idx];
   output_mem[output_idx] = 0;
-
+  
   fft_idx += 1;
-  input_idx += 1;
   output_idx += 1;
 );
 
+
+function eval_string_stft(f_h)
+instance(
+  fft_idx,
+  in_fft_mem, out_fft_mem,
+  fft_interval
+)
+global()
+local()
+(
+  (fft_idx == fft_interval) ? (    
+    this.process_block(in_fft_mem, out_fft_mem, abs(f_h) > 0);
+    fft_idx = 0;
+  );
+  
+  fft_idx += 1;
+);
 
