@@ -151,9 +151,108 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
           coeff_mem[idx] = cos(advance) * damp;
           coeff_mem[idx + 1] = sin(advance) * damp;
             
-          mix_mem[num_partials] = Adivfs * ((2 * floor(k / 2) != floor(k)) + 0.08) * 100 * (k * soundboard_factor) / f_k;
+          mix_mem[num_partials] = 0.5 * Adivfs * ((2 * floor(k / 2) != floor(k)) + 0.08) * 100 * (k * soundboard_factor) / f_k;
           num_partials += 1; idx += 2;
         );
+      );
+      k += 1;
+    );
+    ticker = 0;
+  );
+);
+
+function set_pars_stft_beam(f_0, clamped)
+global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials)
+instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, fft_size);
+    
+    partials = floor(0.5 * srate / f_0);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    loop(partials,
+      clamped ? (
+        (k == 1) ? (
+          f_k = f_0 * 0.59686420;
+        ) : ( k == 2 ) ? (
+          f_k = f_0 * 1.49417560;
+        ) : ( k == 3 ) ? (
+          f_k = f_0 * 2.50024690;
+        ) : ( k == 4 ) ? (
+          f_k = f_0 * 3.49998930;
+        ) : ( 
+          f_k = f_0 * (k - 0.5);
+        );
+      ) : (
+        (k == 1) ? (
+          f_k = f_0 * 1.5056187;
+        ) : ( k == 2 ) ? (
+          f_k = f_0 * 2.4997527;
+        ) : ( k == 3 ) ? (
+          f_k = f_0 * 3.5000107;
+        ) : ( 
+          f_k = f_0 * (k + 0.5);
+        );
+      );
+      f_k *= (1 + inharm * k);
+      omega_k = 2.0 * $pi * f_k;
+      advance = omega_k * fft_interval / srate;
+      bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+      
+      bin < (2 * fft_size) ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(- (base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
+        
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+          
+        mix_mem[num_partials] = Adivfs * sin(k * $pi * relative_position) * 100 * (k * soundboard_factor) / f_k;
+        num_partials += 1; idx += 2;
+      );
+      k += 1;
+    );
+    ticker = 0;
+  );
+);
+
+function set_pars_stft_drum(f_0)
+global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model, bessel_roots)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials)
+instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, fft_size);
+    
+    partials = floor(0.5 * srate / f_0);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    loop(partials,
+      f_k = f_0 * bessel_roots[k - 1] * (1 + inharm * k * k);
+      omega_k = 2.0 * $pi * f_k;
+      advance = omega_k * fft_interval / srate;
+      bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+      
+      bin < (2 * fft_size) ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(- (base_damp + (10/k) + (f_damp / 1000) * omega_k * omega_k) * irate);
+        
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+          
+        mix_mem[num_partials] = Adivfs * sin(k * $pi * relative_position) * 100 * (k * soundboard_factor) / f_k;
+        num_partials += 1; idx += 2;
       );
       k += 1;
     );
@@ -168,8 +267,14 @@ instance()
 (
   (model < 2) ? (
     this.set_pars_stft_basic(f_0);
-  ) : (
+  ) : (model == 2) ? (
     this.set_pars_stft_messy(f_0);
+  ) : (model == 3) ? (
+    this.set_pars_stft_beam(f_0, 0);
+  ) : (model == 4) ? (
+    this.set_pars_stft_beam(f_0, 1);
+  ) : (model == 5) ? (
+    this.set_pars_stft_drum(f_0);
   );
 );
 
@@ -259,7 +364,6 @@ instance(
   (fft_idx == fft_interval) ? (
     read_block(input_mem, input_idx, in_fft_mem, window_mem, fft_size * 2, buffer_size);
     memset(out_fft_mem, 0, fft_size * 2);
-    //memcpy(out_fft_mem, in_fft_mem, fft_size * 2);
   );
   
   input_idx += 1;
