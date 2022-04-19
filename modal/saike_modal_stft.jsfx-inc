@@ -9,7 +9,7 @@ instance(prev_fft_size, fft_size
          fft_scaling_factor,
          buffer_size)
 global()
-local(i, r, a0, a1, a2, a3, a4)
+local(gain, i, r, a0, a1, a2, a3, a4)
 (
   fft_size = 64;
   buffer_size = 65536;
@@ -21,24 +21,28 @@ local(i, r, a0, a1, a2, a3, a4)
   freemem = (window_mem = freemem) + 2 * fft_size;
   freemem = (input_mem = freemem) + buffer_size;
   freemem = (output_mem = freemem) + buffer_size;
-  overlap_factor = 4;
-  
-  output_idx = 0;
-  fft_idx = 0;
-  fft_interval = 2 * fft_size / overlap_factor;
-  fft_scaling_factor = 1 / overlap_factor / overlap_factor / fft_size;
   
   // Hann
   a0 = 0.5;
   a1 = 0.5;
   a2 = a3 = a4 = 0;
+  overlap_factor = fft_size / ceil(fft_size/4);
+  gain = 5 / 0.375;//0.5 * 0.55;
   
   // Blackmann-Harris
-  /*a0 = 0.35875;
+  a0 = 0.35875;
   a1 = 0.48829;
   a2 = 0.14128;
   a3 = 0.01168;
-  a4 = 0;*/
+  a4 = 0;
+  overlap_factor = fft_size / ceil(fft_size/3); // Actually attained overlap with a target of 3
+//  gain = 0.25 / 0.35875;
+  gain = 5 / 0.25796335495;
+  
+  output_idx = 0;
+  fft_idx = 0;
+  fft_interval = fft_size / overlap_factor;
+  fft_scaling_factor = gain / overlap_factor / overlap_factor / fft_size / fft_size;
   
   fft_size != prev_fft_size ? (
     prev_fft_size = fft_size;
@@ -81,7 +85,7 @@ global()
 
 function set_pars_stft_basic(f_0)
 global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, max_bin)
 instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
 (
   ticker += 1;
@@ -96,13 +100,14 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
     k_inc = 1 + model;
     idx = 0;
     num_partials = 0;
+    max_bin = (2 * fft_size - 2);
     loop(partials,
       f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1));
       omega_k = 2.0 * $pi * f_k;
       advance = omega_k * fft_interval / srate;
-      bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+      bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
       
-      bin < (2 * fft_size) ? (
+      bin < max_bin ? (
         bin_mem[num_partials] = bin;
         damp = exp(- (base_damp + f_damp * omega_k) * irate);
         
@@ -121,7 +126,7 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
 
 function set_pars_stft_messy(f_0)
 global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin)
 instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
 (
   ticker += 1;
@@ -136,15 +141,16 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
     idx = 0;
     num_partials = 0;
     offset = 3;
+    max_bin = (2 * fft_size - 2);
     loop(partials,
       loop(2,
         offset = 3 - offset;
         f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1)) + offset * (1 + .05 * k * k) * (0.1 + relative_position);
         omega_k = 2.0 * $pi * f_k;
         advance = omega_k * fft_interval / srate;
-        bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
         
-        bin < (2 * fft_size) ? (
+        bin < max_bin ? (
           bin_mem[num_partials] = bin;
           damp = exp(- (base_damp + f_damp * omega_k * (1 + f_k / 1000)) * irate);
           
@@ -163,7 +169,7 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
 
 function set_pars_stft_beam(f_0, clamped)
 global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin)
 instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
 (
   ticker += 1;
@@ -177,6 +183,7 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
     k = 1;
     idx = 0;
     num_partials = 0;
+    max_bin = (2 * fft_size - 2);
     loop(partials,
       clamped ? (
         (k == 1) ? (
@@ -204,9 +211,9 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
       f_k *= (1 + inharm * k);
       omega_k = 2.0 * $pi * f_k;
       advance = omega_k * fft_interval / srate;
-      bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+      bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
       
-      bin < (2 * fft_size) ? (
+      bin < max_bin ? (
         bin_mem[num_partials] = bin;
         damp = exp(- (base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
         
@@ -221,6 +228,74 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
     ticker = 0;
   );
 );
+
+
+function set_pars_stft_marimba(f_0)
+global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp)
+instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, fft_size);
+    
+    partials = floor(0.5 * srate / f_0);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    max_bin = (2 * fft_size - 2);
+    loop(partials,
+      camp = 1;
+      (k < 9) ? (
+        (k == 1) ? (
+          f_k = f_0;
+        ) : ( k == 2 ) ? (
+          f_k = f_0 * 1.911076; // Torsional
+          camp = 0.04 + 0.2 * relative_position;
+        ) : ( k == 3 ) ? (
+          f_k = f_0 * 4;
+        ) : ( k == 4 ) ? (
+          f_k = f_0 * 10.25;
+        ) : ( k == 5 ) ? (
+          f_k = f_0 * 14.2511700468; // Torsional
+          camp = 0.04 + 0.3 * relative_position;
+        ) : ( k == 6 ) ? (
+          f_k = f_0 * 17.745709828; // Torsional
+          camp = 0.04 + 0.3 * relative_position;
+        ) : ( k == 7 ) ? (
+          f_k = f_0 * 19;
+        ) : ( k == 8 ) ? (
+          f_k = f_0 * 24.352574; // Torsional
+          camp = 0.04 + 0.2 * relative_position;
+        );
+      ) : ( 
+        f_k = f_0 * k * 2;
+        camp = 0.09;
+      );
+      f_k *= sqrt((1 + inharm * k * k));
+      omega_k = 2.0 * $pi * f_k;
+      advance = omega_k * fft_interval / srate;
+      bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+      
+      bin < max_bin ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(- (base_damp + (20/k) + (f_damp / 1000) * omega_k * omega_k) * irate);
+        
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+          
+        mix_mem[num_partials] = Adivfs * camp * 100 * (k * soundboard_factor) / f_k;
+        num_partials += 1; idx += 2;
+      );
+      k += 1;
+    );
+    ticker = 0;
+  );
+);
+
 
 function set_pars_stft_drum(f_0)
 global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model, bessel_roots)
@@ -238,15 +313,15 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
     k = 1;
     idx = 0;
     num_partials = 0;
-    loop(partials,
+    loop(198,
       f_k = f_0 * bessel_roots[k - 1] * (1 + inharm * k * k);
       omega_k = 2.0 * $pi * f_k;
       advance = omega_k * fft_interval / srate;
-      bin = 2 + 2 * floor((f_k / srate) * (2 * fft_size) - 0.5);
+      bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
       
-      bin < (2 * fft_size) ? (
+      bin < (2 * fft_size - 2) ? (
         bin_mem[num_partials] = bin;
-        damp = exp(- (base_damp + (10/k) + (f_damp / 1000) * omega_k * omega_k) * irate);
+        damp = exp(- (base_damp + (10/k) + (f_damp / 1000) * (omega_k * omega_k)) * irate);
         
         coeff_mem[idx] = cos(advance) * damp;
         coeff_mem[idx + 1] = sin(advance) * damp;
@@ -275,6 +350,8 @@ instance()
     this.set_pars_stft_beam(f_0, 1);
   ) : (model == 5) ? (
     this.set_pars_stft_drum(f_0);
+  ) : (model == 6) ? (
+    this.set_pars_stft_marimba(f_0);
   );
 );
 
@@ -284,9 +361,9 @@ global(srate)
 local(f_bin, ix, tix, tmp, bin, coeff_real, coeff_imag, state_real, state_imag)
 (
   // Update the resonators
-  ix = 0; tix = 0;
-  convolve_c(state_mem, coeff_mem, num_partials);
+  convolve_c(state_mem, coeff_mem, num_partials + 1);
   
+  ix = 0; tix = 0;  
   active ? (
     loop(num_partials,
       bin = bin_mem[ix];
@@ -333,6 +410,9 @@ local()
 instance()
 global()
 (
+  fft_ptr[0] += fft_ptr[1];
+  //fft_ptr[0] = sqrt(fft_ptr[0] * fft_ptr[0] + fft_ptr[1] * fft_ptr[1]);
+  fft_ptr[1] = 0; // Kill Nyquist
   fft_ipermute(fft_ptr, len / 2);
   ifft_real(fft_ptr, len);
 
@@ -395,7 +475,7 @@ instance(
 );
 
 
-function eval_string_stft(f_h)
+function eval_string_stft(f_h, on)
 instance(
   fft_idx,
   in_fft_mem, out_fft_mem,
@@ -405,7 +485,7 @@ global()
 local()
 (
   (fft_idx == fft_interval) ? (    
-    this.process_block(in_fft_mem, out_fft_mem, abs(f_h) > 0);
+    this.process_block(in_fft_mem, out_fft_mem, on);
     fft_idx = 0;
   );
   
