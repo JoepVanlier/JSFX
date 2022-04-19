@@ -296,6 +296,85 @@ instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker,
   );
 );
 
+
+function set_pars_stft_pan(f_0)
+global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model, bessel_roots)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp)
+instance(bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, ticker, num_partials)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, fft_size);
+    
+    partials = floor(0.5 * srate / f_0);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    max_bin = (2 * fft_size - 2);
+    loop(partials,
+      camp = 1;
+      (k < 11) ? (
+        (k == 1) ? (
+          f_k = f_0;
+          camp = 3.5 - 1.0 * relative_position;
+        ) : ( k == 2 ) ? (
+          f_k = f_0 * 1.19672275218;
+          camp = 0.05 + 0.26 * relative_position;
+        ) : ( k == 3 ) ? (
+          f_k = f_0 * 0.74899885;
+          camp = 0.05 + 0.18 * relative_position;
+        ) : ( k == 4 ) ? (
+          f_k = f_0 * 1.57885;
+          camp = 0.01 + 0.03 * relative_position;
+          camp *= 0;
+        ) : ( k == 5 ) ? (
+          f_k = f_0 * 2.000333953889411;
+          camp = 0.025
+        ) : ( k == 6 ) ? (
+          f_k = f_0 * 2.000333953889411 + 3.34;
+          camp = 0.025;
+        ) : ( k == 7 ) ? (
+          f_k = f_0 * 2.23426319696;
+          camp = 0.005 * relative_position;
+        ) : ( k == 8 ) ? (
+          f_k = f_0 * 3.0029642446;
+          camp = 0.05;
+        ) : ( k == 9 ) ? (
+          f_k = f_0 * 3.5708;
+          camp = 0.003 * relative_position;
+        ) : ( k == 10 ) ? (
+          f_k = f_0 * 3.997778188;
+          camp = 0.003 * relative_position;
+        );
+      ) : ( 
+        f_k = f_0 * (k + 2) * 0.5;
+        camp = 0.0005;
+      );
+      camp *= 0.33;
+      omega_k = 2.0 * $pi * f_k;
+      advance = omega_k * fft_interval / srate;
+      bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+      
+      bin < max_bin ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(- (base_damp + (5/k) + (f_damp / 1000) * omega_k * omega_k) * irate);
+        
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+          
+        mix_mem[num_partials] = Adivfs * camp * 100 * (k * soundboard_factor) / f_k;
+        num_partials += 1; idx += 2;
+      );
+      k += 1;
+    );
+    ticker = 0;
+  );
+);
+
+
 function set_pars_stft_drum(f_0)
 global(inharm, base_damp, f_damp, relative_position, soundboard_factor, srate, Adivfs, model, bessel_roots)
 local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials)
@@ -351,6 +430,8 @@ instance()
     this.set_pars_stft_drum(f_0);
   ) : (model == 6) ? (
     this.set_pars_stft_marimba(f_0);
+  ) : (model == 7) ? (
+    this.set_pars_stft_pan(f_0);
   );
 );
 
@@ -495,7 +576,7 @@ local()
 function draw_stft(x, y, w, h)
 instance(mix_mem, bin_mem, coeff_mem, state_mem, num_partials, fft_size, ticker)
 local(s, ds, bin, dx, ix, tix, cx, cy, bin_width, yc, decay, offs, ix2)
-global(gfx_x, gfx_y, gfx_a)
+global(gfx_x, gfx_y, gfx_a, srate, display_log)
 (
   ticker = 5000;
   this.set_pars_stft(440 / 2 / 2);
@@ -524,14 +605,19 @@ global(gfx_x, gfx_y, gfx_a)
   ds = 1 / fft_size;
   s = 0;
 
+  // For logarithmic display, we go from 20 - srate
+  //   exp(log(20) + x * (log(srate) - log(20)) * fft_size / srate
+  // (fft_size / srate)* (log(srate) - log(20)) * exp(log(20) + x(log(srate) - log(20))
+
   loop(fft_size,
-    gfx_set(0.3 + 0.7 * s, 0.2 + 0.3 * s, 0.2 + 0.8 * (1 - s), 0.7);
+    gfx_set(0.3 + 0.7 * s, 0.2 + 0.3 * s, 0.2 + 0.8 * (1 - s), 0.8);
     s += ds;
     decay = state_mem[ix];
     yc = 100000 * h * state_mem[ix + 1];
     gfx_rect(cx, cy + h - yc, bin_width, yc);
     
     ix2 = 0;
+    gfx_a = 0.57;
     loop(50,
       gfx_a *= 0.95;
       yc *= decay;
@@ -541,7 +627,11 @@ global(gfx_x, gfx_y, gfx_a)
     
     //yc *= state_mem[ix];
     //gfx_rect(cx, cy + h - yc, bin_width, yc);
-    cx += dx;
+    display_log ? (
+      cx = x + w * log((ix + 0.5) / 2) / log(fft_size);
+    ) : (
+      cx += dx;
+    );
     ix += 2;
   );
 
