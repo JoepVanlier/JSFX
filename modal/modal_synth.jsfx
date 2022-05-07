@@ -2,19 +2,19 @@ desc:Partials
 
 slider1:model=0<0,1,8{Metal,Tube,Beating,Beam open,Beam clamped,Membrane,Marimba,Pan (WIP}>model
 slider2:placeholder=0<0,1,1>-Placeholder
-slider3:relative_position=0.1<0.0001,0.999,0.001>Relative position
-slider4:damp=0.1<-2,2,0.0001>Damping
-slider5:freq_damp=-4<-6,-1,0.0001>Frequency Dependent Damping
-slider6:inharmonic=-4<-4, 0, 0.0001>Inharmonic
-slider7:stiffness=4.6<0,6,0.0001>Stiffness
-slider8:stiffness_exp=2.3<1,3.0,.0001>Stiffness Exponent
+slider3:relative_position=0.1<0.0001,0.999,0.001>-Relative position
+slider4:damp=0.1<-2,2,0.0001>-Damping
+slider5:freq_damp=-4<-6,-1,0.0001>-Frequency Dependent Damping
+slider6:inharmonic=-4<-4, 0, 0.0001>-Inharmonic
+slider7:stiffness=4.6<0,6,0.0001>-Stiffness
+slider8:stiffness_exp=2.3<1,3.0,.0001>-Stiffness Exponent
 slider9:placeholder=0<0,1,1>-Placeholder
 slider10:base_note=0<-12,12,1>Base note
-slider11:force_fb=1<0,15,0.0001>Forced feedback (TD only)
-slider12:partials=32<16,64,16>Partials
+slider11:force_fb=1<0,15,0.0001>-Forced feedback (TD only)
+slider12:partials=32<16,64,16>-Partials
 slider18:midi_input=0<0,1,1{Off,On}>Midi input
 slider62:display_log=0<0,1,1{Linear,Logarithmic}>Display type
-slider63:stft=1<0,1,1>STFT
+slider63:stft=1<0,1,1>-STFT
 
 in_pin:left input
 in_pin:right input
@@ -24,8 +24,18 @@ out_pin:right output
 import saike_kp_midi.jsfx-inc
 import saike_modal.jsfx-inc
 import saike_modal_stft.jsfx-inc
+import saike_modal_gfx.jsfx-inc
 
 @init
+position_knob.init_knob(0, 1, 0.1, 3);
+damp_knob.init_knob(-2, 2, 0.1, 4);
+freq_damp_knob.init_knob(-6, -1, -4, 5);
+inharmonic_knob.init_knob(-4, 0, -4, 6);
+stiffness_knob.init_knob(0, 6, 4.6, 7);
+stiffness_exp_knob.init_knob(1.0, 3.0, 2.3, 8);
+force_fb.init_knob(0, 15.0, 1.0, 11);
+partials.init_knob(16, 64, 32, 12);
+
 freemem = stft_mem.fft_mem(freemem, 64);
 
 freemem = string1.string_mem(freemem, stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
@@ -88,9 +98,11 @@ function eval_string(f_h, on)
 
 function update_notes()
 instance(notes_on, active_note_mem)
-global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, srate, pitch)
+global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, srate, pitch, ref_f)
 local(scaling)
 (
+  ref_f = scaling * 2 ^ ((active_note_mem[0] - 69) / 12);
+
   // Update note parameters
   scaling = 440;
   pitch = scaling * 2 ^ ((active_note_mem[0] - 69) / 12);
@@ -225,11 +237,216 @@ loop(string1.fft_size,
 );
 */
 
-gfx_string.draw_stft(0.02 * gfx_w, 0.02 * gfx_h, gfx_w * 0.8, gfx_h * 0.8);
+function simple_arrow(xx, yy, _r)
+local(dr)
+global()
+(
+  dr = ceil(0.06 * _r);
+  xx = floor(xx);
+  yy = floor(yy);
+  _r = floor(_r);
+  gfx_line(xx, yy - 0.4 * _r, xx, yy - 2 * dr - 1);
+  gfx_line(xx + 1, yy - 0.4 * _r, xx + 1, yy - 2 * dr - 1);
+  gfx_line(xx - 1, yy - 0.4 * _r, xx - 1, yy - 2 * dr - 1);
+  gfx_triangle(xx - dr, yy - 2 * dr, xx + dr, yy - 2 * dr, xx, yy);
+);
 
-bins = 100
+function gfx_draw_icon(id, enabled)
+local(len, xp, xx, yy, dr, s, ds, cy, sy, ang1, ang2, x1, x2, y1, y2)
+global(gfx_x, gfx_y, gfx_a)
+instance(_x, _y, _r, relative_position)
+( 
+  colormodel(0.9);
+  id == 0 ? (
+    // Position
+    len = ceil(0.6 * _r);
+    yy = _y + 0.1 * _r;
+    gfx_line(_x - len, yy, _x + len, yy, 1);
+    gfx_line(_x - len, yy + 1, _x + len, yy + 1, 1);
+    
+    xx = _x - len + ceil(2 * len * relative_position);
+    simple_arrow(xx, yy, _r);
+  ) : ( id == 1 ) ? (
+    // Decay
+    len = ceil(0.6 * _r);
+    yy = ceil(0.3 * _r);
+    ds = 5 * relative_position / len;
+    sy = 1;
+    loop(2,
+      xx = _x - len;
+      s = 1;
+      gfx_x = xx;
+      gfx_y = _y + yy - 2 * yy - sy;
+      loop(2 * len,
+        gfx_lineto(xx, _y + yy - 2 * yy * s - sy);
+        s -= ds * s;
+        xx += 1;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 2 ) ? (
+    // Freq Decay
+    len = ceil(0.6 * _r);
+    yy = ceil(0.3 * _r);
+    sy = 1;
+    loop(2,
+      xx = _x - len;
+      s = 1; cy = 1;
+      gfx_x = xx;
+      gfx_y = _y + yy - 2 * yy - sy;
+      loop(2 * len,
+        gfx_lineto(xx, _y + yy - 2 * yy * cy - sy);
+        (s > 2 * (1 - relative_position) * len) ? cy -= 2 / len;
+        cy = max(0, cy);
+        xx += 1;
+        s += 1;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 3 ) ? (
+    // Spring
+    len = ceil(0.6 * _r);
+    yy = ceil(0.2 * _r);
+    ds = 4.0 * relative_position;
+    sy = 1;
+    loop(2,
+      xx = - len;
+      s = 0;
+      gfx_x = _x + xx - 5;
+      gfx_y = _y;
+      loop(8.5 * len,
+        cy = (1 - 0.4 * relative_position) * s - sy;
+        gfx_a = 0.5 + 0.4 * cos(cy);
+        
+        gfx_lineto(floor(_x + xx - sy + 5 * cos(cy) * tanh(xx / len)), floor(_y - sy + yy * sin(cy)));
+        s += 0.35;
+        xx += 0.25;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 4 ) ? (
+    // Stiffness
+    len = ceil(0.6 * _r);
+    yy = _y + 0.35 * _r;
+    dr = _r * (0.5 + relative_position);
+    
+    gfx_a = 1;
+    xx = _x - len + ceil(2 * len * relative_position);
+    simple_arrow(_x, _y + 0.05 * _r - 0.1 * _r * relative_position, _r);
+
+    xx = _x - len + ceil(2 * len * relative_position);
+    gfx_a = relative_position;
+    simple_arrow(_x + 0.3 * _r, _y + 0.01 * _r - 0.1 * _r * relative_position, _r);
+    simple_arrow(_x - 0.3 * _r, _y + 0.01 * _r - 0.1 * _r * relative_position, _r);
+    
+    gfx_a = 1;
+    ang1 = $pi + asin(0.45 * _r / dr);
+    ang2 = $pi - asin(0.45 * _r / dr);
+    gfx_arc(_x, yy - 1.15 * dr, dr, ang1, ang2);
+    gfx_arc(_x, yy - 1.15 * dr + 0.5, dr, ang1, ang2);
+    
+    yy += floor(0.12 * _r);
+    gfx_arc(_x, yy - 1.15 * dr, dr, ang1, ang2);
+    gfx_arc(_x, yy - 1.15 * dr + 0.5, dr, ang1, ang2);
+    
+    yy += floor(0.12 * _r);
+    gfx_arc(_x, yy - 1.15 * dr, dr, ang1, ang2);
+    gfx_arc(_x, yy - 1.15 * dr + 0.5, dr, ang1, ang2);
+  ) : ( id == 5 ) ? (
+    // Decay
+    len = ceil(0.6 * _r);
+    yy = ceil(0.3 * _r);
+    ds = 0.5 / len;
+    sy = 1;
+    loop(2,
+      xx = _x - len;
+      s = 0;
+      gfx_x = xx;
+      gfx_y = _y + yy - sy;
+      loop(2 * len,
+        gfx_lineto(xx, _y + yy - 2 * yy * pow(s, 1 + 5 * relative_position) - sy);
+        s += ds;
+        xx += 1;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 6 ) ? (
+    gfx_a = enabled;
+    x1 = floor(_x - 0.3 * _r);
+    x2 = floor(_x + 0.3 * _r);
+    dr = floor(0.07 * _r);
+    gfx_circle(x1, y2, dr, 1);
+  
+    gfx_a = 0.1 + 0.9 * relative_position * enabled;
+    y1 = floor(_y - 0.3 * _r);
+    y2 = floor(_y + 0.3 * _r);
+    
+    loop(2,
+      x1 = floor(_x - 0.3 * _r);
+      x2 = floor(_x + 0.3 * _r);
+      loop(2,
+        gfx_line(x1, y1, x1, y2 - 3 * dr);
+        gfx_line(x1, y1, x1, y1);
+        gfx_line(x1 + 1, y1, x2 - 1, y1);
+        gfx_line(x2, y1, x2, y2 - 1);
+        gfx_line(x1 + 3 * dr, y2, x2, y2);    
+        gfx_line(x1 + 3 * dr, y2 + 1, x1 + 4 * dr, y2 + dr + 1);
+        gfx_line(x1 + 3 * dr, y2 - 1, x1 + 4 * dr, y2 - dr - 1);
+        x1 += 1;
+        x2 += 1;
+      );
+      y1 += 1;
+      y2 += 1;
+    );
+  );
+);
 
 
 
 
+gfx_string.draw_stft(0.02 * gfx_w, 0.02 * gfx_h, gfx_w * 0.8, gfx_h * 0.9);
+
+radius = 0.027 * gfx_w;
+button_size = 0.004 * gfx_w;
+cx = 2 * radius;
+cy = 2 * radius;
+label_font();
+position_knob.draw_knob(cx, cy, radius, "", "Relative Position", 1, 1);
+position_knob.gfx_draw_icon(0, 1);
+cx += 3 * radius;
+damp_knob.draw_knob(cx, cy, radius, "", "Frequency Independent Damping", 1, 1);
+damp_knob.gfx_draw_icon(1, 1);
+cx += 3 * radius;
+freq_damp_knob.draw_knob(cx, cy, radius, "", "Frequency Dependent Damping", 1, 1);
+freq_damp_knob.gfx_draw_icon(2, 1);
+cx += 3 * radius;
+inharmonic_knob.draw_knob(cx, cy, radius, "", "Inharmonicity", 1, 1);
+inharmonic_knob.gfx_draw_icon(3, 1);
+cx += 3 * radius;
+stiffness_knob.draw_knob(cx, cy, radius, "", "Stiffness (tends to make things louder)", 1, 1);
+stiffness_knob.gfx_draw_icon(4, 1);
+cx += 3 * radius;
+stiffness_exp_knob.draw_knob(cx, cy, radius, "", "Input Non-Linearity", 1, 1);
+stiffness_exp_knob.gfx_draw_icon(5, 1);
+cx += 3 * radius;
+stft = 1 - processMouseToggle(cx - 1.1 * radius, cy - 1.1 * radius, button_size, button_size, 1 - stft, "Time domain mode\n\nTime domain mode allows using feedback but\nrequires significantly more CPU (especially\nwhen using a large number of partials).\n\nIn addition, it runs the risk of instability, so\nwhile it can be used to obtain creative effects\nit's not really recommended for live use.", mouse_x, mouse_y, mouse_cap);
+force_fb.draw_knob(cx, cy, radius, "", "Feedback Level", 1, 1 - stft);
+force_fb.gfx_draw_icon(6, 1 - stft);
+cx += 3 * radius;
+n_partials = sprintf(16, "%d", 16 * floor((partials / 16)));
+partials.draw_knob(cx, cy, radius, n_partials, "Number of partials to include", 1, 1 - stft);
+n_partials.gfx_draw_icon(7, 1 - stft);
+
+bins = 100;
+
+lx = mouse_x;
+ly = mouse_y;
+last_cap = mouse_cap;
+
+mouse_cap == 0 ? captured = 0;
+
+hinter.drawhint();
+newtime = time_precise();
+delta_time = newtime - ctime;
+ctime = newtime;
 
