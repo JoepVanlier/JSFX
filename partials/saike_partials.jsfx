@@ -1,6 +1,17 @@
 desc:Partials
+tags: modal effect
+version: 0.01
+author: Joep Vanlier
+changelog: Initial commit
+license: MIT
+provides:
+  partials_dependencies/*
+about:
+  # An effect which simulates different materials
+  This effect takes both audio and MIDI input. Based on the model selected the incoming audio will excite
+  a number of resonators that produce particular sounds. Up to 4 note polyphony is supported.
 
-slider1:model=0<0,1,8{Metal,Tube,Beating,Beam open,Beam clamped,Membrane,Marimba,Pan>-model
+slider1:model=0<0,1,9{Metal,Tube,Beating,Beam open,Beam clamped,Membrane,Marimba,Pan,Voice>-model
 slider2:placeholder=0<0,1,1>-Placeholder
 slider3:relative_position=0.1<0.0001,0.999,0.001>-Relative position
 slider4:damp=0.1<-2,2,0.0001>-Damping
@@ -12,6 +23,7 @@ slider9:placeholder=0<0,1,1>-Placeholder
 slider10:base_note=0<-12,12,1>Base note
 slider11:force_fb=1<0,15,0.0001>-Forced feedback (TD only)
 slider12:partials=32<16,64,16>-Partials
+slider13:stereo=0<0,1,1{Off,On}>Stereo-ize
 slider18:midi_input=0<0,1,1{Off,On}>Midi input
 slider62:display_log=0<0,1,1{Linear,Logarithmic}>Display type
 slider63:stft=1<0,1,1>-STFT
@@ -25,6 +37,8 @@ import saike_kp_midi.jsfx-inc
 import saike_modal.jsfx-inc
 import saike_modal_stft.jsfx-inc
 import saike_modal_gfx.jsfx-inc
+import saike_vowel_data.jsfx-inc
+import saike_modal_buffer.jsfx-inc
 
 @init
 position_knob.init_knob(0, 1, 0.1, 3);
@@ -63,10 +77,22 @@ bessel_roots[165] = 316.848240; bessel_roots[166] = 318.762449; bessel_roots[167
 bessel_roots[181] = 347.475585; bessel_roots[182] = 349.389794; bessel_roots[183] = 351.304003; bessel_roots[184] = 353.218212; bessel_roots[185] = 355.132421; bessel_roots[186] = 357.046630; bessel_roots[187] = 358.960839; bessel_roots[188] = 360.875048; bessel_roots[189] = 362.789257; bessel_roots[190] = 364.703466; bessel_roots[191] = 366.617675; bessel_roots[192] = 368.531884; bessel_roots[193] = 370.446093; bessel_roots[194] = 372.360302; bessel_roots[195] = 374.274511; bessel_roots[196] = 376.188720; bessel_roots[197] = 378.102930; bessel_roots[198] = 380.017139;
 
 //bessel_roots[0] = 1.000000; bessel_roots[1] = 1.639423; bessel_roots[2] = 1.870192; bessel_roots[3] = 2.403846; bessel_roots[4] = 2.860577; bessel_roots[5] = 3.278846; bessel_roots[6] = 3.980769; bessel_roots[7] = 4.192308; bessel_roots[8] = 5.225962; bessel_roots[9] = 5.649038; bessel_roots[10] = 6.591346; bessel_roots[11] = 7.240385; bessel_roots[12] = 8.956731; bessel_roots[13] = 10.802885;
-
+//freemem = (bessel_roots = freemem) + 2048;
+//memset(bessel_roots, 0, 2048);
 
 freemem = midi.init_midi(freemem);
 
+freemem = buffer.init_buffer(freemem, freemem + 32766);
+freemem += 32768;
+
+delay_ms = 16.12;
+buffer.set_offset(delay_ms * srate / 1000);
+lowcut = 0.32;
+lowcut_freq = exp((1-LowCut) * log(20/22050));
+hp.init_linearSVF(lowcut_freq, 0);
+displayFreq = 0.5 * srate * lowcut_freq;
+
+freemem = init_vowels(freemem);
 
 function tanh(x)
 local()
@@ -221,7 +247,19 @@ stft ? (
   f_h = -(f_h > 0 ? (10^stiffness) * f_h^stiffness_exp : 0);
 );
 
-spl0 = spl1 = f_b;
+
+stereo ? (
+  buffer.update_buffer(f_b);
+  rb = buffer.read_buffer();
+
+  /* Highpass the added comb filter signal */
+  rb = hp.eval_linearSVF_HP6(rb);
+  
+  spl0 = f_b + 0.33 * rb;
+  spl1 = f_b - 0.33 * rb;
+) : (
+  spl0 = spl1 = f_b;
+);
 
 @gfx
 gfx_set(0, 0, 0, 1);
@@ -580,3 +618,14 @@ newtime = time_precise();
 delta_time = newtime - ctime;
 ctime = newtime;
 
+/*
+gfx_set(1, 1, 1, 1);
+ptr = vowel;
+x = 0;
+init_vowels(vowel);
+loop(64100,
+  gfx_circle(0.013 * x, 0.5 * gfx_h - 15 * log10(ptr[]), 1);
+  x += 1;
+  ptr += 1;
+);
+*/
