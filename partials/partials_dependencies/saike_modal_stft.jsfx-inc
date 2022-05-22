@@ -1,11 +1,11 @@
 @init
 function fft_mem(freemem, _fft_size)
-instance(prev_fft_size, fft_size
+instance(fft_size
          overlap_factor,
          fft_interval,
          in_fft_mem, out_fft_mem, window_mem,
          input_mem, output_mem,
-         fft_idx, output_idx,
+         input_idx, fft_idx, output_idx,
          fft_scaling_factor,
          buffer_size)
 global()
@@ -17,10 +17,15 @@ local(gain, i, r, a0, a1, a2, a3, a4)
   /* Make sure we start on a boundary */
   freemem = ceil(freemem / 65536) * 65536;
   freemem = (in_fft_mem = freemem) + 2 * fft_size;
+  memset(in_fft_mem, 0, 2 * fft_size);
   freemem = (out_fft_mem = freemem) + 2 * fft_size;
+  memset(out_fft_mem, 0, 2 * fft_size);
   freemem = (window_mem = freemem) + 2 * fft_size;
+  memset(window_mem, 0, 2 * fft_size);
   freemem = (input_mem = freemem) + buffer_size;
+  memset(input_mem, 0, buffer_size);
   freemem = (output_mem = freemem) + buffer_size;
+  memset(output_mem, 0, buffer_size);
   
   // Hann
   a0 = 0.5;
@@ -39,21 +44,17 @@ local(gain, i, r, a0, a1, a2, a3, a4)
 //  gain = 0.25 / 0.35875;
   gain = 5 / 0.25796335495;
   
-  output_idx = 0;
-  fft_idx = 0;
+  fft_idx = output_idx = input_idx = 0;
   fft_interval = fft_size / overlap_factor;
   fft_scaling_factor = gain / overlap_factor / overlap_factor / fft_size / fft_size;
-  
-  fft_size != prev_fft_size ? (
-    prev_fft_size = fft_size;
     
-    i = 0;
-    loop(2 * fft_size,
-      r = (i + 0.5) / (2 * fft_size);
-      window_mem[i] = sqrt(fft_scaling_factor) * (a0 - a1 * cos(2 * $pi * r) + a2 * cos(4 * $pi * r) - a3 * cos(6 * $pi * r) + a4 * cos(8 * $pi * r));
-      i += 1;
-    );
+  i = 0;
+  loop(2 * fft_size,
+    r = (i + 0.5) / (2 * fft_size);
+    window_mem[i] = sqrt(fft_scaling_factor) * (a0 - a1 * cos(2 * $pi * r) + a2 * cos(4 * $pi * r) - a3 * cos(6 * $pi * r) + a4 * cos(8 * $pi * r));
+    i += 1;
   );
+  
   freemem
 );
 
@@ -63,18 +64,25 @@ instance(
   bin_mem, coeff_mem, mix_mem, state_mem,
   fft_size, fft_interval,
   in_fft_mem, out_fft_mem,
+  ticker,
+  fft_idx,
 )
 local()
 global()
 (
   // Allocate memory for this string, note that in and out fft_mem have to be preallocated.
-  
+  ticker = 0;
   max_partial = 1024;
   freemem = (bin_mem = freemem) + 2 * max_partial;
+  memset(bin_mem, 0, 2 * max_partial);
   freemem = (coeff_mem = freemem) + 2 * max_partial;
+  memset(coeff_mem, 0, 2 * max_partial);
   freemem = (mix_mem = freemem) + 2 * max_partial;
+  memset(mix_mem, 0, 2 * max_partial);
   freemem = (state_mem = freemem) + 2 * max_partial;
+  memset(state_mem, 0, 2 * max_partial);
   
+  fft_idx = 0;
   fft_size = _fft_size;
   fft_interval = _fft_interval;
   in_fft_mem = _in_fft_mem;
@@ -547,9 +555,9 @@ instance()
 );
 
 function process_block(in_fft_mem, out_fft_mem, active)
-instance(fft_size, fft_interval, coeff_mem, mix_mem, state_mem, bin_mem, num_partials)
+instance(coeff_mem, mix_mem, state_mem, bin_mem, num_partials)
 global(srate)
-local(f_bin, ix, tix, tmp, bin, coeff_real, coeff_imag, state_real, state_imag)
+local(ix, tix, bin)
 (
   // Update the resonators
   convolve_c(state_mem, coeff_mem, num_partials + 1);
@@ -621,14 +629,12 @@ function read_stft(f_h)
 local()
 global()
 instance(
-  f_hn, f_b,
   fft_idx, fft_interval,
   input_mem, input_idx,
   in_fft_mem, out_fft_mem, window_mem,
   fft_size, buffer_size
 )
 (
-  f_hn = f_b = 0;
   input_idx == buffer_size ? input_idx = 0;
   input_mem[input_idx] = f_h;
   
@@ -639,7 +645,6 @@ instance(
   
   input_idx += 1;
 );
-
 
 function write_stft()
 local()
