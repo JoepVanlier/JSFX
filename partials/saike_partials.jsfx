@@ -25,6 +25,11 @@ slider11:force_fb=1<0,15,0.0001>-Forced feedback (TD only)
 slider12:partials=32<16,64,16>-Partials
 slider13:stereo=1<0,1,1{Off,On}>-Stereo-ize
 slider18:midi_input=0<0,1,1{Off,On}>Midi input
+slider19:first_note=45<0,127,1>-Midi note 1
+slider20:second_note=52<0,127,1>-Midi note 2
+slider21:third_note=60<0,127,1>-Midi note 3
+slider22:fourth_note=64<0,127,1>-Midi note 4
+slider23:fifth_note=48<0,127,1>-Midi note 5
 slider62:display_log=0<0,1,1{Linear,Logarithmic}>-Display type
 slider63:stft=1<0,1,1>-STFT
 
@@ -176,37 +181,45 @@ midi_input ? (
     // Force instant reset
     force_update();
   );
+) : (
+  ix = 19;
+  idx = 0;
+  change = 0;
+  loop(5,
+    // If this one is used, store it in the active note memory.
+    val = slider(ix);
+    val ? (
+      change = (midi.active_note_mem[idx] != val) ? 1 : change;
+      midi.active_note_mem[idx] = val;
+      idx += 1;
+    );
+    ix += 1;
+  );
+  midi.notes_on = idx;
+  val = 5 - idx;
+  loop(val,
+    change = (midi.active_note_mem[idx] != 0) ? 1 : change;
+    midi.active_note_mem[idx] = 0;
+    idx += 1;
+  );
+  change ? (
+    force_update();
+  );
 );
 
 
 update_global_parameters();
-
-!midi_input ? (
-  mul = pow(2, base_note / 12);
-  string1.set_pars(220/2 * mul);
-  string2.set_pars(329.628/2 * mul);
-  string3.set_pars(261.63 * mul);
-  string4.set_pars(329.628 * mul);
-);
 
 f_hn = 0;
 f_b = 0;
 
 stft ? stft_mem.read_stft(f_h);
 
-midi_input ? (
-  string1.eval_string(f_h, midi.notes_on > 0);
-  string2.eval_string(f_h, midi.notes_on > 1);
-  string3.eval_string(f_h, midi.notes_on > 2);
-  string4.eval_string(f_h, midi.notes_on > 3);
-  string5.eval_string(f_h, midi.notes_on > 4);
-) : (
-  string1.eval_string(f_h, 1);
-  string2.eval_string(f_h, 1);
-  string3.eval_string(f_h, 1);
-  string4.eval_string(f_h, 1);
-  string5.f_b = string5.f_hn = 0;
-);
+string1.eval_string(f_h, midi.notes_on > 0);
+string2.eval_string(f_h, midi.notes_on > 1);
+string3.eval_string(f_h, midi.notes_on > 2);
+string4.eval_string(f_h, midi.notes_on > 3);
+string5.eval_string(f_h, midi.notes_on > 4);
 
 stft ? (
   stft_mem.write_stft();
@@ -273,6 +286,11 @@ stereo ? (
   spl0 = spl1 = f_b;
 );
 
+settings_changed ? (
+  settings_changed = 0;
+  force_update();
+);
+
 @gfx
 //gfx_set(0, 0, 0, 1);
 //gfx_rect(0, 0, gfx_w, gfx_h);
@@ -281,6 +299,7 @@ stereo ? (
   init_w = gfx_w;
   init_h = gfx_h;
   last_model = model;
+  settings_changed = 1;
   gfx_setimgdim(1, gfx_w, gfx_h);
   gfx_dest = 1;
   gfx_set(0, 0, 0, 1);
@@ -659,13 +678,45 @@ label_toggle(gfx_x, gfx_y, "[Logarithmic]") ? (display_log = 1);
 
 keyboard.draw_keyboard(base_note, notes, 0.12 * gfx_w, 0.935 * gfx_h, gfx_w * 0.82, 0.05 * gfx_y);
 
-midi_input ? (
-  keyboard.highlight_note(midi.active_note_mem[0]);
-  keyboard.highlight_note(midi.active_note_mem[1]);
-  keyboard.highlight_note(midi.active_note_mem[2]);
-  keyboard.highlight_note(midi.active_note_mem[3]);
-  keyboard.highlight_note(midi.active_note_mem[4]);
+keyboard.highlight_note(midi.active_note_mem[0]);
+keyboard.highlight_note(midi.active_note_mem[1]);
+keyboard.highlight_note(midi.active_note_mem[2]);
+keyboard.highlight_note(midi.active_note_mem[3]);
+keyboard.highlight_note(midi.active_note_mem[4]);
+
+note_over = keyboard.note_clicked();
+
+function handle_non_midi_click(note_over)
+instance(over)
+local(idx, disabled_note)
+global(keyboard.over, last_cap, mouse_cap)
+(
+  this.over ? (
+    (last_cap == 0) && (mouse_cap == 1) ? (
+      idx = 19;
+      disabled_note = 0;
+      loop(5,
+        (slider(idx) == note_over) ? (
+          slider_automate(slider(idx) = 0);
+          disabled_note = 1;
+        );
+        idx += 1;
+      );
+      idx = 19;
+      (!disabled_note) ? (
+        loop(5,
+          (slider(idx) == 0) ? (
+            (!disabled_note) ? slider_automate(slider(idx) = note_over);
+            disabled_note = 1;
+          );
+          idx += 1;
+        );
+      );
+    );
+  );
 );
+
+keyboard.handle_non_midi_click(note_over);
 
 
 
