@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.04
+version: 0.05
 author: Joep Vanlier
-changelog: Added dev mode (ctrl + click partials logo, and edit saike_modal_custom.jsfx-inc to tinker with custom models.
+changelog: Input gain normalization (Unfortunately, this means that you will have to adjust the output volume of earlier presets since previously stiffness very strongly affected gain. It should only be a linear change, but I realize this may still be annoying. My apologies for this. Note that breaking changes such as this one can still occur during the alpha stage). Removed some cruft that wasn't being used or needed. *Note that the time domain model needs more work.
 license: MIT
 provides:
   partials_dependencies/*
@@ -18,7 +18,7 @@ slider3:relative_position=0.1<0.0001,0.999,0.001>-Relative position
 slider4:damp=0.1<-2,2,0.0001>-Damping
 slider5:freq_damp=-4<-6,-1,0.0001>-Frequency Dependent Damping
 slider6:inharmonic=-4<-4, 0, 0.0001>-Inharmonic
-slider7:stiffness=4.6<0,6,0.0001>-Stiffness
+slider7:stiffness=4.6<2,6,0.0001>-Stiffness
 slider8:stiffness_exp=2.3<1,3.0,.0001>-Stiffness Exponent
 slider9:placeholder=0<0,1,1>-Placeholder
 slider10:base_note=0<-12,12,1>-Base note
@@ -61,7 +61,7 @@ position_knob.init_knob(0, 1, 0.1, 3);
 damp_knob.init_knob(-2, 2, 0.1, 4);
 freq_damp_knob.init_knob(-6, -1, -4, 5);
 inharmonic_knob.init_knob(-4, 0, -4, 6);
-stiffness_knob.init_knob(0, 6, 4.6, 7);
+stiffness_knob.init_knob(3, 6, 4.6, 7);
 stiffness_exp_knob.init_knob(1.0, 3.0, 2.3, 8);
 force_fb.init_knob(0, 15.0, 1.0, 11);
 partials.init_knob(16, 64, 32, 12);
@@ -270,37 +270,37 @@ stft ? (
 
 hammer = 0;
 
-hammer ? (
-  f_h = (1 + force_fb) * f_hn;
-  f_h += spl0;
-  mh = 4.9;
-  ah = -(1.0/mh) * fdy;
-  vh = vh + (1.0/srate) * ah;
-  yh = yh + (1.0/srate) * vh;
-  dy = - f_h + yh;
-  fdy = ((dy > 0) ? (10^stiffness) * dy^stiffness_exp : 0);
-  f_h = fdy;
-) : (
-  // No hammer
-  delay = 1;
-  delay ? (
-    f_h = (force_fb) * f_hn;
-    f_h += spl0;
-    f_h = -(f_h > 0 ? (10^stiffness) * f_h^stiffness_exp : 0);
-  ) : (
-    f_h = f_delay;
-    f_delay = (force_fb) * f_hn;
-    f_delay += spl0;
-    f_delay = -(f_delay > 0 ? (10^stiffness) * f_delay^stiffness_exp : 0);
-  );
+function soft_clip(x)
+(
+  (abs(x) < 1) ? 1.5 * x - 0.5 * x * x * x : sign(x)
 );
+
+amp_factor = 10^stiffness;
 
 stft ? (
-  // TODO: remove
-  f_delay = f_h = spl0;
-  f_h = -(f_h > 0 ? (10^stiffness) * f_h^stiffness_exp : 0);
+  f_h = spl0;
+  f_h = -(f_h > 0 ? 100000 * f_h ^ stiffness_exp : 0);
+  //f_h = soft_clip(Adivfs*f_h) * srate;
+) : (
+  hammer ? (
+    // WIP dynamical model (broken for now)
+    f_h = (1 + force_fb) * f_hn;
+    f_h += spl0;
+    mh = 4.9;
+    ah = -(1.0 / mh) * fdy;
+    vh = vh + (1.0/srate) * ah;
+    yh = yh + (1.0/srate) * vh;
+    dy = - f_h + yh;
+    fdy = ((dy > 0) ? amp_factor * dy ^ stiffness_exp : 0);
+    f_h = fdy;
+  ) : (
+    // No hammer but simple feedback
+    f_h = force_fb * f_hn;
+    f_h += spl0;
+    f_h = -(f_h > 0 ? amp_factor * f_h ^ stiffness_exp : 0);
+    //f_h = soft_clip(Adivfs*f_h) * srate;
+  );
 );
-
 
 stereo ? (
   buffer.update_buffer(f_b);
@@ -313,6 +313,12 @@ stereo ? (
   spl1 = f_b - 0.33 * rb;
 ) : (
   spl0 = spl1 = f_b;
+);
+
+!stft ? (
+  // Gain normalization in case of feedback system
+  spl0 /= amp_factor * 0.00001;
+  spl1 /= amp_factor * 0.00001;
 );
 
 settings_changed ? (
@@ -484,7 +490,7 @@ instance(_x, _y, _r, relative_position)
     yy = _y + 0.35 * _r;
     dr = _r * (0.5 + relative_position);
     
-    gfx_a = 1;
+    gfx_a = 0.2 + 0.8 * enabled;
     xx = _x - len + ceil(2 * len * relative_position);
     simple_arrow(_x, _y + 0.05 * _r - 0.1 * _r * relative_position, _r);
 
@@ -493,7 +499,7 @@ instance(_x, _y, _r, relative_position)
     simple_arrow(_x + 0.3 * _r, _y + 0.01 * _r - 0.1 * _r * relative_position, _r);
     simple_arrow(_x - 0.3 * _r, _y + 0.01 * _r - 0.1 * _r * relative_position, _r);
     
-    gfx_a = 1;
+    gfx_a = 0.2 + 0.8 * enabled;
     ang1 = $pi + asin(0.45 * _r / dr);
     ang2 = $pi - asin(0.45 * _r / dr);
     gfx_arc(_x, yy - 1.15 * dr, dr, ang1, ang2);
@@ -786,9 +792,6 @@ inharmonic_knob.draw_knob(cx, cy, radius, "", "Inharmonicity", 1, 1);
 inharmonic_knob.gfx_draw_icon(3, 1);
 cx += 3 * radius;
 stereo = stereoToggle.processMouseToggle(cx - 1.1 * radius, cy - 1.1 * radius, button_size, button_size, stereo, "Stereoize the output.", mouse_x, mouse_y, mouse_cap);
-stiffness_knob.draw_knob(cx, cy, radius, "", "Stiffness (tends to make things louder)", 1, 1);
-stiffness_knob.gfx_draw_icon(4, 1);
-cx += 3 * radius;
 stiffness_exp_knob.draw_knob(cx, cy, radius, "", "Input Non-Linearity", 1, 1);
 stiffness_exp_knob.gfx_draw_icon(5, 1);
 cx += 3 * radius;
@@ -800,6 +803,9 @@ last_stft = stft;
 
 force_fb.draw_knob(cx, cy, radius, "", "Feedback Level", 1, 1 - stft);
 force_fb.gfx_draw_icon(6, 1 - stft);
+cx += 3 * radius;
+stiffness_knob.draw_knob(cx, cy, radius, "", "Stiffness (tends to make things louder)", 1, 1 - stft);
+stiffness_knob.gfx_draw_icon(4, 1 - stft);
 cx += 3 * radius;
 n_partials = sprintf(16, "%d", 16 * floor((partials / 16)));
 partials.draw_knob(cx, cy, radius, n_partials, "Number of partials to include", 1, 1 - stft);
