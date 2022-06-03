@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.12
+version: 5.0.13
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Don't show sonogram combobox
+changelog: Option to select notes instead of frequencies as axis display.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -294,6 +294,7 @@ file_var(0, sModeB);
 file_var(0, kernelSizeB);
 file_var(0, fftSizeB);
 file_var(0, xscaleB);
+file_var(0, showNotes);
 
 @slider
 slider2 != lfloor ? old_w=0;
@@ -1000,6 +1001,12 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   gfx_mode = 0;
 );
 
+function to_x(f)
+global(srate, spectrum_xoffset, wsc)
+(
+  log(800 * (f - srate * spectrum_xoffset) / srate + 1) * wsc
+);
+
 function from_frequency(hz)
 local(octave, float_note, note, note_label, offset)
 global()
@@ -1013,16 +1020,29 @@ global()
   sprintf(16, "%s%d (%+.2g ct)", note_label, octave + 4, offset)
 );
 
+function note(hz)
+local(octave, float_note, note, note_label, offset)
+global()
+(
+  note = log(hz / 261.6255653005986) / log(2);
+  octave = floor(note);
+  float_note = 12 * (note - octave);
+  note = floor(float_note + 0.5);
+  offset = float_note - note;
+  note < 1 ? "C" : note < 2 ? "C" : note < 3 ? "D" : note < 4 ? "D" : note < 5 ? "E" : note < 6 ? "F" : note < 7 ? "F" : note < 8 ? "G" : note < 9 ? "G" : note < 10 ? "A" : note < 11 ? "A" : "B";
+);
+
 function drawGrid()
 local(intensity, textintensity,
-      gv, cnt, y, gfx_texth, bottom_line, f, lx, ltxt, tx, dotext, scale_offset, drawtext)
+      gv, cnt, y, gfx_texth, bottom_line, f, lx, ltxt, tx, dotext, scale_offset, drawtext, f1, f2, color)
 global(bgColor, wsc, logf_to_pixels, scale_offset_db,
        gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, gfx_w, gfx_h,
        slider39, slider40, srate,
        spectrum_yoffset, spectrum_yoffsetbottom, spectrum_xpad,
-       scaling, spectrum_xmax, spectrum_xoffset, hideUI, micro_view)
+       scaling, spectrum_xmax, spectrum_xoffset, hideUI, micro_view,
+       showNotes)
 (
-  intensity = 0 * bgColor + 1 * ( 1 - bgColor );
+  intensity = 1 - bgColor;
   textintensity = 0.1 * bgColor + 1.0 * ( 1 - bgColor ); 
   
   // draw horz grid
@@ -1061,28 +1081,59 @@ global(bgColor, wsc, logf_to_pixels, scale_offset_db,
   wsc = scaling*gfx_w/log(1+400) * (spectrum_xmax/gfx_w);
 
   // draw vert grid
-  f=20;
-  gfx_x+=4;
-  lx=gfx_x;
-  ltxt = 0;
-  tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
-  while(
-    gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
-    dotext = drawtext && (tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
-       (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000) || (tx-ltxt)>.1*gfx_w);
-    tx > lx ? ( lx=tx+4; gfx_line(tx,spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
-    // NOTE: Note that the line above didn't have a rescale Y
-    gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
-    dotext ? (
-      ltxt = tx;
-      gfx_x = tx + 3;
-      gfx_y = gfx_h-gfx_texth-spectrum_yoffsetbottom;
-      gfx_line( gfx_x-3, gfx_y, gfx_x-3, gfx_y+gfx_texth );
-      f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
+  showNotes ? (
+    lx = 0;
+    f2 = 0;
+    gv = 0;
+    f1 = to_x(27.5 * 2^((lx - 0.5)/12));
+    f2 = to_x(27.5 * 2^((lx + 0.5)/12));
+    gfx_setfont(4, "Arial", 4 * (f2 - f1));
+    loop(120,
+      f2 < (gfx_w-spectrum_xpad) ? (
+        f = 27.5 * 2^(lx/12);
+        f2 = floor(to_x(27.5 * 2^((lx + 0.5)/12)));
+        color = 1.0 - ((gv == 1) || (gv == 4) || (gv == 6) || (gv == 9) || (gv == 11));
+
+        gfx_set(color, color, color, 0.10 * slider39 * slider40);
+        gfx_rect(f1, 0, f2 - f1, gfx_h - spectrum_yoffsetbottom);
+        
+        color ? (
+          gfx_set(textintensity, textintensity, textintensity, 1);
+          gfx_x = f1;
+          gfx_y = gfx_h - spectrum_yoffsetbottom;
+          gfx_drawstr(note(f), 1, f2, gfx_y + 20);
+        );
+        lx += 1;
+        gv += 1;
+        gv > 11 ? gv = 0;
+        f1 = f2;
+      );
     );
-    f += (f<100?10:f<1000?100:f<10000?1000:5000);
+    gfx_setfont(0)
+  ) : (
+    f=20;
+    gfx_x+=4;
+    lx=gfx_x;
+    ltxt = 0;
     tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
-    tx < spectrum_xmax
+    while(
+      gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
+      dotext = drawtext && (tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
+         (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000) || (tx-ltxt)>.1*gfx_w);
+      tx > lx ? ( lx=tx+4; gfx_line(tx,spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
+      // NOTE: Note that the line above didn't have a rescale Y
+      gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
+      dotext ? (
+        ltxt = tx;
+        gfx_x = tx + 3;
+        gfx_y = gfx_h-gfx_texth-spectrum_yoffsetbottom;
+        gfx_line( gfx_x-3, gfx_y, gfx_x-3, gfx_y+gfx_texth );
+        f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
+      );
+      f += (f<100?10:f<1000?100:f<10000?1000:5000);
+      tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
+      tx < spectrum_xmax
+    );
   );
 );
 
@@ -1805,6 +1856,7 @@ instance()
                  slider42 == 0 ? integrate_button.hit_button(mouse_x,mouse_y,4); 
                  slider42 == 0 ? integration_type_button.hit_button(mouse_x, mouse_y, 46);
                  slider42 == 0 ? show_side_button.hit_button(mouse_x, mouse_y, 47);
+                 slider42 == 0 ? show_notes_button.hit_button(mouse_x, mouse_y, 50);
                  slider42 == 0 ? diff_mode_button.hit_button(mouse_x, mouse_y, 48);
                  slider42 == 0 ? scaling.hit_button(mouse_x,mouse_y,5);
                  slider42 == 0 ? colormap.hit_button(mouse_x,mouse_y,7);              
@@ -1853,6 +1905,10 @@ instance()
       showSide = drag_slider(showSide, 0.0, 1.0, .03);
       old_w=0;
       slider_automate(showSide);
+    ) :
+    cap_mode == 50 && cap_last_y != mouse_y ? (
+      showNotes = drag_slider(showNotes, 0.0, 1.0, .03);
+      old_w=0;
     ) :
     cap_mode == 48 && cap_last_y != mouse_y ? (
       displayMode = drag_slider(displayMode, 0.0, 1.0, .03);
@@ -1966,6 +2022,10 @@ instance()
       old_w=0;
       slider_automate(showSide);
     );
+    cap_mode == 50 ? (
+      showNotes = cycle_slider(showNotes, 0.0, 1.0, 1.0);
+      old_w=0;
+    );
     cap_mode == 48 ? (
       displayMode = cycle_slider(displayMode, 0.0, 1.0, 1.0);
       old_w=0;
@@ -2043,6 +2103,8 @@ function DrawButtons()
       integration_type_button.draw_button_wrap(gfx_y, maxIntegrate ? "Max" : "Int", storeBX);
       show_side_button.str_add_measure("Mid/Side");
       show_side_button.draw_button_wrap(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
+      show_notes_button.str_add_measure("Notes");
+      show_notes_button.draw_button_wrap(gfx_y, showNotes ? "Notes" : "Freq", storeBX);
       diff_mode_button.str_add_measure("Diff (BETA)");
       diff_mode_button.draw_button_wrap(gfx_y, displayMode ? "Diff (BETA)" : "Normal", storeBX);      
     );
