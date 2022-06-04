@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.13
+version: 5.0.14
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Option to select notes instead of frequencies as axis display.
+changelog: Add quadratic interpolation option for spectral display and Gaussian window for exact frequency estimation.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -17,7 +17,7 @@ import colormaps.jsfx-inc
 slider1:9<0,9,1{16,32,64,128,256,512,1024,2048,4096,8192,16384,32768}>-FFT size
 slider2:-90<-450,-12,6>-floor
 slider3:0<0,1,1{disabled,enabled}>-show phase
-slider4:2<0,4,1{rectangular,hamming,blackman-harris,blackman,flat-top}>-window
+slider4:2<0,6,1{rectangular,hamming,blackman-harris,blackman,flat-top,gaussian}>window
 slider5:200<0,2500,1>-integration time (ms)
 slider6:1<1,6,.2>-scaling
 slider7:smoothing=20<0,100,1>-smoothing
@@ -75,7 +75,7 @@ slider54:showB=0<0,1,1>-Show B
 slider55:maxIntegrate=0<0,1,0>-Integration mode
 slider56:showSide=0<0,1,0>-Show side channel
 slider57:noRenderBuffer=0<0,1,1>-Offscreen buffer
-slider58:dummy=0<0,1,1>-Dummy
+slider58:interpolate_lines=0<0,1,1>-interpolate_lines
 slider59:dummy=0<0,1,1>-Dummy
 slider60:displayMode=0<0,1,1>-Display mode
 slider61:scale_offset_db_user=0<-48,48,1>-Scale offset
@@ -1138,15 +1138,17 @@ global(bgColor, wsc, logf_to_pixels, scale_offset_db,
 );
 
 function drawFFT(bufout, fftsize, xscale, kernelSize, rr, gg, bb, fill, draw, offset)
-local(i, curh, ixsc,
+local(i, curh, ixsc, iwsc,
       prec, tx, ty, tx0, lx0, lx, ly, 
-      fill_slast, fill_slmin, ly2, ty2)
+      fill_slast, fill_slmin, ly2, ty2, bin, last_bin, left_bin,
+      a, b, c, y1, y2, y3, xrel,
+      scale1, scale2)
 global(gfx_w, gfx_h, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a,
-       slider37, displayMode,
+       slider37, displayMode, srate,
        spectrum_yoffsetbottom, spectrum_yoffset,
        spectrum_xoffsetbottom, spectrum_xoffset
        wsc, spectrum_xmax, scale_offset_db,
-       spectral_offset_pixels, zeroline)
+       spectral_offset_pixels, zeroline, interpolate_lines)
 instance()
 (
   i = 0;
@@ -1157,44 +1159,84 @@ instance()
   ixsc = 0;
   prec = fftsize*spectrum_xoffset*xscale;
   zeroline = spectrum_yoffset-spectral_offset_pixels;
-  loop(fftsize*0.5-kernelSize,
-    tx = log(1.0+ixsc-prec)*wsc;
-    ty = bufout[];
-    ty = min(ty, gfx_h - spectrum_yoffsetbottom);
   
-    ( i && ( tx < spectrum_xmax ) ) ?
-    ( 
-      gfx_r=rr;
-      gfx_g=gg;
-      gfx_b=bb;
-        
-      fill ? (
-        gfx_a=slider37;
-        tx0=tx|0;
-        lx0=lx|0;
-        tx0>lx0? (
-          displayMode == 1 ? (
-            gfx_triangle(lx0,max(zeroline,ly),lx0,ly,tx0-1,ty,tx0-1,max(zeroline,ty));
-            gfx_triangle(lx0,min(zeroline,ly),lx0,ly,tx0-1,ty,tx0-1,min(zeroline,ty));
+  interpolate_lines ? (
+    tx = 0;
+    scale1 = fftsize / 800;
+    scale2 = spectrum_xoffset * fftsize;
+    iwsc = 1 / wsc;
+    gfx_r=rr;
+    gfx_g=gg;
+    gfx_b=bb;
+    last_bin = -2;
+    loop(spectrum_xmax,
+      bin = scale1 * (exp(tx * iwsc) - 1) + scale2;
+      left_bin = floor(bin) - 1;
+      
+      // Update interpolant eq
+      // x-axis is defined at [0, 1, 2]
+      (left_bin != last_bin) ? (
+        left_bin = max(0, left_bin);
+        y1 = bufout[left_bin];
+        y2 = bufout[left_bin + 1];
+        y3 = bufout[left_bin + 2];
+      
+        a = - 0.5 * (2 * (y2 - y1) + (y1 - y3));
+        b = - 0.5 * (4 * (y1 - y2) + (y3 - y1));
+        c = y1;
+      );
+      xrel = bin - left_bin;
+
+      ty = a * xrel * xrel + b * xrel + c;
+      ty = min(ty, gfx_h - spectrum_yoffsetbottom);
+      
+      gfx_a = 1;
+      gfx_line(tx,ly,tx+1,ty);
+      gfx_a = slider37;
+      gfx_line(tx,gfx_h - spectrum_yoffsetbottom,tx,ty);      
+      tx += 1;
+      ly = ty;
+    );
+  ) : (
+    loop(fftsize*0.5-kernelSize,
+      tx = log(1.0+ixsc-prec)*wsc;
+      ty = bufout[];
+      ty = min(ty, gfx_h - spectrum_yoffsetbottom);
+    
+      ( i && ( tx < spectrum_xmax ) ) ?
+      ( 
+        gfx_r=rr;
+        gfx_g=gg;
+        gfx_b=bb;
+          
+        fill ? (
+          gfx_a=slider37;
+          tx0=tx|0;
+          lx0=lx|0;
+          tx0>lx0? (
+            displayMode == 1 ? (
+              gfx_triangle(lx0,max(zeroline,ly),lx0,ly,tx0-1,ty,tx0-1,max(zeroline,ty));
+              gfx_triangle(lx0,min(zeroline,ly),lx0,ly,tx0-1,ty,tx0-1,min(zeroline,ty));
+            ) : (
+              ly < curh || ty < curh ? gfx_triangle(lx0,max(curh,ly),lx0,ly,tx0-1,ty,tx0-1,max(curh,ty));
+            );
           ) : (
-            ly < curh || ty < curh ? gfx_triangle(lx0,max(curh,ly),lx0,ly,tx0-1,ty,tx0-1,max(curh,ty));
+            tx0 > fill_slast ? (
+             fill_slast < curh ? gfx_line(fill_slast,curh,fill_slast,fill_slmin);
+             fill_slmin=curh;
+           ) : (
+             fill_slmin=min(fill_slmin,ty);
+            );
           );
-        ) : (
-          tx0 > fill_slast ? (
-           fill_slast < curh ? gfx_line(fill_slast,curh,fill_slast,fill_slmin);
-           fill_slmin=curh;
-         ) : (
-           fill_slmin=min(fill_slmin,ty);
-          );
-        );
-        fill_slast=tx0;        
-      );  
-      gfx_a=1;
-      gfx_x=lx; gfx_y=ly; draw == 1 ? gfx_lineto(tx,ty,1) ;
-   );
-   
-   lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
-  )
+          fill_slast=tx0;        
+        );  
+        gfx_a=1;
+        gfx_x=lx; gfx_y=ly; draw == 1 ? gfx_lineto(tx,ty,1) ;
+     );
+     
+     lx=tx; ly=ty; ly2=ty2; bufout+=1; i+=1; ixsc+=xscale;
+    );
+  );
 );
 
 function prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
@@ -1857,6 +1899,7 @@ instance()
                  slider42 == 0 ? integration_type_button.hit_button(mouse_x, mouse_y, 46);
                  slider42 == 0 ? show_side_button.hit_button(mouse_x, mouse_y, 47);
                  slider42 == 0 ? show_notes_button.hit_button(mouse_x, mouse_y, 50);
+                 slider42 == 0 ? interpolation_button.hit_button(mouse_x, mouse_y, 51);
                  slider42 == 0 ? diff_mode_button.hit_button(mouse_x, mouse_y, 48);
                  slider42 == 0 ? scaling.hit_button(mouse_x,mouse_y,5);
                  slider42 == 0 ? colormap.hit_button(mouse_x,mouse_y,7);              
@@ -1892,7 +1935,7 @@ instance()
       slider_automate(scale_offset_db_user);
     ) :
     cap_mode == 2 && cap_last_y != mouse_y ? (
-      slider4 = drag_slider(slider4, 0.0, 3.0, .03);
+      slider4 = drag_slider(slider4, 0.0, 5.0, .03);
       old_w=0;
       slider_automate(slider4);
     ) :
@@ -1909,6 +1952,10 @@ instance()
     cap_mode == 50 && cap_last_y != mouse_y ? (
       showNotes = drag_slider(showNotes, 0.0, 1.0, .03);
       old_w=0;
+    ) :
+    cap_mode == 51 && cap_last_y != mouse_y ? (
+      interpolate_lines = drag_slider(interpolate_lines, 0.0, 1.0, .03);
+      old_w = 0;
     ) :
     cap_mode == 48 && cap_last_y != mouse_y ? (
       displayMode = drag_slider(displayMode, 0.0, 1.0, .03);
@@ -2026,6 +2073,10 @@ instance()
       showNotes = cycle_slider(showNotes, 0.0, 1.0, 1.0);
       old_w=0;
     );
+    cap_mode == 51 ? (
+      interpolate_lines = cycle_slider(interpolate_lines, 0.0, 1.0, 1.0);
+      old_w=0;
+    );
     cap_mode == 48 ? (
       displayMode = cycle_slider(displayMode, 0.0, 1.0, 1.0);
       old_w=0;
@@ -2068,8 +2119,9 @@ function DrawButtons()
                         (slider4|0)==1 ? "Hamming" :  
                         (slider4|0)==2 ? "Blackman-Harris" :
                         (slider4|0)==3 ? "Blackman" : 
-                        (slider4|0)==4 ? "Rectangular":
-                          "Flat-top", storeBX);
+                        (slider4|0)==0 ? "Rectangular":
+                        (slider4|0)==4 ? "Flat-top":
+                          "Gaussian", storeBX);
     
       floor_button.str_add_measure("Floor: 888.8 dB");
       floor_button.draw_button_wrap(gfx_y, sprintf(#,"Floor: %.1fdB", slider2), storeBX);
@@ -2105,6 +2157,8 @@ function DrawButtons()
       show_side_button.draw_button_wrap(gfx_y, showSide ? "Mid/Side" : "Mono", storeBX);
       show_notes_button.str_add_measure("Notes");
       show_notes_button.draw_button_wrap(gfx_y, showNotes ? "Notes" : "Freq", storeBX);
+      interpolation_button.str_add_measure("Notes");
+      interpolation_button.draw_button_wrap(gfx_y, interpolate_lines ? "Quad" : "Linear", storeBX);
       diff_mode_button.str_add_measure("Diff (BETA)");
       diff_mode_button.draw_button_wrap(gfx_y, displayMode ? "Diff (BETA)" : "Normal", storeBX);      
     );
@@ -2499,19 +2553,22 @@ mouse_cap > 0 ? (
     integrate_sc=1;
   );
 
-  windowsize != fftsize || windowtype != (slider4|0) ? (
+  1 ? (//windowsize != fftsize || windowtype != (slider4|0) ? (
     windowtype=slider4|0; 
     windowsize=fftsize;
     dwindowpos = $pi*2/fftsize;
     i=pwr=0;
+    ipi = 1.0 / $pi;
     loop(fftsize*.5+1,
        windowpos=i*dwindowpos;
        pwr += (window[i] = (
+         //rectangular,hamming,blackman-harris,blackman,flat-top,gaussian
+         windowtype==0 ? ( 1 ) :
          windowtype==1 ? ( 0.53836 - cos(windowpos)*0.46164 ) :
          windowtype==2 ? ( 0.35875 - 0.48829 * cos(windowpos) + 0.14128 * cos(2*windowpos) - 0.01168 * cos(3*windowpos) ) :
-         windowtype==3 ? ( 0.42 - 0.50 * cos(windowpos) + 0.08 * cos(2.0*windowpos) ) :
-         windowtype==4 ? ( 1.0 ) :
-         ( .21557895 - 0.41663158 * cos(windowpos) + 0.277263158 * cos(2*windowpos) - 0.083578947 * cos(3*windowpos) + 0.006947368 * cos(4*windowpos) )
+         windowtype==3 ? ( 0.42659 - 0.49656 * cos(windowpos) + 0.076849 * cos(2.0*windowpos) ) :
+         windowtype==4 ? ( 0.21557895 - 0.41663158 * cos(windowpos) + 0.277263158 * cos(2*windowpos) - 0.083578947 * cos(3*windowpos) + 0.006947368 * cos(4*windowpos) ) :
+         windowtype==5 ? ( exp(- 5 * (windowpos * ipi - 1.0) * (windowpos * ipi - 1.0) ) )
          ) );
        i+=1;
     );
