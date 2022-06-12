@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.10
+version: 0.11
 author: Joep Vanlier
-changelog: Add copy paste behaviour for pattern data (shift + right mouse button).
+changelog: Fix large blocksize synchronization issues.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -206,42 +206,7 @@ file_version = 2;
 @slider
 
 @block
-function update_time_info()
-(
-  samples_per_beat = (srate * 60) / tempo / current_speed;
-  loop_length = loop_point * samples_per_beat;
-  pattern_length = n_segments * samples_per_beat;
-  to_index = n_segments / pattern_length;
-  from_beat = 60 * srate / tempo;
-);
-
-update_time_info();
-loaded_pattern = -1;
-pattern_update();
-midi.midi_block();
-
-@sample
-midi.curSample += 1;
-midi.notes_remain ? (
-  midi.midi_sample();
-  midi.assign_notes(current_arp, poly_mode);
-);
-
-pattern_update();
-
-time_mode == 0 ? current_sample = beat_position * from_beat;
-
-current_sample += 1;
-current_sample > loop_length ? 
-(
-  while(
-    current_sample -= loop_length;
-    current_sample > loop_length
-  );
-);
-sequencer_index = floor(to_index * (current_sample + 1));
-
-function process_sequence(current_pattern_index)
+function process_sequence(current_pattern_index, block_position)
 local(current_pattern, idx, current_idx, audio_octave, current_row, new_note, mod, vel)
 global(
   pattern_buffer,
@@ -258,7 +223,8 @@ global(
   modulator2_values,
   min_vel, max_vel,
   min_modwheel, max_modwheel,
-  enable_vel, enable_mod
+  enable_vel, enable_mod,
+  cpos,
   )
 (
   (sequencer_index != last_sequencer_index) ? (
@@ -270,10 +236,11 @@ global(
     
     enable_mod ? (
       mod = modulator1_values[sequencer_index] * (max_modwheel - min_modwheel) + min_modwheel;
-      midisend(0, $xB0, 1, mod);
+      midisend(block_position, $xB0, 1, mod);
     );
     
     audio_octave = 0;
+    cpos = max(cpos, block_position);
     loop(extra_octaves + 1,
       idx = 0;
       loop(polyphony,
@@ -283,19 +250,19 @@ global(
         (current_row[sequencer_index] == 0) ? (
           // No note / Terminate one if it is playing
           (notes_in_flight[current_idx] > 0) ? (
-            midisend(0, $x80, notes_in_flight[current_idx], 0);
+            midisend(block_position, $x80, notes_in_flight[current_idx], 0);
             notes_in_flight[current_idx] = 0;
           );
         ) : (current_row[sequencer_index] == 1) ? (
           // If something playing, stop before starting new note
           (notes_in_flight[current_idx] > 0) ? (
-            midisend(0, $x80, notes_in_flight[current_idx], 0);
+            midisend(block_position, $x80, notes_in_flight[current_idx], 0);
             notes_in_flight[current_idx] = 0;
           );
           // Start new note
           (current_arp[idx] > 0) ? (
             new_note = current_arp[idx] + 12 * audio_octave;
-            midisend(1, $x90, new_note, vel);
+            midisend(block_position + 1, $x90, new_note, vel);
             notes_in_flight[current_idx] = new_note;
           );
         );
@@ -306,7 +273,48 @@ global(
   );
 );
 
-process_sequence(current_pattern_index);
+function update_time_info()
+(
+  samples_per_beat = (srate * 60) / tempo / current_speed;
+  loop_length = loop_point * samples_per_beat;
+  pattern_length = n_segments * samples_per_beat;
+  to_index = n_segments / pattern_length;
+  from_beat = 60 * srate / tempo;
+);
+
+update_time_info();
+loaded_pattern = -1;
+pattern_update();
+midi.midi_block();
+
+// Sync to block
+time_mode == 0 ? current_sample = beat_position * from_beat;
+
+// Loop my own samples
+block_position = 0;
+loop(samplesblock,
+  midi.curSample += 1;
+  midi.notes_remain ? (
+    midi.midi_sample();
+    midi.assign_notes(current_arp, poly_mode);
+  );
+  
+  pattern_update();
+  
+  current_sample > loop_length ? 
+  (
+    while(
+      current_sample -= loop_length;
+      current_sample > loop_length
+    );
+  );
+  sequencer_index = floor(to_index * current_sample);
+  current_sample += 1;
+  process_sequence(current_pattern_index, block_position);
+  block_position += 1; 
+);
+
+@sample
 
 @gfx 919 302
 setup_theme();
