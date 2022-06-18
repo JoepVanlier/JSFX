@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.07
+version: 0.08
 author: Joep Vanlier
-changelog: Increase MIDI memory for people with larger block sizes. Don't accept duplicate pitch bend commands (performance improvement). Don't allow memory cloobering of note_mem.
+changelog: Don't let MIDI signals override settings_changed. Add MIDI velocity sensitivity.
 license: MIT
 provides:
   partials_dependencies/*
@@ -25,10 +25,10 @@ slider10:base_note=0<-12,12,1>-Base note
 slider11:force_fb=1<0,15,0.0001>-Forced feedback (TD only)
 slider12:partials=32<16,64,16>-Partials
 slider13:stereo=1<0,1,1{Off,On}>-Stereo-ize
-slider14:placeholder=0<0,1,1>-Placeholder
-slider15:placeholder=0<0,1,1>-Placeholder
-slider16:placeholder=0<0,1,1>-Placeholder
-slider17:placeholder=0<0,1,1>-Placeholder
+slider14:position_vel=0<-1,1,0.000001>-Position velocity sensitivity
+slider15:damp_vel=0<-4,4,0.000001>-Damping velocity sensitivity
+slider16:freq_damp_vel=0<-5,5,0.000001>-Frequency dependent damping velocity sensitivity
+slider17:inharmonic_vel=0<-4,4,0.000001>-Inharmonicity velocity sensitivity
 slider18:midi_input=0<0,1,1{Off,On}>-Midi input
 slider19:first_note=45<0,127,1>-Midi note 1
 slider20:second_note=52<0,127,1>-Midi note 2
@@ -58,14 +58,14 @@ import saike_modal_buffer.jsfx-inc
 gfx_ext_retina = 1;
 version = 1;
 
-position_knob.init_knob(0, 1, 0.1, 3);
-damp_knob.init_knob(-2, 2, 0.1, 4);
-freq_damp_knob.init_knob(-6, -1, -4, 5);
-inharmonic_knob.init_knob(-4, 0, -4, 6);
-stiffness_knob.init_knob(3, 6, 4.6, 7);
-stiffness_exp_knob.init_knob(1.0, 3.0, 2.3, 8);
-force_fb.init_knob(0, 15.0, 1.0, 11);
-partials.init_knob(16, 64, 32, 12);
+position_knob.init_knob(0, 1, 0.1, 3, 14);
+damp_knob.init_knob(-2, 2, 0.1, 4, 15);
+freq_damp_knob.init_knob(-6, -1, -4, 5, 16);
+inharmonic_knob.init_knob(-4, 0, -4, 6, 17);
+stiffness_knob.init_knob(3, 6, 4.6, 7, 0);
+stiffness_exp_knob.init_knob(1.0, 3.0, 2.3, 8, 0);
+force_fb.init_knob(0, 15.0, 1.0, 11, 0);
+partials.init_knob(16, 64, 32, 12, 0);
 
 function initialize_memory()
 local(logo_handle, freemem, lowcut, lowcut_freq, delay_ms, count)
@@ -142,12 +142,24 @@ instance()
   (2/(1+exp(-2*x)) - 1)
 );
 
-
-function set_pars(f_0)
+function set_pars(f_0, vel)
 local()
-global(stft)
-instance()
+global(
+  stft,
+  relative_position, damp, freq_damp, inharmonic,
+  position_vel, damp_vel, freq_damp_vel, inharmonic_vel,
+)
+instance(base_damp, f_damp, inharm, rel_position)
 (
+  // position 0 to 1
+  // damp -2 to 2
+  // freq_damp -6 to -1
+  // inharmonic -4 to 0
+  rel_position = min(max(0, relative_position + position_vel * vel), 1);
+  base_damp = 10^(min(max(-2, damp + damp_vel * vel), 2));
+  f_damp = 10^(min(max(-6, freq_damp + freq_damp_vel * vel), -1));
+  inharm = 10^(min(max(-4, inharmonic + inharmonic_vel * vel), 0));
+
   stft ? (
     this.set_pars_stft(f_0);
   ) : (
@@ -169,7 +181,7 @@ instance()
 
 
 function update_notes()
-instance(notes_on, active_note_mem)
+instance(notes_on, active_note_mem, active_note_vel)
 global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift, midi.pitchbend)
 local(ref_pitch, scaling)
 (
@@ -178,11 +190,11 @@ local(ref_pitch, scaling)
   ref_pitch = 2 * midi.pitchbend + pitch_shift - 69;
   
   // Update note parameters
-  notes_on ? string1.set_pars(scaling * 2 ^ ((active_note_mem[0] + ref_pitch) / 12));
-  notes_on > 1 ? string2.set_pars(scaling * 2 ^ ((active_note_mem[1] + ref_pitch) / 12));
-  notes_on > 2 ? string3.set_pars(scaling * 2 ^ ((active_note_mem[2] + ref_pitch) / 12));
-  notes_on > 3 ? string4.set_pars(scaling * 2 ^ ((active_note_mem[3] + ref_pitch) / 12));
-  notes_on > 4 ? string5.set_pars(scaling * 2 ^ ((active_note_mem[4] + ref_pitch) / 12));
+  notes_on ? string1.set_pars(scaling * 2 ^ ((active_note_mem[0] + ref_pitch) / 12), active_note_vel[0]);
+  notes_on > 1 ? string2.set_pars(scaling * 2 ^ ((active_note_mem[1] + ref_pitch) / 12), active_note_vel[1]);
+  notes_on > 2 ? string3.set_pars(scaling * 2 ^ ((active_note_mem[2] + ref_pitch) / 12), active_note_vel[2]);
+  notes_on > 3 ? string4.set_pars(scaling * 2 ^ ((active_note_mem[3] + ref_pitch) / 12), active_note_vel[3]);
+  notes_on > 4 ? string5.set_pars(scaling * 2 ^ ((active_note_mem[4] + ref_pitch) / 12), active_note_vel[4]);
 );
 
 function force_update()
@@ -210,7 +222,7 @@ update_global_parameters();
 function update_fixed_notes()
 local(change, val, ix, idx)
 global(settings_changed)
-instance(active_note_mem, notes_on)
+instance(active_note_mem, active_note_vel, notes_on)
 (
   ix = 19;
   idx = 0;
@@ -221,6 +233,7 @@ instance(active_note_mem, notes_on)
     val ? (
       change = (active_note_mem[idx] != val) ? 1 : change;
       active_note_mem[idx] = val;
+      active_note_vel[idx] = 1.0;
       idx += 1;
     );
     ix += 1;
@@ -230,6 +243,7 @@ instance(active_note_mem, notes_on)
   loop(val,
     change = (active_note_mem[idx] != 0) ? 1 : change;
     active_note_mem[idx] = 0;
+    active_note_vel[idx] = 0;
     idx += 1;
   );
   change ? (
@@ -239,7 +253,9 @@ instance(active_note_mem, notes_on)
 
 midi.notes_remain ? (
   // Reset if MIDI stuff updated
-  settings_changed = midi.midi_sample(midi_input);
+  midi.midi_sample(midi_input) ? (
+    settings_changed = 1;
+  );
 );
 midi.curSample += 1;
 
@@ -697,27 +713,28 @@ instance(_x, _y, _w, _h, active, _me)
 
 gfx_string.draw_stft(0.02 * gfx_w, 0.02 * gfx_h, gfx_w * 0.93, gfx_h * 0.9);
 
-function label_toggle(x, y, str)
-local(ww, hh)
-global(mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y, last_cap)
+function label_toggle(x, y, str, hint)
+local(ww, hh, over)
+global(mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y, last_cap, hinter.sethint)
 (
   gfx_x = x; gfx_y = y;
   gfx_measurestr(str, ww, hh);
   gfx_printf(str);
   
+  over = (mouse_x > x) && (mouse_x < (x + ww)) && (mouse_y > y) && (mouse_y < (y + hh));
+  over ? hinter.sethint(hint);
+  
   ((mouse_cap == 1) && (last_cap == 0)) ? (
-    (mouse_x > x) && (mouse_x < (x + ww)) && (mouse_y > y) && (mouse_y < (y + hh)) ? (
-      1
-    );
+    over ? 1
   );
 );
 
 
 gfx_setfont(3, "Arial", 12 * max(1, scaling));
 colormodel(1 - display_log - 0.01);
-label_toggle(0.02 * gfx_w, 0.93 * gfx_h, "[Linear] ") ? (display_log = 0);
+label_toggle(0.02 * gfx_w, 0.93 * gfx_h, "[Linear] ", "Display frequencies on a linear scale") ? (display_log = 0);
 colormodel(display_log);
-label_toggle(gfx_x, gfx_y, "[Logarithmic]") ? (display_log = 1);
+label_toggle(gfx_x, gfx_y, "[Logarithmic]", "Display frequencies on a logarithmic scale") ? (display_log = 1);
 
 keyboard.draw_keyboard(base_note, gfx_x + 0.01 * gfx_w, 0.935 * gfx_h, gfx_w * 0.82, 0.05 * gfx_y);
 
@@ -731,11 +748,16 @@ note_over = keyboard.note_clicked();
 
 gfx_setfont(3, "Arial", 12 * max(1, scaling));
 colormodel(midi_input - 0.01);
-label_toggle(keyboard._x + keyboard._w, 0.935 * gfx_h, " [MIDI]") ? (
+label_toggle(keyboard._x + keyboard._w, 0.935 * gfx_h, " [MIDI]", "Use MIDI notes as input\n\nWhen enabled, the pitches are set\nby MIDI notes being received by the\nplugin. Note that you will still need an\naudio source in addition as input.\n") ? (
   midi_input = 1.0 - midi_input;
   memset(midi.active_note_mem, 0, 5);
   midi.notes_on = 0;
   settings_changed = 1;
+);
+
+colormodel(change_vel_mod - 0.01);
+label_toggle(keyboard._x + keyboard._w + 30, 0.935 * gfx_h, " [Velocity]", "Click this to change the velocity sensitivity of the parameters.\nParameters that can be linked to MIDI note velocity will\nbe highlighted.\n\nChanging their settings will result in those parameters\nbeing sensitive to MIDI note velocity. This sensitivity is\nindicated by a differently colored arc.") ? (
+  change_vel_mod = 1 - change_vel_mod;
 );
 
 function handle_non_midi_click(note_over)
@@ -909,13 +931,13 @@ logo.draw_logo(logomem, rle_mem, 0.45, 6, 6);
 // Ctrl + Click the logo enters dev mode
 ((mouse_cap == 5) && (last_cap == 0) && (mouse_x < 120) && (mouse_y < 25)) ? (
   model = 10;
-  kkyes = 1;
+  settings_changed = 1;
 );
 
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.07 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.08 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
