@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.17
+version: 5.0.18
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Bugfix integration time.
+changelog: Bugfix quadratic interpolation mode that could omit high frequency peaks.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -1142,7 +1142,8 @@ local(i, curh, ixsc, iwsc,
       prec, tx, ty, tx0, lx0, lx, ly, 
       fill_slast, fill_slmin, ly2, ty2, bin, last_bin, left_bin,
       a, b, c, y1, y2, y3, xrel,
-      scale1, scale2)
+      scale1, scale2,
+      cmax, idx, checked_bin, dbin)
 global(gfx_w, gfx_h, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a,
        slider37, displayMode, srate,
        spectrum_yoffsetbottom, spectrum_yoffset,
@@ -1169,16 +1170,30 @@ instance()
     gfx_g=gg;
     gfx_b=bb;
     last_bin = -2;
-    
     ly = 0;
     loop(spectrum_xmax,
       bin = scale1 * (exp(tx * iwsc) - 1) + scale2;
-      left_bin = floor(bin) - 1;
+      dbin = floor(bin) - last_bin;
       
-      // Update interpolant eq
-      // x-axis is defined at [0, 1, 2]
-      (left_bin != last_bin) ? (
-        left_bin = max(0, left_bin);
+      // Update interpolant
+      (dbin >= 1) ? (
+        // If we crossed multiple bins, seek the bin with the maximum in this range.
+        (dbin >= 2) ? (
+          cmax = 1000000000000000;
+          idx = last_bin + 1;
+          loop(dbin,
+            checked_bin = bufout[idx];
+            (checked_bin < cmax) ? (
+              cmax = checked_bin;
+              bin = idx;
+            );
+            idx += 1;
+          );
+        );
+        last_bin = floor(bin);
+        left_bin = max(0, floor(bin) - 1);
+        
+        // x-axis is defined at [0, 1, 2]
         y1 = bufout[left_bin];
         y2 = bufout[left_bin + 1];
         y3 = bufout[left_bin + 2];
@@ -1187,9 +1202,10 @@ instance()
         b = - 0.5 * (4 * (y1 - y2) + (y3 - y1));
         c = y1;
       );
+    
       xrel = bin - left_bin;
-
       ty = a * xrel * xrel + b * xrel + c;
+      
       ty = min(ty, gfx_h - spectrum_yoffsetbottom);
       
       gfx_a = 1;
