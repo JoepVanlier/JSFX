@@ -1,0 +1,196 @@
+@init
+function init_stft_mem(freemem, size)
+instance(
+  buffer_index, buffer_length,
+  fft_buffer, window_buffer, 
+  input_buffer, output_buffer,
+  fft_size_index, phase_left, phase_right,
+)
+local(MAX_FFT_SIZE)
+global(srate)
+(
+  // Make sure we don't end up on a boundary
+  freemem = ceil(freemem / 65536) * 65536;
+  fft_size_index = size;
+
+  MAX_FFT_SIZE = 32768;
+  
+  /* There's some additional padding so that we don't have to range check when octaving */
+  freemem = (fft_buffer = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (window_buffer = freemem) + MAX_FFT_SIZE * 2;
+  freemem = (phase_left = freemem) + MAX_FFT_SIZE * 2;
+  freemem = (phase_right = freemem) + MAX_FFT_SIZE * 2;
+  
+  buffer_length = srate;
+  buffer_index = 0;
+  freemem = (input_buffer = freemem) + buffer_length * 2;
+  freemem = (output_buffer = freemem) + buffer_length * 2;
+  freemem
+);
+
+function block_stft()
+instance(fft_buffer, fft_size, prev_fft_size, fft_interval, fft_scaling_factor, window_buffer, fft_size_index)
+local(overlap_factor, i, r)
+global()
+(
+  overlap_factor = 6;
+  fft_size = 256 << fft_size_index;
+  fft_interval = fft_size / overlap_factor;
+  fft_scaling_factor = 1.0 / overlap_factor / fft_size;
+  
+  fft_size != prev_fft_size ? (
+    prev_fft_size = fft_size;
+    // Fill window buffer
+    i = 0;
+    loop(fft_size,
+      r = (i + 0.5) / fft_size;
+      window_buffer[i] = (0.5 - 0.5 * cos(2 * $pi * r)) / sqrt(0.375);
+      i += 1;
+    );
+  );
+);
+
+function process_stft_segment(fft_buffer, fft_size, phase_left, phase_right)
+global(srate)
+instance()
+local(
+  fft_bin, tfft_bin2, tmp, /* Iterators */
+  left_real, left_imag, right_real, right_imag,
+  left_real_new, left_imag_new, right_real_new, right_imag_new,
+  tfft_bin,
+)
+(
+  fft_bin = 0; // FFT bin number
+  
+  tfft_bin = 0;
+  loop(fft_size/2,
+    tfft_bin2 = fft_bin ? 2 * (fft_size - fft_bin) : 0;
+
+    // Unfold complex spectrum into two real spectra
+    left_real = fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    left_imag = fft_buffer[tfft_bin + 1] - fft_buffer[tfft_bin2 + 1];
+    right_real = fft_buffer[tfft_bin + 1] + fft_buffer[tfft_bin2 + 1];
+    right_imag = -fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    
+    // Basic phase rotation
+    left_real_new = left_real * phase_left[tfft_bin] - left_imag * phase_left[tfft_bin + 1];
+    left_imag_new = left_real * phase_left[tfft_bin + 1] + left_imag * phase_left[tfft_bin];
+    right_real_new = right_real * phase_right[tfft_bin] - right_imag * phase_right[tfft_bin + 1];
+    right_imag_new = right_real * phase_right[tfft_bin + 1] + right_imag * phase_right[tfft_bin];
+ 
+    // Re-fold back into complex spectrum
+    fft_buffer[tfft_bin] = (left_real_new - right_imag_new) * 0.5;
+    fft_buffer[tfft_bin + 1] = (left_imag_new + right_real_new) * 0.5;
+    fft_buffer[tfft_bin2] = (left_real_new + right_imag_new) * 0.5;
+    fft_buffer[tfft_bin2 + 1] = (-left_imag_new + right_real_new) * 0.5;
+
+    fft_bin += 1;
+    tfft_bin += 2;
+  );
+);
+
+function fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length)
+local(bi, i, i2)
+global()
+(
+  // Copy input to buffer
+  bi = buffer_index - fft_size + 1;
+  i = 0;
+  loop(fft_size,
+    i2 = bi + i;
+    i2 < 0 ? i2 += buffer_length;
+  
+    fft_buffer[2 * i] = input_buffer[2 * i2] * window_buffer[i];
+    fft_buffer[2 * i + 1] = input_buffer[2 * i2 + 1] * window_buffer[i];
+  
+    i += 1;
+  );
+  
+  // Process buffer
+  fft(fft_buffer, fft_size);
+  fft_permute(fft_buffer, fft_size);
+);
+
+function process_stft(in0, in1)
+local(i, bi, i2, inv_size, scale, fa, xc)
+global(spline, spline.should_update, spline.eval_spline, srate)
+instance(
+  buffer_ready,
+  input_buffer,
+  output_buffer,
+  buffer_index,
+  output_index,
+  fft_counter, fft_interval,
+  fft_buffer,
+  buffer_length,
+  window_buffer,
+  fft_size,
+  fft_scaling_factor,
+  out_left,
+  out_right,
+  phase_left,
+  phase_right,
+  )
+(
+  input_buffer[buffer_index * 2] = in0;
+  input_buffer[buffer_index * 2 + 1] = in1;
+  
+  buffer_ready > 0 ? (
+    buffer_ready += 1;
+  );
+   
+  // Once a block is ready, begin processing.
+  fft_counter += 1;
+  fft_counter >= fft_interval ? (
+    fft_counter = 0;
+    fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length);
+    buffer_ready = 1;
+    
+    fa = 15 / srate;
+    
+    //spline.should_update ? (
+      i = 0; i2 = 0; inv_size = 1.0 / fft_size;
+      //scale = 20.0 * $pi;
+      scale = 2.0 * $pi;
+      loop(fft_size,
+        xc = (log10(i2) - log10(fa)) / (log10(1.0) - log10(fa));
+        phase_right[i] = phase_left[i] = cos(scale * spline.eval_spline(xc));
+        phase_right[i + 1] = phase_left[i + 1] = - sin(scale * spline.eval_spline(xc));
+        i += 2;
+        i2 += inv_size;
+      );
+      phase_right[0] = 1;
+      phase_right[1] = 0;
+    //);
+    
+    
+    this.process_stft_segment(fft_buffer, fft_size, phase_left, phase_right);
+    fft_ipermute(fft_buffer, fft_size);
+    ifft(fft_buffer, fft_size);
+    
+    // Add to output
+    bi = buffer_index - fft_size + 1;
+    i = 0;
+    loop(fft_size,
+      i2 = bi + i;
+      (i2 < 0) ? i2 += buffer_length;
+      output_buffer[2 * i2] += fft_buffer[2 * i] * window_buffer[i] * fft_scaling_factor;
+      output_buffer[2 * i2 + 1] += fft_buffer[2 * i + 1] * window_buffer[i] * fft_scaling_factor;
+      i += 1;
+    );
+    buffer_ready = 0;
+    
+  );
+  
+  output_index = buffer_index - fft_size;
+  output_index < 0 ? output_index += buffer_length;
+  
+  out_left = output_buffer[output_index * 2];
+  out_right = output_buffer[output_index * 2 + 1];
+   
+  output_buffer[output_index * 2] = 0;
+  output_buffer[output_index * 2 + 1] = 0;
+  
+  buffer_index = (buffer_index + 1) % buffer_length;
+);
+

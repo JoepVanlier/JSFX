@@ -1,0 +1,251 @@
+@init
+function init_fft_scope_mem(freemem, size)
+instance(
+  buffer_index, buffer_length,
+  fft_buffer, out_buffer, window_buffer, 
+  input_buffer, fft_size_index,
+)
+local(MAX_FFT_SIZE)
+global(srate)
+(
+  MAX_FFT_SIZE = 32768;
+  
+  // Make sure we don't end up on a boundary
+  freemem = ceil(freemem / 65536) * 65536;
+  fft_size_index = size;
+  
+  /* There's some additional padding so that we don't have to range check when octaving */
+  freemem = (fft_buffer = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (out_buffer = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (window_buffer = freemem) + MAX_FFT_SIZE * 2;
+  
+  buffer_length = srate;
+  buffer_index = 0;
+  
+  freemem = (input_buffer = freemem) + buffer_length * 2;
+  freemem
+);
+
+function block_fft_view()
+instance(fft_buffer, fft_size, prev_fft_size, fft_interval, fft_scaling_factor, window_buffer, fft_size_index)
+local(overlap_factor, i, window_pos, pwr, ipi, windowtype)
+global(wcalc)
+(
+  overlap_factor = 6;
+  fft_size = 256 << fft_size_index;
+  fft_interval = fft_size / overlap_factor;
+  fft_scaling_factor = 1.0 / overlap_factor / fft_size;
+  
+  fft_size != prev_fft_size ? (
+    prev_fft_size = fft_size;
+
+    // Fill window buffer
+    i = pwr = 0;
+    ipi = 1.0 / $pi;
+    windowtype = 3;
+    loop(fft_size,
+      window_pos = 2.0 * $pi * (i + 0.5) / fft_size;
+      pwr += (window_buffer[i] = (
+        windowtype==0 ? ( 1 ) :
+        windowtype==1 ? ( 0.53836 - cos(window_pos) * 0.46164 ) :
+        windowtype==2 ? ( 0.35875 - 0.48829 * cos(window_pos) + 0.14128 * cos(2*window_pos) - 0.01168 * cos(3*window_pos) ) :
+        windowtype==3 ? ( 0.42659 - 0.49656 * cos(window_pos) + 0.076849 * cos(2.0*window_pos) ) :
+        windowtype==4 ? ( 0.21557895 - 0.41663158 * cos(window_pos) + 0.277263158 * cos(2*window_pos) - 0.083578947 * cos(3*window_pos) + 0.006947368 * cos(4*window_pos) ) :
+        windowtype==5 ? ( exp(- 5 * (window_pos * ipi - 1.0) * (window_pos * ipi - 1.0) ) ) :
+        windowtype==6 ? (0.5 - 0.5 * cos(window_pos)) / 0.375 )
+      );
+      i += 1;
+    );
+    //pwr = 0.5 / pwr / sqrt(fft_scaling_factor);
+    pwr = 0.125 * sqrt(fft_scaling_factor);
+    loop(fft_size, window_buffer[i -= 1] *= pwr);
+  );
+);
+
+function process_fft_view(fft_buffer, out_buffer, fft_size)
+global(srate)
+instance()
+local(
+  fft_bin, tfft_bin2, tmp, /* Iterators */
+  left_real, left_imag, right_real, right_imag,
+  tfft_bin,
+)
+(
+  fft_bin = 0; // FFT bin number
+  
+  tfft_bin = 0;
+  loop(fft_size/2,
+    tfft_bin2 = fft_bin ? 2 * (fft_size - fft_bin) : 0;
+
+    // Unfold complex spectrum into two real spectra
+    left_real = fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    left_imag = fft_buffer[tfft_bin + 1] - fft_buffer[tfft_bin2 + 1];
+    right_real = fft_buffer[tfft_bin + 1] + fft_buffer[tfft_bin2 + 1];
+    right_imag = -fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    
+    // Compute squared log-magnitudes
+    out_buffer[fft_bin] = log(left_real * left_real + left_imag * left_imag + 0.00000000001);
+    out_buffer[fft_bin + fft_size / 2] = log(right_real * right_real + right_imag * right_imag + 0.0000000000001);
+
+    fft_bin += 1;
+    tfft_bin += 2;
+  );
+);
+
+function process_fft_view(in0, in1)
+local(i, bi, i2, inv_size, scale)
+global(spline, spline.should_update, spline.eval_spline)
+instance(
+  input_buffer,
+  buffer_index,
+  fft_counter,
+  fft_buffer, out_buffer,
+  buffer_length,
+)
+(
+  input_buffer[buffer_index * 2] = in0;
+  input_buffer[buffer_index * 2 + 1] = in1;
+   
+  // Once a block is ready, could begin processing when requested.
+  fft_counter += 1;
+  
+  buffer_index = (buffer_index + 1) % buffer_length;
+);
+
+function render_grid(x, y, w, h)
+local(idx, floor_db, ceil_db, pixel_per_db, db_step_size, min_line, max_line, current_db, distance_from_floor)
+global(gfx_a)
+instance()
+(
+  y = floor(y); h = floor(h);
+  colormodel(0.0); gfx_a = 0.5;
+  floor_db = -90;
+  ceil_db = 0;
+  db_step_size = 6;
+  min_line = ceil(floor_db / db_step_size);
+  max_line = floor(ceil_db / db_step_size);
+  
+  idx = 0;
+  pixel_per_db = h / (ceil_db - floor_db);
+  current_db = max_line * db_step_size;
+  loop(max_line - min_line,
+    distance_from_floor = floor((current_db - floor_db) * pixel_per_db);
+    gfx_a = 0.5;
+    gfx_line(x, y + h - distance_from_floor, x + w, y + h - distance_from_floor);
+    gfx_a = 0.25;
+    gfx_line(x, y + h - distance_from_floor + 1, x + w, y + h - distance_from_floor + 1);
+    current_db -= db_step_size;
+  );
+);
+
+function render_fft_buffer(memory, x, y, w, h)
+local(
+  to_dB, scaling, offset,
+  y1, y2, y3,
+  bin, left_bin,, last_bin,
+  xrel, a, b, c,
+  y_val, last_y_val,
+  cx, f_to_bin,
+  min_freq,
+  floor_db, ceil_db,
+  to_fig_y_scale, to_fig_y_origin,
+  cmax,  idx, checked_bin, dbin,
+)
+global(srate, gfx_a)
+instance(fft_size)
+(
+  to_dB = 10 / log(10);
+  
+  floor_db = -90;
+  ceil_db = 0;
+  
+  to_fig_y_scale = h * to_dB / (ceil_db - floor_db);
+  to_fig_y_origin = h * to_dB * ceil_db / (ceil_db - floor_db);
+  
+  // x = w * (log(f) - log(fa)) / (log(fb) - log(fa))
+  // log(f) = x / w * (log(fb) - log(fa)) + log(fa))
+  // f = exp( x * (log(fb / fa) / w) + log(fa)) )
+  
+  // bin = (fft_size / 2) * f / (srate / 2)
+  //     = binscaling * f
+  // f = exp( x * (log(fb / fa) / w) + log(fa)) + log(binscaling) )
+  
+  min_freq = 20;
+  scaling = (log(srate / 2) - log(min_freq)) / w;
+  f_to_bin = (fft_size / 2) / (srate / 2);
+  offset = log(min_freq) + log(f_to_bin);
+  
+  colormodel(0.5); gfx_a = 0.5;
+  
+  // Pixel perfect rendering
+  cx = 0;
+  last_bin = 0;
+  last_y_val = y - to_fig_y_scale * memory[exp(offset)] + to_fig_y_origin;
+  last_y_val = max(y, min(y + h, last_y_val));
+  loop(w,
+    bin = exp(scaling * cx + offset);
+    dbin = floor(bin) - last_bin;
+    
+    // Update interpolant
+    (dbin >= 1) ? (
+      // If we crossed multiple bins, seek the bin with the maximum in this range.
+      dbin > 2 ? (
+        cmax = -1000000000000000;
+        idx = last_bin + 1;
+        loop(dbin,
+          checked_bin = memory[idx];
+          (checked_bin > cmax) ? (
+            cmax = checked_bin;
+            bin = idx;
+          );
+          idx += 1;
+        );
+      );
+      last_bin = floor(bin);
+      left_bin = max(0, floor(bin) - 1);
+      
+      // x-axis is defined at [0, 1, 2]
+      y1 = memory[left_bin];
+      y2 = memory[left_bin + 1];
+      y3 = memory[left_bin + 2];
+    
+      a = - 0.5 * (2 * (y2 - y1) + (y1 - y3));
+      b = - 0.5 * (4 * (y1 - y2) + (y3 - y1));
+      c = y1;
+    );
+    
+    xrel = bin - left_bin;
+    y_val = a * xrel * xrel + b * xrel + c;
+    
+    y_val = y - to_fig_y_scale * y_val + to_fig_y_origin;
+    y_val = max(y, min(y + h, y_val));
+    
+    gfx_line(x + cx, last_y_val, x + cx + 1, y_val);
+    gfx_line(x + cx - 1, last_y_val, x + cx, y_val);
+    gfx_line(x + cx, last_y_val + 1, x + cx + 1, y_val + 1);
+    last_y_val = y_val;
+    
+    cx += 1;
+  );
+);
+
+function render_fft(x, y, w, h)
+local()
+global()
+instance(
+  input_buffer, fft_buffer, window_buffer, buffer_index, buffer_length, out_buffer
+  fft_counter, fft_interval,
+  window_buffer, fft_size, fft_scaling_factor,
+)
+(
+  fft_counter >= fft_interval ? (
+    fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length);
+    this.process_fft_view(fft_buffer, out_buffer, fft_size);
+    fft_counter = 0;
+  );
+ 
+  this.render_grid(x, y, w, h);
+  this.render_fft_buffer(out_buffer, x, y, w, h);
+  this.render_fft_buffer(out_buffer + fft_size / 2, x, y, w, h);
+);
+
