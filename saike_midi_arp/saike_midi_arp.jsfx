@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.11
+version: 0.12
 author: Joep Vanlier
-changelog: Fix large blocksize synchronization issues.
+changelog: Added UI for adding additional CCs
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -20,6 +20,18 @@ slider6:min_vel=1<0,127,1>-Minimum Velocity
 slider7:max_vel=127<0,128,1>-Maximum Velocity
 slider8:min_modwheel=1<0,127,1>-Minimum Modwheel
 slider9:max_modwheel=127<0,128,1>-Maximum Modwheel
+slider10:cc1_choice=0<0,119,1>-Assignable CC1
+slider11:min_cc1=1<0,127,1>-Minimum Assignable CC1
+slider12:max_cc1=127<0,128,1>-Maximum Assignable CC1
+slider13:cc2_choice=0<0,119,1>-Assignable CC2
+slider14:min_cc2=1<0,127,1>-Minimum Assignable CC2
+slider15:max_cc2=127<0,128,1>-Maximum Assignable CC2
+slider16:cc3_choice=0<0,119,1>-Assignable CC3
+slider17:min_cc3=1<0,127,1>-Minimum Assignable CC3
+slider18:max_cc3=127<0,128,1>-Maximum Assignable CC3
+slider19:cc4_choice=0<0,119,1>-Assignable CC4
+slider20:min_cc4=1<0,127,1>-Minimum Assignable CC4
+slider21:max_cc4=127<0,128,1>-Maximum Assignable CC4
 
 in_pin:left input
 in_pin:right input
@@ -201,7 +213,16 @@ serialize_patterns(writing, file_version);
 file_var(0, loop_point);
 file_var(0, enable_vel);
 file_var(0, enable_mod);
-file_version = 2;
+
+(file_version > 2) ? (
+  file_var(0, enable_cc1);
+  file_var(0, enable_cc2);
+  file_var(0, enable_cc3);
+  file_var(0, enable_cc4);
+);
+
+
+file_version = 3;
 
 @slider
 
@@ -225,7 +246,12 @@ global(
   min_modwheel, max_modwheel,
   enable_vel, enable_mod,
   cpos,
-  )
+  enable_cc1, enable_cc2, enable_cc3, enable_cc4,
+  midi_cc_1, midi_cc_2, midi_cc_3, midi_cc_4,
+  cc1_choice, cc2_choice, cc3_choice, cc4_choice,
+  min_cc1, min_cc2, min_cc3, min_cc4,
+  max_cc1, max_cc2, max_cc3, max_cc4,
+)
 (
   (sequencer_index != last_sequencer_index) ? (
     last_sequencer_index = sequencer_index;
@@ -238,6 +264,11 @@ global(
       mod = modulator1_values[sequencer_index] * (max_modwheel - min_modwheel) + min_modwheel;
       midisend(block_position, $xB0, 1, mod);
     );
+     
+    enable_cc1 ? midisend(block_position, $xB0, cc1_choice, midi_cc_1[sequencer_index] * (max_cc1 - min_cc1) + min_cc1);
+    enable_cc2 ? midisend(block_position, $xB0, cc2_choice, midi_cc_2[sequencer_index] * (max_cc2 - min_cc2) + min_cc2);
+    enable_cc3 ? midisend(block_position, $xB0, cc3_choice, midi_cc_3[sequencer_index] * (max_cc3 - min_cc3) + min_cc3);
+    enable_cc4 ? midisend(block_position, $xB0, cc4_choice, midi_cc_4[sequencer_index] * (max_cc4 - min_cc4) + min_cc4);
     
     audio_octave = 0;
     cpos = max(cpos, block_position);
@@ -672,23 +703,9 @@ loop(extra_octaves + 1,
   yc += 1;
 );
 
-select_colormap(1);
-enable_mod ? (
-  yc = process_modulation_row(0, 0, 50, modulator1_values, x, yc, 2 * block_width, "Mod", "Mod wheel");
-  mod_drag.value = -1;
-  mod_drag.drag_button(93, x + 1, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", min_modwheel), row_color_r, row_color_g, row_color_b, "Minimum modwheel (drag to change)", DRAG_SETTING);
-  mod_drag.drag_button(94, x + block_width, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", max_modwheel), row_color_r, row_color_g, row_color_b, "Maximum modwheel (drag to change)", DRAG_SETTING);
-  (mod_drag.value == 93) ? (
-    min_modwheel = min(128, max(0, min_modwheel + 2 * mod_drag.change));
-    slider_automate(8);
-  ) : (mod_drag.value == 94) ? (
-    max_modwheel = min(128, max(0, max_modwheel + 2 * mod_drag.change));
-    slider_automate(9);
-  );
-  mod_drag.change = 0;  
-);
+select_colormap(enable_vel + enable_mod + enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4 - 1);
 enable_vel ? (
-  yc = process_modulation_row(1, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
+  yc = process_modulation_row(0, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
   vel_drag.value = -1;
   vel_drag.drag_button(91, x + 1, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", min_vel), row_color_r, row_color_g, row_color_b, "Minimum velocity (drag to change)", DRAG_SETTING);
   vel_drag.drag_button(92, x + block_width, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", max_vel), row_color_r, row_color_g, row_color_b, "Maximum velocity (drag to change)", DRAG_SETTING);
@@ -702,6 +719,48 @@ enable_vel ? (
   vel_drag.change = 0;
 );
 
+function draw_cc_row(yc, me, mem, min_slider, max_slider, drag_mode_left, drag_mode_right, drag_mode_cc, label, hint, color, cc_select)
+local()
+global(cc1test,
+  x, block_width, DRAG_SETTING,
+  row_color_r, row_color_g, row_color_b,
+)
+instance(mod_drag)
+(
+  yc = this.process_modulation_row(color, 0, me, mem, x, yc, 2 * block_width, label, hint);
+  mod_drag.value = -1;
+ 
+  // Drawn first so the ugly box is hidden
+  (cc_select > 0) ? mod_drag.drag_button_motion(drag_mode_cc, x, yc - 2 * block_width, 2 * block_width - 2, block_width - 4, sprintf(3, "%d", slider(min_slider)), "Control change value to use for this row\n\nClick and drag to change which control\nchange to emit for this row.", DRAG_SETTING);
+  
+  mod_drag.drag_button(drag_mode_left, x + 1, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", slider(min_slider)), row_color_r, row_color_g, row_color_b, "Minimum modwheel (drag to change)", DRAG_SETTING);
+  mod_drag.drag_button(drag_mode_right, x + block_width, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", slider(max_slider)), row_color_r, row_color_g, row_color_b, "Maximum modwheel (drag to change)", DRAG_SETTING);
+  (mod_drag.value == drag_mode_left) ? (
+    slider(min_slider) = min(128, max(0, slider(min_slider) + mod_drag.change));
+    slider_automate(min_slider);
+  ) : (mod_drag.value == drag_mode_right) ? (
+    slider(max_slider) = min(128, max(0, slider(max_slider) + mod_drag.change));
+    slider_automate(max_slider);
+  ) : (mod_drag.value == drag_mode_cc) ? (
+    // Is this one configurable?
+    (cc_select > 0) ? (
+      slider(cc_select) = min(119, max(0, slider(cc_select) + mod_drag.change));
+      slider_automate(cc_select);
+    );
+  );
+  mod_drag.change = 0;  
+  
+  yc
+);
+
+enable_mod ? (
+  yc = mwrow.draw_cc_row(yc, 50, modulator1_values, 8, 9, 93, 94, 0, "Mod", "Mod wheel", 1, 0); 
+);
+
+enable_cc1 ? ( yc = cc1_row.draw_cc_row(yc, 52, midi_cc_1, 11, 12, 95, 96, 102, sprintf(20, "CC %d", cc1_choice), "Custom Control Change", 2, 10); );
+enable_cc2 ? ( yc = cc2_row.draw_cc_row(yc, 53, midi_cc_2, 14, 15, 97, 98, 103, sprintf(20, "CC %d", cc2_choice), "Custom Control Change", 3, 13); );
+enable_cc3 ? ( yc = cc3_row.draw_cc_row(yc, 54, midi_cc_3, 17, 18, 99, 100, 104, sprintf(20, "CC %d", cc3_choice), "Custom Control Change", 4, 16); );
+enable_cc4 ? ( yc = cc4_row.draw_cc_row(yc, 55, midi_cc_4, 20, 21, 101, 101, 105, sprintf(20, "CC %d", cc4_choice), "Custom Control Change", 5, 19); );
 
 function line_idx(cy)
 global(extra_octaves, polyphony, MAX_POLYPHONY, yya, yyo)
