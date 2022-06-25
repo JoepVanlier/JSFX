@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.14
+version: 0.15
 author: Joep Vanlier
-changelog: Allow copy pasting CC modulator rows.
+changelog: Allow randomization by blocks.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -826,7 +826,7 @@ local(ix, yyo)
 function handle_drag(me, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, max_rows, this_drag_mode)
 local(
   block_step, current_x, start_x, start_y, end_x, end_y, sel_ptr, bounce,
-  max_val, current_y,
+  max_val, current_y, block_action,
 )
 instance(
   xs, ys, xe, ye
@@ -839,7 +839,7 @@ instance(
 global(mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
        drag_mode, DRAG_AREA, n_segments, FIXED_LINES,
        current_pattern, order_mem, selection_buffer, max_segments,
-       animate_copy)
+       animate_copy, randomize_block)
 (
   gfx_set(1, 1, 1, 1);
   block_step = block_width + block_spacing;
@@ -853,7 +853,7 @@ global(mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
     current_y = mod_screen_to_y(mouse_y);
   );
 
-  ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0)) ? (
+  ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0) && (current_y < max_rows)) ? (
     DRAG_MODE = this_drag_mode;
     xs = current_x;
     ys = current_y;
@@ -861,27 +861,42 @@ global(mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
     active_block = me;
   );
 
-  ((mouse_cap == 10) && (last_cap == 0) && area_marked && (active_block == me)) ? (
+  block_action = ((mouse_cap == 10) && (last_cap == 0)) || randomize_block;
+  (block_action && area_marked && (active_block == me)) ? (
     (area_marked == 1) ? (
       // Copy to memory
-      area_marked = 2;
+      (!randomize_block) ? (
+        area_marked = 2;
+        animate_copy = 10;
+      );
       cy = start_y;
       sel_ptr = selection_buffer;
       loop(end_y - start_y,
-        animate_copy = 10;
         // First effects are fixed, other ones are determined in order_mem
         row = line_idx(me, cy);
         read_ptr = current_pattern + row * max_segments + start_x;
-        loop(end_x - start_x,
-          sel_ptr[] = read_ptr[];
-          sel_ptr += 1;
-          read_ptr += 1;
+        
+        randomize_block ? (
+          // Randomize this block.
+          // row_offset > 0 is indicative that we are dealing with a modulator
+          (me == 1) ? (
+            randomize_row(read_ptr, end_x - start_x + 1, 1);
+          ) : (
+            randomize_row_modulator(read_ptr, end_x - start_x + 1);
+          );
+        ) : (
+          // Copy behaviour
+          loop(end_x - start_x,
+            sel_ptr[] = read_ptr[];
+            sel_ptr += 1;
+            read_ptr += 1;
+          );
         );
+        
         cy += 1;
       );
     ) : (area_marked == 2) ? (
       // Paste
-      area_marked = 2;
       cy = current_y;
       sel_ptr = selection_buffer;
       loop(min(end_y - start_y, max_rows - cy + 1),
@@ -1005,7 +1020,12 @@ cx = pattern_toggle.selection_button(3, cx + ctrl_spacing, yc + 2, 2 * block_wid
 cx = pattern_toggle.selection_button(4, cx, yc + 2, 2 * block_width, block_width - 4, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
 
 cx += ctrl_spacing;
-cx = randomize_toggle.selection_button(-1, cx, yc + 2, 3.15 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.");
+randomize_block = 0;
+cx = randomize_toggle.selection_button(-1, cx, yc + 2, 3.15 * block_width, block_width - 4, "Randomize", 0.1, 0.2, 0.35, "Randomize sequences.\n\nClicking this will toggle randomize mode.\nIn randomize mode, clicking an effect will\nrandomize its pattern.\n\nAlternatively, select region with shift + left\nmouse button drag then press this button\nwith shift + left mouse button.");
+((randomize_toggle.value == 1) && (mouse_cap == 9)) ? (
+  randomize_toggle.value = 0;
+  randomize_block = 1;
+);
 
 cx += ctrl_spacing;
 cx = pattern_toggle.drag_button(11, cx, yc + 2, block_width, block_width - 4, sprintf(3, "%d", polyphony), 0.36, 0.1, 0.225, "Max polyphony.\n\nThis determines how many rows each octave will have.", DRAG_SETTING);
