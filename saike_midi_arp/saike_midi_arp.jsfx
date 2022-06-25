@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.13
+version: 0.14
 author: Joep Vanlier
-changelog: Support custom CC modulator rows.
+changelog: Allow copy pasting CC modulator rows.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -104,6 +104,7 @@ DRAG_MODSIZE = 6;
 DRAG_SETTING = 7;
 DRAG_NUDGE_ALL = 8;
 DRAG_AREA = 20;
+DRAG_MODULATORS = 21;
 
 sample_clock = 0;
 pattern_change = 1;
@@ -594,10 +595,11 @@ global(label_width, block_width, block_spacing, selected_details,
        randomize_toggle.value
        resize_drag.handle_drag_y_resize)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max)
-instance(start_idx, h, subdiv, snap, randomize)
+instance(start_idx, y_loc, h, subdiv, snap, randomize)
 (
   h == 0 ? h = height;
   subdiv == 0 ? subdiv = 12;
+  y_loc = y;
 
   drag_min = y + h - 5 * (1 + scaling);
   drag_max = drag_min + 10 * (1+scaling);
@@ -704,7 +706,7 @@ loop(extra_octaves + 1,
 
 select_colormap(enable_vel + enable_mod + enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4);
 enable_vel ? (
-  yc = process_modulation_row(0, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
+  yc = velrow.process_modulation_row(0, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
   vel_drag.value = -1;
   vel_drag.drag_button(91, x + 1, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", min_vel), row_color_r, row_color_g, row_color_b, "Minimum velocity (drag to change)", DRAG_SETTING);
   vel_drag.drag_button(92, x + block_width, yc - block_width, 0.9 * block_width, block_width - 4, sprintf(3, "%d", max_vel), row_color_r, row_color_g, row_color_b, "Maximum velocity (drag to change)", DRAG_SETTING);
@@ -761,20 +763,80 @@ enable_cc2 ? ( yc = cc2_row.draw_cc_row(yc, 53, midi_cc_2, 14, 15, 97, 98, 104, 
 enable_cc3 ? ( yc = cc3_row.draw_cc_row(yc, 54, midi_cc_3, 17, 18, 99, 100, 105, sprintf(20, "CC %d", cc3_choice), "Custom Control Change", enable_vel + enable_mod + 3, 16); );
 enable_cc4 ? ( yc = cc4_row.draw_cc_row(yc, 55, midi_cc_4, 20, 21, 101, 102, 106, sprintf(20, "CC %d", cc4_choice), "Custom Control Change", enable_vel + enable_mod + 4, 19); );
 
-function line_idx(cy)
-global(extra_octaves, polyphony, MAX_POLYPHONY, yya, yyo)
-local(current_octave, current_y)
+function line_idx(me, cy)
+global(
+  extra_octaves, polyphony, MAX_POLYPHONY,
+  enable_vel, enable_cc1, enable_cc2, enable_cc3, enable_cc4, enable_mod,
+)
+local(current_octave, current_y, ix, yyo, yya)
 (
-  yya = current_octave = floor(cy/polyphony);
-  current_y = floor(cy - polyphony * current_octave);
-  yyo = MAX_POLYPHONY * (extra_octaves - current_octave) + polyphony - current_y - 1
+  (me == 1) ? (
+    // Blocks
+    yya = current_octave = floor(cy/polyphony);
+    current_y = floor(cy - polyphony * current_octave);
+    yyo = MAX_POLYPHONY * (extra_octaves - current_octave) + polyphony - current_y - 1
+  ) : (
+    // Modulators
+    ix = floor(cy);
+    enable_vel ? ( (ix == 0) ? ( yyo = 51; ); ix -= 1; );
+    enable_mod ? ( (ix == 0) ? ( yyo = 50; ); ix -= 1; );
+    enable_cc1 ? ( (ix == 0) ? ( yyo = 52; ); ix -= 1; );
+    enable_cc2 ? ( (ix == 0) ? ( yyo = 53; ); ix -= 1; );
+    enable_cc3 ? ( (ix == 0) ? ( yyo = 54; ); ix -= 1; );
+    enable_cc4 ? ( (ix == 0) ? ( yyo = 55; ); ix -= 1; );
+    yyo
+  );
 );
 
-function handle_drag(grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, max_rows)
-local(block_step, current_x, current_y, start_x, start_y, end_x, end_y, sel_ptr, bounce,
-      max_val)
-instance(xs, ys, xe, ye, area_marked, cx, cy, read_ptr, row, rect_origin_x, rect_origin_y, rect_width, rect_height, )
-global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
+function rel_position(y)
+local()
+instance(y_loc, h)
+global()
+(
+  min(max(0, (y - y_loc) / h), 1);
+);
+
+function mod_screen_to_y(screen_y)
+(
+  (enable_vel ? velrow.rel_position(screen_y) : 0)
+  + (enable_mod ? mwrow.rel_position(screen_y) : 0)
+  + (enable_cc1 ? cc1_row.rel_position(screen_y) : 0)
+  + (enable_cc2 ? cc2_row.rel_position(screen_y) : 0)
+  + (enable_cc3 ? cc3_row.rel_position(screen_y) : 0)
+  + (enable_cc4 ? cc4_row.rel_position(screen_y) : 0)
+);
+
+function mod_y_to_screen(y)
+local(ix, yyo)
+(
+  yyo = -1;
+  (y < 0) ? (0)
+  : (
+    ix = floor(y);
+    enable_vel ? ( (ix == 0) ? ( yyo = velrow.y_loc; ); ix -= 1; );
+    enable_mod ? ( (ix == 0) ? ( yyo = mwrow.y_loc; ); ix -= 1; );
+    enable_cc1 ? ( (ix == 0) ? ( yyo = cc1_row.y_loc; ); ix -= 1; );
+    enable_cc2 ? ( (ix == 0) ? ( yyo = cc2_row.y_loc; ); ix -= 1; );
+    enable_cc3 ? ( (ix == 0) ? ( yyo = cc3_row.y_loc; ); ix -= 1; );
+    enable_cc4 ? ( (ix == 0) ? ( yyo = cc4_row.y_loc; ); ix -= 1; );
+  );
+  (yyo == -1) ? (cc4_row.y_loc + cc4_row.h) : yyo;
+);
+
+function handle_drag(me, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, max_rows, this_drag_mode)
+local(
+  block_step, current_x, start_x, start_y, end_x, end_y, sel_ptr, bounce,
+  max_val, current_y,
+)
+instance(
+  xs, ys, xe, ye
+  area_marked,
+  cx, cy,
+  read_ptr,
+  row, rect_origin_x, rect_origin_y, rect_width, rect_height,
+  active_block,
+)
+global(mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
        drag_mode, DRAG_AREA, n_segments, FIXED_LINES,
        current_pattern, order_mem, selection_buffer, max_segments,
        animate_copy)
@@ -783,16 +845,23 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
   block_step = block_width + block_spacing;
 
   current_x = (mouse_x - (grid_origin_x + label_width)) / block_step;
-  current_y = (mouse_y - (grid_origin_y)) / block_step;
+  (me == 1) ? (
+    // Blocks
+    current_y = (mouse_y - (grid_origin_y)) / block_step;
+  ) : (
+    // Modulators
+    current_y = mod_screen_to_y(mouse_y);
+  );
 
   ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0)) ? (
-    DRAG_MODE = DRAG_AREA;
+    DRAG_MODE = this_drag_mode;
     xs = current_x;
     ys = current_y;
     area_marked = 1;
+    active_block = me;
   );
 
-  ((mouse_cap == 10) && (last_cap == 0) && area_marked) ? (
+  ((mouse_cap == 10) && (last_cap == 0) && area_marked && (active_block == me)) ? (
     (area_marked == 1) ? (
       // Copy to memory
       area_marked = 2;
@@ -801,7 +870,7 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
       loop(end_y - start_y,
         animate_copy = 10;
         // First effects are fixed, other ones are determined in order_mem
-        row = line_idx(cy);
+        row = line_idx(me, cy);
         read_ptr = current_pattern + row * max_segments + start_x;
         loop(end_x - start_x,
           sel_ptr[] = read_ptr[];
@@ -817,7 +886,7 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
       sel_ptr = selection_buffer;
       loop(min(end_y - start_y, max_rows - cy + 1),
         // First effects are fixed, other ones are determined in order_mem
-        row = line_idx(cy);
+        row = line_idx(me, cy);
         read_ptr = current_pattern + row * max_segments + current_x;
         cx = current_x;
         loop(end_x - start_x,
@@ -832,54 +901,60 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
     );
   );
 
-  drag_mode == DRAG_AREA ? (
+  ((drag_mode == this_drag_mode) && (active_block == me)) ? (
     xe = current_x;
     ye = current_y;
     DRAG_MODE = (mouse_cap == 0) ? 0 : DRAG_MODE;
   );
 
-  start_x = min(xs, xe);
-  end_x = max(xs, xe);
-  start_y = min(ys, ye);
-  end_y = max(ys, ye);
-  start_x = min(max(0, floor(start_x)), n_segments);
-  end_x = min(max(0, ceil(end_x)), n_segments);
-  start_y = min(max(0, floor(start_y)), max_rows);
-  end_y = min(max(0, ceil(end_y)), max_rows);
+  (active_block == me) ? (
+    start_x = min(xs, xe);
+    end_x = max(xs, xe);
+    start_y = min(ys, ye);
+    end_y = max(ys, ye);
+    start_x = min(max(0, floor(start_x)), n_segments);
+    end_x = min(max(0, ceil(end_x)), n_segments);
+    start_y = min(max(0, floor(start_y)), max_rows);
+    end_y = min(max(0, ceil(end_y)), max_rows);
+  
+    ((area_marked == 1) || (animate_copy > 0)) ? (
+      rect_origin_x = grid_origin_x + label_width + block_step * start_x;
+      rect_width = block_step * (end_x - start_x);
+      
+      (me == 1) ? (
+        // Blocks
+        rect_origin_y = grid_origin_y + block_step * start_y;
+        rect_height = block_step * (end_y - start_y);
+      ) : (
+        // Modulators
+        rect_origin_y = mod_y_to_screen(start_y);
+        rect_height = mod_y_to_screen(end_y) - rect_origin_y;
+      );
+    );
 
-  ((area_marked == 1) || (animate_copy > 0)) ? (
-    rect_origin_x = grid_origin_x + label_width + block_step * start_x;
-    rect_origin_y = grid_origin_y + block_step * start_y;
-    rect_width = block_step * (end_x - start_x);
-    rect_height = block_step * (end_y - start_y);
-  );
-
-  (area_marked == 1) ? (
-    gfx_set(0.3, 0.3, 1, 0.001);
-    gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 1);
-
-    gfx_set(0.3, 0.3, 1, 1);
-    gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 0);
-  );
-  (animate_copy > 0) ? (
-    bounce = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
-    gfx_set(0, 0, 0, 0.04 * animate_copy);
-    gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 1);
-
-    gfx_set(0.3, 0.3, 1, animate_copy / 10);
-    gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 0);
-    animate_copy -= 1;
-
-    gfx_x = rect_origin_x;
-    gfx_y = rect_origin_y;
-    gfx_set(1, 1, 1, animate_copy / 10);
-    gfx_drawstr("COPIED", 5, rect_origin_x + rect_width, rect_origin_y + rect_height);
+    (area_marked == 1) ? (
+      gfx_set(0.3, 0.3, 1, 0.001);
+      gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 1);
+  
+      gfx_set(0.3, 0.3, 1, 1);
+      gfx_rect(rect_origin_x, rect_origin_y, rect_width, rect_height, 0);
+    );
+    (animate_copy > 0) ? (
+      bounce = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
+      gfx_set(0, 0, 0, 0.04 * animate_copy);
+      gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 1);
+  
+      gfx_set(0.3, 0.3, 1, animate_copy / 10);
+      gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce, rect_width + 2 * bounce, rect_height + 2 * bounce, 0);
+      animate_copy -= 1;
+  
+      gfx_x = rect_origin_x;
+      gfx_y = rect_origin_y;
+      gfx_set(1, 1, 1, animate_copy / 10);
+      gfx_drawstr("COPIED", 5, rect_origin_x + rect_width, rect_origin_y + rect_height);
+    );
   );
 );
-
-block_selector.handle_drag(grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, polyphony * (extra_octaves + 1));
-
-
 
 idx_ref = min(floor((mouse_x - (x + label_width)) / (block_width + block_spacing)), n_segments);
 
@@ -889,6 +964,8 @@ gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * (loop_poi
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat), grid_origin_y, block_width, yc - 4 * block_spacing);
 
+block_selector.handle_drag(2, grid_origin_x, modulator_origin_y, block_width, block_spacing, label_width, enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4 + enable_mod + enable_vel, DRAG_MODULATORS);
+block_selector.handle_drag(1, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, polyphony * (extra_octaves + 1), DRAG_AREA);
 
 ctrl_spacing = 1;
 
@@ -936,8 +1013,8 @@ cx = pattern_toggle.drag_button(11, cx, yc + 2, block_width, block_width - 4, sp
 cx += ctrl_spacing;
 cx = pattern_toggle.drag_button(12, cx, yc + 2, block_width, block_width - 4, sprintf(3, "%d", extra_octaves), 0.16, 0.3, 0.225, "Extra octaves.\n\nThis determines how many extra octaves will be displayed.\nThese can be used to sequence notes one or two octaves\nup from what is being played.", DRAG_SETTING);
 
-cx += ctrl_spacing;
 
+cx += ctrl_spacing;
 vel_active.value = enable_vel;
 cx = vel_active.selection_button(-1, cx, yc + 2, 1.35 * block_width, block_width - 4, "Vel", 0.05, 0.2, 0.1, "Add row for programming velocity.");
 enable_vel = vel_active.value;
