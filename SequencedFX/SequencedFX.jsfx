@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.89
+version: 0.90
 author: Joep Vanlier
-changelog: Minor bugfix block randomization (used to miss last column).
+changelog: Horrible bugfix mod selector -> take into account height of modulator column.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -3384,8 +3384,9 @@ global(label_width, block_width, block_spacing, selected_details,
        randomize_toggle.value
        resize_drag.handle_drag_y_resize)
 local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max)
-instance(start_idx, h, subdiv, snap, randomize)
+instance(start_idx, y_loc, h, subdiv, snap, randomize)
 (
+  y_loc = y;
   h == 0 ? h = height;
   subdiv == 0 ? subdiv = 12;
 
@@ -3574,6 +3575,26 @@ y_current = draw_effect(15, effect9);
 y_current = draw_effect(16, effect10);
 y_current = draw_effect(17, effect11);
 
+function mod_screen_to_y(screen_y)
+global(modrow1.y_loc, modrow1.h, modrow2.y_loc, modrow2.h)
+(
+  // Ugh. Sorry :|
+  (screen_y < modrow1.y_loc) ? ( 0 )
+  : (screen_y < modrow2.y_loc) ? ( (screen_y - modrow1.y_loc) / modrow1.h )
+  : (screen_y < (modrow2.y_loc + modrow2.h)) ? ( 1 + (screen_y - modrow2.y_loc) / modrow2.h )
+  : 3
+);
+
+function mod_y_to_screen(y)
+global(modrow1.y_loc, modrow2.y_loc, modrow2.h)
+(
+  // Ugh. Sorry :|
+  (y < 0) ? (0)
+  : (y < 1) ? (modrow1.y_loc)
+  : (y == 1) ? (modrow2.y_loc)
+  : modrow2.y_loc + modrow2.h
+);
+
 
 function handle_drag(me, grid_origin_x, grid_origin_y, block_width, block_height, block_spacing, label_width, drag, max_rows, row_offset)
 local(block_step, block_step_y, current_x, current_y, start_x, start_y, end_x, end_y, sel_ptr, bounce, bounce_y
@@ -3589,7 +3610,11 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
   block_step_y = block_height + block_spacing;
   
   current_x = (mouse_x - (grid_origin_x + label_width + block_step)) / block_step;
-  current_y = (mouse_y - (grid_origin_y)) / block_step_y;
+  (block_height > 0) ? (
+    current_y = (mouse_y - grid_origin_y) / block_step_y;
+  ) : (
+    current_y = mod_screen_to_y(mouse_y);
+  );
 
   ((mouse_cap == 9) && (last_cap == 0) && (drag_mode == 0) && (current_x > 0) && (current_y > 0) && (current_y < max_rows)) ? (
     DRAG_MODE = drag;
@@ -3684,9 +3709,15 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
   
     ((area_marked == 1) || (animate_copy > 0)) ? (
       rect_origin_x = grid_origin_x + label_width + block_step + block_step * start_x;
-      rect_origin_y = grid_origin_y + block_step_y * start_y;
       rect_width = block_step * (end_x - start_x);
-      rect_height = block_step_y * (end_y - start_y);
+      
+      (block_height > 0) ? (
+        rect_origin_y = grid_origin_y + block_step_y * start_y;
+        rect_height = block_step_y * (end_y - start_y);
+      ) : (
+        rect_origin_y = mod_y_to_screen(start_y);
+        rect_height = mod_y_to_screen(end_y) - rect_origin_y;
+      );
     );
     
     (area_marked == 1) ? (
@@ -3698,7 +3729,7 @@ global(tttt, mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y,
     );
     (animate_copy > 0) ? (
       bounce = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
-      bounce_y = 0.25 * block_step_y * cos(- 0.25 * (10 - animate_copy));
+      bounce_y = 0.25 * block_step * cos(- 0.25 * (10 - animate_copy));
       gfx_set(0, 0, 0, 0.04 * animate_copy);
       gfx_rect(rect_origin_x - bounce, rect_origin_y - bounce_y, rect_width + 2 * bounce, rect_height + 2 * bounce_y, 1);
       
@@ -3741,7 +3772,7 @@ handle_effect_drag(fixed_effects, free_effects);
 gfx_set(1, 1, 1, .1);
 gfx_rect(grid_origin_x + label_width - block_spacing + (block_width + block_spacing) * floor(current_sample / samples_per_beat + 1), grid_origin_y, block_width, y_current - y_s);
 
-block_selector.handle_drag(2, grid_origin_x, modulator_origin_y, block_width, 2 * block_width, block_spacing, label_width, DRAG_MODULATORS, 2, 30);
+block_selector.handle_drag(2, grid_origin_x, modulator_origin_y, block_width, -1, block_spacing, label_width, DRAG_MODULATORS, 2, 30);
 
 // Control strip
 function selection_button(me, cx, cy, width, height, label, br, bg, bb, hint)
