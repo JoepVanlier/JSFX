@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.08
+version: 0.09
 author: Joep Vanlier
-changelog: Don't let MIDI signals override settings_changed. Add MIDI velocity sensitivity.
+changelog: Allow envelopes to tighten MIDI controlled sound.
 license: MIT
 provides:
   partials_dependencies/*
@@ -35,6 +35,10 @@ slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
+slider56:attack_slider=0<0,2,0.0001>Attack
+slider57:decay_slider=1<0,3,0.0001>Decay
+slider58:release_slider=1.5<0,3,0.0001>Release
+slider59:sustain_level=0.3<0,1,0.0001>Sustain
 slider60:use_envelopes=0<0,1,1>Use Envelopes
 slider61:pitch_shift=0<-24,24,0.000001>-Large pitch bend
 slider62:display_log=0<0,1,1{Linear,Logarithmic}>-Display type
@@ -180,12 +184,6 @@ instance()
   );
 );
 
-mlog0p05 = 2.995732273553991; // Corresponds to time to get to 95%
-attack_s = 3 / 1000;
-decay_s = 30 / 1000;
-release_s = 100 / 1000;
-sustain_level = 0.3;
-
 function update_env_note(vel)
 instance(last_vel, target, sustain, rate,
          k_attack, k_decay, attack_samples)
@@ -281,6 +279,15 @@ settings_changed = 1;
 settings_changed = 1;
 
 @block
+mlog0p05 = 2.995732273553991; // Corresponds to time to get to 95%
+attack_s = exp(-5.809142990314027 + 2.302585092994046 * attack_slider); // 3 - 300 ms <=> 0 - 2
+decay_s = exp(-5.809142990314027 + 2.302585092994046 * decay_slider); // 3 - 3000 ms <=> 0 - 3
+release_s = exp(-5.809142990314027 + 2.302585092994046 * release_slider); // 3 - 3000 ms <=> 0 - 3
+
+//attack_s = 3 / 1000;  // 3 * 10^0 - 10^2
+//decay_s = 30 / 1000;
+//release_s = 100 / 1000;
+
 midi.midi_block();
 
 @sample
@@ -922,6 +929,8 @@ partials.draw_knob(cx, cy, radius, n_partials, "Number of partials to include", 
 n_partials.gfx_draw_icon(7, 1 - stft);
 cx += 3 * radius;
 
+choice_x = cx - radius;
+
 choice_button1.draw_choice(0, cx - radius, cy - 1.1 * radius, radius, radius, 1, "Metal string");
 choice_button1.draw_model_icon();
 choice_button2.draw_choice(1, cx - radius, cy, radius, radius, 1, "Tube");
@@ -971,6 +980,71 @@ loop(64100,
   ptr += 1;
 );
 */
+
+function draw_envelope(x, y, w, h)
+instance(t_max)
+local(plot_srate, attack_samples, decay_samples, k_attack, k_decay, k_release,
+      x_cur, y_cur, x_new, y_new, state, rate, current_target, target)
+global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a)
+(
+  gfx_set(0, 0, 0, 0.7);
+  gfx_rect(x, y, w, h, 1);
+  
+  t_max = 0.1;
+  
+  plot_srate = (w - 4) / t_max;
+  
+  attack_samples = attack_s * plot_srate;
+  decay_samples = 2 * decay_s * plot_srate;
+  k_attack = mlog0p05 / attack_samples;
+  k_decay = mlog0p05 / (decay_s * plot_srate);
+  k_release = mlog0p05 / (release_s * plot_srate);
+  
+  x_cur = x + 2;
+  y_cur = y + h - 4;
+  state = 0;
+  loop(w - 4,
+    x_new = x_cur + 1;
+    y_new = y + 1 + (h - 4) * (1 - state);
+    
+    (attack_samples > 0) ? (
+      rate = k_attack;
+      current_target = 1;
+    ) : (
+      // Release and decay
+      (decay_samples > 0) ? (
+        rate = k_decay;
+        current_target = sustain_level;
+      ) : (
+        rate = k_release;
+        current_target = 0;
+      );
+      
+      decay_samples -= 1;
+    );
+    attack_samples -= 1;
+    
+    state += rate * (current_target - state);
+  
+    colormodel(0.94); gfx_a = 0.2;
+    gfx_line(x_cur + 1, y + h - 3, x_new + 1, y_new);
+    colormodel(1);
+    gfx_line(x_cur + 1, y_cur, x_new + 1, y_new);
+    gfx_line(x_cur, y_cur + 1, x_new, y_new + 1);
+    gfx_line(x_cur, y_cur, x_new, y_new);
+    
+    x_cur = x_new;
+    y_cur = y_new;
+  );
+  
+  colormodel(0);
+  
+  gfx_rect(x, y, w, h, 0);
+  gfx_rect(x + 1, y + 1, w - 2, h - 2, 0);
+);
+
+env.draw_envelope(floor(choice_x), floor(3 * radius + 8), floor((radius + 4) * 5 - 4), floor(2 * radius));
+
 
 
 
