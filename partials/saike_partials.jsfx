@@ -35,7 +35,8 @@ slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
-//slider61:pitch_shift=0<-24,24,0.000001>Large pitch bend
+slider60:use_envelopes=0<0,1,1>Use Envelopes
+slider61:pitch_shift=0<-24,24,0.000001>-Large pitch bend
 slider62:display_log=0<0,1,1{Linear,Logarithmic}>-Display type
 slider63:stft=1<0,1,1>-STFT
 
@@ -167,34 +168,100 @@ instance(base_damp, f_damp, inharm, rel_position)
   );
 );
 
-function eval_string(f_h, on)
+function eval_string(f_h, env, on)
 local()
 global(stft)
 instance()
 (
   stft ? (
-    this.eval_string_stft(f_h, on);
+    this.eval_string_stft(env, on);
   ) : (
-    this.eval_string_td(on ? f_h : 0);
+    this.eval_string_td(on ? f_h * env : 0);
   );
+);
+
+mlog0p05 = 2.995732273553991; // Corresponds to time to get to 95%
+attack_s = 3 / 1000;
+decay_s = 30 / 1000;
+release_s = 100 / 1000;
+sustain_level = 0.3;
+
+function update_env_note(vel)
+instance(last_vel, target, sustain, rate,
+         k_attack, k_decay, attack_samples)
+local()
+global(srate, mlog0p05, attack_s, decay_s, release_s, sustain_level)
+(
+  target = 2 * vel;
+  sustain = sustain_level * target;
+  
+  (last_vel != vel) ? (
+    // Change!
+    vel ? (
+      attack_samples = attack_s * srate;
+      k_attack = mlog0p05 / attack_samples;
+      k_decay = mlog0p05 / (decay_s * srate);
+    ) : (
+      // Note is off => release!
+      attack_samples = 0;
+      k_decay = mlog0p05 / (release_s * srate);
+    );
+  );
+  last_vel = vel;
+);
+
+function env_sample()
+instance(state, target, sustain, 
+         attack_samples,
+         k_attack, k_decay)
+local(current_target, rate)
+global()
+(
+  (attack_samples > 0) ? (
+    rate = k_attack;
+    current_target = target;
+  ) : (
+    // Release and decay
+    rate = k_decay;
+    current_target = sustain;
+  );
+  attack_samples -= 1;
+  
+  state += rate * (current_target - state);
 );
 
 
 function update_notes()
 instance(notes_on, active_note_mem, active_note_vel)
-global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift, midi.pitchbend)
-local(ref_pitch, scaling)
+global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift, midi.pitchbend,
+       use_envelopes, envelope1.update_env_note, envelope2.update_env_note, envelope3.update_env_note, envelope4.update_env_note, envelope5.update_env_note)
+local(ref_pitch, scaling
+      note_vel0, note_vel1, note_vel2, note_vel3, note_vel4)
 (
   scaling = 440;
 
   ref_pitch = 2 * midi.pitchbend + pitch_shift - 69;
   
+  note_vel0 = active_note_vel[0];
+  note_vel1 = active_note_vel[1];
+  note_vel2 = active_note_vel[2];
+  note_vel3 = active_note_vel[3];
+  note_vel4 = active_note_vel[4];
+
   // Update note parameters
-  notes_on ? string1.set_pars(scaling * 2 ^ ((active_note_mem[0] + ref_pitch) / 12), active_note_vel[0]);
-  notes_on > 1 ? string2.set_pars(scaling * 2 ^ ((active_note_mem[1] + ref_pitch) / 12), active_note_vel[1]);
-  notes_on > 2 ? string3.set_pars(scaling * 2 ^ ((active_note_mem[2] + ref_pitch) / 12), active_note_vel[2]);
-  notes_on > 3 ? string4.set_pars(scaling * 2 ^ ((active_note_mem[3] + ref_pitch) / 12), active_note_vel[3]);
-  notes_on > 4 ? string5.set_pars(scaling * 2 ^ ((active_note_mem[4] + ref_pitch) / 12), active_note_vel[4]);
+  notes_on ? string1.set_pars(scaling * 2 ^ ((active_note_mem[0] + ref_pitch) / 12), note_vel0);
+  notes_on > 1 ? string2.set_pars(scaling * 2 ^ ((active_note_mem[1] + ref_pitch) / 12), note_vel1);
+  notes_on > 2 ? string3.set_pars(scaling * 2 ^ ((active_note_mem[2] + ref_pitch) / 12), note_vel2);
+  notes_on > 3 ? string4.set_pars(scaling * 2 ^ ((active_note_mem[3] + ref_pitch) / 12), note_vel3);
+  notes_on > 4 ? string5.set_pars(scaling * 2 ^ ((active_note_mem[4] + ref_pitch) / 12), note_vel4);
+  
+  use_envelopes ? (
+    envelope1.update_env_note(note_vel0);
+    envelope2.update_env_note(note_vel1);
+    envelope3.update_env_note(note_vel2);
+    envelope4.update_env_note(note_vel3);
+    envelope5.update_env_note(note_vel4);
+  );
 );
 
 function force_update()
@@ -268,22 +335,38 @@ f_b = 0;
 
 stft ? stft_mem.read_stft(f_h);
 
-string1.eval_string(f_h, midi.notes_on > 0);
-string2.eval_string(f_h, midi.notes_on > 1);
-string3.eval_string(f_h, midi.notes_on > 2);
-string4.eval_string(f_h, midi.notes_on > 3);
-string5.eval_string(f_h, midi.notes_on > 4);
+use_envelopes ? (
+  string1.eval_string(f_h, envelope1.env_sample(), midi.notes_on > 0);
+  string2.eval_string(f_h, envelope2.env_sample(), midi.notes_on > 1);
+  string3.eval_string(f_h, envelope3.env_sample(), midi.notes_on > 2);
+  string4.eval_string(f_h, envelope4.env_sample(), midi.notes_on > 3);
+  string5.eval_string(f_h, envelope5.env_sample(), midi.notes_on > 4);
+) : (
+  string1.eval_string(f_h, 1, midi.notes_on > 0);
+  string2.eval_string(f_h, 1, midi.notes_on > 1);
+  string3.eval_string(f_h, 1, midi.notes_on > 2);
+  string4.eval_string(f_h, 1, midi.notes_on > 3);
+  string5.eval_string(f_h, 1, midi.notes_on > 4);
+);
 
 stft ? (
   stft_mem.write_stft();
   f_b = stft_mem.f_b;
   f_hn = stft_mem.f_hn;
 ) : (
-  f_b += string1.f_b; f_hn += string1.f_hn;
-  f_b += string2.f_b; f_hn += string2.f_hn;
-  f_b += string3.f_b; f_hn += string3.f_hn;
-  f_b += string4.f_b; f_hn += string4.f_hn;
-  f_b += string5.f_b; f_hn += string5.f_hn;
+  use_envelopes ? (
+    f_b += string1.f_b * envelope1.state; f_hn += string1.f_hn;
+    f_b += string2.f_b * envelope2.state; f_hn += string2.f_hn;
+    f_b += string3.f_b * envelope3.state; f_hn += string3.f_hn;
+    f_b += string4.f_b * envelope4.state; f_hn += string4.f_hn;
+    f_b += string5.f_b * envelope5.state; f_hn += string5.f_hn;
+  ) : (
+    f_b += string1.f_b; f_hn += string1.f_hn;
+    f_b += string2.f_b; f_hn += string2.f_hn;
+    f_b += string3.f_b; f_hn += string3.f_hn;
+    f_b += string4.f_b; f_hn += string4.f_hn;
+    f_b += string5.f_b; f_hn += string5.f_hn;
+  );
 );
 
 hammer = 0;
@@ -343,6 +426,9 @@ settings_changed ? (
   settings_changed = 0;
   force_update();
 );
+
+/*spl0 = sin((csss+=0.1)) * envelope1.state;
+spl1 = spl0;*/
 
 @serialize
 file_var(0, version);
