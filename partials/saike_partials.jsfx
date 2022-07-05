@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.09
+version: 0.10
 author: Joep Vanlier
-changelog: Allow envelopes to tighten MIDI controlled sound.
+changelog: Expose envelope system to user.
 license: MIT
 provides:
   partials_dependencies/*
@@ -35,11 +35,11 @@ slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
-slider56:attack_slider=0<0,2,0.0001>Attack
-slider57:decay_slider=1<0,3,0.0001>Decay
-slider58:release_slider=1.5<0,3,0.0001>Release
-slider59:sustain_level=0.3<0,1,0.0001>Sustain
-slider60:use_envelopes=0<0,1,1>Use Envelopes
+slider56:attack_slider=0<0,2,0.0001>-Attack
+slider57:decay_slider=1<0,3,0.0001>-Decay
+slider58:release_slider=1.5<0,3,0.0001>-Release
+slider59:sustain_level=0.3<0,1,0.0001>-Sustain
+slider60:use_envelopes=0<0,1,1>-Use Envelopes
 slider61:pitch_shift=0<-24,24,0.000001>-Large pitch bend
 slider62:display_log=0<0,1,1{Linear,Logarithmic}>-Display type
 slider63:stft=1<0,1,1>-STFT
@@ -342,7 +342,7 @@ f_b = 0;
 
 stft ? stft_mem.read_stft(f_h);
 
-use_envelopes ? (
+(midi_input && use_envelopes) ? (
   string1.eval_string(f_h, envelope1.env_sample(), midi.notes_on > 0);
   string2.eval_string(f_h, envelope2.env_sample(), midi.notes_on > 1);
   string3.eval_string(f_h, envelope3.env_sample(), midi.notes_on > 2);
@@ -361,7 +361,7 @@ stft ? (
   f_b = stft_mem.f_b;
   f_hn = stft_mem.f_hn;
 ) : (
-  use_envelopes ? (
+  (midi_input && use_envelopes) ? (
     f_b += string1.f_b * envelope1.state; f_hn += string1.f_hn;
     f_b += string2.f_b * envelope2.state; f_hn += string2.f_hn;
     f_b += string3.f_b * envelope3.state; f_hn += string3.f_hn;
@@ -434,12 +434,15 @@ settings_changed ? (
   force_update();
 );
 
-/*spl0 = sin((csss+=0.1)) * envelope1.state;
-spl1 = spl0;*/
-
 @serialize
 file_var(0, version);
-version = 1;
+(version > 1) ? (
+  file_var(0, env.t_max);
+) : (
+  env.t_max = 0.1;
+  use_envelopes = 0;
+);
+version = 2;
 
 @gfx 1080 280
 //scaling = gfx_ext_retina == 2 ? 1 : 0;
@@ -964,11 +967,6 @@ cx += radius + 4;
 
 bins = 100;
 
-hinter.drawhint();
-newtime = time_precise();
-delta_time = newtime - ctime;
-ctime = newtime;
-
 /*
 gfx_set(1, 1, 1, 1);
 ptr = vowel;
@@ -982,15 +980,19 @@ loop(64100,
 */
 
 function draw_envelope(x, y, w, h)
-instance(t_max)
-local(plot_srate, attack_samples, decay_samples, k_attack, k_decay, k_release,
-      x_cur, y_cur, x_new, y_new, state, rate, current_target, target)
-global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a)
+instance(t_max, last_x, last_y, last_cap)
+local(plot_srate, attack_samples, decay_samples,
+      k_attack, k_decay, k_release,
+      x_cur, y_cur, x_new, y_new, state, rate, current_target, target,
+      time_per_pixel, attack_pos, decay_pos, modifier, dx,
+      over, highlight)
+global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a,
+       mouse_x, mouse_y, mouse_wheel, mouse_cap, captured,
+       attack_slider, decay_slider, release_slider, sustain_level,
+       hinter.sethint, hinter.hint_time)
 (
-  gfx_set(0, 0, 0, 0.7);
+  gfx_set(0, 0, 0, 0.2);
   gfx_rect(x, y, w, h, 1);
-  
-  t_max = 0.1;
   
   plot_srate = (w - 4) / t_max;
   
@@ -999,6 +1001,51 @@ global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a)
   k_attack = mlog0p05 / attack_samples;
   k_decay = mlog0p05 / (decay_s * plot_srate);
   k_release = mlog0p05 / (release_s * plot_srate);
+  
+  (t_max == 0) ? t_max = 0.1;
+  over = (mouse_x > x) && (mouse_y > y) && (mouse_y < (y + h));
+  (over) ? (
+    (abs(mouse_wheel) > 0) ? (
+      modifier = 0.00025 * t_max;
+      (mouse_cap & 4 > 0) ? modifier *= 0.5;
+      (mouse_cap & 8 > 0) ? modifier *= 0.25;
+      t_max = max(0.0001, min(t_max - modifier * mouse_wheel, attack_s + 2 * decay_s + release_s));
+      mouse_wheel = 0;
+    );
+  
+    time_per_pixel = t_max / w;
+    attack_pos = attack_s / time_per_pixel;
+    decay_pos = 2 * decay_s / time_per_pixel;
+    
+    (last_cap == 0) ? (
+      (mouse_x < (x + attack_pos)) ? (
+        over = 2;
+      ) : (mouse_x < (x + attack_pos + decay_pos)) ? (
+        over = 3;
+      ) : (
+        over = 4;
+      );
+    ) : (
+      (captured == 100) ? ( over = 2; )
+      : (captured == 101) ? ( over = 3; )
+      : (captured == 102) ? ( over = 4; )
+    );
+  
+    (last_cap == 0) && (mouse_cap == 1) ? (
+      // Fetch click ranges for the various parts of the envelope
+      time_per_pixel = t_max / w;
+      attack_pos = attack_s / time_per_pixel;
+      decay_pos = 2 * decay_s / time_per_pixel;
+    
+      (over == 2) ? (
+        captured = 100;
+      ) : (over == 3) ? (
+        captured = 101;
+      ) : (over == 4) ? (
+        captured = 102;
+      );
+    );
+  );
   
   x_cur = x + 2;
   y_cur = y + h - 4;
@@ -1010,25 +1057,36 @@ global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a)
     (attack_samples > 0) ? (
       rate = k_attack;
       current_target = 1;
+      highlight = (over == 2);
+      attack_samples -= 1;
+      (attack_samples == 0) ? state = 1;
     ) : (
       // Release and decay
       (decay_samples > 0) ? (
         rate = k_decay;
         current_target = sustain_level;
+        highlight = (over == 3);
+        decay_samples -= 1;
+        (decay_samples == 0) ? state = sustain_level;
       ) : (
         rate = k_release;
         current_target = 0;
+        highlight = (over == 4);
       );
-      
-      decay_samples -= 1;
     );
-    attack_samples -= 1;
     
-    state += rate * (current_target - state);
+    state += min(1, rate * (current_target - state));
   
-    colormodel(0.94); gfx_a = 0.2;
+    colormodel(0.94); gfx_a = 0.2 + 0.2 * highlight * abs(sin(2 * time_precise()));
     gfx_line(x_cur + 1, y + h - 3, x_new + 1, y_new);
+
     colormodel(1);
+    highlight ? (
+      gfx_a = 0.8 * abs(sin(time_precise()));
+      gfx_line(x_cur + 1, y_cur - 1, x_new + 1, y_new - 1);
+      gfx_line(x_cur + 1, y_cur + 1, x_new + 1, y_new + 1);
+    );
+    gfx_a = 1;
     gfx_line(x_cur + 1, y_cur, x_new + 1, y_new);
     gfx_line(x_cur, y_cur + 1, x_new, y_new + 1);
     gfx_line(x_cur, y_cur, x_new, y_new);
@@ -1037,13 +1095,81 @@ global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a)
     y_cur = y_new;
   );
   
+  ((captured > 99) && (captured < 103)) ? (
+    (mouse_cap == 0) ? (
+      captured = 0;
+    ) : (
+      
+    
+      modifier = 0.01;
+      (mouse_cap & 4 > 0) ? modifier *= 0.5;
+      (mouse_cap & 8 > 0) ? modifier *= 0.25;
+      
+      dx = modifier * (mouse_x - last_x);
+      (captured == 100) ? (
+        // Attack
+        attack_slider = min(2, max(0, attack_slider + dx));
+        slider_automate(56);
+        hinter.sethint(sprintf(90, "Attack:\n%.2f ms", attack_s * 1000));
+        hinter.hint_time = 1000;
+      ) : (captured == 101) ? (
+        // Decay
+        decay_slider = min(3, max(0, decay_slider + dx));
+        slider_automate(57);
+        sustain_level = min(1, max(0, sustain_level - modifier * (mouse_y - last_y)));
+        slider_automate(59);
+        hinter.sethint(sprintf(90, "Decay:\n%.2f ms\nSustain: %d \n", decay_s * 1000, 100 * sustain_level));
+        hinter.hint_time = 1000;
+      ) : (captured == 102) ? (
+        // Release
+        release_slider = min(3, max(0, release_slider + dx));
+        slider_automate(58);
+        hinter.sethint(sprintf(90, "Release:\n%.2f ms", release_s * 1000));
+        hinter.hint_time = 1000;
+      )
+    );
+  );
+  
   colormodel(0);
   
+  last_cap = mouse_cap;
+  last_x = mouse_x;
+  last_y = mouse_y;
+  
+  gfx_a = 0.7;
   gfx_rect(x, y, w, h, 0);
   gfx_rect(x + 1, y + 1, w - 2, h - 2, 0);
 );
 
-env.draw_envelope(floor(choice_x), floor(3 * radius + 8), floor((radius + 4) * 5 - 4), floor(2 * radius));
+function draw_collapse_rect(x, y, w, h, label)
+local(over)
+global(gfx_a, mouse_x, mouse_y, mouse_cap, last_cap, hinter.sethint)
+(
+  over = (mouse_x < (x + w)) && (mouse_x > x) && (mouse_y < (y + h)) && (mouse_y > y);
+  over ? hinter.sethint(label);
+  
+  gfx_a = 0.5 + 0.5 * over;
+  gfx_rect(x, y, w, h);
+  
+  over && (mouse_cap == 1) && (last_cap == 0);
+);
+
+midi_input ? (
+  use_envelopes ? (
+    env.draw_envelope(floor(choice_x), floor(3 * radius + 8), floor((radius + 4) * 5 - 4), floor(2 * radius));
+  );
+  
+  colormodel(use_envelopes);
+  draw_collapse_rect(
+    floor(choice_x), floor(3 * radius + 0.5 * button_size) + use_envelopes * floor(2 * radius) + use_envelopes * 1.5 * button_size, 
+    floor((radius + 4) * 5 - 4), button_size,
+    use_envelopes ? 
+      "Disable envelope."
+    : "Apply an envelope to the input and output of each string."
+  ) ? (use_envelopes = 1 - use_envelopes);
+  
+  use_envelopes
+);
 
 
 
@@ -1097,7 +1223,7 @@ logo.draw_logo(logomem, rle_mem, 0.45, 6, 6);
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.08 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.10 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
@@ -1107,6 +1233,11 @@ gfx_printf("v0.08 ALPHA (Warning: this plugin is not production ready and is sti
   gfx_x = (gfx_w - gw) / 2; gfx_y = (gfx_h - gh) / 2;
   gfx_printf("DEV MODE")
 );
+
+hinter.drawhint();
+newtime = time_precise();
+delta_time = newtime - ctime;
+ctime = newtime;
 
 lx = mouse_x;
 ly = mouse_y;
