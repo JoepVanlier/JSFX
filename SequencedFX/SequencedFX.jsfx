@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.92
+version: 0.93
 author: Joep Vanlier
-changelog: Force undo points after block placement.
+changelog: Bugfix samplerate reducer.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -413,6 +413,7 @@ PITCH_SLIDER = 7;
 ROUNDED_PITCH_SLIDER = 8;
 DEPTH_SLIDER = 9;
 CUSTOM_SLIDER = 10;
+FREQ_SLIDER_1000 = 11;
 
 function knob_set_display(type, in_active)
 instance(label, active, value, scale, min_value)
@@ -428,7 +429,8 @@ global(srate, tempo_sync_envelopes, getFastEnvelopeLabel,
        PITCH_SLIDER
        ROUNDED_PITCH_SLIDER,
        DEPTH_SLIDER,
-       CUSTOM_SLIDER)
+       CUSTOM_SLIDER,
+       FREQ_SLIDER_1000)
 (
   // Type of slider
   type == DB_SLIDER ? (
@@ -461,6 +463,9 @@ global(srate, tempo_sync_envelopes, getFastEnvelopeLabel,
     label = sprintf(1, "%.2f st", scale * value + min_value);
   ) : ( type == DEPTH_SLIDER ) ? (
     label = sprintf(1, "%d ms", 50 * exp( (1 - value) * log(1/50) ));
+  ) : ( type == FREQ_SLIDER_1000 ) ? (
+    center = .5 * srate * exp( (1 - value) * log(1000/22050) );
+    label = center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000)
   ) : (
     // Unknown labels get forwarded (for now)
     label = type;
@@ -2032,14 +2037,17 @@ instance(x1, x2, x3)
 local(id0, id1, id2, id3)
 global()
 (
-  id0 = x1;
-  id1 = 0.5*(x2 - x0);
-  id2 = x0 - 2.5*x1 + 2*x2 - 0.5*x3;
-  id3 = 0.5*(x3 - x0) + 1.5 * (x1 - x2);
+  // We interpolate in the range 0 - 1
+  //   y[-1]  y[0]  y[1]  y[2]
+  //     x3    x2    x1    x0
+  // Note that when using this interpolator
+  // we need to stagger the non-interpolated
+  // signal by three samples.
   
-  x3 = x2;
-  x2 = x1;
-  x1 = x0;
+  id0 = x2;
+  id1 = 0.5*(x1 - x3);
+  id2 = x3 - 2.5*x2 + 2*x1 - 0.5*x0;
+  id3 = 0.5 * (x0 - x3) + 1.5 * (x2 - x1);
   
   ((id3*frac+id2)*frac+id1)*frac+id0
 );
@@ -2057,10 +2065,11 @@ global()
 function process_degrade()
 instance(factor,
          ib_factor, b_factor,
-         cpos, degrade_pos,
+         degrade_pos,
          from_l, from_r, to_l, to_r,
          l_hist, r_hist, preamp,
-         degrade_mix)
+         degrade_mix,
+         dl1, dl2, dl3, dr1, dr2, dr3, filter.filter.R2.m0)
 local(target, dry_l, dry_r)
 global(sm, bigger_update, ssl, ssr, current_bitrate, current_samplerate, srate, degrade_target, current_saturate, log10d20_conversion, current_degrade_mix)
 (
@@ -2083,18 +2092,27 @@ global(sm, bigger_update, ssl, ssr, current_bitrate, current_samplerate, srate, 
     ssr = ib_factor * floor(ssr * b_factor);
     
     // "S&H"
-    degrade_pos > factor ? (
+    degrade_pos > (factor - 2) ? (
       while(
         degrade_pos -= factor;
-        cpos > factor
+        degrade_pos > (factor - 2)
       );
       
       from_l = to_l;
       from_r = to_r;
       
-      to_l = l_hist.interp(ssl, cpos - floor(cpos));
-      to_r = r_hist.interp(ssr, cpos - floor(cpos));
+      to_l = l_hist.interp(ssl, degrade_pos - floor(degrade_pos));
+      to_r = r_hist.interp(ssr, degrade_pos - floor(degrade_pos));
     );
+
+    dl3 = dl2;
+    dl2 = dl1;
+    dl1 = dry_l;
+    dr3 = dr2;
+    dr2 = dr1;
+    dr1 = dry_r;
+    dry_l = dl2;
+    dry_r = dr2;
     
     l_hist.hist(ssl);
     r_hist.hist(ssr);
@@ -4400,7 +4418,7 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   bitrateKnob.drawAndProcess(cX, cY, knobSize, "Bit rate", "Bit rate", current_bitrate, 1, 1, 1);
 
   cX += 2.5*knobSize;
-  samplerateKnob.knob_set_display(FREQ_SLIDER, degrade_enabled);
+  samplerateKnob.knob_set_display(FREQ_SLIDER_1000, degrade_enabled);
   samplerateKnob.drawAndProcess(cX, cY, knobSize, "Sample rate", "Sample rate", current_samplerate, 1, 1, 1);
   
   cX += 2.5*knobSize;
