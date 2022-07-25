@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.95
+version: 0.97
 author: Joep Vanlier
-changelog: Report SEQS's PDC.
+changelog: Reduce plugin latency caused by playhead to 1 sample.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -108,6 +108,7 @@ DRAG_AREA = 20;
 DRAG_MODULATORS = 21;
 loaded_pattern = -1;
 TAPESTOP_MAX = 10;
+just_started = 1;
 
 log10d20_conversion  = 0.11512925464970228420089957273422;
 
@@ -1189,8 +1190,9 @@ init_playhead();
 
 @block
 radians_to_dt = 2.0 * $pi / srate;
+reset_head_offset = crossfade_samples * 0;
 
-new_pdc = 257;
+new_pdc = reset_head_offset + 1;
 (pdc_delay != new_pdc) ? (
   pdc_top_ch = 2;
   pdc_bot_ch = 0;
@@ -1198,7 +1200,6 @@ new_pdc = 257;
 );
 
 midi.processMIDIBlock();
-//interpolators_block();
 time_mode == 0 ? current_sample = beat_position * from_beat;
 
 effect1 == 0 ? (
@@ -1597,7 +1598,7 @@ local()
 global(current_playhead, playhead_0, playhead_1,
        target_position,
        x_fade_position, crossfade_samples, 
-       too_fast, jumps)
+       too_fast, jumps, reset_head_offset)
 (
   jumps += 1;
 
@@ -1607,9 +1608,9 @@ global(current_playhead, playhead_0, playhead_1,
   
   // Which playhead are we moving away from?
   current_playhead == 0 ? (
-    playhead_1 = target_position + crossfade_samples;
+    playhead_1 = target_position + reset_head_offset;
   ) : (
-    playhead_0 = target_position + crossfade_samples;
+    playhead_0 = target_position + reset_head_offset;
   );
   
   current_playhead = 1 - current_playhead;
@@ -1682,7 +1683,7 @@ instance(j1, j2, j3, j4, j5, j6, j7, current)
     j4 = j5;
     j5 = j6;
     j6 = j7;
-    j7 = 0;
+    j7 = 10000000000000000;
   );
   
   current += 1;
@@ -2262,13 +2263,12 @@ global(chunk_duration_b)
   idx
 );
 
-
 // Delayed sequences to accomodate for crossfades
-(reset_index != last_reset_index) ? (
+just_started || (reset_index != last_reset_index) ? (
   ((reset_index < last_reset_index) && stop_rec && (last_reset_index != 0)) ? (
     record_enabled = max(record_enabled - 0.5, 0);
   );
-
+  
   (reset_index == 0) ? (
     randomizing_modulator_a ? randomize_row_modulator(modulator1_values, n_segments);
     randomizing_modulator_b ? randomize_row_modulator(modulator2_values, n_segments);
@@ -2303,12 +2303,12 @@ global(chunk_duration_b)
       block_len = samples_per_beat * chunk_duration;
     );
     
-    retrig == 1 ? ( jump_schedule.schedule_jump(); )
-    : (retrig == 2) ? ( jump_schedule.schedule_jump(); jump_schedule.schedule_jump(floor(0.5 * block_len)); )
-    : (retrig == 3) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.33333 * block_len)); jump_schedule.schedule_jump(floor(0.66666 * block_len)); )
-    : (retrig == 4) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.25 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.75 * block_len)); )
-    : (retrig == 5) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.2 * block_len)); jump_schedule.schedule_jump(floor(0.4 * block_len)); jump_schedule.schedule_jump(floor(0.6 * block_len)); jump_schedule.schedule_jump(floor(0.8 * block_len)); )
-    : (retrig == 6) ? ( jump_schedule.jump_to_target(); jump_schedule.schedule_jump(floor(0.16666666667 * block_len)); jump_schedule.schedule_jump(floor(0.333333333333333 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.66666666666666666667 * block_len)); jump_schedule.schedule_jump(floor(0.83333333333333333333 * block_len)); )
+    retrig == 1 ? ( jump_schedule.schedule_jump(0); )
+    : (retrig == 2) ? ( jump_schedule.schedule_jump(0); jump_schedule.schedule_jump(floor(0.5 * block_len)); )
+    : (retrig == 3) ? ( jump_schedule.schedule_jump(0); jump_schedule.schedule_jump(floor(0.33333 * block_len)); jump_schedule.schedule_jump(floor(0.66666 * block_len)); )
+    : (retrig == 4) ? ( jump_schedule.schedule_jump(0); jump_schedule.schedule_jump(floor(0.25 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.75 * block_len)); )
+    : (retrig == 5) ? ( jump_schedule.schedule_jump(0); jump_schedule.schedule_jump(floor(0.2 * block_len)); jump_schedule.schedule_jump(floor(0.4 * block_len)); jump_schedule.schedule_jump(floor(0.6 * block_len)); jump_schedule.schedule_jump(floor(0.8 * block_len)); )
+    : (retrig == 6) ? ( jump_schedule.schedule_jump(0); jump_schedule.schedule_jump(floor(0.16666666667 * block_len)); jump_schedule.schedule_jump(floor(0.333333333333333 * block_len)); jump_schedule.schedule_jump(floor(0.5 * block_len)); jump_schedule.schedule_jump(floor(0.66666666666666666667 * block_len)); jump_schedule.schedule_jump(floor(0.83333333333333333333 * block_len)); )
   );
   
   ////////////////////////////
@@ -2352,6 +2352,36 @@ global(chunk_duration_b)
 );
 
 jump_schedule.eval_jump();
+
+// First sample after initialization needs special handling because resets have to be anticipated
+just_started ? (
+  x_fade_position = 0;
+  just_started = 0;
+
+  // Jumps scheduled right after init need to be corrected because jumps have to be anticipated
+  // to perform the cross fade correctly.
+  (jump_schedule.j7 != 10000000000000000) ? (jump_schedule.j7 = max(0, jump_schedule.j7 - crossfade_samples;));
+  (jump_schedule.j6 != 10000000000000000) ? (jump_schedule.j6 = max(0, jump_schedule.j6 - crossfade_samples;));
+  (jump_schedule.j5 != 10000000000000000) ? (jump_schedule.j5 = max(0, jump_schedule.j5 - crossfade_samples;));
+  (jump_schedule.j4 != 10000000000000000) ? (jump_schedule.j4 = max(0, jump_schedule.j4 - crossfade_samples;));
+  (jump_schedule.j3 != 10000000000000000) ? (jump_schedule.j3 = max(0, jump_schedule.j3 - crossfade_samples;));
+  (jump_schedule.j2 != 10000000000000000) ? (jump_schedule.j2 = max(0, jump_schedule.j2 - crossfade_samples;));
+  (jump_schedule.j1 != 10000000000000000) ? (jump_schedule.j1 = max(0, jump_schedule.j1 - crossfade_samples;));
+
+  /*
+    // Uncomment when debugging init
+    jj_what_is_my_pos = target_position;
+    target_position = crossfade_samples;
+    jj_current = jump_schedule.current;
+    jj1 = jump_schedule.j1;
+    jj2 = jump_schedule.j2; 
+    jj3 = jump_schedule.j3;
+    jj4 = jump_schedule.j4;
+    jj5 = jump_schedule.j5;
+    jj6 = jump_schedule.j6;
+    jj7 = jump_schedule.j7;
+  */
+);
 
 // Non delayed sequences
 (sequencer_index != last_sequencer_index) ? (
@@ -2536,8 +2566,8 @@ current_playhead_level > .000000001 ? (
   playhead_drymul = current_playhead_dry > -64 ? exp(log10d20_conversion*current_playhead_dry) : 0;
   playhead_wetmul = exp(log10d20_conversion*current_playhead_wet);
 
-  tmpl = playhead_wetmul * ssl + playhead_drymul * l_buffer.readBuffer(256);
-  tmpr = playhead_wetmul * ssr + playhead_drymul * r_buffer.readBuffer(256);
+  tmpl = playhead_wetmul * ssl + playhead_drymul * l_buffer.readBuffer(reset_head_offset);
+  tmpr = playhead_wetmul * ssr + playhead_drymul * r_buffer.readBuffer(reset_head_offset);
   
   ssl = current_playhead_level * tmpl + (1.0 - current_playhead_level) * ssl;
   ssr = current_playhead_level * tmpr + (1.0 - current_playhead_level) * ssr;
