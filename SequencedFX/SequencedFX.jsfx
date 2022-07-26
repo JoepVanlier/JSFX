@@ -73,7 +73,6 @@ slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
 slider34:pitch_shifter_pitch=0<-24,24,.0001>-Pitch Shift
 slider35:freq_shifter_shift=0.5<0,1,0.000001>-Frequency shift
 slider36:freq_shifter_enabled=0<0,1,1>-Frequency Shifter Enabled
-
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:midi_note_pattern_select=120<0,127,1>-First Pattern
 
@@ -1598,7 +1597,8 @@ local()
 global(current_playhead, playhead_0, playhead_1,
        target_position,
        x_fade_position, crossfade_samples, 
-       too_fast, jumps, reset_head_offset)
+       too_fast, jumps, reset_head_offset,
+       dyn_speed, jump_speed)
 (
   jumps += 1;
 
@@ -1607,10 +1607,11 @@ global(current_playhead, playhead_0, playhead_1,
   x_fade_position = crossfade_samples;
   
   // Which playhead are we moving away from?
+  jump_speed = 0;  // dyn_speed * 0;  /* TODO: Investigate why using last dyn speed can lead to clicks */
   current_playhead == 0 ? (
-    playhead_1 = target_position + reset_head_offset;
+    playhead_1 = target_position + reset_head_offset - crossfade_samples * jump_speed;
   ) : (
-    playhead_0 = target_position + reset_head_offset;
+    playhead_0 = target_position + reset_head_offset - crossfade_samples * jump_speed;
   );
   
   current_playhead = 1 - current_playhead;
@@ -2367,11 +2368,11 @@ just_started ? (
   (jump_schedule.j3 != 10000000000000000) ? (jump_schedule.j3 = max(0, jump_schedule.j3 - crossfade_samples;));
   (jump_schedule.j2 != 10000000000000000) ? (jump_schedule.j2 = max(0, jump_schedule.j2 - crossfade_samples;));
   (jump_schedule.j1 != 10000000000000000) ? (jump_schedule.j1 = max(0, jump_schedule.j1 - crossfade_samples;));
-
+  target_position = crossfade_samples;
+  
   /*
     // Uncomment when debugging init
     jj_what_is_my_pos = target_position;
-    target_position = crossfade_samples;
     jj_current = jump_schedule.current;
     jj1 = jump_schedule.j1;
     jj2 = jump_schedule.j2; 
@@ -2514,10 +2515,6 @@ playback_enabled ? (
 l_buffer.writeBuffer(spl0);
 r_buffer.writeBuffer(spl1);
 
-// Reference playhead is where the playhead is sent after a "reset" by retrigger.
-playhead_0 += dyn_speed;
-playhead_1 += dyn_speed;
-
 // Equal power fades (x^2 + y^2 = 1)
 x_fade_position > 0 ? (
   // Which playhead are we moving _towards_
@@ -2526,15 +2523,23 @@ x_fade_position > 0 ? (
     amp1 = sqrt(fade_level);
     amp0 = sqrt(1.0 - amp1);
     x_fade_position -= 1;
+    playhead_0 += jump_speed;
+    playhead_1 += dyn_speed;
   ) : (
     amp0 = sqrt(fade_level);
     amp1 = sqrt(1.0 - amp0);
     x_fade_position -= 1;
+    playhead_0 += dyn_speed;
+    playhead_1 += jump_speed;
   );
   
   ssl = amp0 * l_buffer.readBuffer(playhead_0) + amp1 * l_buffer.readBuffer(playhead_1);
   ssr = amp0 * r_buffer.readBuffer(playhead_0) + amp1 * r_buffer.readBuffer(playhead_1);
 ) : (
+  // Reference playhead is where the playhead is sent after a "reset" by retrigger.
+  playhead_0 += dyn_speed;
+  playhead_1 += dyn_speed;
+
   current_playhead ? (
     ssl = l_buffer.readBuffer(playhead_1);
     ssr = r_buffer.readBuffer(playhead_1);
