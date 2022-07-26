@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.97
+version: 0.98
 author: Joep Vanlier
-changelog: Reduce plugin latency caused by playhead to 1 sample.
+changelog: Add total output gain. Add button to disable delay reporting.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -93,7 +93,7 @@ import saike_seqs_pitchlib.jsfx-inc
 
 @init
 gfx_ext_retina = 1;
-CURRENT_VERSION = 7;
+CURRENT_VERSION = 8;
 version = CURRENT_VERSION;
 DRAG_STRING = 50;
 DRAG_BLOCK = 1;
@@ -575,6 +575,9 @@ function update_current_levels()
   current_freq_shifter_pitch = freqShifterPitchKnob.getCurrentValue();
   current_freq_shifter_dry = freqShifterDry.getCurrentValue();
   current_freq_shifter_wet = freqShifterWet.getCurrentValue();
+  
+  current_master_gain = finalOutputGain.getCurrentValue();
+  target_master_db = 10^(current_master_gain/20);
 );
 
 function init_controls()
@@ -672,7 +675,10 @@ function init_controls()
   freqShifterDry.init_knob(64, -64, 0, -64);
   freqShifterWet.init_knob(64, -64, 0, 0);
   
+  finalOutputGain.init_knob(64, -32, 0, 0);
+  
   update_current_levels();
+  current_master_db = target_master_db;
 );
 
 from_order_mem();
@@ -1188,10 +1194,11 @@ init_playhead();
   current_freq_shifter_pitch = freqShifterPitchKnob.getCurrentValue();
 
 @block
+d_master_gain = (target_master_db - current_master_db) / samplesblock;
 radians_to_dt = 2.0 * $pi / srate;
 reset_head_offset = crossfade_samples * 0;
 
-new_pdc = reset_head_offset + 1;
+new_pdc = hide_pdc ? 0 : reset_head_offset + 1;
 (pdc_delay != new_pdc) ? (
   pdc_top_ch = 2;
   pdc_bot_ch = 0;
@@ -1570,7 +1577,12 @@ freqShifterPitchKnob.serialize_knob();
 freqShifterDry.serialize_knob();
 freqShifterWet.serialize_knob();
 
+finalOutputGain.serialize_knob();
+
+file_var(0, hide_pdc);
+
 update_current_levels();
+current_master_db = target_master_db;
 version = CURRENT_VERSION; // Update to current version
 
 loaded_pattern = -1;
@@ -2657,8 +2669,10 @@ do_effect(effect9);
 do_effect(effect10);
 do_effect(effect11);
 
-spl0 = ssl;
-spl1 = ssr;
+spl0 = current_master_db * ssl;
+spl1 = current_master_db * ssr;
+
+current_master_db += d_master_gain;
 
 @gfx 1009 695
 current_cursor = randomize_toggle.value ? 32515 : 32512;
@@ -2787,6 +2801,7 @@ function setup_theme()
     s_RETRIGGER = sprintf(79, "RETRIGGER");
     s_REVERSE = sprintf(80, "REVERSE");
     s_FREQ_SHIFT = sprintf(81, "FREQ SHIFTER");
+    s_MASTER = sprintf(82, "MASTER");
   ) : ( style == 1 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2805,6 +2820,7 @@ function setup_theme()
     s_RETRIGGER = sprintf(79, "Retrigger");
     s_REVERSE = sprintf(80, "Reverse");
     s_FREQ_SHIFT = sprintf(81, "Frequency shifter");
+    s_MASTER = sprintf(82, "Master");
   ) : ( style == 2 ) ? (
     s_FILTER = sprintf(65, "Filter");
     s_ENVELOPE = sprintf(66, "Envelope");
@@ -2823,6 +2839,7 @@ function setup_theme()
     s_RETRIGGER = sprintf(79, "Retrigger");
     s_REVERSE = sprintf(80, "Reverse");
     s_FREQ_SHIFT = sprintf(81, "Frequency shifter");
+    s_MASTER = sprintf(82, "Master");
   );
 
   style == 0 ? (
@@ -3571,7 +3588,7 @@ draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 gfx_set(1, 1, 1, .1);
 gfx_x = 150 * (1+scaling);
 gfx_y = 30 * (1+scaling);
-gfx_printf("v0.92");
+gfx_printf("v0.98");
 
 scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
@@ -4190,6 +4207,15 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   stopRecToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.4 * knobSize, 0.15*knobSize, 0.15*knobSize, stop_rec, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Disable recording when reaching end of bar for the second time.\nCan be useful when recording from a looped area.");
   stop_rec = stopRecToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
+) : (selected_details == 1) ? (
+  nextPanel = drawPanel(s_MASTER, cX, cY - 1.5 * knobSize, 4.5*knobSpacing, panelHeight, 1);
+  
+  cX += 1.5*knobSize;
+  finalOutputGain.knob_set_display(DB_SLIDER, 1);
+  finalOutputGain.drawAndProcess(cX, cY, knobSize, "Master Gain", "Final output level.", current_master_gain, 1, 1, 1);
+  
+  reportToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, hide_pdc, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Enable this toggle to make the plugin hide latency (disabling plugin delay compensation).");
+  hide_pdc = reportToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 ) : (selected_details == 2 ) ? (
   nextPanel = drawPanel(s_SLOWDOWN, cX, cY - 1.5 * knobSize, 8.0*knobSpacing, panelHeight, slowdown_enabled);
   cX += 2 * knobSpacing;
