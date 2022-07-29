@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.18
+version: 5.0.20
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Bugfix quadratic interpolation mode that could omit high frequency peaks.
+changelog: Reduce memory footprint (WIP)
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -85,7 +85,9 @@ options:no_meter
 options:gmem=saike_spectrum_analyzer
 
 @init
-ext_noinit = 1;
+!memory_debugging ? (
+  ext_noinit = 1;
+);
 copyTo    = 0;
 magma     = 2000;
 viridis   = 4000;
@@ -183,8 +185,10 @@ fftidx          = -1;
 scaling         = 1;
 max_fft_size    = 32768;
 fftsize         = max_fft_size;
-window          = max_fft_size + (max_fft_size*0.5 - 1);
-histsize        = max_fft_size + (max_fft_size*0.5 - 1);
+
+window          = max_fft_size; /* Location of the window */
+histsize        = 2 * max_fft_size;  /* Size of the audio buffer */
+
 
 SONOSURFACE   = 4;
 gfx_dest      = SONOSURFACE;
@@ -200,11 +204,16 @@ drawHz          = 0;
 update = slider44 == 0;
 
 function init_memory_mapping()
-local(rpos, curshift, rpos, hsize, fftw, ibuf, csh)
+local(rpos, freemem, rpos, hsize, fftw, ibuf, csh)
 global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activechannels, maxchannels, totchannels, offscreenbuf, spacing, M_BLOCK_SIZE, 
-       window, max_fft_size, maxIntegrate, filtout, filtout2, sumshl, sumshr, sumposl, sumposr, fftwl, fftwr, ibufl, ibufr, sumhsl, sumhsr
-       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2)
+       window, histsize, max_fft_size, maxIntegrate, filtout, filtout2, sumshl, sumshr, sumposl, sumposr, fftwl, fftwr, ibufl, ibufr, sumhsl, sumhsr
+       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2,memory_debugging)
 (
+  memory_debugging ? (
+    memset(65536, 0, 512*512*1024);
+  );
+  
+  // Hardcoded ptr positions; note that 10000 - 30000 are taken by the colormaps
   recpositions    = 100;
   histsizes       = 200;
   fftworkspaces   = 300;
@@ -216,34 +225,62 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   offscreenbuf    = 1;
   spacing         = 3; // Used to be 3
   M_BLOCK_SIZE    = 65536;
-  
-  curshift  = M_BLOCK_SIZE;
+
+  freemem   = histsize + max_fft_size;
   rpos      = recpositions;
   hsize     = histsizes;
   fftw      = fftworkspaces; 
   ibuf      = integrate_bufs;
   csh       = shifts;
-  
+
   loop(totchannels*2,
-    rpos[]  = curshift;
-    hsize[] = curshift + window;
-    fftw[]  = curshift + window + (max_fft_size*0.5 + 1);
-    ibuf[]  = curshift + window + (max_fft_size*0.5 + 1) + max_fft_size*2;
-    csh[]   = curshift;
-    
-    memset(fftw[],0,max_fft_size);
-    memset(ibuf[],0-100*maxIntegrate,max_fft_size);
-    memset(rpos[],0,max_fft_size);
+    freemem = (csh[] = rpos[] = freemem) + histsize;   // Buffer start
+    hsize[] = freemem;  // Buffer end
+    freemem = (fftw[] = freemem) + max_fft_size;  // Length of fftw space is max_fft_size
+    freemem = (ibuf[] = freemem) + max_fft_size; // Integration buffer is 0.5 * fftsize long, we round off to a full fft size
+ 
+    memset(fftw[], 0, max_fft_size);
+    memset(ibuf[], 0 - 100*maxIntegrate, 0.5 * max_fft_size);
+    memset(rpos[], 0, max_fft_size);
     
     rpos  += 1;
     hsize += 1;
     fftw  += 1;
     ibuf  += 1;
     csh   += 1;
-    
-    curshift += spacing*M_BLOCK_SIZE;
   );
   
+  // Memory for the filter on the spectrum
+  freemem = (filtout = freemem) + max_fft_size;  // Should only be 0.5 * fftsize; but not clean atm
+  memset(filtout,0,max_fft_size);
+  freemem  = (filtout2 = freemem) + max_fft_size;
+  memset(filtout2,0,max_fft_size);
+  
+  // Memory for the sum signals
+  freemem = (sumshl = sumposl = freemem) + histsize; // Buffer start
+  sumhsl = freemem;  // Buffer end
+  freemem = (fftwl = freemem) + max_fft_size;
+  freemem = (ibufl = freemem) + max_fft_size;
+  
+  freemem = (sumshr = sumposr = freemem) + histsize; // Buffer start
+  sumhsr = freemem;  // Buffer end
+  freemem = (fftwr = freemem) + max_fft_size;
+  freemem = (ibufr = freemem) + max_fft_size;
+  
+  memset(ibufl,0-100*maxIntegrate, max_fft_size);
+  memset(ibufr,0-100*maxIntegrate, max_fft_size);
+  
+  // Buffer for delay compensation
+  freemem = (latencyPtr = latencyBuffer = freemem) + M_BLOCK_SIZE;
+  latencyBufferMax = freemem;
+  memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
+  
+  freemem = (memA = freemem) + max_fft_size;
+  freemem = (memA2 = freemem) + max_fft_size;
+  freemem = (memB = freemem) + max_fft_size;
+  freemem = (memB2 = freemem) + max_fft_size;
+  
+  /*
   // Memory for the filter on the spectrum
   filtout   = (curshift += spacing*M_BLOCK_SIZE);
   memset(filtout,0,max_fft_size);
@@ -268,7 +305,7 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   
   // Buffer for delay compensation
   latencyBuffer  = (curshift += spacing*M_BLOCK_SIZE);
-  latencyBufferMax = latencyBuffer + M_BLOCK_SIZE; // should be x64
+  latencyBufferMax = latencyBuffer + M_BLOCK_SIZE;
   latencyPtr = latencyBuffer;
   memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
   
@@ -276,9 +313,10 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   memB  = (curshift += spacing*M_BLOCK_SIZE);
   memA2 = (curshift += spacing*M_BLOCK_SIZE);
   memB2 = (curshift += spacing*M_BLOCK_SIZE);
+  */
 );
 
-memA == 0 ? init_memory_mapping();
+((memA == 0) || memory_debugging) ? init_memory_mapping();
 updateChannelSliders();
 
 @serialize
@@ -1265,7 +1303,7 @@ instance()
   );
 );
 
-function prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
+function prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, rr, gg, bb, fill, draw, fftsize, xscale, smoothMode, kernelSize)
 local(bufout, fout, scfac, jk, tmp, curSize, kern, tsc, i, curh
       sumWtY, iSize, xij, SumWtS,
       d, w, yAdaptive, res, 
@@ -1566,7 +1604,7 @@ instance()
     bufout[] = last;
   );
   
-  prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
+  prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
 );
 
 function processFFTDifference(rpos, fftwspace, intbuf, bufStart, histEnd, 
@@ -1697,7 +1735,7 @@ instance()
     bufout[] = last;
   );
   
-  prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, histEnd, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
+  prepareForDrawing(filtout, rpos, fftwspace, intbuf, bufStart, rr, gg, bb, fill, draw, fftsize, xscale, floor(slider45), kernelSize)
 );
 
 
@@ -2501,16 +2539,16 @@ instance()
   
   showA ? (
     memcpy(filtout, memA, M_BLOCK_SIZE);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
     memcpy(filtout, memA2, M_BLOCK_SIZE);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
   );
   
   showB ? (
     memcpy(filtout, memB, M_BLOCK_SIZE);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
     memcpy(filtout, memB2, M_BLOCK_SIZE);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, sumhsl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
   );
 );
 
@@ -2634,22 +2672,6 @@ mouse_cap > 0 ? (
       idx += 1;
     );
     
-    /*showSum ? (
-      ( slider34 == 0 ) ? (
-        relative_position = shifts[reference_chan] - recpositions[reference_chan];
-        cpos = sumposr + relative_position;
-        cpos = (cpos < sumshr) ? (cpos + sumhsr - sumshr) : cpos;
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 2);
-        relative_position = shifts[reference_chan] - recpositions[reference_chan];
-        cpos = sumposl + relative_position;
-        cpos = (cpos < sumshl) ? (cpos + sumhsl - sumshl) : cpos;
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 2);
-      ) : (
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 2);
-        scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposl, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 2);
-      );
-    );*/
-    
     // Draw all time tracks
     idx = 0;
     refpoint = recpositions[reference_chan];
@@ -2772,3 +2794,50 @@ mouse_cap > 0 ? (
   // Finished
   update = 1;
 );
+
+function draw_memory_map()
+global(update, gfx_x, gfx_y, gfx_w, gfx_h, fftworkspaces, recpositions)
+local(draw_ptr, on, block, fftw, rpos)
+(
+  gfx_set(0, 0, 0, 0);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+  draw_ptr = 0;
+  
+  // Blocks of 128 doubles
+  // One row takes 128 blocks
+  block = 1024;
+  
+  gfx_x = 10;
+  gfx_y = 100;
+  loop(128,
+    gfx_x = 0;
+    loop(128,
+      on = 0;
+      loop(block,
+        on = on || (abs(draw_ptr[]) > 0);
+        draw_ptr += 1;
+      );
+      gfx_set(1, 1, 1, on ? 1 : .2);
+      gfx_rect(gfx_x, gfx_y, 4, 4);
+      gfx_x += 5;
+    );
+    gfx_y += 5;
+  );
+  gfx_x = 0;
+  
+  rpos      = recpositions;
+  fftw      = fftworkspaces; 
+  
+  gfx_set(1, 1, 1, 1);
+  gfx_y = 100;
+  loop(32,
+    gfx_x = 700;
+    gfx_printf("%d (%f) r: %d\n", fftw[], fftw[] / 65536, rpos[]);
+    fftw += 1;
+    rpos += 1;
+  );
+);
+
+memory_debugging ? draw_memory_map();
+
+
