@@ -2,7 +2,7 @@ desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
 version: 5.0.20
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Reduce memory footprint (WIP)
+changelog: Reduce memory footprint. Only process channels we actually use. (WIP)
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -10,7 +10,7 @@ License: LGPL - http://www.gnu.org/licensses/lgpl.html
 
 This file was modified by Joep Vanlier and Trond-Viggo Melssen to enable multispectrum analysis analysis, sonogram and time domain plots. Thanks to cjewellstudios for the smooth colormap.
 
-options:maxmem=9000000
+options:maxmem=5000000
 
 import colormaps.jsfx-inc
 
@@ -27,20 +27,20 @@ slider10:.15<0,1,.4>-colorBackground
 
 slider11:1<0,1,1>-Ch1
 slider12:1<0,1,1>-Ch2
-slider13:1<0,1,1>-Ch3
-slider14:1<0,1,1>-Ch4
-slider15:1<0,1,1>-Ch5
-slider16:1<0,1,1>-Ch6
-slider17:1<0,1,1>-Ch7
-slider18:1<0,1,1>-Ch8
-slider19:1<0,1,1>-Ch9
-slider20:1<0,1,1>-Ch10
-slider21:1<0,1,1>-Ch11
-slider22:1<0,1,1>-Ch12
-slider23:1<0,1,1>-Ch13
-slider24:1<0,1,1>-Ch14
-slider25:1<0,1,1>-Ch15
-slider26:1<0,1,1>-Ch16
+slider13:0<0,1,1>-Ch3
+slider14:0<0,1,1>-Ch4
+slider15:0<0,1,1>-Ch5
+slider16:0<0,1,1>-Ch6
+slider17:0<0,1,1>-Ch7
+slider18:0<0,1,1>-Ch8
+slider19:0<0,1,1>-Ch9
+slider20:0<0,1,1>-Ch10
+slider21:0<0,1,1>-Ch11
+slider22:0<0,1,1>-Ch12
+slider23:0<0,1,1>-Ch13
+slider24:0<0,1,1>-Ch14
+slider25:0<0,1,1>-Ch15
+slider26:0<0,1,1>-Ch16
 slider27:1<0,1,1>-Sum
 slider28:-1<-1,1,16>-Channel
 slider29:0<1,0,3{Sonogram,Sample,Sample all,Off}>-Sonogram
@@ -85,6 +85,8 @@ options:no_meter
 options:gmem=saike_spectrum_analyzer
 
 @init
+chNames = 800;
+memory_debugging = 0;
 !memory_debugging ? (
   ext_noinit = 1;
 );
@@ -98,13 +100,15 @@ plasma    = 8000;
 freeze = 0;
 
 function setChannelNames()
+local(chName)
+global(chNames)
 (
   chName = 1;
   while (chName <= 16) (
     chName < 10 ? (
-      chNames[chName-1] = sprintf(chName-1, "Ch %{chName}i");
+      chNames[chName-1] = sprintf(chName-1, "Ch %d", chName);
     ) : (
-      chNames[chName-1] = sprintf(chName-1, "Ch%{chName}i");
+      chNames[chName-1] = sprintf(chName-1, "Ch%d", chName);
     );
     chName = chName + 1;
   );
@@ -115,12 +119,25 @@ function updateChannelSliders()
 global(slider11, slider12, slider13, slider14, slider15, 
        slider16, slider17, slider18, slider19, slider20, 
        slider21, slider22, slider23, slider24, slider25, 
-       slider26, slider27, actc, activechannels, maxchannels,
+       slider26, slider27, slider28, num_ch,
+       actc, activechannels, max_active_channels,
        showSum)
-local(mx)
+local(mx, ix)
 (
   // For some reason this isn't being called in @slider
   actc = activechannels;
+ 
+  ix = 0;
+  loop(16,
+    (ix >= (num_ch / 2)) ? (
+      slider(11 + ix) = 0;
+    );
+    ix += 1;
+  );
+  (slider28 >= (num_ch / 2 - 1)) ? (
+    slider28 = 0;
+  );
+  
   mx = 0;
   actc[] = slider11 ? (mx=1; 1);
   actc[1] = slider12 ? (mx=2; 1);
@@ -139,24 +156,19 @@ local(mx)
   actc[14] = slider25 ? (mx=15; 1);
   actc[15] = slider26 ? (mx=16; 1);
 
-  maxchannels = mx;
+  max_active_channels = max(mx, slider28); /* Slider28 contains the channel monitored on the sonogram */
   showSum = slider27;
 );
 
 function initCh()
-global(slider11, slider12, slider13, slider14, slider15,
-       slider16, slider17, slider18, slider19, slider20,
-       slider21, slider22, slider23, slider24, slider25, 
-       slider26, slider50, num_ch)
-local(i1)
+global(slider50, num_ch)
+local(ix)
 (
-  slider50 == 0 ? (
-    slider11 = slider12 = slider13 = slider14 = slider15 = slider16 = slider17 = slider18 = slider19 = slider20 = slider21 = slider22 = slider23 = slider24 = slider25 = slider26 = 0;
-  
-    i1 = 11;
-    loop(num_ch*.5,
-      slider(i1) = 1;
-      i1 = i1 + 1;
+  (slider50 == 0) ? (
+    ix = 0;
+    loop(16,
+      slider(11 + ix) = (ix < (num_ch / 2));
+      ix += 1;
     );
     
     updateChannelSliders();
@@ -204,14 +216,16 @@ drawHz          = 0;
 update = slider44 == 0;
 
 function init_memory_mapping()
-local(rpos, freemem, rpos, hsize, fftw, ibuf, csh)
-global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activechannels, maxchannels, totchannels, offscreenbuf, spacing, M_BLOCK_SIZE, 
+local(rpos, freemem, rpos, hsize, fftw, ibuf, csh, channel_offset, endpoints)
+global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activechannels, maxchannels, offscreenbuf, M_BLOCK_SIZE, 
        window, histsize, max_fft_size, maxIntegrate, filtout, filtout2, sumshl, sumshr, sumposl, sumposr, fftwl, fftwr, ibufl, ibufr, sumhsl, sumhsr
-       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2,memory_debugging)
+       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2,memory_debugging, ch_endpoints)
 (
   memory_debugging ? (
     memset(65536, 0, 512*512*1024);
   );
+  
+  updateChannelSliders();
   
   // Hardcoded ptr positions; note that 10000 - 30000 are taken by the colormaps
   recpositions    = 100;
@@ -220,41 +234,18 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   integrate_bufs  = 400;
   shifts          = 500;
   activechannels  = 600;
+  ch_endpoints    = 700;
   maxchannels     = 16;
-  totchannels     = 16;
   offscreenbuf    = 1;
-  spacing         = 3; // Used to be 3
   M_BLOCK_SIZE    = 65536;
 
-  freemem   = histsize + max_fft_size;
-  rpos      = recpositions;
-  hsize     = histsizes;
-  fftw      = fftworkspaces; 
-  ibuf      = integrate_bufs;
-  csh       = shifts;
-
-  loop(totchannels*2,
-    freemem = (csh[] = rpos[] = freemem) + histsize;   // Buffer start
-    hsize[] = freemem;  // Buffer end
-    freemem = (fftw[] = freemem) + max_fft_size;  // Length of fftw space is max_fft_size
-    freemem = (ibuf[] = freemem) + max_fft_size; // Integration buffer is 0.5 * fftsize long, we round off to a full fft size
- 
-    memset(fftw[], 0, max_fft_size);
-    memset(ibuf[], 0 - 100*maxIntegrate, 0.5 * max_fft_size);
-    memset(rpos[], 0, max_fft_size);
-    
-    rpos  += 1;
-    hsize += 1;
-    fftw  += 1;
-    ibuf  += 1;
-    csh   += 1;
-  );
+  freemem   = histsize + max_fft_size; // Post window and color map
   
   // Memory for the filter on the spectrum
   freemem = (filtout = freemem) + max_fft_size;  // Should only be 0.5 * fftsize; but not clean atm
-  memset(filtout,0,max_fft_size);
+  memset(filtout, 0, max_fft_size);
   freemem  = (filtout2 = freemem) + max_fft_size;
-  memset(filtout2,0,max_fft_size);
+  memset(filtout2, 0, max_fft_size);
   
   // Memory for the sum signals
   freemem = (sumshl = sumposl = freemem) + histsize; // Buffer start
@@ -267,57 +258,48 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   freemem = (fftwr = freemem) + max_fft_size;
   freemem = (ibufr = freemem) + max_fft_size;
   
-  memset(ibufl,0-100*maxIntegrate, max_fft_size);
-  memset(ibufr,0-100*maxIntegrate, max_fft_size);
+  memset(ibufl, 0 - 100 * maxIntegrate, max_fft_size);
+  memset(ibufr, 0 - 100 * maxIntegrate, max_fft_size);
   
   // Buffer for delay compensation
-  freemem = (latencyPtr = latencyBuffer = freemem) + M_BLOCK_SIZE;
+  freemem = (latencyPtr = latencyBuffer = freemem) + max_fft_size;
   latencyBufferMax = freemem;
   memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
   
-  freemem = (memA = freemem) + max_fft_size;
-  freemem = (memA2 = freemem) + max_fft_size;
-  freemem = (memB = freemem) + max_fft_size;
-  freemem = (memB2 = freemem) + max_fft_size;
+  /* These blocks are needlessly big, but serialization needs to have a migration path if they are to be changed */
+  freemem = (memA = freemem) + M_BLOCK_SIZE;
+  freemem = (memB = freemem) + M_BLOCK_SIZE;
+  freemem = (memA2 = freemem) + M_BLOCK_SIZE;
+  freemem = (memB2 = freemem) + M_BLOCK_SIZE;
   
-  /*
-  // Memory for the filter on the spectrum
-  filtout   = (curshift += spacing*M_BLOCK_SIZE);
-  memset(filtout,0,max_fft_size);
-  filtout2  = (curshift += spacing*M_BLOCK_SIZE);
-  memset(filtout2,0,max_fft_size);
-  
-  // Memory for the sum signals
-  sumshl  = (curshift += spacing*M_BLOCK_SIZE);
-  sumposl = sumshl;
-  fftwl   = sumshl + window + (max_fft_size*0.5 + 1);
-  ibufl   = sumshl + window + (max_fft_size*0.5 + 1) + max_fft_size*2;
-  sumhsl  = sumshl + window;
-  
-  sumshr  = (curshift += spacing*M_BLOCK_SIZE);
-  sumposr = sumshr;
-  fftwr   = sumshr + window + (max_fft_size*0.5 + 1);
-  ibufr   = sumshr + window + (max_fft_size*0.5 + 1) + max_fft_size*2;
-  sumhsr  = sumshr + window;
-  
-  memset(ibufl,0-100*maxIntegrate,max_fft_size);
-  memset(ibufr,0-100*maxIntegrate,max_fft_size);
-  
-  // Buffer for delay compensation
-  latencyBuffer  = (curshift += spacing*M_BLOCK_SIZE);
-  latencyBufferMax = latencyBuffer + M_BLOCK_SIZE;
-  latencyPtr = latencyBuffer;
-  memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
-  
-  memA  = (curshift += spacing*M_BLOCK_SIZE);
-  memB  = (curshift += spacing*M_BLOCK_SIZE);
-  memA2 = (curshift += spacing*M_BLOCK_SIZE);
-  memB2 = (curshift += spacing*M_BLOCK_SIZE);
-  */
-);
+  rpos      = recpositions;
+  hsize     = histsizes;
+  fftw      = fftworkspaces; 
+  ibuf      = integrate_bufs;
+  csh       = shifts;
+  endpoints = ch_endpoints;
 
-((memA == 0) || memory_debugging) ? init_memory_mapping();
-updateChannelSliders();
+  loop(maxchannels,
+    channel_offset = 0;
+    loop(2,
+      freemem = ((csh + channel_offset)[] = (rpos + channel_offset)[] = freemem) + histsize;   // Buffer start
+      (hsize + channel_offset)[] = freemem;  // Buffer end
+      freemem = ((fftw + channel_offset)[] = freemem) + max_fft_size;  // Length of fftw space is max_fft_size
+      freemem = ((ibuf + channel_offset)[] = freemem) + max_fft_size; // Integration buffer is 0.5 * fftsize long, we round off to a full fft size
+      channel_offset = maxchannels;
+    );
+    endpoints[] = freemem;
+    
+    rpos  += 1;
+    hsize += 1;
+    fftw  += 1;
+    ibuf  += 1;
+    csh   += 1;
+    endpoints += 1;
+  );
+  freemem
+);
+(memA == 0 || memory_debugging) ? (total_mem = init_memory_mapping());
 
 @serialize
 file_mem(0, memA, 65536);
@@ -339,6 +321,15 @@ slider2 != lfloor ? old_w=0;
 updateChannelSliders();
 
 @block
+max_active_channels > 0 ? (
+  new_mem_endpoint = ch_endpoints[max_active_channels - 1];
+  
+  (new_mem_endpoint != mem_endpoint) ? (
+    mem_endpoint = new_mem_endpoint;
+    freembuf(mem_endpoint);
+  );
+);
+
 displayMode != lastDisplayMode ? (
   lastDisplayMode = displayMode;
   init_memory_mapping();
@@ -356,29 +347,31 @@ updateSliders ? (
 );
 
 function update()
-local(jch, active, recpos, hs, sh, sl, sr, iLoad)
-global(activechannels, recpositions, histsizes, shifts, slider44, maxchannels, slider28, 
-       showSide, sumposl, sumposr, sumhsl, sumshl, sumhsr, sumshr)
+local(jch, active, recpos, hs, sh, sl, sr, iLoad, left_signal, right_signal)
+global(activechannels, recpositions, histsizes, shifts, slider44, maxchannels, max_active_channels, slider28, 
+       showSide, sumposl, sumposr, sumhsl, sumshl, sumhsr, sumshr, num_ch)
 (
   iLoad     = 0;
   jch       = 0;
-  active    = activechannels;
-  recpos    = recpositions;
-  hs        = histsizes;
-  sh        = shifts;
   sl        = 0;
   sr        = 0;
   
   ( slider44 == 0 ) ?
   (
-    loop(maxchannels,
+    active = activechannels;
+    recpos = recpositions;
+    hs = histsizes;
+    sh = shifts;
+    loop(num_ch * 0.5,
+      left_signal = spl(jch);
+      right_signal = spl(jch + 1);
       (active[] == 1 || (slider28==iLoad)) ? (
-        recpos[][]=.5*(spl(jch)+spl(jch+1));
+        recpos[][] = 0.5 * (left_signal + right_signal);
         recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
       );
   
-      sl = sl+spl(jch);
-      sr = sr+spl(jch+1);
+      sl = sl + left_signal;
+      sr = sr + right_signal;
       
       active += 1;
       recpos += 1; 
@@ -390,11 +383,15 @@ global(activechannels, recpositions, histsizes, shifts, slider44, maxchannels, s
     
     showSide ? (
       jch = 0;
-      active = activechannels;
       iLoad = 0;
-      loop(maxchannels,
+
+      active = activechannels;
+      recpos = recpositions + maxchannels;
+      hs = histsizes + maxchannels;
+      sh = shifts + maxchannels;
+      loop(num_ch * 0.5,
         (active[] == 1 || (slider28==iLoad)) ? (
-          recpos[][] = .5*(spl(jch)-spl(jch+1));
+          recpos[][] = 0.5*(spl(jch)-spl(jch+1));
           recpos[] = ((recpos[]+1) >= hs[] ? sh[] : (recpos[]+1));
         );
         
@@ -439,10 +436,11 @@ latencyCompensation ? (
 );
 
 @gfx 900 600
+initCh();
+updateChannelSliders();
+
 micro_view = gfx_ext_flags & 1;
 scaling = slider6;
-initCh();
-
 gfx_ext_retina>1 ? gfx_setfont(1,"Arial",max(12,12*gfx_ext_retina),'b') : gfx_setfont(0);
 
 function proceed(val, h)
@@ -2251,7 +2249,7 @@ function DrawButtons()
       "Theme:    Tracks"); 
     
   slider42 == 0 ? slider43 == 1 ? yShift = yShift*4;
- 
+
     gmem[0] > 0 ? (
       // Reset channel names
       setChannelNames();
@@ -2275,7 +2273,7 @@ function DrawButtons()
       cidx = 0;
       addr = 1;
       chName = 0;
-      while (gmem[addr] != 0) (
+      while (gmem[addr] != 256) (
         gmem[0] == 2 ? (
           // Load RGB color to track colortheme
           cref[cidx+0] = gmem[addr+0] / 255;
@@ -2286,7 +2284,7 @@ function DrawButtons()
         );
         // Change channel name to track name
         sOffs = 0;
-        while (gmem[addr] != 0) (
+        while (gmem[addr] != 256) (
           str_setchar(chName, sOffs, gmem[addr], 'c');
           sOffs = sOffs + 1;
           addr = addr + 1;
@@ -2469,7 +2467,7 @@ local(j,
 
 function drawSpectra(rpos, fftw, ibuf, shft, hsiz)
 global(slider8, slider36, slider45,
-       maxchannels, showSide, activechannels, showSum, copyTo, bgcolor,
+       maxchannels, max_active_channels, showSide, activechannels, showSum, copyTo, bgcolor,
        sumposr, fftwr, ibufr, sumshr, sumhsr,
        sumposl, fftwl, ibufl, sumshl, sumhsl
        fftw, ibuf, shft, hsiz, rpos,
@@ -2489,7 +2487,7 @@ instance()
   ccolor   = cref;
   jl       = 1;
   isActive = activechannels;
-  loop(maxchannels,
+  loop(max_active_channels,
     (isActive[] == 1) ? (
       ( slider36 < 0 || ( slider36 == (jl-1) ) ) ? (
         showSide ? processFFT((rpos+maxchannels)[], (fftw+maxchannels)[], (ibuf+maxchannels)[], (shft+maxchannels)[], (hsiz+maxchannels)[], ccolor[0], ccolor[1], ccolor[2], 1, 2);
@@ -2837,7 +2835,15 @@ local(draw_ptr, on, block, fftw, rpos)
     rpos += 1;
   );
 );
-
 memory_debugging ? draw_memory_map();
 
-
+/*
+  gfx_set(1, 1, 1, 1);
+  gfx_y = 100;
+  ix = 0;
+  loop(16,
+    gfx_x = 700;
+    gfx_printf("%d\n", ch_endpoints[ix]);
+    ix += 1;
+  );
+*/  

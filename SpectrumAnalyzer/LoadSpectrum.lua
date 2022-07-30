@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.81
+@version 0.82
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -81,6 +81,8 @@
   row on the top. Doubleclicking alters the signal window size.
 --]] --[[
  * Changelog:
+ * v0.82 (2020-07-30)
+   + Fix bug that led to channels starting with zero in color not parsing correctly because they were being interpreted as terminator.
  * v0.8 (2020-02-29)
    + Pulled in modifications from Feed The Cat.
  * v0.71 (2018-11-11)
@@ -121,40 +123,6 @@ local extname = 'saike_spectrum_analyzer'
 
 local track_cnt = reaper.CountTracks(0)
 local track_sel_cnt = reaper.CountSelectedTracks(0)
-
-local ret, track_spec_guid = GetProjExtState(0, extname, 'guid')
-if ret then
-    -- Find old track based on GUID
-    for i = track_cnt - 1, 0, -1 do
-        local track = reaper.GetTrack(0, i)
-        local guid = reaper.GetTrackGUID(track)
-        local guid_str = reaper.guidToString(guid, '')
-        if track_spec_guid == guid_str then
-            track_spec = track
-            break
-        end
-    end
-end
-
-if not track_spec then
-    -- Create spectrum track at the end
-    reaper.InsertTrackAtIndex(track_cnt, true)
-    track_spec = reaper.GetTrack(0, track_cnt)
-    track_cnt = track_cnt + 1
-    -- Save track guid
-    local guid = reaper.GetTrackGUID(track_spec)
-    local guid_str = reaper.guidToString(guid, '')
-    SetProjExtState(0, extname, 'guid', guid_str)
-    -- Set track info
-    GetSetTrackInfoStr(track_spec, 'P_NAME', track_spec_name, true)
-    SetTrackInfo(track_spec, 'B_MAINSEND', 0)
-    SetTrackInfo(track_spec, 'I_NCHAN', 16 * 2)
-else
-    -- Remove existing track sends
-    for i = reaper.GetTrackNumSends(track_spec, -1) - 1, 0, -1 do
-        reaper.RemoveTrackSend(track_spec, -1, i)
-    end
-end
 
 -- Find tracks to show in analyzer
 local tracks = {}
@@ -213,6 +181,40 @@ if #tracks > 16 then
     end
 end
 
+local ret, track_spec_guid = GetProjExtState(0, extname, 'guid')
+if ret then
+    -- Find old track based on GUID
+    for i = track_cnt - 1, 0, -1 do
+        local track = reaper.GetTrack(0, i)
+        local guid = reaper.GetTrackGUID(track)
+        local guid_str = reaper.guidToString(guid, '')
+        if track_spec_guid == guid_str then
+            track_spec = track
+            break
+        end
+    end
+end
+
+if not track_spec then
+    -- Create spectrum track at the end
+    reaper.InsertTrackAtIndex(track_cnt, true)
+    track_spec = reaper.GetTrack(0, track_cnt)
+    track_cnt = track_cnt + 1
+    -- Save track guid
+    local guid = reaper.GetTrackGUID(track_spec)
+    local guid_str = reaper.guidToString(guid, '')
+    SetProjExtState(0, extname, 'guid', guid_str)
+    -- Set track info
+    GetSetTrackInfoStr(track_spec, 'P_NAME', track_spec_name, true)
+    SetTrackInfo(track_spec, 'B_MAINSEND', 0)
+    SetTrackInfo(track_spec, 'I_NCHAN', math.min(16, #tracks) * 2)
+else
+    -- Remove existing track sends
+    for i = reaper.GetTrackNumSends(track_spec, -1) - 1, 0, -1 do
+        reaper.RemoveTrackSend(track_spec, -1, i)
+    end
+end
+
 -- Set up track sends
 for i, track in ipairs(tracks) do
     local send_idx = reaper.CreateTrackSend(track, track_spec)
@@ -261,6 +263,8 @@ if reaper.gmem_write then
             reaper.gmem_write(mem_addr + 1, g)
             reaper.gmem_write(mem_addr + 2, b)
             mem_addr = mem_addr + 3
+            
+            --reaper.ShowConsoleMsg(string.format("%d %d %d ", r, g, b));
         end
         -- Write track name to gmem in ASCII bytes
         local ret, name = reaper.GetTrackName(track, '')
@@ -277,17 +281,18 @@ if reaper.gmem_write then
                 byte = 95
             end
             reaper.gmem_write(mem_addr, byte)
+            --reaper.ShowConsoleMsg(string.format("%s ", string.char(byte)));
             mem_addr = mem_addr + 1
         end
-        -- Write zeros to gmem to signal string end
-        reaper.gmem_write(mem_addr, 0)
-        reaper.gmem_write(mem_addr + 1, 0)
+        -- Write negative ones to gmem to signal string end
+        reaper.gmem_write(mem_addr, 256)
+        reaper.gmem_write(mem_addr + 1, 256)
         mem_addr = mem_addr + 1
     end
     -- Edge case: No tracks
     if #tracks == 0 then
         reaper.gmem_write(0, 1)
-        reaper.gmem_write(1, 0)
+        reaper.gmem_write(1, 256)
     else
         -- Notify jsfx about write (and write type)
         reaper.gmem_write(0, use_track_colors and 2 or 1)
