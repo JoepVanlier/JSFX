@@ -2,7 +2,7 @@ desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
 version: 5.0.20
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Reduce memory footprint. Only process channels we actually use. (WIP)
+changelog: Reduce memory footprint. Only process channels we actually use. Reduce size memory blocks. (WIP)
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -85,6 +85,7 @@ options:no_meter
 options:gmem=saike_spectrum_analyzer
 
 @init
+version = 2;
 chNames = 800;
 memory_debugging = 0;
 !memory_debugging ? (
@@ -197,6 +198,7 @@ fftidx          = -1;
 scaling         = 1;
 max_fft_size    = 32768;
 fftsize         = max_fft_size;
+mem_block_size  = 0.5 * max_fft_size;
 
 window          = max_fft_size; /* Location of the window */
 histsize        = 2 * max_fft_size;  /* Size of the audio buffer */
@@ -219,7 +221,8 @@ function init_memory_mapping()
 local(rpos, freemem, rpos, hsize, fftw, ibuf, csh, channel_offset, endpoints)
 global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activechannels, maxchannels, offscreenbuf, M_BLOCK_SIZE, 
        window, histsize, max_fft_size, maxIntegrate, filtout, filtout2, sumshl, sumshr, sumposl, sumposr, fftwl, fftwr, ibufl, ibufr, sumhsl, sumhsr
-       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2,memory_debugging, ch_endpoints)
+       latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2,memory_debugging, ch_endpoints,
+       mem_block_size)
 (
   memory_debugging ? (
     memset(65536, 0, 512*512*1024);
@@ -267,10 +270,10 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   memset(latencyBuffer, 0, latencyBufferMax - latencyBuffer);
   
   /* These blocks are needlessly big, but serialization needs to have a migration path if they are to be changed */
-  freemem = (memA = freemem) + M_BLOCK_SIZE;
-  freemem = (memB = freemem) + M_BLOCK_SIZE;
-  freemem = (memA2 = freemem) + M_BLOCK_SIZE;
-  freemem = (memB2 = freemem) + M_BLOCK_SIZE;
+  freemem = (memA = freemem) + mem_block_size;
+  freemem = (memB = freemem) + mem_block_size;
+  freemem = (memA2 = freemem) + mem_block_size;
+  freemem = (memB2 = freemem) + mem_block_size;
   
   rpos      = recpositions;
   hsize     = histsizes;
@@ -302,10 +305,12 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
 (memA == 0 || memory_debugging) ? (total_mem = init_memory_mapping());
 
 @serialize
-file_mem(0, memA, 65536);
-file_mem(0, memB, 65536);
-file_mem(0, memA2, 65536);
-file_mem(0, memB2, 65536);
+file_var(0, version);
+file_var(0, mem_block_size);
+file_mem(0, memA, mem_block_size);
+file_mem(0, memB, mem_block_size);
+file_mem(0, memA2, mem_block_size);
+file_mem(0, memB2, mem_block_size);
 file_var(0, sModeA);
 file_var(0, kernelSizeA);
 file_var(0, fftSizeA);
@@ -2466,7 +2471,7 @@ local(j,
 );
 
 function drawSpectra(rpos, fftw, ibuf, shft, hsiz)
-global(slider8, slider36, slider45,
+global(slider8, slider36, slider45, mem_block_size,
        maxchannels, max_active_channels, showSide, activechannels, showSum, copyTo, bgcolor,
        sumposr, fftwr, ibufr, sumshr, sumhsr,
        sumposl, fftwl, ibufl, sumshl, sumhsl
@@ -2510,14 +2515,13 @@ instance()
     shade = 1-bgcolor;
     processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 1);
     
-    (copyTo == 1) ? memcpy(memA2, filtout, 65536);
-    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
-    (copyTo == 2) ? memcpy(memB2, filtout, 65536);
+    (copyTo == 1) ? memcpy(memA2, filtout, mem_block_size);
+    (copyTo == 2) ? memcpy(memB2, filtout, mem_block_size);
     
     processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 1);
     
     copyTo == 1 ? (
-      memcpy(memA, filtout, M_BLOCK_SIZE);
+      memcpy(memA, filtout, mem_block_size);
       copyTo = 0;
       sModeA = floor(slider45);
       kernelSizeA = kernelSize;
@@ -2526,7 +2530,7 @@ instance()
     );
     
     copyTo == 2 ? (
-      memcpy(memB, filtout, M_BLOCK_SIZE);
+      memcpy(memB, filtout, mem_block_size);
       copyTo = 0;
       sModeB = floor(slider45);
       kernelSizeB = kernelSize;
@@ -2536,16 +2540,16 @@ instance()
   );
   
   showA ? (
-    memcpy(filtout, memA, M_BLOCK_SIZE);
+    memcpy(filtout, memA, mem_block_size);
     prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
-    memcpy(filtout, memA2, M_BLOCK_SIZE);
+    memcpy(filtout, memA2, mem_block_size);
     prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
   );
   
   showB ? (
-    memcpy(filtout, memB, M_BLOCK_SIZE);
+    memcpy(filtout, memB, mem_block_size);
     prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
-    memcpy(filtout, memB2, M_BLOCK_SIZE);
+    memcpy(filtout, memB2, mem_block_size);
     prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
   );
 );
