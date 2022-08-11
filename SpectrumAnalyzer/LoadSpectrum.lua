@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.82
+@version 0.83
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -81,6 +81,8 @@
   row on the top. Doubleclicking alters the signal window size.
 --]] --[[
  * Changelog:
+ * v0.83 (2020-08-11)
+   + Force track volume.
  * v0.82 (2020-07-30)
    + Fix bug that led to channels starting with zero in color not parsing correctly because they were being interpreted as terminator.
  * v0.8 (2020-02-29)
@@ -110,6 +112,7 @@ function print(msg)
     reaper.ShowConsoleMsg(tostring(msg) .. '\n')
 end
 
+local use_volume = false
 local GetProjExtState = reaper.GetProjExtState
 local SetProjExtState = reaper.SetProjExtState
 local GetSetTrackInfoStr = reaper.GetSetMediaTrackInfo_String
@@ -219,6 +222,13 @@ end
 for i, track in ipairs(tracks) do
     local send_idx = reaper.CreateTrackSend(track, track_spec)
     SetSendInfo(track, 0, send_idx, 'I_DSTCHAN', 2 * (i - 1))
+    
+    if use_volume then
+      local retval, volume, pan = reaper.GetTrackUIVolPan(track)
+      SetSendInfo(track, 0, send_idx, 'D_VOL', volume)
+    else
+      SetSendInfo(track, 0, send_idx, 'D_VOL', 1.0)
+    end
 end
 
 -- Set up track titles/colors in gmem for jsfx
