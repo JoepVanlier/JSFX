@@ -7,7 +7,7 @@ instance(
   fft_size_index, phase_left, phase_right,
 )
 local(MAX_FFT_SIZE)
-global(srate)
+global()
 (
   // Make sure we don't end up on a boundary
   freemem = ceil(freemem / 65536) * 65536;
@@ -21,7 +21,7 @@ global(srate)
   freemem = (phase_left = freemem) + MAX_FFT_SIZE * 2;
   freemem = (phase_right = freemem) + MAX_FFT_SIZE * 2;
   
-  buffer_length = srate;
+  buffer_length = 32768 * 2;
   buffer_index = 0;
   freemem = (input_buffer = freemem) + buffer_length * 2;
   freemem = (output_buffer = freemem) + buffer_length * 2;
@@ -51,7 +51,7 @@ global()
 );
 
 function process_stft_segment(fft_buffer, fft_size, phase_left, phase_right)
-global(srate)
+global()
 instance()
 local(
   fft_bin, tfft_bin2, tmp, /* Iterators */
@@ -218,14 +218,18 @@ instance(
   buffer_index = (buffer_index + 1) % buffer_length;
 );
 
-// 16384
 function allocate_stereo_delay_mem(freemem, size)
 instance(delay_mem, delay_end, ptr)
 local()
 global()
 (
-  delay_mem = freemem;
-  delay_end = freemem + size;
+  (delay_end != (freemem + size)) ? (
+    // Reinitialize if the memory mapping changed.
+    memset(freemem, 0, size);
+    ptr = freemem;
+    delay_mem = freemem;
+    delay_end = freemem + size;
+  );
   ptr < delay_mem ? ptr = delay_mem;
   
   freemem + size
@@ -234,7 +238,7 @@ global()
 function simple_stereo_delay(in_l, in_r, read_offset)
 local(read_ptr)
 instance(delay_mem, delay_end, ptr, l, r)
-global()
+global(max_read, max_write)
 (
   ptr[] = in_l;
   ptr[1] = in_r;
@@ -243,6 +247,9 @@ global()
   read_ptr < delay_mem ? read_ptr += (delay_end - delay_mem);
   l = read_ptr[];
   r = read_ptr[1];
+  
+  max_read = min(max_read, read_ptr);
+  max_write = min(max_write, ptr);
   
   ptr += 2;
   (ptr >= delay_end) ? ptr = delay_mem;
