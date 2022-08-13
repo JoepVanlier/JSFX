@@ -1,5 +1,25 @@
 desc:Phase Mangler
- 
+tags: phase shifting plugin
+version: 0.01
+author: Joep Vanlier
+changelog: Initial release
+license: MIT
+about:
+  # A plugin to manipulate audio phase in a frequency dependent manner
+  This plugin can be used to shift the phase of audio in a frequency dependent manner. One can
+  draw a phase distortion using a spline. This distortion can be modulated by scaling the amount
+  of phase distortion.
+  
+  The plugin has a number of modes of operation.
+    Linked - Left and right are distorted according to the same shape.
+    Opposite - Left and right are phase shifted in an opposite manner. Good for making whoosy
+    laser-like sounds, but can lead to loss of mono compatiblity.
+    Mono-Opposite - This mode works like opposite, but computes the changes applied to the left and
+    right channel and adds an opposite change to the other channel. This serves more as a 
+    widener.
+    
+  This plugin operates using an STFT. Sharp phase transitions can lead to a loss of allpass response.
+
 slider1:x1=0<0,1,0.000001>-1X
 slider2:y1=0<0,1,0.000001>-1Y
 slider3:x2=0.1<0,1,0.000001>-2X
@@ -33,13 +53,14 @@ slider30:y15=0<0,1,0.000001>-15Y
 slider31:x16=0.7<0,1,0.000001>-16X
 slider32:y16=0<0,1,0.000001>-16Y
 slider33:polarity=0<0,1,{Same,Opposite,Opposite Compensated (not flat but effect disappears when summed to mono)}>-Polarity
-slider34:compensation=0<0,1,0.0001>Mono compensation
-slider35:test_mono=0<0,1,{Off,On}>Test mono
-slider64:scale=1<0,20,0.1>scale
+slider34:compensation=0.5<0,1,0.0001>-Mono compensation
+slider35:test_mono=0<0,1,{Off,On}>-Test mono
+slider36:scale=1<0,20,0.1>-scale
 
 import saike_splines.jsfx-inc
 import saike_phase_mangler_stft.jsfx-inc
 import saike_fft_view.jsfx-inc
+import saike_phase_mangler_gfx.jsfx-inc
 
 in_pin:left input
 in_pin:right input
@@ -53,6 +74,15 @@ freemem = stft.init_stft_mem(freemem, 5);
 freemem = gfx_fft.init_fft_scope_mem(freemem, 5);
 freemem = stereo_delay.allocate_stereo_delay_mem(freemem, 32768);
 spline.init_spline(freemem, 1);
+scale_slider.init_slider(36, 1, 0, 20);
+mono_compensation_slider.init_slider(34, 0.5, 0, 1);
+
+function set_sliders_now()
+(
+  current_compensation = compensation;
+);
+
+set_sliders_now();
 
 @slider
 spline.read_data();
@@ -64,6 +94,7 @@ file_var(0, spline.n_points);
 
 spline.read_data();
 spline.should_update = 1;
+set_sliders_now();
 
 @block
 stft.block_stft();
@@ -78,11 +109,14 @@ stft.process_stft(spl0, spl1);
 (polarity == 2) ? (
   stereo_delay.simple_stereo_delay(spl0, spl1, stft.fft_size);
   
+  // Rough anti-click
+  current_compensation += 0.01 * (compensation - current_compensation);
+  
   l_diff = stft.out_left - stereo_delay.l;
   r_diff = stft.out_right - stereo_delay.r;
   
-  spl0 = stereo_delay.l + (l_diff - r_diff * compensation) * 0.5;
-  spl1 = stereo_delay.r + (r_diff - l_diff * compensation) * 0.5;
+  spl0 = stereo_delay.l + (l_diff - r_diff * current_compensation) * 0.5;
+  spl1 = stereo_delay.r + (r_diff - l_diff * current_compensation) * 0.5;
 ) : (
   spl0 = stft.out_left;
   spl1 = stft.out_right;
@@ -93,19 +127,6 @@ test_mono ? (
 );
 
 @gfx
-//!loaded ? (
-//  loaded = gfx_loadimg(5, "./saike_phase_gui/mid7.png");
-//  img_scale = 2;
-//  loaded = gfx_loadimg(5, "./saike_phase_gui/mid1.png");
-//  scale = 2;
-//  loaded = gfx_loadimg(5, "./saike_phase_gui/mid18.png");
-//  scale = 0.5;
-//);
-//gfx_x = 0;
-//gfx_y = 0;
-//gfx_a = 1.0;
-//gfx_blit(5, img_scale, 0);
-
 floor_db = -84 + 12;
 ceil_db = 0;
 db_step_size = 6;
@@ -117,101 +138,46 @@ height = 0.7 * gfx_h;
 gfx_set(0.00, 0.00, 0.00, 0.8);
 gfx_rect(xmin, ymin - 0.1 * height, width, 1.2 * height);
 
-
-function simple_arrow(x1, y1, x2, y2, tip_size, tip_aspect)
-local(dx, dy, dr, perp_x, perp_y, len, bx, by, ta)
-global()
-(
-  x1 = floor(x1);
-  y1 = floor(y1);
-  x2 = floor(x2);
-  y2 = floor(y2);
-  
-  dx = x2 - x1;
-  dy = y2 - y1;
-  len = sqrt(dx * dx + dy * dy);
-  dx /= len;
-  dy /= len;
-  
-  perp_x = - dy;
-  perp_y = dx;
-  
-  bx = x2 - tip_size * dx;
-  by = y2 - tip_size * dy;
-  
-  ta = floor(tip_size * tip_aspect);
-  
-  gfx_triangle(
-    x2, y2,
-    floor(bx - perp_x * ta), floor(by - perp_y * ta),
-    floor(bx + perp_x * ta), floor(by + perp_y * ta)
-  );
-  
-  gfx_line(x1, y1, x2, y2);
-  gfx_line(x1 + perp_x, y1 + perp_y, x2 + perp_x - dx, y2 + perp_y - dy);
-  gfx_line(x1 - perp_x, y1 - perp_y, x2 - perp_x - dx, y2 - perp_y - dy);
-);
-
-function polarity_button(x, y, w, h, polarity, me)
-local(qw, over_me)
-instance()
-global(last_cap, gfx_a, mouse_cap, mouse_x, mouse_y)
-(
-  over_me = (mouse_x > x) && (mouse_x < (x+w)) && (mouse_y > y) && (mouse_y < (y+h));
-  colormodel(0);
-  
-  x = floor(x); y = floor(y); w = floor(w); h = floor(h);
-  qw = floor(w * 0.25);
-  
-  gfx_a = 0.1 + 0.25 * (polarity == me) + 0.1 * over_me * sin(5 * time_precise());
-  gfx_rect(x, y, w, h);
-  gfx_a = 1;
-  gfx_line(x, y, x + w, y);
-  gfx_line(x, y + h, x + w, y + h);
-  gfx_line(x, y, x, y + h);
-  gfx_line(x + w, y, x + w, y + h);
-  
-  (me == 0) ? (
-    simple_arrow(x + qw, y + 0.25 * h, x + qw, y + 0.75 * h, 0.15 * h, 0.8);
-    simple_arrow(x + 3 * qw, y + 0.25 * h, x + 3 * qw, y + 0.75 * h, 0.15 * h, 0.8);
-  ) : (me == 1) ? (
-    simple_arrow(x + qw, y + 0.25 * h, x + qw, y + 0.75 * h, 0.15 * h, 0.8);
-    simple_arrow(x + 3 * qw, y + 0.75 * h, x + 3 * qw, y + 0.25 * h, 0.15 * h, 0.8);
-  ) : (me == 2) ? (
-    simple_arrow(x + qw, y + 0.25 * h, x + qw, y + 0.75 * h, 0.15 * h, 0.8);
-    simple_arrow(x + 3 * qw, y + 0.75 * h, x + 3 * qw, y + 0.25 * h, 0.15 * h, 0.8);
-    simple_arrow(x + qw + 0.1 * w, y + 0.25 * h, x + 3 * qw - 0.1 * w, y + 0.25 * h, 0.15 * h, 0.8);
-    simple_arrow(x + 3 * qw - 0.1 * w, y + 0.75 * h, x + qw + 0.1 * w, y + 0.75 * h, 0.15 * h, 0.8);
-  );
-  
-  (last_cap == 0 && mouse_cap == 1 && over_me) ? (
-    1
-  );
-);
-
+x_left = 0.05 * gfx_w;
+y_top = 0.05 * gfx_h;
 button_size = 0.1 * gfx_h;
-polarity_button(0.05 * gfx_w, 0.05 * gfx_h, button_size, button_size, polarity, 0) ? polarity = 0;
-polarity_button(0.05 * gfx_w + button_size + 4, 0.05 * gfx_h, button_size, button_size, polarity, 1) ? polarity = 1;
-polarity_button(0.05 * gfx_w + 2 * button_size + 8, 0.05 * gfx_h, button_size, button_size, polarity, 2) ? polarity = 2;
+d_button = button_size + 4;
+toggle_button(x_left, y_top, button_size, button_size, polarity, 0, "Use same phase shift\nfor left and right.") ? polarity = 0;
+toggle_button(x_left + d_button, y_top, button_size, button_size, polarity, 1, "Use opposite phase shift\nfor left and right.") ? polarity = 1;
+toggle_button(x_left + 2 * d_button, y_top, button_size, button_size, polarity, 2, "Use opposite phase shift\nfor left and right. Then transfers\nopposite change from the\nleft to the right channel and\nvice versa so that downmixing\nto mono partially cancels the\neffect.") ? polarity = 2;
+toggle_button(x_left + 3 * d_button, y_top, button_size, button_size, test_mono * 3, 3, "Convert output signal to mono\n(to test mono compatibility).") ? test_mono = 1 - test_mono;
+
+(polarity == 2) ? (
+  mono_compensation_slider.simple_control(x_left + 4 * d_button, y_top + 0.5 * button_size, 0.9 * gfx_w - 4 * d_button, 0.5 * button_size, "Mono-ization");
+  scale_slider.simple_control(x_left + 4 * d_button, y_top, 0.9 * gfx_w - 4 * d_button, 0.5 * button_size, "Effect strength");
+) : (
+  scale_slider.simple_control(x_left + 4 * d_button, y_top, 0.9 * gfx_w - 4 * d_button, button_size, "Effect strength");
+);
 
 gfx_fft.block_fft_view();
 gfx_fft.render_fft(xmin, ymin, width, height, floor_db, ceil_db, db_step_size, 20, srate / 2, 0.9, 0.6);
 
 function draw_phase_grid(x, y, w, h)
+global(gfx_a, scale)
+local(cy, yh, cc)
 (
+  cy = 0;
+  yh = y + h;
+  gfx_a = 1;
+  cc = 1;
   colormodel(0.7);
-  gfx_line(x, y + 0.5 * h, x + w, y + 0.5 * h);
-  gfx_line(x, y + 0.5 * h + 1, x + w, y + 0.5 * h + 1);
-  colormodel(0.7);
-  gfx_line(x, y + 1.5 * h, x + w, y + 1.5 * h);
-  gfx_line(x, y + 1.5 * h + 1, x + w, y + 1.5 * h + 1);
-  
-  colormodel(0.7); gfx_a = 0.5;
-  gfx_line(x, y + 1.25 * h, x + w, y + 1.25 * h);
-  gfx_line(x, y + 1.25 * h + 1, x + w, y + 1.25 * h + 1);
-  colormodel(0.7); gfx_a = 0.5;
-  gfx_line(x, y + 0.75 * h, x + w, y + 0.75 * h);
-  gfx_line(x, y + 0.75 * h + 1, x + w, y + 0.75 * h + 1);
+  loop(2 * scale,
+    gfx_a = cc == 1 ? 0.5 / (1 + 0.15 * scale) : 1 / (1 + 0.15 * scale);
+    
+    cy += 0.25 * h / scale;
+    gfx_line(x, yh + cy, x + w, yh + cy);
+    scale < 5 ? gfx_line(x, yh + cy + 1, x + w, yh + cy + 1);
+    
+    gfx_line(x, yh - cy, x + w, yh - cy);
+    scale < 5 ? gfx_line(x, yh - cy + 1, x + w, yh - cy + 1);
+    cc = 1 - cc;
+  );
+
 );
 
 gfx_set(1, 1, 1, 1);
@@ -231,3 +197,10 @@ loop(512,
 */
 
 last_cap = mouse_cap;
+last_x = mouse_x;
+last_y = mouse_y;
+
+HINT_FONT = 6;
+gfx_setfont(HINT_FONT, "Arial", max(12, 10 * (gfx_h / 300)));
+hinter.drawHint_draw();
+
