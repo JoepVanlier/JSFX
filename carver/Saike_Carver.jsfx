@@ -1,0 +1,350 @@
+desc:Carver
+
+slider1:frequency=0<0,1,0.00001>Frequency
+slider2:q=0.1<0.1, 8, 0.00001>Q
+slider3:gain=0<0, 60, 0.001>Gain
+slider4:effect_mod1=0<0, 1, 0.00001>Effect Mod 1
+slider5:effect_mod2=0<0, 1, 0.00001>Effect Mod 2
+slider6:effect_choice=0<0,6,1{Tanh,Frequency Shift,Samplerate Reduction,Comb,Crush}>Effect choice
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_carver_effects.jsfx-inc
+import saike_carver_fft_view.jsfx-inc
+
+@init
+inertia_factor = 0.001;
+
+function init_effect(freq, q, gain, mod1, mod2, choice, force)
+local()
+global()
+instance(
+  freq_idx, q_idx, gain_idx, mod1_idx, mod2_idx, choice_idx,
+  c_freq, c_q, c_gain, c_mod1, c_mod2,
+  coeff, init,
+)
+(
+  coeff = 0.001;
+
+  freq_idx = freq;
+  q_idx = q;
+  gain_idx = gain;
+  mod1_idx = mod1;
+  mod2_idx = mod2;
+  choice_idx = choice;
+
+  force ? (
+    c_freq = slider(freq_idx);
+    c_q = slider(q_idx);
+    c_gain = slider(gain_idx);
+    c_mod1 = slider(mod1_idx);
+    c_mod2 = slider(mod2_idx);
+    init = 0;
+  );
+);
+
+effect1.init_effect(1, 2, 3, 4, 5, 6, 1);
+
+
+
+function init_buffer(mem, size)
+local()
+instance(mem_start, mem_end, mem_ptr)
+global()
+(
+  mem_start = mem;
+  mem_end = mem_start + size;
+  !mem_ptr ? mem_ptr = mem_start;
+  
+  mem_end
+);
+
+function init_effect(freemem)
+local(BUF_SIZE)
+instance()
+global()
+(
+  // 1 second of buffer at 96 kHz should be plenty.
+  BUF_SIZE = 96000;
+  freemem = this.l.init_buffer(freemem, BUF_SIZE);
+  freemem = this.r.init_buffer(freemem, BUF_SIZE);
+  
+  freemem
+);
+
+freemem = 0;
+freemem = in_gfx_fft.init_fft_scope_mem(freemem, 5);
+freemem = out_gfx_fft.init_fft_scope_mem(freemem, 5);
+freemem = effect1.init_effect(freemem);
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  (2/(1+exp(-2*x)) - 1)
+);
+
+function set_bell(log_frequency, q, gain)
+local(A, frequency)
+instance(g, k, a1, a2, a3, m1)
+global(srate)
+(
+  a = pow(10, gain / 40);
+  frequency = 0.5 * exp((1.0 - log_frequency) * log(20/22050));
+  g = tan($pi * frequency);
+//  q = q / (1 + 60 * frequency/srate); /* Fudgy decramp */
+  k = 1.0 / (q * a);
+  
+  a1 = 1.0 / (1.0 + g * (g + k));
+  a2 = g * a1;
+  a3 = g * a2;
+  m1 = k * (a * a - 1.0);
+);
+
+function bell_tick(v0)
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, a1, a2, a3, m1)
+global()
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3 * v3;
+  ic1eq = 2.0 * v1 - ic1eq;
+  ic2eq = 2.0 * v2 - ic2eq;
+  
+  m1 * v1;
+);
+
+function update_effect(choice, cur_mod1, cur_mod2)
+instance(current_effect, delay, c_delay, dt, crush_step_size, icrush_step_size)
+local()
+global(srate)
+(
+  current_effect = choice;
+  (choice == 1) ? (
+    // Frequency shifter
+    this.freq_shifter.init_cheapest_freq_shifter(
+      0.5 * exp((1.0 - cur_mod1) * log(1/22050)) * srate
+    );
+  ) : (choice == 2) ? (
+    this.srate_reduction.init_srate_reduction(cur_mod1, cur_mod2);
+  ) : (choice == 3) ? (
+    delay = exp((1.0 - cur_mod1) * log(1/22050)) * srate;
+  ) : (choice == 4) ? (
+    crush_step_size = 0.5 * exp(- 5 * (1.0 - cur_mod1));
+    icrush_step_size = 1 / crush_step_size;
+  ) : (choice == 201) ? (
+    // Vibrato kinda lame for this
+    delay = exp((1.0 - cur_mod1) * log(1/22050)) * srate;
+    dt = 2 * $pi * exp((1.0 - cur_mod2) * log(1/440)) * 440 / srate;
+  ) : (choice == 200) ? (
+    // Ring modulation (sucks)
+    this.rm.init_cheap_rm_am(
+      0.5 * exp((1.0 - cur_mod1) * log(20/22050)) * srate,
+      cur_mod2
+    );
+  );
+);
+
+function mem_interp(offset)
+local(ptr, frac, 
+      x0, x1, x2, x3, id0, id1, id2, id3)
+global()
+instance(mem_ptr, mem_end, mem_start)
+(
+  ptr = mem_ptr - offset - 1;
+  frac = ptr - floor(ptr);
+  
+  ptr < mem_start ? ptr += (mem_end - mem_start);
+  x3 = ptr[]; ptr += 1;
+  (ptr == mem_end) ? ptr = mem_start;
+  x2 = ptr[];
+  (ptr == mem_end) ? ptr = mem_start;
+  x1 = ptr[];
+  (ptr == mem_end) ? ptr = mem_start;
+  x0 = ptr[];
+  
+  id0 = x2;
+  id1 = 0.5*(x1 - x3);
+  id2 = x3 - 2.5*x2 + 2*x1 - 0.5*x0;
+  id3 = 0.5 * (x0 - x3) + 1.5 * (x2 - x1);
+  
+  ((id3*frac+id2)*frac+id1)*frac+id0
+);
+
+function do_effect(v0)
+local()
+instance(current_effect, h1, h2, h3,
+         mem_ptr, mem_end, mem_start,
+         c_delay, delay, t, dt,
+         crush_step_size, icrush_step_size)
+global(inertia_factor, tmp, tmp2)
+(
+  v0 = this.bell_tick(v0);
+
+  mem_ptr[] = v0;
+  mem_ptr += 1; (mem_ptr == mem_end) ? mem_ptr = mem_start;
+
+  (current_effect == 0) ? (
+    tanh(v0) - v0
+  ) : (current_effect == 1) ? (
+    this.freq_shifter.eval_cheapest_freq_shifter(v0)
+  ) : (current_effect == 2) ? (
+    h3 = h2; h2 = h1; h1 = v0; /* Delay compensation */
+    this.srate_reduction.eval_srate_reduction(v0) - h3;
+  ) : (current_effect == 3) ? (
+    c_delay += inertia_factor * (delay - c_delay);
+    0.5 * (this.mem_interp(c_delay) - v0);
+  ) : (current_effect == 4) ? (
+    v0 /= this.m1;
+    tmp = icrush_step_size * (v0 + 0.00000001);
+    tmp2 = (tmp - floor(tmp)) / crush_step_size;  // Probability
+    ((floor(tmp + (rand() < tmp2)) * crush_step_size) - v0) * this.m1
+  ) : (current_effect == 201) ? (
+    // Vibrato is kinda lame for this
+    t += dt;
+    c_delay += inertia_factor * (delay - c_delay);
+    this.mem_interp(c_delay * (0.6 + 0.5 * sin(t))) - v0;
+  ) : (current_effect == 200) ? (
+    this.rm.eval_cheap_rm_am(v0)
+  );
+);
+
+function set_effect_stereo()
+instance(
+  l, r,
+  freq_idx, q_idx, gain_idx, mod1_idx, mod2_idx, choice_idx,
+  c_freq, c_q, c_gain, c_mod1, c_mod2, c_choice, l_choice,
+  coeff,
+  init,
+)
+local(choice, df, dq, dg, dm1, dm2)
+global(cbell)
+(
+  df = (slider(freq_idx) - c_freq);
+  dq = (slider(q_idx) - c_q);
+  dg = (slider(gain_idx) - c_gain);
+  dm1 = (slider(mod1_idx) - c_mod1);
+  dm2 = (slider(mod2_idx) - c_mod2);
+  c_freq += coeff * df;
+  c_q += coeff * dq;
+  c_gain += coeff * dg;
+  c_mod1 += coeff * dm1;
+  c_mod2 += coeff * dm2;
+  choice = slider(choice_idx);
+
+  !init || (abs(df) + abs(dq) + abs(dg)) > 0.000001 ? (
+    l.set_bell(c_freq, c_q, c_gain);
+    r.a1 = l.a1; r.a2 = l.a2; r.a3 = l.a3; r.m1 = l.m1;
+  );
+  !init || (abs(choice - l_choice) + abs(dm1) + abs(dm2)) > 0.00001 ? (
+    l_choice = choice;
+    l.update_effect(choice, c_mod1, c_mod2);
+    r.update_effect(choice, c_mod1, c_mod2);
+    cbell += 1;
+  );
+  
+  init = 1;
+);
+
+function bell_response(w, g, k)
+local(gsq, ksq, wsq, gsqwsq)
+(
+    gsq = g * g;
+    ksq = k * k;
+    wsq = w * w;
+    gsqwsq = gsq * wsq;
+    
+    gsqwsq / (gsq * gsq + ksq * gsqwsq - 2 * gsqwsq + wsq * wsq)
+);
+
+function render_bell(x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color)
+local(f, scaling, f_to_bin, offset, cx, mag, i_db_range, last_mag, iradian_rate)
+global(srate, gfx_a, tester)
+instance(g, k, m1)
+(
+//  to_dB = 10 / log(10);
+//  to_fig_y_scale = h * to_dB / (ceil_db - floor_db);
+//  to_fig_y_origin = h * to_dB * ceil_db / (ceil_db - floor_db);
+  colormodel(color);
+
+  scaling = (log(max_freq) - log(min_freq)) / w;
+//  f_to_bin = 0.5 * $pi * (srate / (max_freq - min_freq)) / srate;
+//  f_to_bin = 0.5 * $pi / (max_freq - min_freq);
+//  f_to_bin = $pi / srate;
+//  offset = log(min_freq) + log(f_to_bin);
+
+  iradian_rate = $pi / srate;
+  offset = log(min_freq * iradian_rate);
+  scaling = (log(max_freq * iradian_rate) - offset) / w;
+  
+  tester = exp(scaling * w + offset) / (2 * $pi) * (max_freq - min_freq) + min_freq;
+
+  ceil_db = 120;
+  floor_db = -60;
+  i_db_range = h / (ceil_db - floor_db);
+  
+  cx = 0;
+  f = tan(exp(scaling * 0 + offset));
+  last_mag = y + h - (20 * log10(m1 * m1 * bell_response(f, g, k)) - floor_db) * i_db_range;
+  loop(w,
+    f = tan(exp(scaling * cx + offset));
+    mag = y + h - (20 * log10(m1 * m1 * bell_response(f, g, k)) - floor_db) * i_db_range;
+    mag < (y + h) ? (
+      gfx_line(x + cx - 1, last_mag, x + cx, mag);
+      gfx_line(x + cx - 1, last_mag + 1, x + cx, mag + 1);
+    );
+    last_mag = mag;
+    
+    cx += 1;
+  );
+1
+);
+
+@slider
+next_gain = 10^(gain_db/20);
+
+@block
+d_gain = (next_gain - last_gain)/samplesblock;
+
+@sample
+spl0 *= last_gain;
+spl1 *= last_gain;
+last_gain += d_gain;
+
+in_gfx_fft.process_fft_view(spl0, spl1);
+
+// There are two modes of operation
+// 1 -> For every bell, carve out the the bell by reducing the volume with the
+//      bell and then subtracting the modified signal from the raw one.
+effect1.set_effect_stereo();
+
+spl0 = spl0 + effect1.l.do_effect(spl0);
+spl1 = spl1 + effect1.r.do_effect(spl1);
+
+out_gfx_fft.process_fft_view(spl0, spl1);
+
+@gfx
+gfx_set(0, 0, 0, 0);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+floor_db = -84 + 12;
+ceil_db = 0;
+db_step_size = 6;
+x_wnd = 0.1 * gfx_w;
+y_wnd = 0.1 * gfx_h;
+w_wnd = 0.8 * gfx_w;
+h_wnd = 0.8 * gfx_h;
+
+in_gfx_fft.block_fft_view();
+in_gfx_fft.render_fft(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, db_step_size, 20, srate / 2, 0.8, 0.8);
+
+out_gfx_fft.block_fft_view();
+out_gfx_fft.render_fft(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, db_step_size, 20, srate / 2, 0.2, 0.2);
+
+effect1.l.render_bell(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8); 
+

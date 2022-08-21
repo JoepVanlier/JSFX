@@ -1,0 +1,324 @@
+@init
+function colormodel(x)
+global(gfx_a)
+local(frac)
+(
+  (x < 0.25) ? ( frac = (4 * x - 0); gfx_set(0.34901960784313724 + frac * 0.20000000000000007, 0.403921568627451 + frac * -0.09019607843137256, 1.0 + frac * 0.0); )
+  : (x < 0.5) ? ( frac = (4 * x - 1); gfx_set(0.5490196078431373 + frac * 0.4509803921568627, 0.3137254901960784 + frac * -0.07450980392156861, 1.0 + frac * -0.21568627450980393); )
+  : (x < 0.75) ? ( frac = (4 * x - 2); gfx_set(1.0 + frac * 0.0, 0.23921568627450981 + frac * 0.10980392156862742, 0.7843137254901961 + frac * -0.6196078431372549); )
+  : ( frac = (4 * x - 3); gfx_set(1.0 + frac * 0.0, 0.34901960784313724 + frac * 0.34509803921568627, 0.16470588235294117 + frac * -0.03529411764705881); )
+  
+  //x = sqrt(x); gfx_set(1.0 * x, 0.84 * x + 0.44, 1.0 - x, 0.8);
+);
+
+function fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length)
+local(bi, i, i2)
+global()
+(
+  // Copy input to buffer
+  bi = buffer_index - fft_size + 1;
+  i = 0;
+  loop(fft_size,
+    i2 = bi + i;
+    i2 < 0 ? i2 += buffer_length;
+  
+    fft_buffer[2 * i] = input_buffer[2 * i2] * window_buffer[i];
+    fft_buffer[2 * i + 1] = input_buffer[2 * i2 + 1] * window_buffer[i];
+  
+    i += 1;
+  );
+  
+  // Process buffer
+  fft(fft_buffer, fft_size);
+  fft_permute(fft_buffer, fft_size);
+);
+
+function init_fft_scope_mem(freemem, size)
+instance(
+  buffer_index, buffer_length,
+  fft_buffer, out_buffer, window_buffer, 
+  input_buffer, fft_size_index,
+)
+local(MAX_FFT_SIZE)
+global()
+(
+  MAX_FFT_SIZE = 32768;
+  
+  // Make sure we don't end up on a boundary
+  freemem = ceil(freemem / 65536) * 65536;
+  
+  (fft_size_index == 0) ? (
+    // Only reset to begin if we haven't initialized before
+    buffer_index = 0;
+  );
+  
+  fft_size_index = size;
+  
+  /* There's some additional padding so that we don't have to range check when octaving */
+  freemem = (fft_buffer = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (out_buffer = freemem) + MAX_FFT_SIZE * 4;
+  freemem = (window_buffer = freemem) + MAX_FFT_SIZE * 2;
+  
+  buffer_length = 65536;
+  
+  freemem = (input_buffer = freemem) + buffer_length * 2;
+  freemem
+);
+
+function block_fft_view()
+instance(fft_buffer, fft_size, prev_fft_size, fft_interval, fft_scaling_factor, window_buffer, fft_size_index)
+local(overlap_factor, i, window_pos, pwr, ipi, windowtype)
+global()
+(
+  overlap_factor = 6;
+  fft_size = 256 << fft_size_index;
+  fft_interval = fft_size / overlap_factor;
+  fft_scaling_factor = 1.0 / overlap_factor / fft_size;
+  
+  fft_size != prev_fft_size ? (
+    prev_fft_size = fft_size;
+
+    // Fill window buffer
+    i = pwr = 0;
+    ipi = 1.0 / $pi;
+    windowtype = 3;
+    loop(fft_size,
+      window_pos = 2.0 * $pi * (i + 0.5) / fft_size;
+      pwr += (window_buffer[i] = (
+        windowtype==0 ? ( 1 ) :
+        windowtype==1 ? ( 0.53836 - cos(window_pos) * 0.46164 ) :
+        windowtype==2 ? ( 0.35875 - 0.48829 * cos(window_pos) + 0.14128 * cos(2*window_pos) - 0.01168 * cos(3*window_pos) ) :
+        windowtype==3 ? ( 0.42659 - 0.49656 * cos(window_pos) + 0.076849 * cos(2.0*window_pos) ) :
+        windowtype==4 ? ( 0.21557895 - 0.41663158 * cos(window_pos) + 0.277263158 * cos(2*window_pos) - 0.083578947 * cos(3*window_pos) + 0.006947368 * cos(4*window_pos) ) :
+        windowtype==5 ? ( exp(- 5 * (window_pos * ipi - 1.0) * (window_pos * ipi - 1.0) ) ) :
+        windowtype==6 ? (0.5 - 0.5 * cos(window_pos)) / 0.375 )
+      );
+      i += 1;
+    );
+    //pwr = 0.5 / pwr / sqrt(fft_scaling_factor);
+    pwr = 0.125 * sqrt(fft_scaling_factor);
+    loop(fft_size, window_buffer[i -= 1] *= pwr);
+  );
+);
+
+function process_fft_view(fft_buffer, out_buffer, fft_size)
+global()
+instance()
+local(
+  fft_bin, tfft_bin2, tmp, /* Iterators */
+  left_real, left_imag, right_real, right_imag,
+  tfft_bin,
+)
+(
+  fft_bin = 0; // FFT bin number
+  
+  tfft_bin = 0;
+  loop(fft_size/2,
+    tfft_bin2 = fft_bin ? 2 * (fft_size - fft_bin) : 0;
+
+    // Unfold complex spectrum into two real spectra
+    left_real = fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    left_imag = fft_buffer[tfft_bin + 1] - fft_buffer[tfft_bin2 + 1];
+    right_real = fft_buffer[tfft_bin + 1] + fft_buffer[tfft_bin2 + 1];
+    right_imag = -fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
+    
+    // Compute squared log-magnitudes
+    out_buffer[fft_bin] = log(left_real * left_real + left_imag * left_imag + 0.00000000001);
+    out_buffer[fft_bin + fft_size / 2] = log(right_real * right_real + right_imag * right_imag + 0.0000000000001);
+
+    fft_bin += 1;
+    tfft_bin += 2;
+  );
+);
+
+function process_fft_view(in0, in1)
+local(i, bi, i2, inv_size, scale)
+global()
+instance(
+  input_buffer,
+  buffer_index,
+  fft_counter,
+  fft_buffer, out_buffer,
+  buffer_length,
+  max_buf,
+)
+(
+  max_buf = max(max_buf, input_buffer + buffer_index*2 + 1);
+  input_buffer[buffer_index * 2] = in0;
+  input_buffer[buffer_index * 2 + 1] = in1;
+   
+  // Once a block is ready, could begin processing when requested.
+  fft_counter += 1;
+  
+  buffer_index = (buffer_index + 1) % buffer_length;
+);
+
+function _f_to_w(freq, min_freq, max_freq)
+local()
+global()
+(
+  (log(freq) - log(min_freq)) / (log(max_freq) - log(min_freq))
+);
+
+function q_draw(x, y, w, h, freq, min_freq, max_freq, draw_text)
+local(xc)
+global(gfx_x, gfx_y, gfx_a)
+(
+  gfx_setfont(3, "Arial", 12);
+  xc = x + w * _f_to_w(freq, min_freq, max_freq);
+  gfx_a = 0.3;
+  gfx_line(xc, y, xc, y + h);
+  gfx_x = xc;
+  gfx_y = y + h - 12;
+  gfx_a = 0.8;
+  draw_text ? (
+    freq < 1000 ? gfx_printf(" %d", freq) : gfx_printf(" %dk", freq/1000);
+  );
+);
+
+function render_grid(x, y, w, h, floor_db, ceil_db, db_step_size, min_freq, max_freq)
+local(idx, floor_db, ceil_db, pixel_per_db, db_step_size, min_line, max_line, current_db, distance_from_floor)
+global(gfx_a)
+instance()
+(
+  y = floor(y); h = floor(h);
+  colormodel(0.1); gfx_a = 0.5;
+  min_line = ceil(floor_db / db_step_size);
+  max_line = floor(ceil_db / db_step_size);
+  
+  idx = 0;
+  pixel_per_db = h / (ceil_db - floor_db);
+  current_db = max_line * db_step_size;
+  loop(max_line - min_line,
+    distance_from_floor = floor((current_db - floor_db) * pixel_per_db);
+    gfx_a = 0.2;
+    gfx_line(x, y + h - distance_from_floor, x + w, y + h - distance_from_floor);
+    gfx_a = 0.1;
+    gfx_line(x, y + h - distance_from_floor + 1, x + w, y + h - distance_from_floor + 1);
+    current_db -= db_step_size;
+  );
+  
+  colormodel(0.1);
+  q_draw(x, y, w, h, 50, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 100, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 200, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 500, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 1000, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 2000, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 3000, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 5000, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 10000, min_freq, max_freq, 1);
+  q_draw(x, y, w, h, 20000, min_freq, max_freq, 0);
+);
+
+function render_fft_buffer(memory, x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color)
+local(
+  to_dB, scaling, offset,
+  y1, y2, y3,
+  bin, left_bin,, last_bin,
+  xrel, a, b, c,
+  y_val, last_y_val,
+  cx, f_to_bin,
+  min_freq,
+  floor_db, ceil_db,
+  to_fig_y_scale, to_fig_y_origin,
+  cmax,  idx, checked_bin, dbin,
+)
+global(srate, gfx_a)
+instance(fft_size)
+(
+  to_dB = 10 / log(10);
+  
+  to_fig_y_scale = h * to_dB / (ceil_db - floor_db);
+  to_fig_y_origin = h * to_dB * ceil_db / (ceil_db - floor_db);
+  
+  // x = w * (log(f) - log(fa)) / (log(fb) - log(fa))
+  // log(f) = x / w * (log(fb) - log(fa)) + log(fa))
+  // f = exp( x * (log(fb / fa) / w) + log(fa)) )
+  
+  // bin = (fft_size / 2) * f / (srate / 2)
+  //     = binscaling * f
+  // f = exp( x * (log(fb / fa) / w) + log(fa)) + log(binscaling) )
+  scaling = (log(max_freq) - log(min_freq)) / w;
+  f_to_bin = (fft_size / 2) / (srate / 2);
+  offset = log(min_freq) + log(f_to_bin);
+  
+  colormodel(color);
+  
+  // Pixel perfect rendering
+  cx = 0;
+  last_bin = 0;
+  last_y_val = y - to_fig_y_scale * memory[exp(offset)] + to_fig_y_origin;
+  last_y_val = max(y, min(y + h, last_y_val));
+  loop(w,
+    bin = exp(scaling * cx + offset);
+    dbin = floor(bin) - last_bin;
+    
+    // Update interpolant
+    (dbin >= 1) ? (
+      // If we crossed multiple bins, seek the bin with the maximum in this range.
+      dbin > 2 ? (
+        cmax = -1000000000000000;
+        idx = last_bin + 1;
+        loop(dbin,
+          checked_bin = memory[idx];
+          (checked_bin > cmax) ? (
+            cmax = checked_bin;
+            bin = idx;
+          );
+          idx += 1;
+        );
+      );
+      last_bin = floor(bin);
+      left_bin = max(0, floor(bin) - 1);
+      
+      // x-axis is defined at [0, 1, 2]
+      y1 = memory[left_bin];
+      y2 = memory[left_bin + 1];
+      y3 = memory[left_bin + 2];
+    
+      a = - 0.5 * (2 * (y2 - y1) + (y1 - y3));
+      b = - 0.5 * (4 * (y1 - y2) + (y3 - y1));
+      c = y1;
+    );
+    
+    xrel = bin - left_bin;
+    y_val = a * xrel * xrel + b * xrel + c;
+    
+    y_val = y - to_fig_y_scale * y_val + to_fig_y_origin;
+    y_val = max(y, min(y + h, y_val));
+    
+    gfx_a = 0.3;
+    gfx_line(x + cx - 1, last_y_val, x + cx, y_val);
+    gfx_line(x + cx, last_y_val + 1, x + cx + 1, y_val + 1);
+    gfx_a = 1.0;
+    gfx_line(x + cx, last_y_val, x + cx + 1, y_val);
+    
+    gfx_a = 0.15;
+    gfx_line(x + cx, y + h, x + cx, y_val, 1);
+    last_y_val = y_val;
+    
+    cx += 1;
+  );
+);
+
+function render_fft(x, y, w, h, floor_db, ceil_db, db_step_size, min_freq, max_freq, color1, color2)
+local()
+global()
+instance(
+  input_buffer, fft_buffer, window_buffer, buffer_index, buffer_length, out_buffer
+  fft_counter, fft_interval,
+  window_buffer, fft_size, fft_scaling_factor,
+)
+(
+  fft_counter >= fft_interval ? (
+    fft_input(input_buffer, fft_buffer, window_buffer, fft_size, buffer_index, buffer_length);
+    this.process_fft_view(fft_buffer, out_buffer, fft_size);
+    fft_counter = 0;
+  );
+ 
+  this.render_grid(x, y, w, h, floor_db, ceil_db, db_step_size, min_freq, max_freq);
+  this.render_fft_buffer(out_buffer, x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color1);
+  this.render_fft_buffer(out_buffer + fft_size / 2, x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color2);
+);
+
