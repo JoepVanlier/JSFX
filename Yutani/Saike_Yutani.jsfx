@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.56
+version: 0.58
 author: Joep Vanlier
-changelog: Fix for performance issue on SSE JSFX branch.
+changelog: Make cutoff setting sample rate independent. Before this change, how the slider position maps to the obtained frequency depended on the sample rate. After this change, the range always runs from 0 to 20.6 kHz (note: indicated values were and are correct). A legacy mode is still available by clicking the LED next to inertia. This will allow you to go to higher cutoff frequencies at higher sample rates if desired. Removed grunge from the FM.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -63,7 +63,7 @@ slider22:detune3=0<-1, 1, .00001>-Detune [semitones]
 slider23:amp4=0<0, 1,.00001>-Voice 4 [%]
 slider24:detune4=0<-1, 1, .00001>-Detune [semitones]
 
-slider25:filter_type=1<0,16,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
+slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA,Muck}>Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:boost=0<-6,48,1>-Post Boost (dB)
 slider28:cutoff=.6<0,1,.0001>-Cutoff
@@ -108,7 +108,7 @@ slider60:f_lfo_speed=0<0,20,.001>-Free LFO speed [-]
 
 slider61:fm_fine=0<0,1,.00001>-fine tune FM
 
-slider62:fix_dc=0<0,1,1>Fix DC
+slider62:fix_dc=0<0,1,1>-Fix DC
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:oversampling=1<1,8,1>-Oversampling
 
@@ -388,6 +388,8 @@ file_var(0, c_lfo_speed_flfo);
 file_var(0, note_mode);
 file_var(0, perform_amp_correction);
 
+file_var(0, legacy_mode);
+
 loop(198,
   file_var(0, 0);
 );
@@ -396,6 +398,10 @@ loop(198,
 updateSlider();
 
 @block
+sampling_ratio = legacy_mode ? 1 : 44100 / srate;
+sampling_factor = oversampling / sampling_ratio;
+isampling_factor = 1 / sampling_factor;
+
 israte = 1.0 / srate;
 israte_radian = 2.0*$pi*israte;
 vib_factor = 16 * $pi * israte;
@@ -576,7 +582,7 @@ lf_update_step % 8 == 0 ? (
   
   perform_amp_correction ? (
     new_correction = .25 / (amp1 + (current_amp2 + current_amp3 + current_amp4)*bonus_enabled);
-    new_correction = min(new_correction, amp_correction);
+    new_correction = amp_correction ? min(new_correction, amp_correction) : new_correction;
     amp_correction = 0.983 * amp_correction + 0.017 * new_correction;
   ) : ( amp_correction = 0.25 );
   
@@ -771,7 +777,8 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   // FM modulation of the filter
   current_fm_amnt != 0 ? (
     updateFMFilter();
-    FM_t += (2^(floor(fm_factor)))*(1+fudge)*440*israte*pitch;
+    FM_t += (2^(floor(fm_factor)))*440*israte*pitch;
+    
     fm_mode == 0 ? (
       fm_mod1 = sin(two_pi*FM_t);
       fm_mod2 = sin(two_pi*FM_t+$pi*current_fm_spread);
@@ -1427,7 +1434,7 @@ activeModifier == 1 ? ( noiseAmpKnob.knob_modifier_processMouse(0, noise_db_vel 
 
 cX += 2.5*knobSize;
 
-center = .5 * srate * exp( noise_cutoff * log(20/22050) );
+center = .5 * sampling_ratio * srate * exp(noise_cutoff * log(20/22050));
 noiseCutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, 1-noise_cutoff);
 noiseCutoffKnob.drawKnob(cX, cY, floor(knobSize), "Cutoff", "Noise Cutoff Frequency.", 1.0);
 noiseCutoffKnob.knob_draw_modifier(noise_cutoff_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
@@ -1527,8 +1534,7 @@ drawSelectionButton("nlSVF2p", cX - .25*knobSize, y_ref + 5*y_move, ww, hh, 10, 
 drawSelectionButton("nlSVF4p", cX - .25*knobSize, y_ref + 6*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
 
 cX += 2.5*knobSize;
-
-center = .5 * srate * exp( (1-cutoff) * log(20/22050) );
+center = .5 * sampling_ratio * srate * exp( (1-clamp(cutoff, 0, .99)) * log(20/22050) );
 cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff);
 cutoffKnob.drawKnob(cX, cY, knobSize, "Cutoff", "Filter Cutoff", 1.0);
 
@@ -2296,7 +2302,6 @@ showOptions ? (
     );
   );
   
-  
   oversamplingKnob.active = 1;
   oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
     oversamplingKnob.value = (oversampling - 1) / 7;
@@ -2321,6 +2326,9 @@ showOptions ? (
     inertia = inertiaKnob.value * 200;
     slider_automate(inertia);
   );
+  
+  legacyToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, legacy_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "In previous versions of Yutani, the\nfilter range was always mapped\nto the full range from zero to\n0.934 * Nyquist. This meant that\npresets were samplerate dependent.\n\nIn the newer version, the range always\nruns from 0 to 20.6 kHz (irrespective of\nsample rate).\n\nWhen this button is enabled, the\nold mode is returned.");
+  legacy_mode = legacyToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 );
 
 cX += 3.5 * knobSpacing;
