@@ -1417,36 +1417,6 @@ global(srate, free_osc, k_glide)
   y
 );
 
-// Pulls in k_glide, hard_sync, amp_envelope, pitch_envelope and pitch_env from global namespace
-function update_oscs(osc1_amp, osc2_amp)
-instance(dt1, dt2, target_dt1, target_dt2,
-         osc1, osc2, osc1_vol, osc2_vol, osc2.hardsync, fm_level,
-         ly, y_declick, declick)
-global(k_glide, hardsync, pitch_envelope, current_pitch_env, cdt, faux_analog, faux_analog2, pitch_bend)
-local(osc1_amp, osc2_amp, osc1_dt, osc2_dt, y)
-(
-  dt1 += k_glide * (target_dt1 - dt1);
-  dt2 += k_glide * (target_dt2 - dt2); 
-  
-  current_pitch_env > 0 ? (
-    osc2_dt = dt2 * (1+current_pitch_env*pitch_envelope) * pitch_bend * (1-faux_analog2);
-  ) : (
-    osc2_dt = dt2 * (1+abs(current_pitch_env)*(1.0-pitch_envelope)) * pitch_bend * (1-faux_analog2);
-  );
-  
-  osc1_dt = dt1 * (1+faux_analog) * pitch_bend;
-  y = osc1.evaluate_osc(osc1_dt, osc1_dt, osc1_amp);
-  cdt = osc2_dt * (1.0 + fm_level*y);
-  y *= osc1_amp;
-  hardsync ? osc2.hardsync(osc1.t, dt1, osc2_dt, osc2_amp);
-  y += osc2.evaluate_osc(cdt, cdt, osc2_amp) * osc2_amp;
-  
-  ly = y;
-  y = y * (1-declick) + declick*y_declick;
-  declick *= .98;
-  y
-);
-
 function oscs_update_settings(pitch1, pitch2, osc1_shape, osc2_shape, note_change)
 instance(target_dt1, target_dt2, dt1, dt2, osc1, osc2, last_type, y_declick, ly, declick)
 local(scaling)
@@ -1484,12 +1454,26 @@ global(srate, free_osc)
 function update_oscs(osc1_amp, osc2_amp)
 instance(dt1, dt2, target_dt1, target_dt2,
          osc1, osc2, osc1_vol, osc2_vol, osc2.hardsync, fm_level,
-         ly, y_declick, declick)
-global(k_glide, hardsync, pitch_envelope, current_pitch_env, cdt, faux_analog, faux_analog2, pitch_bend)
-local(osc1_amp, osc2_amp, osc1_dt, osc2_dt, y)
+         ly, y_declick, declick,
+         lerror1, lerror2, cerror1, cerror2, osc1_dt, osc2_dt)
+global(k_glide, hardsync, pitch_envelope, current_pitch_env, cdt, faux_analog, faux_analog2, pitch_bend, israte, srate)
+local(osc1_amp, osc2_amp, y, error1, error2)
 (
-  dt1 += k_glide * (target_dt1 - dt1);
-  dt2 += k_glide * (target_dt2 - dt2); 
+  error1 = target_dt1 - dt1;
+  error2 = target_dt2 - dt2;
+
+  // Exponential glide
+  dt1 += k_glide * error1;
+  dt2 += k_glide * error2;
+  
+  // Linear glide
+  /*k_glide == 1 ? (
+    dt1 = target_dt1; 
+    dt2 = target_dt2;
+  ) : (
+    dt1 += k_glide * sign(error1) * dt1;
+    dt2 += k_glide * sign(error2) * dt2;
+  );*/
   
   current_pitch_env > 0 ? (
     osc2_dt = dt2 * (1+current_pitch_env*pitch_envelope) * pitch_bend * (1-faux_analog2);
@@ -1531,13 +1515,12 @@ local(time_factor)
 function noise_osc(amp, cutoff, pitch, noise_pitch_track)
 instance(t, s, coeff, env, s, v, co, dt)
 local(sin_omega, omega)
-global(srate)
+global(srate, sampling_ratio)
 (
   env = amp;
   co = cutoff;
   dt = noise_pitch_track ? dt = 2*$pi*440*pitch/srate : 2*$pi*540/srate;
-  
-  omega = 0.5 * $pi * exp( (1-cutoff) * log(20/22050) );
+  omega = 0.5 * $pi * exp( (1-cutoff) * log(20/22050)) * sampling_ratio;
   sin_omega = sin(omega);
   coeff = sin_omega / (sin_omega + cos(omega));
   s = v = 0;
