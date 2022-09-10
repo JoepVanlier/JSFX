@@ -31,6 +31,37 @@
 // Note that eval_HP6 is not part of this library, but any highpass filter will do.
 
 @init
+function initOscillatorGlobals()
+local(w, ip)
+global(srate, impulseWindowCoeff, impulseLength, impulseHalfLength, impulseInit1, impulseInit2)
+(
+  // Cheap Hann window N is given by the relation (note that N must be odd)
+  //   w = 2.0 * pi / (N - 1)
+  //   impulseWindowCoeff = 2.0 * cos(w)
+  // Where the initial conditions of the system are given by:
+  //   ip = - 0.5 * pi
+  //   y1 = sin( ip - w )
+  //   y2 = sin( ip - 2.0*w );
+  // Upon initialization in the oscillator.
+  // Since we want a bright impulse, we switch sign halfway through the window.
+  
+  // The dynamical system that we need to run inside the oscillator is:
+  //    y0 = impulseWindowCoeff * y1 - y2
+  //    y2 = y1
+  //    y1 = y0
+  //    w = 0.5 * (y0 + 1) * sign(i - impulseHalfLength)
+  
+  impulseLength = floor(0.01 * srate);
+  ((impulseLength % 2) == 0) ? impulseLength += 1; // Force it to be odd
+  impulseHalfLength = floor(impulseLength / 2);
+
+  w = 2.0 * $pi / (impulseLength - 1);
+  ip = - 0.5 * $pi;
+  impulseWindowCoeff = 2.0 * cos(w);
+  impulseInit1 = sin(ip - w);
+  impulseInit2 = sin(ip - 2.0 * w); 
+);
+
 function init_blamp(minBLAMP)
 local()
 instance()
@@ -1314,16 +1345,19 @@ local()
 );
 
 function comb_osc(fb, offset)
-local(shift, lk, kp, igain, input)
-global(free_osc)
-instance(t, y, dc0, dc1)
+local(shift, lk, kp, igain, input, y0)
+global(free_osc, impulseWindowCoeff, impulseHalfLength, impulseLength)
+instance(t, y, dc0, dc1, tc, y1, y2)
 (
   free_osc ? (
     input = rand() - 0.5;
   ) : (
-    (t == 0.5) ? (
-      input = 12.5;
-      t = 0.51;
+    (tc < impulseLength) ? (
+      tc += 1;
+      y0 = impulseWindowCoeff * y1 - y2;
+      y2 = y1;
+      y1 = y0;
+      input = 1.74 * (y0 + 1) * sign(tc - impulseHalfLength);
     ) : (
       input = 0;
     );
@@ -1341,7 +1375,6 @@ instance(t, y, dc0, dc1)
   dc1 = lk; lk = dc0;
   
   lk *= 0.19;
-  !free_osc ? lk = 1.41 * tanh(lk);
   y = lk;
 );
 
@@ -1472,7 +1505,7 @@ global(srate, free_osc, k_glide)
 function oscs_update_settings(pitch1, pitch2, osc1_shape, osc2_shape, note_change)
 instance(target_dt1, target_dt2, dt1, dt2, osc1, osc2, last_type, y_declick, ly, declick)
 local(scaling)
-global(srate, free_osc)
+global(srate, free_osc, impulseInit1, impulseInit2)
 (
   scaling = 440 / srate;
   target_dt1 = scaling * 2^(pitch1/12);
@@ -1491,6 +1524,10 @@ global(srate, free_osc)
     osc2.t = 0.5;
     y_declick = ly;
     declick = 1;
+    
+    osc2.tc = osc1.tc = 0;
+    osc2.y1 = osc1.y1 = impulseInit1;
+    osc2.y2 = osc1.y2 = impulseInit2;
   );
   
   (osc1.type != last_type || (!free_osc && note_change)) ? (
