@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.12
+version: 0.13
 author: Joep Vanlier
-changelog: Fixed annoying issue where notes kept getting reordered leading to spurious releases.
+changelog: Started work on impulse mode.
 license: MIT
 provides:
   partials_dependencies/*
@@ -35,6 +35,7 @@ slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
+slider55:impulse_mode=0<0,1,1>Impulse mode
 slider56:attack_slider=0<0,2,0.0001>-Attack
 slider57:decay_slider=1<0,3,0.0001>-Decay
 slider58:release_slider=1.5<0,3,0.0001>-Release
@@ -58,6 +59,7 @@ import saike_modal_stft.jsfx-inc
 import saike_modal_gfx.jsfx-inc
 import saike_vowel_data.jsfx-inc
 import saike_modal_buffer.jsfx-inc
+import saike_modal_impulses.jsfx-inc
 
 @init
 gfx_ext_retina = 1;
@@ -174,12 +176,22 @@ instance(base_damp, f_damp, inharm, rel_position)
 
 function eval_string(f_h, env, on)
 local()
-global(stft)
+global(stft, impulse_mode, stft_mem.fft_size, input_active)
 instance()
 (
   stft ? (
-    this.eval_string_stft(env, on);
+    // Impulses are added at the global level below, since the STFT
+    // variant only uses one STFT for the entire input.
+    impulse_mode ? (
+      input_active = this.impulse.impulse_alive(stft_mem.fft_size);
+    );
+
+    this.eval_string_stft(env * input_active, env, on);
   ) : (
+    /* Add string specific impulse if relevant */
+    impulse_mode ? (
+      f_h += this.impulse.eval_impulse();
+    );
     this.eval_string_td(on ? f_h * env : 0);
   );
 );
@@ -233,7 +245,13 @@ function update_notes()
 instance(notes_on, active_note_mem, active_note_vel,
          note_on0, note_on1, note_on2, note_on3, note_on4)
 global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift, midi.pitchbend,
-       use_envelopes, envelope1.update_env_note, envelope2.update_env_note, envelope3.update_env_note, envelope4.update_env_note, envelope5.update_env_note)
+       use_envelopes, envelope1.update_env_note, envelope2.update_env_note, envelope3.update_env_note, envelope4.update_env_note, envelope5.update_env_note,
+       string1.impulse.update_impulse_note,
+       string2.impulse.update_impulse_note,
+       string3.impulse.update_impulse_note,
+       string4.impulse.update_impulse_note,
+       string5.impulse.update_impulse_note
+       impulse_mode)
 local(ref_pitch, scaling
       note_vel0, note_vel1, note_vel2, note_vel3, note_vel4)
 (
@@ -267,6 +285,14 @@ local(ref_pitch, scaling
     envelope4.update_env_note(note_vel3);
     envelope5.update_env_note(note_vel4);
   );
+  
+  impulse_mode ? (
+    string1.impulse.update_impulse_note(note_vel0);
+    string2.impulse.update_impulse_note(note_vel1);
+    string3.impulse.update_impulse_note(note_vel2);
+    string4.impulse.update_impulse_note(note_vel3);
+    string5.impulse.update_impulse_note(note_vel4);
+  );
 );
 
 function force_update()
@@ -286,6 +312,11 @@ settings_changed = 1;
 settings_changed = 1;
 
 @block
+(srate != last_srate) ? (
+  prepare_impulse_globals();
+  last_srate = srate;
+);
+
 mlog0p05 = 2.995732273553991; // Corresponds to time to get to 95%
 attack_s = exp(-5.809142990314027 + 2.302585092994046 * attack_slider); // 3 - 300 ms <=> 0 - 2
 decay_s = exp(-5.809142990314027 + 2.302585092994046 * decay_slider); // 3 - 3000 ms <=> 0 - 3
@@ -343,7 +374,17 @@ midi.curSample += 1;
 f_hn = 0;
 f_b = 0;
 
-stft ? stft_mem.read_stft(f_h);
+stft ? (
+  impulse_mode ? (
+    f_h += string1.impulse.eval_impulse();
+    f_h += string2.impulse.eval_impulse();
+    f_h += string3.impulse.eval_impulse();
+    f_h += string4.impulse.eval_impulse();
+    f_h += string5.impulse.eval_impulse();
+  );
+
+  stft_mem.read_stft(f_h);
+);
 
 (midi_input && use_envelopes) ? (
   string1.eval_string(f_h, envelope1.env_sample(), midi.note_on0);
