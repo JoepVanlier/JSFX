@@ -1,0 +1,88 @@
+@init
+function prepare_impulse_globals()
+local(w, ip)
+global(srate,
+       impulse_init_1, impulse_init_2, impulse_window_coeff, impulse_halflength, impulse_length)
+instance()
+(
+  // Cheap Hann window N is given by the relation (note that N must be odd)
+  //   w = 2.0 * pi / (N - 1)
+  //   impulse_window_coeff = 2.0 * cos(w)
+  // Where the initial conditions of the system are given by:
+  //   ip = - 0.5 * pi
+  //   y1 = sin( ip - w )
+  //   y2 = sin( ip - 2.0*w );
+  // Upon initialization in the oscillator.
+  // Since we want a bright impulse, we switch sign halfway through the window.
+  
+  // The dynamical system that we need to run inside the oscillator is:
+  //    y0 = impulse_window_coeff * y1 - y2
+  //    y2 = y1
+  //    y1 = y0
+  //    w = 0.5 * (y0 + 1) * sign(i - impulse_halflength)
+  
+  impulse_length = floor(0.01 * srate);
+  ((impulse_length % 2) == 0) ? impulse_length += 1; // Force it to be odd
+  impulse_halflength = floor(impulse_length / 2);
+  
+  w = 2.0 * $pi / (impulse_length - 1);
+  ip = - 0.5 * $pi;
+  impulse_window_coeff = 2.0 * cos(w);
+  impulse_init_1 = sin(ip - w);
+  impulse_init_2 = sin(ip - 2.0 * w); 
+);
+
+function update_impulse_note(vel)
+instance(
+  impulse_type, last_vel,
+  t, y1, y2,
+)
+local()
+global(
+  impulse_mode,
+  impulse_init_1, impulse_init_2, impulse_window_coeff, impulse_halflength, impulse_length,
+)
+(
+  (last_vel != vel) ? (
+    (vel > 0) ? (
+      t = 0;
+      impulse_type = impulse_mode;
+      (impulse_type == 1) ? (
+        // Simple pulse
+        y1 = impulse_init_1;
+        y2 = impulse_init_2;
+      );
+    );
+  );
+  last_vel = vel;
+);
+
+
+function eval_impulse()
+local(y0)
+global(impulse_window_coeff, impulse_length, impulse_halflength)
+instance(
+  impulse_type,
+  t, y1, y2,
+)
+(
+  t += 1;
+  (impulse_type == 1) ? (
+    (t < impulse_length) ? (
+      y0 = impulse_window_coeff * y1 - y2;
+      y2 = y1;
+      y1 = y0;
+      5000 * (y0 + 1) * sign(t - impulse_halflength)
+    ) : (
+      0
+    );
+  );
+);
+
+function impulse_alive(fft_size)
+local()
+global(impulse_length)
+instance(t)
+(
+  t < (impulse_length + fft_size)
+);
