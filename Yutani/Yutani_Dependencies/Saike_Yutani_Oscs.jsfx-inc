@@ -31,6 +31,79 @@
 // Note that eval_HP6 is not part of this library, but any highpass filter will do.
 
 @init
+function bspline_train(phase_advance)
+instance(phase, from_phase)
+local(old_phase, rel_sample)
+global()
+(
+  old_phase = phase;
+  phase += phase_advance;
+  phase > 0.5 ? (
+    phase -= 1;
+  );
+
+  rel_sample = from_phase * phase;
+  ((rel_sample >= -1.5) && (rel_sample < 1.5)) ? (
+    // To convert phase back to sample, we do
+    //   phase / phase_advance
+    from_phase = 1.0 / phase_advance;
+    (rel_sample < -0.5) ? (
+      0.5 * sqr(rel_sample + 1.5) - phase_advance
+    ) : (
+      (rel_sample < 0.5) ? (
+        0.75 - sqr(rel_sample) - phase_advance
+      ) : (
+        0.5 * sqr(rel_sample - 3/2) - phase_advance
+      );
+    );
+  ) : - phase_advance;
+);
+
+function init_ssaw()
+instance(t1, t2, t3, t4, t5, t6, t7, yn)
+(
+  yn = 0;
+  t1.phase = 0;
+  t2.phase = 0.05646;
+  t3.phase = 0.102456;
+  t4.phase = 0.02465;
+  t5.phase = 0.0465;
+  t6.phase = 0.065;
+  t7.phase = 0.03256;
+);
+
+function ssaw(dt)
+local(from_phase)
+global(srate, ssaw_detune)
+instance(
+  yn,
+  t1, t2, t3, t4, t5, t6, t7,
+  last_dt, ph1, ph2, ph3, ph4, ph5, ph6, ph7,
+)
+(
+  (last_dt != (dt + ssaw_detune)) ? (
+    last_dt = (dt + ssaw_detune);
+    ph1 = dt;
+    ph2 = ph1 * exp(-0.004043358553266347 * ssaw_detune); // 2^(-7/1200);
+    ph3 = ph1 * exp(-0.008086717106532694 * ssaw_detune); // 2^(-14/1200);
+    ph4 = ph1 * exp(-0.012130075659799042 * ssaw_detune); // 2^(-21/1200);
+    ph5 = ph1 * exp(0.0023104906018664843 * ssaw_detune); // 2^(4/1200);
+    ph6 = ph1 * exp(0.0046209812037329686 * ssaw_detune); // 2^(8/1200);
+    ph7 = ph1 * exp(0.006931471805599452 * ssaw_detune);  // 2^(12/1200);
+  );
+  
+  yn *= 0.995;
+  yn += t1.bspline_train(ph1);
+  yn += t2.bspline_train(ph2);
+  yn += t3.bspline_train(ph3);
+  yn += t4.bspline_train(ph4);
+  yn += t5.bspline_train(ph5);
+  yn += t6.bspline_train(ph6);
+  yn += t7.bspline_train(ph7);
+    
+  yn
+);
+
 function initOscillatorGlobals()
 local(w, ip)
 global(srate, impulseWindowCoeff, impulseLength, impulseHalfLength, impulseInit1, impulseInit2)
@@ -1152,7 +1225,11 @@ instance()
   this.osc1.initBuffer(freemem, freemem + BUFSIZE - 1);
   freemem += BUFSIZE;
   this.osc2.initBuffer(freemem, freemem + BUFSIZE - 1);
-  freemem += BUFSIZE;  
+  freemem += BUFSIZE;
+  
+  this.osc1.init_ssaw();
+  this.osc2.init_ssaw();
+  
   freemem
 );
 
@@ -1448,6 +1525,8 @@ local()
     this.comb_osc(exp(-6.9077552789 / (dt * srate * 10)), 1.0 / dt)
   ) : ( type == 6 ) ? (
     this.comb_osc(-exp(-6.9077552789 / (dt * srate * 10)), 0.5 / dt)
+  ) : ( type == 7 ) ? (
+    this.ssaw(dt);
   );
 );
 
@@ -1528,6 +1607,9 @@ global(srate, free_osc, impulseInit1, impulseInit2)
     osc2.tc = osc1.tc = 0;
     osc2.y1 = osc1.y1 = impulseInit1;
     osc2.y2 = osc1.y2 = impulseInit2;
+    
+    osc1.type == 7 ? osc1.init_ssaw();
+    osc2.type == 7 ? osc2.init_ssaw();
   );
   
   (osc1.type != last_type || (!free_osc && note_change)) ? (
