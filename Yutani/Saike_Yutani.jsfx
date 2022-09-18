@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.65
+version: 0.66
 author: Joep Vanlier
-changelog: Optimized filter selection a bit (linear chain of ifs -> hierarchical).
+changelog: Stop running the heavy subsystems (filter / oscs / chorus) if there's no audio going out and no notes are being played.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -457,6 +457,9 @@ pre_sub = subosc_vol && subosc_enabled && subosc_pre;
 post_sub = subosc_vol && subosc_enabled && !subosc_pre;
 
 @sample
+m_state = max(0.9999 * m_state, max(midi.lastNotesOn, m_out_last));
+audio_running = m_state > 0.00000000001;
+
 function updateCurrentVelocitySettings()
 (
   shouldUpdateCurrentVelocitySettings = 0;
@@ -724,17 +727,19 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   
   pre_sub ? y += subosc_vol * subosc.update_subosc(subosc_shape) * amp_envelope;
   
-  y += oscs.update_oscs(o1_vol * amp1, o2_vol * amp1);
-  bonus_enabled ? (
-    multi == 2 ? (
-      y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
-    ) : ( multi == 3 ) ? (
-      y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
-      y += oscs3.update_oscs(o1_vol * current_amp3, o2_vol * current_amp3);
-    ) : ( multi == 4 ) ? (
-      y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
-      y += oscs3.update_oscs(o1_vol * current_amp3, o2_vol * current_amp3);
-      y += oscs4.update_oscs(o1_vol * current_amp4, o2_vol * current_amp4);
+  audio_running ? (
+    y += oscs.update_oscs(o1_vol * amp1, o2_vol * amp1);
+    bonus_enabled ? (
+      multi == 2 ? (
+        y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
+      ) : ( multi == 3 ) ? (
+        y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
+        y += oscs3.update_oscs(o1_vol * current_amp3, o2_vol * current_amp3);
+      ) : ( multi == 4 ) ? (
+        y += oscs2.update_oscs(o1_vol * current_amp2, o2_vol * current_amp2);
+        y += oscs3.update_oscs(o1_vol * current_amp3, o2_vol * current_amp3);
+        y += oscs4.update_oscs(o1_vol * current_amp4, o2_vol * current_amp4);
+      );
     );
   );
   
@@ -754,7 +759,7 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   y *= amp_correction;
   noise_vol ? y += noise.update_noise(noise_type);
 
-// Filter modulation section
+  // Filter modulation section
   sliderCutoffL = sliderCutoffR = cutoff_interpolator.interpolate() + cutoff_velmod + cutoff_mw + .1*faux_analog;
   sliderReso = clamp(reso_interpolator.interpolate() + reso_velmod + reso_mw, 0, 1);
   sliderMorphL = sliderMorphR = morph_interpolator.interpolate() + morph_velmod;
@@ -900,109 +905,114 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   
   hotness_rmsq = .9999 * hotness_rms + .0001 * yl * yl;
   
-  // Oversampled processing
-  ( oversampling > 1 ) ? (
-    ( oversampling_method == 1 ) ? (
-      upsampleL.updateUpHist(overSampling, yl);
-      upsampleR.updateUpHist(overSampling, yr);
-      
-      f = 0;
-      loop(overSampling,
-        f += 1;
-        ssl = overSampling*upsampleL.upSample(overSampling);
-        ssr = overSampling*upsampleR.upSample(overSampling);
-      
-        filter.processSample(filter_type);
-        ssl *= inv_preamp;
-        ssr *= inv_preamp;
-        shaper ? processShaper();
+  /* Stop processing if there's nothing to process */
+  audio_running ? (
+    // Oversampled processing
+    ( oversampling > 1 ) ? (
+      ( oversampling_method == 1 ) ? (
+        upsampleL.updateUpHist(overSampling, yl);
+        upsampleR.updateUpHist(overSampling, yr);
         
-        downL.updateDownHist(overSampling, ssl);
-        downR.updateDownHist(overSampling, ssr);
+        f = 0;
+        loop(overSampling,
+          f += 1;
+          ssl = overSampling*upsampleL.upSample(overSampling);
+          ssr = overSampling*upsampleR.upSample(overSampling);
         
-        ( f == 1 ) ? (
-          spl0 = downL.downSample(overSampling);
-          spl1 = downR.downSample(overSampling);
+          filter.processSample(filter_type);
+          ssl *= inv_preamp;
+          ssr *= inv_preamp;
+          shaper ? processShaper();
+          
+          downL.updateDownHist(overSampling, ssl);
+          downR.updateDownHist(overSampling, ssr);
+          
+          ( f == 1 ) ? (
+            spl0 = downL.downSample(overSampling);
+            spl1 = downR.downSample(overSampling);
+          );
         );
+      ) : (
+        sincFilterL.advanceSinc(yl);
+        sincFilterR.advanceSinc(yr);
+        
+        loop( oversampling,
+          ssl = sincFilterL.getSubSample();
+          ssr = sincFilterR.getSubSample();
+          
+          filter.processSample(filter_type);
+          ssl *= inv_preamp;
+          ssr *= inv_preamp;
+          shaper ? processShaper();
+          
+          sincDownL.advanceHist(ssl);
+          sincDownR.advanceHist(ssr);
+        );
+        
+        spl0 = sincDownL.sincDownSample();
+        spl1 = sincDownR.sincDownSample();
       );
     ) : (
-      sincFilterL.advanceSinc(yl);
-      sincFilterR.advanceSinc(yr);
+      ssr = yr;
+      ssl = yl;
       
-      loop( oversampling,
-        ssl = sincFilterL.getSubSample();
-        ssr = sincFilterR.getSubSample();
-        
-        filter.processSample(filter_type);
-        ssl *= inv_preamp;
-        ssr *= inv_preamp;
-        shaper ? processShaper();
-        
-        sincDownL.advanceHist(ssl);
-        sincDownR.advanceHist(ssr);
-      );
+      filter.processSample(filter_type);
+      ssl *= inv_preamp;
+      ssr *= inv_preamp;
+      shaper ? processShaper();
       
-      spl0 = sincDownL.sincDownSample();
-      spl1 = sincDownR.sincDownSample();
+      spl0 = ssl;
+      spl1 = ssr;
     );
-  ) : (
-    ssr = yr;
-    ssl = yl;
+  
+    last_yl = spl0;
+    last_yr = spl1;
     
-    filter.processSample(filter_type);
-    ssl *= inv_preamp;
-    ssr *= inv_preamp;
-    shaper ? processShaper();
+    spl0 *= final_boost;
+    spl1 *= final_boost;
     
-    spl0 = ssl;
-    spl1 = ssr;
-  );
-  
-  last_yl = spl0;
-  last_yr = spl1;
-  
-  spl0 *= final_boost;
-  spl1 *= final_boost;
-  
-  !amp_before_filter ? (
-    spl0 *= amp_envelope;
-    spl1 *= amp_envelope;
-  );
-  
-  fix_dc ? (
-    spl0 = dc2.eval_HP6(spl0);
-    spl1 = dc3.eval_HP6(spl1);
-  );
-  
-  fb_mode ? (
-    spl0 = spl0 / (1+exp(fb));
-    spl1 = spl1 / (1+exp(fb));
-  );
-  
-  chorus_enabled > .01 ? (
-    // Subtle bass preserving chorus
-    l_delay.writeBuffer(l_delay_filt.eval_linearSVF_HP(spl0));
-    r_delay.writeBuffer(r_delay_filt.eval_linearSVF_HP(spl1));
+    !amp_before_filter ? (
+      spl0 *= amp_envelope;
+      spl1 *= amp_envelope;
+    );
     
-    csample += 1;
+    fix_dc ? (
+      spl0 = dc2.eval_HP6(spl0);
+      spl1 = dc3.eval_HP6(spl1);
+    );
     
-    chorus_tri = naiveTri(csample * israte * .25);
-    ch_cur = chorus_enabled * .001 + ch_cur * .999;
-    l_offset = ch_cur * (0.0075 + 0.002 * chorus_tri) * srate;
-    r_offset = ch_cur * (0.0075 - 0.002 * chorus_tri) * srate;
+    fb_mode ? (
+      spl0 = spl0 / (1+exp(fb));
+      spl1 = spl1 / (1+exp(fb));
+    );
     
-    spl0 = spl0 - .5 * r_delay.readBuffer(r_offset);
-    spl1 = spl1 - .5 * l_delay.readBuffer(l_offset);
-  );
-  
-  post_sub ? (
-    sub_osc_sig = subosc_vol * subosc.update_subosc(subosc_shape) * amp_envelope * final_boost * .25;
-    spl0 += sub_osc_sig;
-    spl1 += sub_osc_sig;
+    chorus_enabled > .01 ? (
+      // Subtle bass preserving chorus
+      l_delay.writeBuffer(l_delay_filt.eval_linearSVF_HP(spl0));
+      r_delay.writeBuffer(r_delay_filt.eval_linearSVF_HP(spl1));
+      
+      csample += 1;
+      
+      chorus_tri = naiveTri(csample * israte * .25);
+      ch_cur = chorus_enabled * .001 + ch_cur * .999;
+      l_offset = ch_cur * (0.0075 + 0.002 * chorus_tri) * srate;
+      r_offset = ch_cur * (0.0075 - 0.002 * chorus_tri) * srate;
+      
+      spl0 = spl0 - .5 * r_delay.readBuffer(r_offset);
+      spl1 = spl1 - .5 * l_delay.readBuffer(l_offset);
+    );
+    
+    post_sub ? (
+      sub_osc_sig = subosc_vol * subosc.update_subosc(subosc_shape) * amp_envelope * final_boost * .25;
+      spl0 += sub_osc_sig;
+      spl1 += sub_osc_sig;
+    );
   );
 
 spl0 += spl_0;
 spl1 += spl_1;
+
+m_out_last = max(abs(spl0), abs(spl1));
 
 @gfx 1510 600
 style != 0 ? (
