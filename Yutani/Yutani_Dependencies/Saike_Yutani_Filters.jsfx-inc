@@ -54,7 +54,7 @@ function check_safety()
     );
   );
   
-  (filter_type == 18) || (filter_type == 19) ? (
+  (filter_type == 18) || (filter_type == 19) || (filter_type == 20) || (filter_type == 21) ? (
     (cutoff > safety_limit_resa) && (oversampling == 1) ? (
       slider_automate(cutoff = safety_limit_resa);
       warning = 75;
@@ -1020,6 +1020,77 @@ function eval_linearSVF_BR(v0)
 //    (0.375 - 0.140625 * ss) / (0.052734375 * ss * ss + 0.28125 * ss + 0.375)
   );
     
+  function eval_steiner_rav_aggro(xn)
+    global(epsilon, maxiter_svf, avg_iter)
+    local(res, f1, f2, x_xn, hp_xn,
+          a, b, c, d, norm, s1, s2, s1_fixed, s2_fixed,
+          xn, v1n, v2n, iter, ss1, ss2
+          fb, fb_s1, fb_clipped, kp1,
+          ds1, ds2, nl_st, denom1, denom2, tmp,
+          )
+    instance(x, v1, v2, h, hsq, K, Kh, normalizing_const, alpha, vref, beta,
+             lp, hp, bp)
+    (
+      x_xn = x + xn;
+      hp_xn = hp * xn;
+
+      // Linear prediction is so bad for this one that it doesn't help
+      //v1n = (-Kh*v1 + (bp-hp)*h*x_xn + hsq*((lp - hp) * x_xn - v1) + 2*h*v2 + v1) * normalizing_const;
+      //v2n = (Kh*((bp-hp) * x_xn + v2 - 2.0 * v1)+ (lp-bp)*hsq*x_xn + (lp-bp)*h*x_xn - hsq*v2 + v2) * normalizing_const;
+      
+      Kp1 = K + 1.0;
+      fb = f_g((K + 1)*(hp*x + v1));
+      s1_fixed = 2.0 * bp * x - hp * x - v1 + v2 + fb - hp_xn;
+      s2_fixed = - 4.0 * bp * x + hp * x - 2.0*(v2 + fb) + v1 + lp*x + hp_xn + lp * xn;
+      
+      iter = 0;
+
+      while(
+        iter += 1;
+        
+        // System update
+        fb_s1 = Kp1 * (hp_xn + v1n);
+        fb_clipped = f_g(fb_s1);
+        s1 = s1_fixed - v1n + v2n + fb_clipped;
+        s2 = s2_fixed + v1n - 2.0 * (v2n + fb_clipped);
+        
+        /* State non-linearity */
+        /* Note: Written in this form to reuse the division */
+        denom1 = 1 / (abs(s1) * (1.0 + abs(s1)));
+        denom2 = 1 / (abs(s2) * (1.0 + abs(s2)));
+        s1 = s1 * abs(s1) * denom1;
+        s2 = s2 * abs(s2) * denom2;
+        
+        f1 = - v1n + v1 + h * s1;
+        f2 = - v2n + v2 + h * s2;
+        
+        res = abs(f1) + abs(f2);
+        
+        // Evaluate Jacobian
+        ds1 = s1 * s1 * denom1 * denom1;
+        ds2 = s2 * s2 * denom2 * denom2;
+         
+        a = h * ( Kp1 * f_dg(fb_s1) - 1.0 ) * ds1 - 1.0;
+        b = h * ds1;
+        c = h * ( 1.0 - 2.0 * (K + 1.0) * f_dg(fb_s1) ) * ds2;
+        d = -2.0 * h * ds2 - 1.0;
+        
+        norm = 1.0 / ( a*d - b*c );
+        v1n -= ( d*f1 - b*f2 ) * norm;
+        v2n -= ( a*f2 - c*f1 ) * norm;
+        
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      avg_iter = 0.99995 * avg_iter + 0.00005 * iter;
+      
+      x = xn;
+      v1 = v1n;
+      v2 = v2n;
+      
+      (v1n + hp * xn)
+    );
+    
   function eval_steiner_rav(xn)
     global(epsilon, maxiter_svf, avg_iter)
     local(res, f1, f2, x_xn, hp_xn,
@@ -1089,7 +1160,7 @@ function eval_linearSVF_BR(v0)
       v2 = v2n;
       
       (v1n + hp * xn)
-    );
+    );    
     
   function eval_steiner_old(xn)
     global(epsilon, maxiter_svf)
@@ -1912,6 +1983,24 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, 
     R.init_steiner(sliderCutoffR, sliderReso / 2, sliderMorphL);
     L2.init_steiner(sliderCutoffL * (0.93 + 0.07 * sliderCutoffL), sliderReso / 2, sliderMorphL);
     R2.init_steiner(sliderCutoffR * (0.93 + 0.07 * sliderCutoffR), sliderReso / 2, sliderMorphL);
+  ) : ( filter_type == 20 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_resa ? safety_limit_resa : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_resa ? safety_limit_resa : sliderCutoffR;
+    );
+  
+    L.init_steiner(sliderCutoffL, sliderReso / 2, sliderMorphL);
+    R.init_steiner(sliderCutoffR, sliderReso / 2, sliderMorphL);
+  ) : ( filter_type == 21 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_resa ? safety_limit_resa : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_resa ? safety_limit_resa : sliderCutoffR;
+    );
+    
+    L.init_steiner(sliderCutoffL, sliderReso / 2, sliderMorphL);
+    R.init_steiner(sliderCutoffR, sliderReso / 2, sliderMorphL);
+    L2.init_steiner(sliderCutoffL * (0.93 + 0.07 * sliderCutoffL), sliderReso / 2, sliderMorphL);
+    R2.init_steiner(sliderCutoffR * (0.93 + 0.07 * sliderCutoffR), sliderReso / 2, sliderMorphL);
   );
   
   filter_choiceL = floor(sliderMorphL*4);
@@ -2000,6 +2089,12 @@ global(ssl, ssr, epsilon)
   ) : ( filter_type == 19 ) ? (
     ssl = L2.eval_steiner_rav(L.eval_steiner_rav(ssl));
     ssr = R2.eval_steiner_rav(R.eval_steiner_rav(ssr));
+  ) : ( filter_type == 20 ) ? (
+    ssl = L.eval_steiner_rav_aggro(ssl);
+    ssr = R.eval_steiner_rav_aggro(ssr);
+  ) : ( filter_type == 21 ) ? (
+    ssl = L2.eval_steiner_rav_aggro(L.eval_steiner_rav_aggro(ssl));
+    ssr = R2.eval_steiner_rav_aggro(R.eval_steiner_rav_aggro(ssr));
   );
 );
 
