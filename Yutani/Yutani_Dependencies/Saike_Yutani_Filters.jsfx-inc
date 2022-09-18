@@ -6,6 +6,7 @@ maxiter = 6;
 maxiter_svf = 26;
 safety_limit_ms20 = 0.935;
 safety_limit_moog = 0.25; // Above this level the model suffers from numerical difficulties. Ensures fc < fs/8.
+safety_limit_resa = 0.89; // Above this level the model suffers from numerical difficulties. Ensures fc < fs/4.
 safety_limit_svf = 0.9;//0.94;//0.9;
 safety_limit_svf2 = 0.85;
 
@@ -49,6 +50,13 @@ function check_safety()
   filter_type == 10 ? (
     (cutoff > safety_limit_svf) && (oversampling == 1) ? (
       slider_automate(cutoff = safety_limit_svf);
+      warning = 75;
+    );
+  );
+  
+  (filter_type == 18) || (filter_type == 19) ? (
+    (cutoff > safety_limit_resa) && (oversampling == 1) ? (
+      slider_automate(cutoff = safety_limit_resa);
       warning = 75;
     );
   );
@@ -574,6 +582,14 @@ function eval_linearSVF_BR(v0)
     max(-1,min(1,s))
   );
   
+  function f_dg(s)
+  local()
+  global()
+  instance()
+  (
+    1 - 1 * (abs(s)>1)
+  );
+  
   function f_dg_asym(s)
   local()
   global()
@@ -581,14 +597,6 @@ function eval_linearSVF_BR(v0)
   (
     s > 0 ? 1 - 1 * (abs(s)>1)
     : .25 - .25 * (abs(s)>4)
-  );  
-  
-  function f_dg(s)
-  local()
-  global()
-  instance()
-  (
-    1 - 1 * (abs(s)>1)
   );
   
   function f_g_svf(s)
@@ -989,7 +997,99 @@ function eval_linearSVF_BR(v0)
       v2 = v2n;
       
       (v1n + hp * xn)
-    );    
+    );
+    
+  function f_g_hyp(s)
+  local()
+  global()
+  instance()
+  (
+    abs(s) > 0.0001 ? s / (1 + abs(0.25 * s)) : 0;
+//    abs(s) > 0.0001 ? s / (1 + abs(0.375 * s * s)) : 0;
+  );
+  
+  function f_dg_hyp(s)
+  local(ss)
+  global()
+  instance()
+  (
+    ss = s * s;
+    abs(s) > 0.0001 ? abs(s) / (0.0625 * ss * abs(s) +  0.5 *ss + abs(s)) : 1
+//    (1.0 - ss) / (ss * ss + (ss + ss) + 1)
+//    ss = s * s;
+//    (0.375 - 0.140625 * ss) / (0.052734375 * ss * ss + 0.28125 * ss + 0.375)
+  );
+    
+  function eval_steiner_rav(xn)
+    global(epsilon, maxiter_svf, avg_iter)
+    local(res, f1, f2, x_xn, hp_xn,
+          a, b, c, d, norm, s1, s2, s1_fixed, s2_fixed,
+          xn, v1n, v2n, iter, ss1, ss2
+          fb, fb_s1, fb_clipped, kp1,
+          ds1, ds2, nl_st, denom1, denom2, tmp,
+          )
+    instance(x, v1, v2, h, hsq, K, Kh, normalizing_const, alpha, vref, beta,
+             lp, hp, bp)
+    (
+      x_xn = x + xn;
+      hp_xn = hp * xn;
+
+      // Linear prediction is so bad for this one that it doesn't help
+      //v1n = (-Kh*v1 + (bp-hp)*h*x_xn + hsq*((lp - hp) * x_xn - v1) + 2*h*v2 + v1) * normalizing_const;
+      //v2n = (Kh*((bp-hp) * x_xn + v2 - 2.0 * v1)+ (lp-bp)*hsq*x_xn + (lp-bp)*h*x_xn - hsq*v2 + v2) * normalizing_const;
+      
+      Kp1 = K + 1.0;
+      fb = f_g_hyp((K + 1)*(hp*x + v1));
+      s1_fixed = 2.0 * bp * x - hp * x - v1 + v2 + fb - hp_xn;
+      s2_fixed = - 4.0 * bp * x + hp * x - 2.0*(v2 + fb) + v1 + lp*x + hp_xn + lp * xn;
+      
+      iter = 0;
+
+      while(
+        iter += 1;
+        
+        // System update
+        fb_s1 = Kp1 * (hp_xn + v1n);
+        fb_clipped = f_g_hyp(fb_s1);
+        s1 = s1_fixed - v1n + v2n + fb_clipped;
+        s2 = s2_fixed + v1n - 2.0 * (v2n + fb_clipped);
+        
+        /* State non-linearity */
+        /* Note: Written in this form to reuse the division */
+        denom1 = 1 / (abs(s1) * (1.0 + abs(s1)));
+        denom2 = 1 / (abs(s2) * (1.0 + abs(s2)));
+        s1 = s1 * abs(s1) * denom1;
+        s2 = s2 * abs(s2) * denom2;
+        
+        f1 = - v1n + v1 + h * s1;
+        f2 = - v2n + v2 + h * s2;
+        
+        res = abs(f1) + abs(f2);
+        
+        // Evaluate Jacobian
+        ds1 = s1 * s1 * denom1 * denom1;
+        ds2 = s2 * s2 * denom2 * denom2;
+         
+        a = h * ( Kp1 * f_dg_hyp(fb_s1) - 1.0 ) * ds1 - 1.0;
+        b = h * ds1;
+        c = h * ( 1.0 - 2.0 * (K + 1.0) * f_dg_hyp(fb_s1) ) * ds2;
+        d = -2.0 * h * ds2 - 1.0;
+        
+        norm = 1.0 / ( a*d - b*c );
+        v1n -= ( d*f1 - b*f2 ) * norm;
+        v2n -= ( a*f2 - c*f1 ) * norm;
+        
+      (res > epsilon) && (iter < maxiter_svf);
+      );
+      
+      avg_iter = 0.99995 * avg_iter + 0.00005 * iter;
+      
+      x = xn;
+      v1 = v1n;
+      v2 = v2n;
+      
+      (v1n + hp * xn)
+    );
     
   function eval_steiner_old(xn)
     global(epsilon, maxiter_svf)
@@ -1689,7 +1789,7 @@ instance(
   filter_choiceL, frac_morphL, i_morphL,
   filter_choiceR, frac_morphR, i_morphR,
 )
-global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf, safety_limit_svf2)
+global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf, safety_limit_svf2, safety_limit_resa)
 (
   filter_type == 0 ? (
     L.init_linearSVF_all(sliderCutoffL, sliderReso, sliderMorphL);
@@ -1794,6 +1894,24 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, 
     R2.init_linearSVF_all(sliderCutoffR, sliderReso, sliderMorphR);
     L.init_SVF_nonlin(sliderCutoffL, sliderReso, sliderMorphL);
     R.init_SVF_nonlin(sliderCutoffR, sliderReso, sliderMorphR);
+  ) : ( filter_type == 18 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_resa ? safety_limit_resa : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_resa ? safety_limit_resa : sliderCutoffR;
+    );
+  
+    L.init_steiner(sliderCutoffL, sliderReso / 2, sliderMorphL);
+    R.init_steiner(sliderCutoffR, sliderReso / 2, sliderMorphL);
+  ) : ( filter_type == 19 ) ? (
+    (oversampling == 1) ? (
+      sliderCutoffL = sliderCutoffL > safety_limit_resa ? safety_limit_resa : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > safety_limit_resa ? safety_limit_resa : sliderCutoffR;
+    );
+    
+    L.init_steiner(sliderCutoffL, sliderReso / 2, sliderMorphL);
+    R.init_steiner(sliderCutoffR, sliderReso / 2, sliderMorphL);
+    L2.init_steiner(sliderCutoffL * (0.93 + 0.07 * sliderCutoffL), sliderReso / 2, sliderMorphL);
+    R2.init_steiner(sliderCutoffR * (0.93 + 0.07 * sliderCutoffR), sliderReso / 2, sliderMorphL);
   );
   
   filter_choiceL = floor(sliderMorphL*4);
@@ -1876,6 +1994,12 @@ global(ssl, ssr, epsilon)
   ) : ( filter_type == 17 ) ? (
     ssl = L.eval_SVF_nonlin_broken(L2.eval_linearSVF_All(ssl));
     ssr = R.eval_SVF_nonlin_broken(R2.eval_linearSVF_All(ssr));
+  ) : ( filter_type == 18 ) ? (
+    ssl = L.eval_steiner_rav(ssl);
+    ssr = R.eval_steiner_rav(ssr);
+  ) : ( filter_type == 19 ) ? (
+    ssl = L2.eval_steiner_rav(L.eval_steiner_rav(ssl));
+    ssr = R2.eval_steiner_rav(R.eval_steiner_rav(ssr));
   );
 );
 
