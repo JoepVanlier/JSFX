@@ -32,18 +32,20 @@ instance()
   impulse_init_2 = sin(ip - 2.0 * w); 
 );
 
-function update_impulse_note(vel)
+function update_impulse_note(vel, state)
 instance(
   impulse_type, last_vel,
-  t, y1, y2,
+  t, y1, y2, len, scale,
 )
 local()
 global(
   impulse_mode,
   impulse_init_1, impulse_init_2, impulse_window_coeff, impulse_halflength, impulse_length,
+  inverse_brightness,
 )
 (
-  (last_vel != vel) ? (
+  /* State 1 is press, -1 is release */
+  (state) ? (
     (vel > 0) ? (
       t = 0;
       impulse_type = impulse_mode;
@@ -51,6 +53,10 @@ global(
         // Simple pulse
         y1 = impulse_init_1;
         y2 = impulse_init_2;
+        len = impulse_length;
+        scale = pow(10, 1 - 3 * inverse_brightness);
+      ) : ( impulse_type == 3 ) ? (
+        len = impulse_length * 1000;
       );
     );
   );
@@ -59,21 +65,23 @@ global(
 
 
 function eval_impulse()
-local(y0)
-global(impulse_window_coeff, impulse_length, impulse_halflength)
+local(y0, loc)
+global(impulse_window_coeff, impulse_halflength)
 instance(
   impulse_type,
   t, y1, y2,
   b0, b1, b2, white, pink,
+  len, scale,
 )
 (
   t += 1;
-  (t < impulse_length) ? (
+  (t < len) ? (
     (impulse_type == 1) ? (
       y0 = impulse_window_coeff * y1 - y2;
       y2 = y1;
       y1 = y0;
-      5000 * (y0 + 1) * sign(t - impulse_halflength)
+      loc = t - impulse_halflength;
+      5000 * (y0 + 1) * (scale * loc / (1 + scale * abs(loc))) // sign(t - impulse_halflength)
     ) : (impulse_type == 2) ? (
       y0 = impulse_window_coeff * y1 - y2;
       y2 = y1;
@@ -90,7 +98,15 @@ instance(
       5000 * (y0 + 1) * pink
     ) : (impulse_type == 3) ? (
       // Breathy (placeholder)
-      0
+      
+      // Cheapo pink noise
+      // Stolen from: https://www.firstpr.com.au/dsp/pink-noise/#Filtering
+      white = rand() - 0.5;
+      b0 = 0.99765 * b0 + white * 0.0990460;
+      b1 = 0.96300 * b1 + white * 0.2965164;
+      b2 = 0.57000 * b2 + white * 1.0526913;
+      pink = b0 + b1 + b2 + white * 0.1848;
+      2000 * pink 
     );
   ) : (
     0
@@ -99,8 +115,9 @@ instance(
 
 function impulse_alive(fft_size)
 local()
-global(impulse_length)
-instance(t)
+global()
+instance(t, len)
 (
-  t < (impulse_length + fft_size)
+  t < (len + fft_size)
 );
+
