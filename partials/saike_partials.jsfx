@@ -2,7 +2,7 @@ desc:Partials (Saike)
 tags: modal effect
 version: 0.13
 author: Joep Vanlier
-changelog: Started work on impulse mode.
+changelog: Started work on impulse mode. Don't retrigger impulses for note when changing settings.
 license: MIT
 provides:
   partials_dependencies/*
@@ -13,7 +13,7 @@ about:
   a number of resonators that produce particular sounds. Up to 4 note polyphony is supported.
 
 slider1:model=0<0,1,11{Metal,Tube,Beating,Beam open,Beam clamped,Membrane,Marimba,Pan,Voice (male),Voice (female),Custom>-model
-slider2:placeholder=0<0,1,1>-Placeholder
+slider2:inverse_brightness=0<0,1,0.0001>-Inverse Brightness
 slider3:relative_position=0.1<0.0001,0.999,0.001>-Relative position
 slider4:damp=0.1<-2,2,0.0001>-Damping
 slider5:freq_damp=-4<-6,-1,0.0001>-Frequency Dependent Damping
@@ -35,7 +35,8 @@ slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
-slider55:impulse_mode=0<0,2,1>Impulse mode
+slider54:brightness_vel=0<0,1,0.0001>-Brightness vel
+slider55:impulse_mode=0<0,3,1>Impulse mode
 slider56:attack_slider=0<0,2,0.0001>-Attack
 slider57:decay_slider=1<0,3,0.0001>-Decay
 slider58:release_slider=1.5<0,3,0.0001>-Release
@@ -65,6 +66,7 @@ import saike_modal_impulses.jsfx-inc
 gfx_ext_retina = 1;
 version = 2;
 
+brightness_knob.init_knob(1, 0, 0.1, 2, 54);
 position_knob.init_knob(0, 1, 0.1, 3, 14);
 damp_knob.init_knob(-2, 2, 0.1, 4, 15);
 freq_damp_knob.init_knob(-6, -1, -4, 5, 16);
@@ -194,7 +196,7 @@ instance()
   );
 );
 
-function update_env_note(vel)
+function update_env_note(vel, state)
 instance(last_vel, target, sustain, rate,
          k_attack, k_decay, attack_samples)
 local()
@@ -203,7 +205,7 @@ global(srate, mlog0p05, attack_s, decay_s, release_s, sustain_level)
   target = 2 * vel;
   sustain = sustain_level * target;
   
-  (last_vel != vel) ? (
+  state ? (
     // Change!
     vel ? (
       attack_samples = attack_s * srate;
@@ -240,7 +242,7 @@ global()
 
 
 function update_notes()
-instance(notes_on, active_note_mem, active_note_vel,
+instance(notes_on, active_note_mem, active_note_vel, active_note_state,
          note_on0, note_on1, note_on2, note_on3, note_on4)
 global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift, midi.pitchbend,
        use_envelopes, envelope1.update_env_note, envelope2.update_env_note, envelope3.update_env_note, envelope4.update_env_note, envelope5.update_env_note,
@@ -277,20 +279,26 @@ local(ref_pitch, scaling
   note_on4 ? string5.set_pars(scaling * 2 ^ ((active_note_mem[4] + ref_pitch) / 12), note_vel4);
   
   use_envelopes ? (
-    envelope1.update_env_note(note_vel0);
-    envelope2.update_env_note(note_vel1);
-    envelope3.update_env_note(note_vel2);
-    envelope4.update_env_note(note_vel3);
-    envelope5.update_env_note(note_vel4);
+    envelope1.update_env_note(note_vel0, active_note_state[0]);
+    envelope2.update_env_note(note_vel1, active_note_state[1]);
+    envelope3.update_env_note(note_vel2, active_note_state[2]);
+    envelope4.update_env_note(note_vel3, active_note_state[3]);
+    envelope5.update_env_note(note_vel4, active_note_state[4]);
   );
   
   impulse_mode ? (
-    string1.impulse.update_impulse_note(note_vel0);
-    string2.impulse.update_impulse_note(note_vel1);
-    string3.impulse.update_impulse_note(note_vel2);
-    string4.impulse.update_impulse_note(note_vel3);
-    string5.impulse.update_impulse_note(note_vel4);
+    string1.impulse.update_impulse_note(note_vel0, active_note_state[0]);
+    string2.impulse.update_impulse_note(note_vel1, active_note_state[1]);
+    string3.impulse.update_impulse_note(note_vel2, active_note_state[2]);
+    string4.impulse.update_impulse_note(note_vel3, active_note_state[3]);
+    string5.impulse.update_impulse_note(note_vel4, active_note_state[4]);
   );
+  
+  active_note_state[0] = 0;
+  active_note_state[1] = 0;
+  active_note_state[2] = 0;
+  active_note_state[3] = 0;
+  active_note_state[4] = 0;
 );
 
 function force_update()
@@ -304,6 +312,8 @@ function force_update()
 );
 
 initialize_memory();
+midi.reset_midi();
+
 settings_changed = 1;
 
 @slider
@@ -939,24 +949,28 @@ radius = 0.032 * gfx_w;
 button_size = 0.004 * gfx_w;
 cx = 2 * radius;
 cy = 2 * radius;
+knob_spacing = 0.65 * radius;
 
 label_font();
+brightness_knob.draw_knob(cx, cy, radius, "", "Brightness", 1, 1);
+brightness_knob.gfx_draw_icon(0, 1);
+cx += 2 * radius + knob_spacing;
 position_knob.draw_knob(cx, cy, radius, "", "Relative Position", 1, 1);
 position_knob.gfx_draw_icon(0, 1);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 damp_knob.draw_knob(cx, cy, radius, "", "Frequency Independent Damping", 1, 1);
 damp_knob.gfx_draw_icon(1, 1);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 freq_damp_knob.draw_knob(cx, cy, radius, "", "Frequency Dependent Damping", 1, 1);
 freq_damp_knob.gfx_draw_icon(2, 1);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 inharmonic_knob.draw_knob(cx, cy, radius, "", "Inharmonicity", 1, 1);
 inharmonic_knob.gfx_draw_icon(3, 1);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 stereo = stereoToggle.processMouseToggle(cx - 1.1 * radius, cy - 1.1 * radius, button_size, button_size, stereo, "Stereoize the output.", mouse_x, mouse_y, mouse_cap);
 stiffness_exp_knob.draw_knob(cx, cy, radius, "", "Input Non-Linearity", 1, 1);
 stiffness_exp_knob.gfx_draw_icon(5, 1);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 stft = 1 - stftToggle.processMouseToggle(cx - 1.1 * radius, cy - 1.1 * radius, button_size, button_size, 1 - stft, "Time domain mode\n\nTime domain mode allows using feedback but\nrequires significantly more CPU (especially\nwhen using a large number of partials).\n\nIn addition, it runs the risk of instability, so\nwhile it can be used to obtain creative effects\nit's not really recommended for live use.", mouse_x, mouse_y, mouse_cap);
 (last_stft != stft) ? (
   settings_changed = 1;
@@ -965,14 +979,14 @@ last_stft = stft;
 
 force_fb.draw_knob(cx, cy, radius, "", "Feedback Level", 1, 1 - stft);
 force_fb.gfx_draw_icon(6, 1 - stft);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 stiffness_knob.draw_knob(cx, cy, radius, "", "Stiffness (tends to make things louder)", 1, 1 - stft);
 stiffness_knob.gfx_draw_icon(4, 1 - stft);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 n_partials = sprintf(16, "%d", 16 * floor((partials / 16)));
 partials.draw_knob(cx, cy, radius, n_partials, "Number of partials to include", 1, 1 - stft);
 n_partials.gfx_draw_icon(7, 1 - stft);
-cx += 3 * radius;
+cx += 2 * radius + knob_spacing;
 
 choice_x = cx - radius;
 
