@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.15
+version: 0.16
 author: Joep Vanlier
-changelog: Add brightness filter to noise pulse.
+changelog: Add brightness filter to noise pulse. Improve play mode selection.
 license: MIT
 provides:
   partials_dependencies/*
@@ -29,14 +29,14 @@ slider14:position_vel=0<-1,1,0.000001>-Position velocity sensitivity
 slider15:damp_vel=0<-4,4,0.000001>-Damping velocity sensitivity
 slider16:freq_damp_vel=0<-5,5,0.000001>-Frequency dependent damping velocity sensitivity
 slider17:inharmonic_vel=0<-4,4,0.000001>-Inharmonicity velocity sensitivity
-slider18:midi_input=0<0,1,1{Off,On}>-Midi input
+slider18:dummy=0<0,0,1{Off,On}>-Dummy
 slider19:first_note=45<0,127,1>-Midi note 1
 slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
 slider54:brightness_vel=0<0,1,0.0001>-Brightness vel
-slider55:impulse_mode=0<0,3,1>Impulse mode
+slider55:play_mode=0<0,3,1>-Impulse mode
 slider56:attack_slider=0<0,2,0.0001>-Attack
 slider57:decay_slider=1<0,3,0.0001>-Decay
 slider58:release_slider=1.5<0,3,0.0001>-Release
@@ -66,6 +66,7 @@ import saike_modal_impulses.jsfx-inc
 gfx_ext_retina = 1;
 version = 2;
 
+playmode_knob.init_knob(0, 3, 0.1, 55, 0);
 brightness_knob.init_knob(1, 0, 0.1, 2, 54);
 position_knob.init_knob(0, 1, 0.1, 3, 14);
 damp_knob.init_knob(-2, 2, 0.1, 4, 15);
@@ -178,18 +179,18 @@ instance(base_damp, f_damp, inharm, rel_position)
 
 function eval_string(f_h, env, on)
 local(input_active)
-global(stft, impulse_mode, stft_mem.fft_size)
+global(stft, play_mode, stft_mem.fft_size)
 instance()
 (
   stft ? (
     // Impulses are added at the global level below, since the STFT
     // variant only uses one STFT for the entire input.
-    input_active = impulse_mode ? this.impulse.impulse_alive(stft_mem.fft_size) : 1;
+    input_active = play_mode ? this.impulse.impulse_alive(stft_mem.fft_size) : 1;
 
     this.eval_string_stft(env * input_active, env, on);
   ) : (
     /* Add string specific impulse if relevant */
-    impulse_mode ? (
+    play_mode ? (
       f_h += this.impulse.eval_impulse();
     );
     this.eval_string_td(on ? f_h * env : 0);
@@ -251,7 +252,7 @@ global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, s
        string3.impulse.update_impulse_note,
        string4.impulse.update_impulse_note,
        string5.impulse.update_impulse_note
-       impulse_mode,
+       play_mode,
        inverse_brightness, brightness_vel)
 local(ref_pitch, scaling
       note_vel0, note_vel1, note_vel2, note_vel3, note_vel4)
@@ -286,7 +287,7 @@ local(ref_pitch, scaling
     envelope5.update_env_note(note_vel4, active_note_state[4]);
   );
   
-  impulse_mode ? (
+  play_mode ? (
     string1.impulse.update_impulse_note(active_note_state[0], inverse_brightness + brightness_vel * note_vel0);
     string2.impulse.update_impulse_note(active_note_state[1], inverse_brightness + brightness_vel * note_vel1);
     string3.impulse.update_impulse_note(active_note_state[2], inverse_brightness + brightness_vel * note_vel2);
@@ -320,6 +321,14 @@ settings_changed = 1;
 settings_changed = 1;
 
 @block
+midi_input = play_mode > 0;
+(play_mode != last_play_mode) ? (
+  memset(midi.active_note_mem, 0, 5);
+  midi.notes_on = 0;
+  settings_changed = 1;
+  last_play_mode = play_mode;
+);
+
 (srate != last_srate) ? (
   prepare_impulse_globals();
   last_srate = srate;
@@ -383,7 +392,7 @@ f_hn = 0;
 f_b = 0;
 
 stft ? (
-  impulse_mode ? (
+  play_mode ? (
     f_h += string1.impulse.eval_impulse() * 4;
     f_h += string2.impulse.eval_impulse() * 4;
     f_h += string3.impulse.eval_impulse() * 4;
@@ -578,7 +587,7 @@ global()
 );
 
 function gfx_draw_icon(id, enabled)
-local(len, xp, xx, yy, dr, s, ds, cy, sy, ang1, ang2, x1, x2, y1, y2)
+local(len, xp, xx, yy, dr, s, ds, cy, sy, ang1, ang2, x1, x2, y1, y2, i, di)
 global(gfx_x, gfx_y, gfx_a)
 instance(_x, _y, _r, relative_position)
 ( 
@@ -723,6 +732,89 @@ instance(_x, _y, _r, relative_position)
       );
       y1 += 1;
       y2 += 1;
+    );
+  ) : ( id == 7 ) ? (
+    s = 0;
+    _r *= 0.8;
+    loop(12,
+      gfx_a = 0.5 + (s < (17 * relative_position) ? 0.5 : 0);
+      gfx_line(
+        _x - 0.2 * _r * sin(s),
+        _y + 0.2 * _r * cos(s), 
+        _x - (0.5 + 0.05 * s) * _r * sin(s),
+        _y + (0.5 + 0.03 * s) * _r * cos(s)
+      );
+      gfx_line(
+        _x - 0.2 * _r * sin(s),
+        _y + 0.2 * _r * cos(s) + 1, 
+        _x - (0.5 + 0.05 * s) * _r * sin(s),
+        _y + (0.5 + 0.03 * s) * _r * cos(s) + 1
+      );
+      s += 0.35 * $pi;
+    );
+  ) : ( id == 8 ) ? (
+    // Waveform
+    len = ceil(0.6 * _r);
+    yy = ceil(0.2 * _r);
+    ds = 4.0 * relative_position;
+    sy = 1;
+    loop(2,
+      xx = - len;
+      s = 0;
+      gfx_x = _x + xx - 5;
+      gfx_y = _y;
+      
+      loop(8.5 * len,
+        gfx_a = 0.5 + 0.4 * cos(cy);
+        _r = 0.7 * sin(0.1 * s) + 0.5 * sin(0.22 * s + 3) + 0.3 * sin(0.88 * s + 3);
+        gfx_line(_x + xx - sy, _y - sy - yy * sin(_r), _x + xx - sy, _y - sy + yy * sin(_r));
+        s += 0.35;
+        xx += 0.25;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 9 ) ? (
+    // MIDI (TO-DO)
+    len = ceil(0.6 * _r);
+    yy = ceil(0.2 * _r);
+    ds = 4.0 * relative_position;
+    sy = 1;
+    loop(2,
+      xx = - len;
+      s = 0;
+      gfx_x = _x + xx - 5;
+      gfx_y = _y;
+      
+      loop(8.5 * len,
+        gfx_a = 0.5 + 0.4 * cos(cy);
+        _r = 0.7 * sin(0.1 * s) + 0.5 * sin(0.22 * s + 3) + 0.3 * sin(0.88 * s + 3);
+        gfx_line(_x + xx - sy, _y - sy - yy * sin(_r), _x + xx - sy, _y - sy + yy * sin(_r));
+        s += 0.35;
+        xx += 0.25;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 10 ) ? (
+    // Spike
+    gfx_line(_x - 0.5 * _r, _y + 0.25 * _r, _x + 0.5 * _r + 1, _y + 0.25 * _r);
+    gfx_line(_x - 0.5 * _r, _y + 0.25 * _r - 1, _x + 0.5 * _r + 1, _y + 0.25 * _r - 1);
+    simple_arrow(_x, _y - 0.35 * _r, -1.5 * _r);
+  ) : ( id == 11 ) ? (
+    // Noise burst
+    ang2 = 0;
+    loop(2,
+      s = _x - 0.5 * _r;
+      i = - 0.5;
+      di = - 2 * i / _r;
+      gfx_y = _y + 0.35 * _r;
+      gfx_x = s;
+      loop(_r,
+        ang1 = _y + 0.35 * _r - 0.8 * _r * exp(-1.5 * i * i * _r);
+        gfx_lineto(s, ang1 + ang2, 1);
+        s += 1;
+        i += di;
+      );
+      ang2 += 1;
     );
   );
 );
@@ -895,16 +987,16 @@ midi.note_on4 ? keyboard.highlight_note(midi.active_note_mem[4]);
 note_over = keyboard.note_clicked();
 
 gfx_setfont(3, "Arial", 12 * max(1, scaling));
-colormodel(midi_input - 0.01);
+/*colormodel(midi_input - 0.01);
 label_toggle(keyboard._x + keyboard._w, 0.935 * gfx_h, " [MIDI]", "Use MIDI notes as input\n\nWhen enabled, the pitches are set\nby MIDI notes being received by the\nplugin. Note that you will still need an\naudio source in addition as input.\n") ? (
   midi_input = 1.0 - midi_input;
   memset(midi.active_note_mem, 0, 5);
   midi.notes_on = 0;
   settings_changed = 1;
-);
+);*/
 
 colormodel(change_vel_mod - 0.01);
-label_toggle(keyboard._x + keyboard._w + 30, 0.935 * gfx_h, " [Velocity]", "Click this to change the velocity sensitivity of the parameters.\nParameters that can be linked to MIDI note velocity will\nbe highlighted.\n\nChanging their settings will result in those parameters\nbeing sensitive to MIDI note velocity. This sensitivity is\nindicated by a differently colored arc.") ? (
+label_toggle(keyboard._x + keyboard._w, 0.935 * gfx_h, " [Velocity]", "Click this to change the velocity sensitivity of the parameters.\nParameters that can be linked to MIDI note velocity will\nbe highlighted.\n\nChanging their settings will result in those parameters\nbeing sensitive to MIDI note velocity. This sensitivity is\nindicated by a differently colored arc.") ? (
   change_vel_mod = 1 - change_vel_mod;
 );
 
@@ -943,17 +1035,63 @@ global(keyboard.over, last_cap, mouse_cap, settings_changed, midi_input)
 
 keyboard.handle_non_midi_click(note_over);
 
-
-
 radius = 0.032 * gfx_w;
 button_size = 0.004 * gfx_w;
 cx = 2 * radius;
 cy = 2 * radius;
 knob_spacing = 0.65 * radius;
+knob_spacing = 0.65 * radius;
 
 label_font();
-brightness_knob.draw_knob(cx, cy, radius, "", "Brightness", 1, 1);
-brightness_knob.gfx_draw_icon(0, 1);
+playmode_knob.draw_knob(cx, cy, radius, "", 
+"Play mode
+
+Determines how the plugin responds to inputs. Dial 
+for the different modes, or click with right mouse 
+button to select mode from a menu.
+
+Audio input fixes notes
+  Received audio and transforms it according to the
+  notes set on the keyboard at the bottom.
+Audio input with MIDI notes
+  Receives audio and MIDI input. Transforms the input
+  audio with the MIDI notes played. Note that envelopes
+  can optionally be enabled on the right (below the 
+  models)
+Spike impulse with MIDI notes
+  Plays spikes through the resonator on MIDI notes.
+  This allows you to play the plugin like a MIDI
+  instrument.
+Noise impulse with MIDI notes
+  Plays spikes through the resonator on MIDI notes.
+  This allows you to play the plugin like a MIDI
+  instrument.  
+", 1, 1);
+playmode_knob.gfx_draw_icon(8 + floor(play_mode), 1);
+
+playmode_knob.over ? (
+  ((mouse_cap & 2) == 2) && (last_cap == 0) ? (
+    menu_selection = gfx_showmenu("Audio input fixed notes|Audio input with MIDI notes|Spike impulse with MIDI notes|Noise impulse with MIDI notes");
+    menu_selection > 0 ? (
+      play_mode = menu_selection - 1;
+      menu_selection = 0;
+    );
+  );
+);
+
+cx += 2 * radius + knob_spacing;
+brightness_knob.draw_knob(cx, cy, radius, "", 
+"Brightness
+
+How bright should the impulse be that is 
+played through the resonator. Note that 
+linking this to the velocity is generally 
+a good idea to get an expressive sound.
+
+You can do this by clicking the [velocity]
+button on the lower right.
+", 1, 1);
+brightness_knob.gfx_draw_icon(7, 1);
 cx += 2 * radius + knob_spacing;
 position_knob.draw_knob(cx, cy, radius, "", "Relative Position", 1, 1);
 position_knob.gfx_draw_icon(0, 1);
@@ -1290,6 +1428,7 @@ gfx_printf("v0.11 ALPHA (Warning: this plugin is not production ready and is sti
   gfx_printf("DEV MODE")
 );
 
+gfx_setfont(4, "Arial", 10 * max(1,scaling));
 hinter.drawhint();
 newtime = time_precise();
 delta_time = newtime - ctime;
