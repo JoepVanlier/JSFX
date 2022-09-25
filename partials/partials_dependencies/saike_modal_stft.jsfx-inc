@@ -373,6 +373,77 @@ instance(
   );
 );
 
+function set_pars_stft_from_memory(f_0)
+global(
+  soundboard_factor, Adivfs, srate, model,
+  rel_position, base_damp, f_damp, inharm,
+  custom_partial_mem, MAX_CUSTOM_PARTIALS,
+)
+local(
+  idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin,
+  m_freq_relative, m_freq_abs, m_decay, m_amplitude,
+)
+instance(
+  bin_mem, coeff_mem, mix_mem, state_mem,
+  fft_size, fft_interval, ticker, num_partials,
+  new_freq, new_damp, new_amp, max_partial,
+  /*base_damp, f_damp, inharm, rel_position,*/
+)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, 2 * max_partial);
+    
+    partials = min(floor(0.5 * srate / f_0), max_partial);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    offset = 3;
+    max_bin = (2 * fft_size - 2);
+    
+    // TODO: investigate a better way than globals for this
+    // This makes me weep ;_____;
+    rel_position = this.rel_position;
+    base_damp = this.base_damp;
+    f_damp = this.f_damp;
+    inharm = this.inharm;
+    
+    m_freq_relative = custom_partial_mem;
+    m_freq_abs = custom_partial_mem + MAX_CUSTOM_PARTIALS * 2;
+    m_decay = custom_partial_mem + MAX_CUSTOM_PARTIALS * 4;
+    m_amplitude = custom_partial_mem + MAX_CUSTOM_PARTIALS * 6;
+    
+    loop(partials,
+      //new_freq = f_0 * k * (2^(m_freq_relative[k - 1])) + m_freq_abs[k - 1];
+      new_freq = f_0 * (k + m_freq_relative[k - 1]);
+      new_damp = - (m_decay[k - 1] - 1);
+      new_amp = pow(10, m_amplitude[k - 1]);
+      
+      //new_freq = f_0 * k;
+      //new_damp = 0.9;
+      //new_amp = 0.1;
+      
+      omega_k = 2.0 * $pi * new_freq;
+      advance = omega_k * irate;
+      bin = 2 * floor((new_freq / srate) * (2 * fft_size) + 0.5);
+      bin < max_bin ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(-new_damp * irate);
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+        mix_mem[num_partials] = Adivfs * new_amp;  /* Flat response */  // * new_freq / 128
+        num_partials += 1; idx += 2;
+      );
+      
+      k += 1;
+    );
+    ticker = 0;
+  );
+);
+
 
 function colormodel(x)
 global(model, gfx_a)
@@ -430,6 +501,8 @@ local(frac)
   ) : ( model == 10 ) ? (
     x = sqrt(x);
     (x < 1.0) ? ( frac = (1 * x - 0); gfx_set(0.1568627450980392 + frac * 0.11372549019607842, 0.23529411764705882 + frac * 0.39999999999999997, 0.5254901960784314 + frac * -0.24705882352941178); )
+  ) : ( model == 11 ) ? (
+    x = sqrt(x); gfx_set(0.3 + 0.67 * x, 0.5 - 0.3 * x, 0.2 + 0.8 * (1 - x), 0.8);
   );
 );
 
@@ -637,18 +710,25 @@ instance()
     this.set_pars_stft_vowel(f_0, female_vowel);
   ) : (model == 10) ? (
     this.set_pars_stft_raw(f_0);
+  ) : (model == 11) ? (
+    this.set_pars_stft_from_memory(f_0);
   );
 );
 
 function process_block(in_fft_mem, out_fft_mem, active, env_level_in, env_level_out)
 instance(coeff_mem, mix_mem, state_mem, bin_mem, num_partials)
-global(srate)
+global(srate, stft_mem.fft_size)
 local(ix, tix, bin)
 (
   // Update the resonators
   convolve_c(state_mem, coeff_mem, num_partials + 1);
   
-  ix = 0; tix = 0;  
+  ix = 0; tix = 0;
+  
+  // This is a fudge factor added later. In reality, the amplitudes should have 
+  // taken into account the fft bin width.
+  env_level_in *= (stft_mem.fft_size / 64) * (stft_mem.fft_size / 64);
+  
   active ? (
     loop(num_partials,
       bin = bin_mem[ix];
