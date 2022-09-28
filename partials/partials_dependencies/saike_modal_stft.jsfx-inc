@@ -376,18 +376,24 @@ instance(
 function set_pars_stft_from_memory(f_0)
 global(
   soundboard_factor, Adivfs, srate, model,
-  rel_position, base_damp, f_damp, inharm,
   custom_partial_mem, MAX_CUSTOM_PARTIALS,
+  freq_damp, inharmonic, // Sliders
 )
 local(
-  idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin,
-  m_freq_relative, m_freq_abs, m_decay, m_amplitude, relative_freq, x, xsq,
+  idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin, relative_freq
+
+  // Memory locations
+  m_freq_relative, m_freq_abs, m_decay, m_amplitude,
+  m_freq_relative2, m_freq_abs2, m_decay2, m_amplitude2,
+
+  x, xsq, ptr,
+  inharm_01, damp_01, // Mapped to [0 - 1]
+  new_freq, new_damp, new_amp,
 )
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem,
-  fft_size, fft_interval, ticker, num_partials,
-  new_freq, new_damp, new_amp, max_partial,
-  /*base_damp, f_damp, inharm, rel_position,*/
+  fft_size, fft_interval, ticker, num_partials, max_partial,
+  rel_position,
 )
 (
   ticker += 1;
@@ -404,31 +410,30 @@ instance(
     offset = 3;
     max_bin = (2 * fft_size - 2);
     
-    // TODO: investigate a better way than globals for this
-    // This makes me weep ;_____;
-    rel_position = this.rel_position;
-    base_damp = this.base_damp;
-    f_damp = this.f_damp;
-    inharm = this.inharm;
+    /* Unpack my data */
+    ptr = custom_partial_mem;
+    ptr = (m_freq_relative = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_freq_relative2 = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_freq_abs = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_freq_abs2 = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_decay = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_decay2 = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_amplitude = ptr) + MAX_CUSTOM_PARTIALS;
+    ptr = (m_amplitude2 = ptr) + MAX_CUSTOM_PARTIALS;
     
-    m_freq_relative = custom_partial_mem;
-    m_freq_abs = custom_partial_mem + MAX_CUSTOM_PARTIALS * 2;
-    m_decay = custom_partial_mem + MAX_CUSTOM_PARTIALS * 4;
-    m_amplitude = custom_partial_mem + MAX_CUSTOM_PARTIALS * 6;
+    // Sorry devs who see this. Mistakes of the past ;_;
+    inharm_01 = 0.25 * inharmonic + 1; // inharmonic - Value between -4 and 0 (linearly mapped) => [0, 1]
+    damp_01 = 0.2 * freq_damp + 1.2; // freq_damp - Value between -6 and -1 (linearly mapped) => [0, 1]
     
     loop(partials,
-      //new_freq = f_0 * k * (2^(m_freq_relative[k - 1])) + m_freq_abs[k - 1];
-      x = m_freq_relative[k - 1];
-      xsq = x * x;
-      relative_freq = sign(x) * (3 * xsq - 2 * xsq * abs(x));
+      // Sensitivity feels better when mapping nonlinearly
+      x = m_freq_relative[k - 1] * (1.0 - inharm_01) + m_freq_relative2[k - 1] * inharm_01;
+      xsq = x * x; relative_freq = sign(x) * (3 * xsq - 2 * xsq * abs(x));
       
-      new_freq = f_0 * (k + relative_freq) + m_freq_abs[k - 1];
-      new_damp = - (m_decay[k - 1] - 1);
-      new_amp = m_amplitude[k - 1] > -71.999 ? pow(10, m_amplitude[k - 1] / 20) : 0;
-      
-      //new_freq = f_0 * k;
-      //new_damp = 0.9;
-      //new_amp = 0.1;
+      new_freq = f_0 * (k + relative_freq) + m_freq_abs[k - 1] * (1.0 - inharm_01) + m_freq_abs2[k - 1] * inharm_01;
+      new_damp = - ((m_decay[k - 1] * (1.0 - damp_01) + m_decay2[k - 1] * damp_01) - 1);
+      new_amp = m_amplitude[k - 1] * (1.0 - rel_position) + m_amplitude2[k - 1] * rel_position;
+      new_amp = new_amp > -71.999 ? pow(10, new_amp / 20) : 0;
       
       omega_k = 2.0 * $pi * new_freq;
       advance = omega_k * irate;
@@ -438,7 +443,7 @@ instance(
         damp = exp(-new_damp * irate);
         coeff_mem[idx] = cos(advance) * damp;
         coeff_mem[idx + 1] = sin(advance) * damp;
-        mix_mem[num_partials] = Adivfs * new_amp;  /* Flat response */  // * new_freq / 128
+        mix_mem[num_partials] = Adivfs * new_amp;
         num_partials += 1; idx += 2;
       );
       
