@@ -21,9 +21,11 @@ local(ptr, ds, ix)
     
     // Amplitudes
     ptr = freemem + max_partials * 6;
-    ix = 0; loop(max_partials, ptr[ix] = - 20 * ds * ix - 100; ix += 1; );
+    ix = 0; loop(max_partials, ptr[ix] = - 1000 * ds * ix - 3 * ds * ix * ix; ix += 1; );
     ptr = freemem + max_partials * 7;
-    ix = 0; loop(max_partials, ptr[ix] = - ds * ix; ix += 1; );
+    ix = 0; loop(max_partials, ptr[ix] = - 1000 * ds * ix - 3 * ds * ix * ix; ix += 1; );
+//    ptr = freemem + max_partials * 7;
+//    ix = 1; loop(max_partials / 2, ptr[ix] = - 1000 * ds * ix - 30; ix += 2; );
     
     freemem[max_partials * 8 + 1] = 1;
   );
@@ -31,42 +33,52 @@ local(ptr, ds, ix)
 );
 
 
-function _draw_array_draw_block(xc, yc, hc, bin_width, bin_count, idx, memory_block, memory_block2, min_value, inv_range, y_bottom)
+function _draw_array_draw_block(xc, yc, hc, bin_width, bin_count, idx, memory_block, memory_block2, min_value, inv_range, y_bottom, name)
 local(xp, idx, value, value2)
-global(gfx_a)
+global(gfx_a, gfx_x, gfx_y)
 instance()
 (
-  xp = xc;
-  idx = 0;
+  xp = floor(xc);
+  bin_width = floor(bin_width);
+  y_bottom = floor(y_bottom);
   loop(bin_count,
     colormodel(idx / bin_count);
     gfx_a = 0.1;
     gfx_rect(xp, yc, bin_width - 2, hc, 1);
-    gfx_a = 0.6;
-    gfx_rect(xp, yc, bin_width - 2, hc, 0);
+    // gfx_a = 0.6;
+    // gfx_rect(xp, yc, bin_width - 2, hc, 0);
     
     gfx_a = 0.9;
-    value = min(hc, max(0, (memory_block[idx] - min_value) * inv_range));
-    gfx_rect(xp, floor(y_bottom - value), bin_width - 2, value, 1);
+    value = floor(min(hc, max(0, (memory_block[idx] - min_value) * inv_range)));
+    gfx_rect(xp, y_bottom - value, bin_width - 2, value, 1);
     
     memory_block2 ? (
-      value2 = min(hc, max(0, (memory_block2[idx] - min_value) * inv_range));
+      value2 = floor(min(hc, max(0, (memory_block2[idx] - min_value) * inv_range)));
       
       value2 > value ? (
-        gfx_rect(xp, floor(y_bottom - value2), bin_width - 2, (value2 - value), 0);
+        gfx_rect(xp, y_bottom - value2, bin_width - 2, value2 - value, 0);
+       
+        gfx_set(0, 0, 0, 0.2);
+        gfx_line(xp + 1, y_bottom - 2, xp + 1, y_bottom - value + 2, 0);
       ) : (
         gfx_set(0, 0, 0, 0.6);
-        gfx_rect(xp, floor(y_bottom - value), bin_width - 2, - (value2 - value), 0);
+        gfx_rect(xp, y_bottom - value, bin_width - 2, - (value2 - value), 0);
+        
+        gfx_set(0, 0, 0, 0.2);
+        gfx_line(xp + 1, y_bottom - 2, xp + 1, y_bottom - value2 + 2, 0);
       );
     );
-    
     
     idx += 1;
     xp += bin_width;
   );
+  
+  gfx_setfont(12, "Arial", hc);
+  colormodel(0.2); gfx_a = 0.23;
+  gfx_x = xc + bin_width; gfx_y = yc; gfx_printf(name);
 );
 
-function draw_array(me, xc, yc, wc, hc, bin_width, min_value, max_value, memory_block, max_partial)
+function draw_array(me, xc, yc, wc, hc, bin_width, offset, min_value, max_value, memory_block, max_partial, name)
 local(
   bins, idx, value, xp, range, inv_range, y_bottom,
   increments, lx, ly, dx, dy, mem_loc
@@ -84,7 +96,7 @@ instance(
   y_bottom = yc + hc;
   
   //_draw_array_draw_block(xc, yc, hc, bin_width, bin_count, idx, memory_block, 0, min_value, inv_range, y_bottom);
-  _draw_array_draw_block(xc, yc, hc, bin_width, bin_count, idx, memory_block, memory_block + max_partial, min_value, inv_range, y_bottom);
+  _draw_array_draw_block(xc, yc, hc, bin_width, bin_count, offset, memory_block, memory_block + max_partial, min_value, inv_range, y_bottom, name);
   
   // Are we in here?
   ((captured == 0) || (captured == me)) ? (
@@ -103,7 +115,7 @@ instance(
         dy = (mouse_y - ly) / increments;
         loop(increments + 1,
           m_idx = (lx - xc) / bin_width;        
-          mem_loc[m_idx] = min(max_value, max(min_value, (yc + hc - ly) * range + min_value));
+          mem_loc[m_idx + offset] = min(max_value, max(min_value, (yc + hc - ly) * range + min_value));
           lx += dx;
           ly += dy;
         );
@@ -117,20 +129,75 @@ instance(
   last_y = mouse_y;
 );
 
-function draw_custom_partial_ui(xc, yc, wc, hc, memory_block, max_partials)
-local(vert_step, vert_size, bin_width)
-global()
-instance(a1, a2, a3, a4)
+function handle_scrollbar(me, xc, yc, width, height, viewport_fraction)
+local(inner_width, scrollbar_width, movement_extent, scroll_position)
+global(gfx_a, mouse_x, mouse_y, mouse_cap, last_cap, captured, lx)
+instance(over)
 (
-  bin_width = 12;
+  colormodel(1.0);
+  gfx_rect(xc, yc, width, height, 0);
+  inner_width = width - 4;
+  scrollbar_width = viewport_fraction * inner_width;
+  movement_extent = inner_width - scrollbar_width;
+  
+  over = (mouse_x > (xc + 2 + scroll_position)) && 
+         (mouse_x < (xc + 2 + scroll_position + scrollbar_width)) &&
+         (mouse_y > (yc + 2)) && 
+         (mouse_y < (yc + height - 4));
+  
+  gfx_a = 0.6 - 0.1 * over * abs(cos(2 * time_precise()));
+  gfx_rect(xc + 2 + scroll_position, yc + 2, scrollbar_width, height - 4, 1);
+  
+  (mouse_cap == 1) ? (
+    ((last_cap == 0) && over) ? (
+      captured = me;
+    ) : (
+      (captured == me) ? (
+        scroll_position += (mouse_x - lx);
+      );
+    );
+  );
+  
+  ((mouse_cap == 0) && (captured == me)) ? (
+    captured = 0;
+  );
+  
+  lx = mouse_x;
+  scroll_position = min(movement_extent, max(0, scroll_position));
+);
+
+function draw_custom_partial_ui(xc, yc, wc, hc, memory_block, max_partials)
+local(
+  vert_step, vert_size,
+  bin_width, scale, bins_in_view,
+  bin_offset, scroll_position,
+)
+global(gfx_a, mouse_wheel, mouse_x, mouse_y, mouse_cap)
+instance(a1, a2, a3, a4, scroll, continuous_binwidth, over)
+(
+  continuous_binwidth == 0 ? continuous_binwidth = 12;
+  scale = 1.0;
+  bin_width = floor(continuous_binwidth);
   gfx_set(0, 0, 0, 0.8);
   gfx_rect(xc, yc, wc, hc);
-  
-  vert_size = floor((hc - 8) / 4);
+  vert_size = floor((hc - 8 - 20 * scale) / 4);
   vert_step = vert_size + 2;
-  a1.draw_array(100, xc, yc, wc, vert_size, bin_width, -1, 1, memory_block, max_partials); /* Freq */
-  a2.draw_array(101, xc, yc + vert_step, wc, vert_size, bin_width, -50, 50, memory_block + max_partials * 2, max_partials); /* Freq */
-  a3.draw_array(102, xc, yc + 2 * vert_step, wc, vert_size, bin_width, -3, 0, memory_block + max_partials * 4, max_partials); /* Decay */
-  a4.draw_array(103, xc, yc + 3 * vert_step, wc, vert_size, bin_width, -72, 0, memory_block + max_partials * 6, max_partials); /* Amplitude */
+
+  bins_in_view = floor(wc / bin_width);
+  scroll_position = scroll.handle_scrollbar(110, xc, yc + 4 * vert_step, bins_in_view * bin_width, floor(20 * scale), bins_in_view / max_partials);
+  
+  bin_offset = floor(scroll_position * bins_in_view / max_partials);
+  a1.draw_array(103, xc, yc, wc, vert_size, bin_width, bin_offset, -72, 0, memory_block + max_partials * 6, max_partials, "AMPLITUDE"); /* Amplitude */
+  a2.draw_array(100, xc, yc + vert_step, wc, vert_size, bin_width, bin_offset, -1, 1, memory_block, max_partials, "REL FREQ"); /* Freq */
+  a3.draw_array(101, xc, yc + 2 * vert_step, wc, vert_size, bin_width, bin_offset, -50, 50, memory_block + max_partials * 2, max_partials, "ABS FREQ"); /* Freq */
+  a4.draw_array(102, xc, yc + 3 * vert_step, wc, vert_size, bin_width, bin_offset, -3, 0, memory_block + max_partials * 4, max_partials, "DECAY"); /* Decay */
+  
+  over = (mouse_x > xc) && (mouse_x < (xc + wc)) && (mouse_y > yc) && (mouse_y < (yc + hc));
+  ((mouse_cap == 0) && over) ? (
+    (abs(mouse_wheel) > 0) ? (
+      continuous_binwidth = min(max(6, continuous_binwidth + 0.01 * mouse_wheel), 24);
+      mouse_wheel = 0;
+    );
+  );
 );
 
