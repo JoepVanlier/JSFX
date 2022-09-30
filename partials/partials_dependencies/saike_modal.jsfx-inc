@@ -286,6 +286,41 @@ instance(b, a1, a2, win, wout, new_freq, new_amp, new_damp)
 );
 
 
+function pars_memory(f_0, k, rel_freq, abs_freq, amp, decay)
+global(omega_base, base_damp, f_damp, irate, soundboard_factor, Adivfs, srate)
+local(f_k, camp, omega_k, gamma_k, wb, omk, tmp, xsq, relative_freq, final_freq)
+instance(b, a1, a2, win, wout)
+(
+  // Sensitivity feels better when mapping nonlinearly
+  xsq = rel_freq * rel_freq;
+  relative_freq = sign(rel_freq) * (3 * xsq - 2 * xsq * abs(rel_freq));
+  
+  final_freq = f_0 * (k + relative_freq) + abs_freq;
+  decay = - (decay - 1);
+  amp = amp > -71.999 ? pow(10, amp / 20) : 0;
+  
+  omega_k = final_freq * omega_base;
+  omk = 2.0 * $pi * final_freq;
+  gamma_k = exp(- decay * irate);
+  
+  wout = win = amp;
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (final_freq < 0.48 * srate) ? (
+    b = Adivfs * gamma_k * sin(omega_k) / (100 * wb);
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    0
+  );
+);
+
 function tick(f_h)
 instance(b, a1, a2, win, wout,
          y, yh)
@@ -302,9 +337,16 @@ function set_pars_td(f_0)
 instance(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20, f21, f22, f23, f24, f25, f26, f27, f28, f29, f30, f31, f32, f33, f34, f35, f36, f37, f38, f39, f40, f41, f42, f43, f44, f45, f46, f47, f48, f49, f50, f51, f52, f53, f54, f55, f56, f57, f58, f59, f60, f61, f62, f63,
          l1, l2, l3, l4, l5, l6, l7,
          ticker, used_partials)
-local(spectrum_idx, spectrum_frac, spectrum_a, spectrum_b, current_vowel, norm_factor)
+local(spectrum_idx, spectrum_frac, spectrum_a, spectrum_b, current_vowel, norm_factor, ptr, inharm_01, damp_01)
 global(model, vowel, female_vowel, note_onz
-       rel_position, base_damp, f_damp, inharm)
+       rel_position, base_damp, f_damp, inharm,
+       inharmonic, freq_damp,
+       custom_partial_mem, MAX_CUSTOM_PARTIALS,
+       m_freq_relative, m_freq_relative2,
+       m_freq_abs, m_freq_abs2,
+       m_decay, m_decay2,
+       m_amplitude, m_amplitude2,
+)
 (
   ticker += 1;
   used_partials = 0;
@@ -902,7 +944,7 @@ global(model, vowel, female_vowel, note_onz
       used_partials += f61.pars_vowels(f_0, 61, spectrum_a, spectrum_b, spectrum_frac);
       used_partials += f62.pars_vowels(f_0, 62, spectrum_a, spectrum_b, spectrum_frac);
       used_partials += f63.pars_vowels(f_0, 63, spectrum_a, spectrum_b, spectrum_frac);
-    ) : (
+    ) : ( model == 10 ) ? (
       used_partials += f1.pars_raw(f_0, 1);
       used_partials += f2.pars_raw(f_0, 2);
       used_partials += f3.pars_raw(f_0, 3);
@@ -966,7 +1008,87 @@ global(model, vowel, female_vowel, note_onz
       used_partials += f61.pars_raw(f_0, 61);
       used_partials += f62.pars_raw(f_0, 62);
       used_partials += f63.pars_raw(f_0, 63);
+    ) : (
+      /* Unpack data */
+      ptr = custom_partial_mem;
+      ptr = (m_freq_relative = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_freq_relative2 = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_freq_abs = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_freq_abs2 = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_decay = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_decay2 = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_amplitude = ptr) + MAX_CUSTOM_PARTIALS;
+      ptr = (m_amplitude2 = ptr) + MAX_CUSTOM_PARTIALS;
+      
+      // Sorry devs who see this. Mistakes of the past ;_;
+      inharm_01 = 0.25 * inharmonic + 1; // inharmonic - Value between -4 and 0 (linearly mapped) => [0, 1]
+      damp_01 = 0.2 * freq_damp + 1.2; // freq_damp - Value between -6 and -1 (linearly mapped) => [0, 1]
+      
+      used_partials += f1.pars_memory(f_0, 1, m_freq_relative[0] * (1.0 - inharm_01) + m_freq_relative2[0] * inharm_01, m_freq_abs[0] * (1.0 - inharm_01) + m_freq_abs2[0] * inharm_01, m_amplitude[0] * (1.0 - rel_position) + m_amplitude2[0] * rel_position, m_decay[0] * (1.0 - damp_01) + m_decay2[0] * damp_01);
+      used_partials += f2.pars_memory(f_0, 2, m_freq_relative[1] * (1.0 - inharm_01) + m_freq_relative2[1] * inharm_01, m_freq_abs[1] * (1.0 - inharm_01) + m_freq_abs2[1] * inharm_01, m_amplitude[1] * (1.0 - rel_position) + m_amplitude2[1] * rel_position, m_decay[1] * (1.0 - damp_01) + m_decay2[1] * damp_01);
+      used_partials += f3.pars_memory(f_0, 3, m_freq_relative[2] * (1.0 - inharm_01) + m_freq_relative2[2] * inharm_01, m_freq_abs[2] * (1.0 - inharm_01) + m_freq_abs2[2] * inharm_01, m_amplitude[2] * (1.0 - rel_position) + m_amplitude2[2] * rel_position, m_decay[2] * (1.0 - damp_01) + m_decay2[2] * damp_01);
+      used_partials += f4.pars_memory(f_0, 4, m_freq_relative[3] * (1.0 - inharm_01) + m_freq_relative2[3] * inharm_01, m_freq_abs[3] * (1.0 - inharm_01) + m_freq_abs2[3] * inharm_01, m_amplitude[3] * (1.0 - rel_position) + m_amplitude2[3] * rel_position, m_decay[3] * (1.0 - damp_01) + m_decay2[3] * damp_01);
+      used_partials += f5.pars_memory(f_0, 5, m_freq_relative[4] * (1.0 - inharm_01) + m_freq_relative2[4] * inharm_01, m_freq_abs[4] * (1.0 - inharm_01) + m_freq_abs2[4] * inharm_01, m_amplitude[4] * (1.0 - rel_position) + m_amplitude2[4] * rel_position, m_decay[4] * (1.0 - damp_01) + m_decay2[4] * damp_01);
+      used_partials += f6.pars_memory(f_0, 6, m_freq_relative[5] * (1.0 - inharm_01) + m_freq_relative2[5] * inharm_01, m_freq_abs[5] * (1.0 - inharm_01) + m_freq_abs2[5] * inharm_01, m_amplitude[5] * (1.0 - rel_position) + m_amplitude2[5] * rel_position, m_decay[5] * (1.0 - damp_01) + m_decay2[5] * damp_01);
+      used_partials += f7.pars_memory(f_0, 7, m_freq_relative[6] * (1.0 - inharm_01) + m_freq_relative2[6] * inharm_01, m_freq_abs[6] * (1.0 - inharm_01) + m_freq_abs2[6] * inharm_01, m_amplitude[6] * (1.0 - rel_position) + m_amplitude2[6] * rel_position, m_decay[6] * (1.0 - damp_01) + m_decay2[6] * damp_01);
+      used_partials += f8.pars_memory(f_0, 8, m_freq_relative[7] * (1.0 - inharm_01) + m_freq_relative2[7] * inharm_01, m_freq_abs[7] * (1.0 - inharm_01) + m_freq_abs2[7] * inharm_01, m_amplitude[7] * (1.0 - rel_position) + m_amplitude2[7] * rel_position, m_decay[7] * (1.0 - damp_01) + m_decay2[7] * damp_01);
+      used_partials += f9.pars_memory(f_0, 9, m_freq_relative[8] * (1.0 - inharm_01) + m_freq_relative2[8] * inharm_01, m_freq_abs[8] * (1.0 - inharm_01) + m_freq_abs2[8] * inharm_01, m_amplitude[8] * (1.0 - rel_position) + m_amplitude2[8] * rel_position, m_decay[8] * (1.0 - damp_01) + m_decay2[8] * damp_01);
+      used_partials += f10.pars_memory(f_0, 10, m_freq_relative[9] * (1.0 - inharm_01) + m_freq_relative2[9] * inharm_01, m_freq_abs[9] * (1.0 - inharm_01) + m_freq_abs2[9] * inharm_01, m_amplitude[9] * (1.0 - rel_position) + m_amplitude2[9] * rel_position, m_decay[9] * (1.0 - damp_01) + m_decay2[9] * damp_01);
+      used_partials += f11.pars_memory(f_0, 11, m_freq_relative[10] * (1.0 - inharm_01) + m_freq_relative2[10] * inharm_01, m_freq_abs[10] * (1.0 - inharm_01) + m_freq_abs2[10] * inharm_01, m_amplitude[10] * (1.0 - rel_position) + m_amplitude2[10] * rel_position, m_decay[10] * (1.0 - damp_01) + m_decay2[10] * damp_01);
+      used_partials += f12.pars_memory(f_0, 12, m_freq_relative[11] * (1.0 - inharm_01) + m_freq_relative2[11] * inharm_01, m_freq_abs[11] * (1.0 - inharm_01) + m_freq_abs2[11] * inharm_01, m_amplitude[11] * (1.0 - rel_position) + m_amplitude2[11] * rel_position, m_decay[11] * (1.0 - damp_01) + m_decay2[11] * damp_01);
+      used_partials += f13.pars_memory(f_0, 13, m_freq_relative[12] * (1.0 - inharm_01) + m_freq_relative2[12] * inharm_01, m_freq_abs[12] * (1.0 - inharm_01) + m_freq_abs2[12] * inharm_01, m_amplitude[12] * (1.0 - rel_position) + m_amplitude2[12] * rel_position, m_decay[12] * (1.0 - damp_01) + m_decay2[12] * damp_01);
+      used_partials += f14.pars_memory(f_0, 14, m_freq_relative[13] * (1.0 - inharm_01) + m_freq_relative2[13] * inharm_01, m_freq_abs[13] * (1.0 - inharm_01) + m_freq_abs2[13] * inharm_01, m_amplitude[13] * (1.0 - rel_position) + m_amplitude2[13] * rel_position, m_decay[13] * (1.0 - damp_01) + m_decay2[13] * damp_01);
+      used_partials += f15.pars_memory(f_0, 15, m_freq_relative[14] * (1.0 - inharm_01) + m_freq_relative2[14] * inharm_01, m_freq_abs[14] * (1.0 - inharm_01) + m_freq_abs2[14] * inharm_01, m_amplitude[14] * (1.0 - rel_position) + m_amplitude2[14] * rel_position, m_decay[14] * (1.0 - damp_01) + m_decay2[14] * damp_01);
+      used_partials += f16.pars_memory(f_0, 16, m_freq_relative[15] * (1.0 - inharm_01) + m_freq_relative2[15] * inharm_01, m_freq_abs[15] * (1.0 - inharm_01) + m_freq_abs2[15] * inharm_01, m_amplitude[15] * (1.0 - rel_position) + m_amplitude2[15] * rel_position, m_decay[15] * (1.0 - damp_01) + m_decay2[15] * damp_01);
+      used_partials += f17.pars_memory(f_0, 17, m_freq_relative[16] * (1.0 - inharm_01) + m_freq_relative2[16] * inharm_01, m_freq_abs[16] * (1.0 - inharm_01) + m_freq_abs2[16] * inharm_01, m_amplitude[16] * (1.0 - rel_position) + m_amplitude2[16] * rel_position, m_decay[16] * (1.0 - damp_01) + m_decay2[16] * damp_01);
+      used_partials += f18.pars_memory(f_0, 18, m_freq_relative[17] * (1.0 - inharm_01) + m_freq_relative2[17] * inharm_01, m_freq_abs[17] * (1.0 - inharm_01) + m_freq_abs2[17] * inharm_01, m_amplitude[17] * (1.0 - rel_position) + m_amplitude2[17] * rel_position, m_decay[17] * (1.0 - damp_01) + m_decay2[17] * damp_01);
+      used_partials += f19.pars_memory(f_0, 19, m_freq_relative[18] * (1.0 - inharm_01) + m_freq_relative2[18] * inharm_01, m_freq_abs[18] * (1.0 - inharm_01) + m_freq_abs2[18] * inharm_01, m_amplitude[18] * (1.0 - rel_position) + m_amplitude2[18] * rel_position, m_decay[18] * (1.0 - damp_01) + m_decay2[18] * damp_01);
+      used_partials += f20.pars_memory(f_0, 20, m_freq_relative[19] * (1.0 - inharm_01) + m_freq_relative2[19] * inharm_01, m_freq_abs[19] * (1.0 - inharm_01) + m_freq_abs2[19] * inharm_01, m_amplitude[19] * (1.0 - rel_position) + m_amplitude2[19] * rel_position, m_decay[19] * (1.0 - damp_01) + m_decay2[19] * damp_01);
+      used_partials += f21.pars_memory(f_0, 21, m_freq_relative[20] * (1.0 - inharm_01) + m_freq_relative2[20] * inharm_01, m_freq_abs[20] * (1.0 - inharm_01) + m_freq_abs2[20] * inharm_01, m_amplitude[20] * (1.0 - rel_position) + m_amplitude2[20] * rel_position, m_decay[20] * (1.0 - damp_01) + m_decay2[20] * damp_01);
+      used_partials += f22.pars_memory(f_0, 22, m_freq_relative[21] * (1.0 - inharm_01) + m_freq_relative2[21] * inharm_01, m_freq_abs[21] * (1.0 - inharm_01) + m_freq_abs2[21] * inharm_01, m_amplitude[21] * (1.0 - rel_position) + m_amplitude2[21] * rel_position, m_decay[21] * (1.0 - damp_01) + m_decay2[21] * damp_01);
+      used_partials += f23.pars_memory(f_0, 23, m_freq_relative[22] * (1.0 - inharm_01) + m_freq_relative2[22] * inharm_01, m_freq_abs[22] * (1.0 - inharm_01) + m_freq_abs2[22] * inharm_01, m_amplitude[22] * (1.0 - rel_position) + m_amplitude2[22] * rel_position, m_decay[22] * (1.0 - damp_01) + m_decay2[22] * damp_01);
+      used_partials += f24.pars_memory(f_0, 24, m_freq_relative[23] * (1.0 - inharm_01) + m_freq_relative2[23] * inharm_01, m_freq_abs[23] * (1.0 - inharm_01) + m_freq_abs2[23] * inharm_01, m_amplitude[23] * (1.0 - rel_position) + m_amplitude2[23] * rel_position, m_decay[23] * (1.0 - damp_01) + m_decay2[23] * damp_01);
+      used_partials += f25.pars_memory(f_0, 25, m_freq_relative[24] * (1.0 - inharm_01) + m_freq_relative2[24] * inharm_01, m_freq_abs[24] * (1.0 - inharm_01) + m_freq_abs2[24] * inharm_01, m_amplitude[24] * (1.0 - rel_position) + m_amplitude2[24] * rel_position, m_decay[24] * (1.0 - damp_01) + m_decay2[24] * damp_01);
+      used_partials += f26.pars_memory(f_0, 26, m_freq_relative[25] * (1.0 - inharm_01) + m_freq_relative2[25] * inharm_01, m_freq_abs[25] * (1.0 - inharm_01) + m_freq_abs2[25] * inharm_01, m_amplitude[25] * (1.0 - rel_position) + m_amplitude2[25] * rel_position, m_decay[25] * (1.0 - damp_01) + m_decay2[25] * damp_01);
+      used_partials += f27.pars_memory(f_0, 27, m_freq_relative[26] * (1.0 - inharm_01) + m_freq_relative2[26] * inharm_01, m_freq_abs[26] * (1.0 - inharm_01) + m_freq_abs2[26] * inharm_01, m_amplitude[26] * (1.0 - rel_position) + m_amplitude2[26] * rel_position, m_decay[26] * (1.0 - damp_01) + m_decay2[26] * damp_01);
+      used_partials += f28.pars_memory(f_0, 28, m_freq_relative[27] * (1.0 - inharm_01) + m_freq_relative2[27] * inharm_01, m_freq_abs[27] * (1.0 - inharm_01) + m_freq_abs2[27] * inharm_01, m_amplitude[27] * (1.0 - rel_position) + m_amplitude2[27] * rel_position, m_decay[27] * (1.0 - damp_01) + m_decay2[27] * damp_01);
+      used_partials += f29.pars_memory(f_0, 29, m_freq_relative[28] * (1.0 - inharm_01) + m_freq_relative2[28] * inharm_01, m_freq_abs[28] * (1.0 - inharm_01) + m_freq_abs2[28] * inharm_01, m_amplitude[28] * (1.0 - rel_position) + m_amplitude2[28] * rel_position, m_decay[28] * (1.0 - damp_01) + m_decay2[28] * damp_01);
+      used_partials += f30.pars_memory(f_0, 30, m_freq_relative[29] * (1.0 - inharm_01) + m_freq_relative2[29] * inharm_01, m_freq_abs[29] * (1.0 - inharm_01) + m_freq_abs2[29] * inharm_01, m_amplitude[29] * (1.0 - rel_position) + m_amplitude2[29] * rel_position, m_decay[29] * (1.0 - damp_01) + m_decay2[29] * damp_01);
+      used_partials += f31.pars_memory(f_0, 31, m_freq_relative[30] * (1.0 - inharm_01) + m_freq_relative2[30] * inharm_01, m_freq_abs[30] * (1.0 - inharm_01) + m_freq_abs2[30] * inharm_01, m_amplitude[30] * (1.0 - rel_position) + m_amplitude2[30] * rel_position, m_decay[30] * (1.0 - damp_01) + m_decay2[30] * damp_01);
+      used_partials += f32.pars_memory(f_0, 32, m_freq_relative[31] * (1.0 - inharm_01) + m_freq_relative2[31] * inharm_01, m_freq_abs[31] * (1.0 - inharm_01) + m_freq_abs2[31] * inharm_01, m_amplitude[31] * (1.0 - rel_position) + m_amplitude2[31] * rel_position, m_decay[31] * (1.0 - damp_01) + m_decay2[31] * damp_01);
+      used_partials += f33.pars_memory(f_0, 33, m_freq_relative[32] * (1.0 - inharm_01) + m_freq_relative2[32] * inharm_01, m_freq_abs[32] * (1.0 - inharm_01) + m_freq_abs2[32] * inharm_01, m_amplitude[32] * (1.0 - rel_position) + m_amplitude2[32] * rel_position, m_decay[32] * (1.0 - damp_01) + m_decay2[32] * damp_01);
+      used_partials += f34.pars_memory(f_0, 34, m_freq_relative[33] * (1.0 - inharm_01) + m_freq_relative2[33] * inharm_01, m_freq_abs[33] * (1.0 - inharm_01) + m_freq_abs2[33] * inharm_01, m_amplitude[33] * (1.0 - rel_position) + m_amplitude2[33] * rel_position, m_decay[33] * (1.0 - damp_01) + m_decay2[33] * damp_01);
+      used_partials += f35.pars_memory(f_0, 35, m_freq_relative[34] * (1.0 - inharm_01) + m_freq_relative2[34] * inharm_01, m_freq_abs[34] * (1.0 - inharm_01) + m_freq_abs2[34] * inharm_01, m_amplitude[34] * (1.0 - rel_position) + m_amplitude2[34] * rel_position, m_decay[34] * (1.0 - damp_01) + m_decay2[34] * damp_01);
+      used_partials += f36.pars_memory(f_0, 36, m_freq_relative[35] * (1.0 - inharm_01) + m_freq_relative2[35] * inharm_01, m_freq_abs[35] * (1.0 - inharm_01) + m_freq_abs2[35] * inharm_01, m_amplitude[35] * (1.0 - rel_position) + m_amplitude2[35] * rel_position, m_decay[35] * (1.0 - damp_01) + m_decay2[35] * damp_01);
+      used_partials += f37.pars_memory(f_0, 37, m_freq_relative[36] * (1.0 - inharm_01) + m_freq_relative2[36] * inharm_01, m_freq_abs[36] * (1.0 - inharm_01) + m_freq_abs2[36] * inharm_01, m_amplitude[36] * (1.0 - rel_position) + m_amplitude2[36] * rel_position, m_decay[36] * (1.0 - damp_01) + m_decay2[36] * damp_01);
+      used_partials += f38.pars_memory(f_0, 38, m_freq_relative[37] * (1.0 - inharm_01) + m_freq_relative2[37] * inharm_01, m_freq_abs[37] * (1.0 - inharm_01) + m_freq_abs2[37] * inharm_01, m_amplitude[37] * (1.0 - rel_position) + m_amplitude2[37] * rel_position, m_decay[37] * (1.0 - damp_01) + m_decay2[37] * damp_01);
+      used_partials += f39.pars_memory(f_0, 39, m_freq_relative[38] * (1.0 - inharm_01) + m_freq_relative2[38] * inharm_01, m_freq_abs[38] * (1.0 - inharm_01) + m_freq_abs2[38] * inharm_01, m_amplitude[38] * (1.0 - rel_position) + m_amplitude2[38] * rel_position, m_decay[38] * (1.0 - damp_01) + m_decay2[38] * damp_01);
+      used_partials += f40.pars_memory(f_0, 40, m_freq_relative[39] * (1.0 - inharm_01) + m_freq_relative2[39] * inharm_01, m_freq_abs[39] * (1.0 - inharm_01) + m_freq_abs2[39] * inharm_01, m_amplitude[39] * (1.0 - rel_position) + m_amplitude2[39] * rel_position, m_decay[39] * (1.0 - damp_01) + m_decay2[39] * damp_01);
+      used_partials += f41.pars_memory(f_0, 41, m_freq_relative[40] * (1.0 - inharm_01) + m_freq_relative2[40] * inharm_01, m_freq_abs[40] * (1.0 - inharm_01) + m_freq_abs2[40] * inharm_01, m_amplitude[40] * (1.0 - rel_position) + m_amplitude2[40] * rel_position, m_decay[40] * (1.0 - damp_01) + m_decay2[40] * damp_01);
+      used_partials += f42.pars_memory(f_0, 42, m_freq_relative[41] * (1.0 - inharm_01) + m_freq_relative2[41] * inharm_01, m_freq_abs[41] * (1.0 - inharm_01) + m_freq_abs2[41] * inharm_01, m_amplitude[41] * (1.0 - rel_position) + m_amplitude2[41] * rel_position, m_decay[41] * (1.0 - damp_01) + m_decay2[41] * damp_01);
+      used_partials += f43.pars_memory(f_0, 43, m_freq_relative[42] * (1.0 - inharm_01) + m_freq_relative2[42] * inharm_01, m_freq_abs[42] * (1.0 - inharm_01) + m_freq_abs2[42] * inharm_01, m_amplitude[42] * (1.0 - rel_position) + m_amplitude2[42] * rel_position, m_decay[42] * (1.0 - damp_01) + m_decay2[42] * damp_01);
+      used_partials += f44.pars_memory(f_0, 44, m_freq_relative[43] * (1.0 - inharm_01) + m_freq_relative2[43] * inharm_01, m_freq_abs[43] * (1.0 - inharm_01) + m_freq_abs2[43] * inharm_01, m_amplitude[43] * (1.0 - rel_position) + m_amplitude2[43] * rel_position, m_decay[43] * (1.0 - damp_01) + m_decay2[43] * damp_01);
+      used_partials += f45.pars_memory(f_0, 45, m_freq_relative[44] * (1.0 - inharm_01) + m_freq_relative2[44] * inharm_01, m_freq_abs[44] * (1.0 - inharm_01) + m_freq_abs2[44] * inharm_01, m_amplitude[44] * (1.0 - rel_position) + m_amplitude2[44] * rel_position, m_decay[44] * (1.0 - damp_01) + m_decay2[44] * damp_01);
+      used_partials += f46.pars_memory(f_0, 46, m_freq_relative[45] * (1.0 - inharm_01) + m_freq_relative2[45] * inharm_01, m_freq_abs[45] * (1.0 - inharm_01) + m_freq_abs2[45] * inharm_01, m_amplitude[45] * (1.0 - rel_position) + m_amplitude2[45] * rel_position, m_decay[45] * (1.0 - damp_01) + m_decay2[45] * damp_01);
+      used_partials += f47.pars_memory(f_0, 47, m_freq_relative[46] * (1.0 - inharm_01) + m_freq_relative2[46] * inharm_01, m_freq_abs[46] * (1.0 - inharm_01) + m_freq_abs2[46] * inharm_01, m_amplitude[46] * (1.0 - rel_position) + m_amplitude2[46] * rel_position, m_decay[46] * (1.0 - damp_01) + m_decay2[46] * damp_01);
+      used_partials += f48.pars_memory(f_0, 48, m_freq_relative[47] * (1.0 - inharm_01) + m_freq_relative2[47] * inharm_01, m_freq_abs[47] * (1.0 - inharm_01) + m_freq_abs2[47] * inharm_01, m_amplitude[47] * (1.0 - rel_position) + m_amplitude2[47] * rel_position, m_decay[47] * (1.0 - damp_01) + m_decay2[47] * damp_01);
+      used_partials += f49.pars_memory(f_0, 49, m_freq_relative[48] * (1.0 - inharm_01) + m_freq_relative2[48] * inharm_01, m_freq_abs[48] * (1.0 - inharm_01) + m_freq_abs2[48] * inharm_01, m_amplitude[48] * (1.0 - rel_position) + m_amplitude2[48] * rel_position, m_decay[48] * (1.0 - damp_01) + m_decay2[48] * damp_01);
+      used_partials += f50.pars_memory(f_0, 50, m_freq_relative[49] * (1.0 - inharm_01) + m_freq_relative2[49] * inharm_01, m_freq_abs[49] * (1.0 - inharm_01) + m_freq_abs2[49] * inharm_01, m_amplitude[49] * (1.0 - rel_position) + m_amplitude2[49] * rel_position, m_decay[49] * (1.0 - damp_01) + m_decay2[49] * damp_01);
+      used_partials += f51.pars_memory(f_0, 51, m_freq_relative[50] * (1.0 - inharm_01) + m_freq_relative2[50] * inharm_01, m_freq_abs[50] * (1.0 - inharm_01) + m_freq_abs2[50] * inharm_01, m_amplitude[50] * (1.0 - rel_position) + m_amplitude2[50] * rel_position, m_decay[50] * (1.0 - damp_01) + m_decay2[50] * damp_01);
+      used_partials += f52.pars_memory(f_0, 52, m_freq_relative[51] * (1.0 - inharm_01) + m_freq_relative2[51] * inharm_01, m_freq_abs[51] * (1.0 - inharm_01) + m_freq_abs2[51] * inharm_01, m_amplitude[51] * (1.0 - rel_position) + m_amplitude2[51] * rel_position, m_decay[51] * (1.0 - damp_01) + m_decay2[51] * damp_01);
+      used_partials += f53.pars_memory(f_0, 53, m_freq_relative[52] * (1.0 - inharm_01) + m_freq_relative2[52] * inharm_01, m_freq_abs[52] * (1.0 - inharm_01) + m_freq_abs2[52] * inharm_01, m_amplitude[52] * (1.0 - rel_position) + m_amplitude2[52] * rel_position, m_decay[52] * (1.0 - damp_01) + m_decay2[52] * damp_01);
+      used_partials += f54.pars_memory(f_0, 54, m_freq_relative[53] * (1.0 - inharm_01) + m_freq_relative2[53] * inharm_01, m_freq_abs[53] * (1.0 - inharm_01) + m_freq_abs2[53] * inharm_01, m_amplitude[53] * (1.0 - rel_position) + m_amplitude2[53] * rel_position, m_decay[53] * (1.0 - damp_01) + m_decay2[53] * damp_01);
+      used_partials += f55.pars_memory(f_0, 55, m_freq_relative[54] * (1.0 - inharm_01) + m_freq_relative2[54] * inharm_01, m_freq_abs[54] * (1.0 - inharm_01) + m_freq_abs2[54] * inharm_01, m_amplitude[54] * (1.0 - rel_position) + m_amplitude2[54] * rel_position, m_decay[54] * (1.0 - damp_01) + m_decay2[54] * damp_01);
+      used_partials += f56.pars_memory(f_0, 56, m_freq_relative[55] * (1.0 - inharm_01) + m_freq_relative2[55] * inharm_01, m_freq_abs[55] * (1.0 - inharm_01) + m_freq_abs2[55] * inharm_01, m_amplitude[55] * (1.0 - rel_position) + m_amplitude2[55] * rel_position, m_decay[55] * (1.0 - damp_01) + m_decay2[55] * damp_01);
+      used_partials += f57.pars_memory(f_0, 57, m_freq_relative[56] * (1.0 - inharm_01) + m_freq_relative2[56] * inharm_01, m_freq_abs[56] * (1.0 - inharm_01) + m_freq_abs2[56] * inharm_01, m_amplitude[56] * (1.0 - rel_position) + m_amplitude2[56] * rel_position, m_decay[56] * (1.0 - damp_01) + m_decay2[56] * damp_01);
+      used_partials += f58.pars_memory(f_0, 58, m_freq_relative[57] * (1.0 - inharm_01) + m_freq_relative2[57] * inharm_01, m_freq_abs[57] * (1.0 - inharm_01) + m_freq_abs2[57] * inharm_01, m_amplitude[57] * (1.0 - rel_position) + m_amplitude2[57] * rel_position, m_decay[57] * (1.0 - damp_01) + m_decay2[57] * damp_01);
+      used_partials += f59.pars_memory(f_0, 59, m_freq_relative[58] * (1.0 - inharm_01) + m_freq_relative2[58] * inharm_01, m_freq_abs[58] * (1.0 - inharm_01) + m_freq_abs2[58] * inharm_01, m_amplitude[58] * (1.0 - rel_position) + m_amplitude2[58] * rel_position, m_decay[58] * (1.0 - damp_01) + m_decay2[58] * damp_01);
+      used_partials += f60.pars_memory(f_0, 60, m_freq_relative[59] * (1.0 - inharm_01) + m_freq_relative2[59] * inharm_01, m_freq_abs[59] * (1.0 - inharm_01) + m_freq_abs2[59] * inharm_01, m_amplitude[59] * (1.0 - rel_position) + m_amplitude2[59] * rel_position, m_decay[59] * (1.0 - damp_01) + m_decay2[59] * damp_01);
+      used_partials += f61.pars_memory(f_0, 61, m_freq_relative[60] * (1.0 - inharm_01) + m_freq_relative2[60] * inharm_01, m_freq_abs[60] * (1.0 - inharm_01) + m_freq_abs2[60] * inharm_01, m_amplitude[60] * (1.0 - rel_position) + m_amplitude2[60] * rel_position, m_decay[60] * (1.0 - damp_01) + m_decay2[60] * damp_01);
+      used_partials += f62.pars_memory(f_0, 62, m_freq_relative[61] * (1.0 - inharm_01) + m_freq_relative2[61] * inharm_01, m_freq_abs[61] * (1.0 - inharm_01) + m_freq_abs2[61] * inharm_01, m_amplitude[61] * (1.0 - rel_position) + m_amplitude2[61] * rel_position, m_decay[61] * (1.0 - damp_01) + m_decay2[61] * damp_01);
+      used_partials += f63.pars_memory(f_0, 63, m_freq_relative[62] * (1.0 - inharm_01) + m_freq_relative2[62] * inharm_01, m_freq_abs[62] * (1.0 - inharm_01) + m_freq_abs2[62] * inharm_01, m_amplitude[62] * (1.0 - rel_position) + m_amplitude2[62] * rel_position, m_decay[62] * (1.0 - damp_01) + m_decay2[62] * damp_01);
     );
+    
     ticker = 0;
   );
 );
