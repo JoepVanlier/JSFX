@@ -239,7 +239,7 @@ instance(
         
         coeff_mem[idx] = cos(advance) * damp;
         coeff_mem[idx + 1] = sin(advance) * damp;
-          
+        
         mix_mem[num_partials] = norm_factor * sin(k * $pi * rel_position) * 100 * (k * soundboard_factor) / f_k;
         num_partials += 1; idx += 2;
       );
@@ -310,7 +310,7 @@ instance(
         
         coeff_mem[idx] = cos(advance) * damp;
         coeff_mem[idx + 1] = sin(advance) * damp;
-          
+        
         mix_mem[num_partials] = norm_factor * camp * 100 * (k * soundboard_factor) / f_k;
         num_partials += 1; idx += 2;
       );
@@ -455,6 +455,80 @@ instance(
   k
 );
 
+function set_pars_stft_from_memory_b(f_0)
+global(
+  soundboard_factor, Adivfs, srate, model,
+  custom_partial_mem, MAX_CUSTOM_PARTIALS,
+  freq_damp, inharmonic, // Sliders
+)
+local(
+  idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin, relative_freq
+
+  // Memory locations
+  m_freq_relative, m_freq_abs, m_decay, m_amplitude,
+
+  x, xsq, ptr,
+  inharm_01, damp_01, // Mapped to [0 - 1]
+  new_freq, new_damp, new_amp,
+)
+instance(
+  bin_mem, coeff_mem, mix_mem, state_mem, inharm,
+  fft_size, fft_interval, ticker, num_partials, max_partial,
+  rel_position, base_damp, f_damp,
+)
+(
+  ticker += 1;
+  ticker > 256 ? (
+    memset(coeff_mem, 0, 2 * fft_size);
+    memset(mix_mem, 0, 2 * max_partial);
+    
+    partials = min(floor(0.5 * srate / f_0), max_partial);
+    irate = fft_interval / srate;
+    
+    k = 1;
+    idx = 0;
+    num_partials = 0;
+    offset = 3;
+    max_bin = (2 * fft_size - 2);
+    
+    /* Unpack my data */
+    ptr = custom_partial_mem;
+    ptr = (m_freq_relative = ptr) + 2 * MAX_CUSTOM_PARTIALS;
+    ptr = (m_freq_abs = ptr) + 2 * MAX_CUSTOM_PARTIALS;
+    ptr = (m_decay = ptr) + 2 * MAX_CUSTOM_PARTIALS;
+    ptr = (m_amplitude = ptr) + 2 * MAX_CUSTOM_PARTIALS;
+    
+    loop(partials,
+      // Sensitivity feels better when mapping nonlinearly
+      x = m_freq_relative[k - 1];
+      xsq = x * x;
+      relative_freq = sign(x) * (3 * xsq - 2 * xsq * abs(x));
+      
+      new_freq = f_0 * sqrt((1 + inharm * k * k)) * (k + relative_freq) + m_freq_abs[k - 1];
+      new_damp = - (m_decay[k - 1] - 1);
+      new_amp = m_amplitude[k - 1];
+      new_amp = new_amp > -71.999 ? pow(10, new_amp / 20) : 0;
+      
+      omega_k = 2.0 * $pi * new_freq;
+      advance = omega_k * irate;
+      bin = 2 * floor((new_freq / srate) * (2 * fft_size) + 0.5);
+      bin < max_bin ? (
+        bin_mem[num_partials] = bin;
+        damp = exp(- (new_damp + base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
+        
+        coeff_mem[idx] = cos(advance) * damp;
+        coeff_mem[idx + 1] = sin(advance) * damp;
+        mix_mem[num_partials] = Adivfs * new_amp * sin(k * $pi * rel_position);
+        num_partials += 1; idx += 2;
+      );
+      
+      k += 1;
+    );
+    ticker = 0;
+  );
+  
+  k
+);
 
 function colormodel(x)
 global(model, gfx_a)
@@ -514,6 +588,11 @@ local(frac)
     (x < 1.0) ? ( frac = (1 * x - 0); gfx_set(0.1568627450980392 + frac * 0.11372549019607842, 0.23529411764705882 + frac * 0.39999999999999997, 0.5254901960784314 + frac * -0.24705882352941178); )
   ) : ( model == 11 ) ? (
     x = sqrt(x); gfx_set(0.3 + 0.67 * x, 0.5 - 0.3 * x, 0.2 + 0.8 * (1 - x), 0.8);
+  ) : ( model == 12 ) ? (
+    (x < 0.25) ? ( frac = (4 * x - 0); gfx_set(0.34901960784313724 + frac * 0.20000000000000007, 0.403921568627451 + frac * -0.09019607843137256, 1.0 + frac * 0.0); )
+    : (x < 0.5) ? ( frac = (4 * x - 1); gfx_set(0.5490196078431373 + frac * 0.4509803921568627, 0.3137254901960784 + frac * -0.07450980392156861, 1.0 + frac * -0.21568627450980393); )
+    : (x < 0.75) ? ( frac = (4 * x - 2); gfx_set(1.0 + frac * 0.0, 0.23921568627450981 + frac * 0.10980392156862742, 0.7843137254901961 + frac * -0.6196078431372549); )
+    : ( frac = (4 * x - 3); gfx_set(1.0 + frac * 0.0, 0.34901960784313724 + frac * 0.34509803921568627, 0.16470588235294117 + frac * -0.03529411764705881); )
   );
 );
 
@@ -723,6 +802,8 @@ instance(used_partials)
     this.set_pars_stft_raw(f_0);
   ) : (model == 11) ? (
     used_partials = this.set_pars_stft_from_memory(f_0);
+  ) : (model == 12) ? (
+    used_partials = this.set_pars_stft_from_memory_b(f_0);
   );
 );
 

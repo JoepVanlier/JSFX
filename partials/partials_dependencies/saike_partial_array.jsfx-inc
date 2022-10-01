@@ -15,9 +15,9 @@ local(ptr, ds, ix)
     // Decays
     ds = 1 / (max_partials * 2);
     ptr = freemem + max_partials * 4;
-    ix = 0; loop(max_partials, ptr[ix] = -2 - 80 * ds * ix; ix += 1; );
+    ix = 0; loop(max_partials, ptr[ix] = -2 - 120 * ds * ix - 2 * ix * ix; ix += 1; );
     ptr = freemem + max_partials * 5;
-    ix = 0; loop(max_partials, ptr[ix] = -1 - ds * ix; ix += 1; );
+    ix = 0; loop(max_partials, ptr[ix] = -2 - 80 * ds * ix; ix += 1; );
     
     // Amplitudes
     ptr = freemem + max_partials * 6;
@@ -87,16 +87,38 @@ instance()
   gfx_x = xc + bin_width; gfx_y = yc; gfx_printf(name);
 );
 
-function draw_array(me, xc, yc, wc, hc, bin_width, offset, min_value, max_value, memory_block, max_partial, name, alpha1, alpha2, hint)
+function print_array_label(field, value, k)
+local(xsq)
+global(gfx_x, gfx_y, mouse_x, mouse_y)
+(
+  gfx_x = mouse_x + 20;
+  gfx_y = mouse_y;
+  gfx_set(1, 1, 1, 1);
+  gfx_setfont(4, "Arial", 12);
+  (field == 0) ? (
+    gfx_printf("%.2f dB", value);
+  ) : (field == 1) ? (
+    xsq = value * value;
+    value = sign(value) * (3 * xsq - 2 * xsq * abs(value));
+    gfx_printf("f%d = f%d + %.3f f0", k + 1, k, 1 + value);
+  ) : (field == 2) ? (
+    gfx_printf("%.2f Hz", value);
+  ) : (field == 3) ? (
+    gfx_printf("%.2f", value);
+  );
+);
+
+function draw_array(me, xc, yc, wc, hc, bin_width, offset, min_value, max_value, memory_block, max_partial, name, alpha1, alpha2, hint, two_blocks, field)
 local(
   bins, idx, value, xp, range, inv_range, y_bottom,
-  increments, lx, ly, dx, dy, mem_loc, second_block
+  increments, lx, ly, dx, dy, mem_loc, second_block,
+  mul, new_value,
 )
 global(
   gfx_a, mouse_x, mouse_y, mouse_cap, captured, settings_changed, hinter.sethint
 )
 instance(
-  bin_count, m_idx, last_x, last_y, over
+  bin_count, m_idx, last_x, last_y, over, selected_bin
 )
 (
   over = ((mouse_x > xc) && (mouse_y > yc) && (mouse_x < (xc + wc)) && (mouse_y < (yc + hc)));
@@ -106,7 +128,7 @@ instance(
   y_bottom = yc + hc;
   
   //_draw_array_draw_block(xc, yc, hc, bin_width, bin_count, idx, memory_block, 0, min_value, inv_range, y_bottom);
-  _draw_array_draw_block(xc, yc, hc, bin_width, bin_count, offset, memory_block, memory_block + max_partial, min_value, inv_range, y_bottom, name, alpha1, alpha2);
+  _draw_array_draw_block(xc, yc, hc, bin_width, bin_count, offset, memory_block, two_blocks ? memory_block + max_partial : 0, min_value, inv_range, y_bottom, name, two_blocks ? alpha1 : 0.9, two_blocks ? alpha2 : 0);
   
   // Are we in here?
   ((captured == 0) || (captured == me)) ? (
@@ -115,22 +137,53 @@ instance(
         captured = me;
         
         second_block = 1;
-        loop(2,
+        loop(1 + two_blocks,
           mem_loc = memory_block + (second_block - 1) * max_partial;
           (mouse_cap & second_block == second_block) ? (
             // Smaller increments than mouse movement to increase precision and
             // not miss bins when the user moves fast.
-            lx = last_x;
-            ly = last_y;
-            dx = mouse_x - lx;
-            increments = ceil(abs(dx) / (bin_width / 2));
-            dx /= increments;
-            dy = (mouse_y - ly) / increments;
-            loop(increments + 1,
-              m_idx = (lx - xc) / bin_width;        
-              mem_loc[m_idx + offset] = min(max_value, max(min_value, (yc + hc - ly) * range + min_value));
-              lx += dx;
-              ly += dy;
+            (mouse_cap & 16 == 16) ? (
+              // Change all at once
+              mul = 1.0;
+              (mouse_cap & 4) ? mul *= 0.1666666667;
+              (mouse_cap & 8) ? mul *= 0.125;
+              dy = - mul * (mouse_y - last_y) / inv_range;
+              
+              idx = 0;
+              loop(max_partial,
+                mem_loc[idx] = min(max_value, max(min_value, mem_loc[idx] + dy));
+                idx += 1;
+              );
+            ) : (
+              ((mouse_cap & 4 == 4) || (mouse_cap & 8 == 8)) ? (
+                // Precision adjustments
+                mul = 1.0;
+                (mouse_cap & 4) ? mul *= 0.1666666667;
+                (mouse_cap & 8) ? mul *= 0.125;
+                dy = - mul * (mouse_y - last_y) / inv_range;
+                // Nothing selected yet? => Do it now.
+                (selected_bin < 0) ? (
+                  selected_bin = min(max(0, (mouse_x - xc) / bin_width), max_partial);
+                );
+                new_value = min(max_value, max(min_value, mem_loc[selected_bin + offset] + dy));
+                mem_loc[selected_bin + offset] = new_value;
+                print_array_label(field, new_value, selected_bin + offset);
+              ) : (
+                // Gross drawing
+                lx = last_x;
+                ly = last_y;
+                dx = mouse_x - lx;
+                increments = ceil(abs(dx) / (bin_width / 2));
+                dx /= increments;
+                dy = (mouse_y - ly) / increments;
+                loop(increments + 1,
+                  m_idx = min(max(0, (lx - xc) / bin_width), max_partial);
+                  mem_loc[m_idx + offset] = min(max_value, max(min_value, (yc + hc - ly) * range + min_value));
+                  lx += dx;
+                  ly += dy;
+                );
+                selected_bin = m_idx;
+              );
             );
           );
           second_block = 2;
@@ -139,7 +192,12 @@ instance(
       );
     );
   );
-  ((mouse_cap == 0) && (captured == me)) ? captured = 0;
+  (mouse_cap == 0) ? (
+    selected_bin = -1;
+    (captured == me) ? (
+      captured = 0;
+    );
+  );
   
   over && (mouse_cap == 0) ? (
     hinter.sethint(hint);
@@ -186,7 +244,7 @@ instance(over)
   scroll_position = min(movement_extent, max(0, scroll_position));
 );
 
-function draw_custom_partial_ui(xc, yc, wc, hc, memory_block, max_partials, partials_used)
+function draw_custom_partial_ui(xc, yc, wc, hc, memory_block, max_partials, partials_used, two_blocks)
 local(
   vert_step, vert_size,
   bin_width, scale, bins_in_view,
@@ -233,8 +291,10 @@ unless you play very low notes, you will not hear the
 entire partial spectrum.
 
 Scrollwheel can be used to zoom, while the scroll-bar 
-can be used to pan.
-"
+can be used to pan. Hold ctrl and/or shift to make 
+precision adjustments. Hold alt to shift all partials
+at once.
+", two_blocks, 0
   );
 
   tmp = 0.25 * inharmonic + 1;  // inharmonic - Value between -4 and 0 (linearly mapped) => [0, 1]
@@ -264,8 +324,10 @@ with the left mouse button (spectrum A) or the right
 mouse button (spectrum B).
 
 Scrollwheel can be used to zoom, while the scroll-bar 
-can be used to pan.
-"
+can be used to pan. Hold ctrl and/or shift to make 
+precision adjustments. Hold alt to shift all partials
+at once.
+", two_blocks, 1
   ); /* Freq */
   afreq.draw_array(101, xc, yc + 2 * vert_step, wc, vert_size, bin_width, bin_offset, -50, 50, memory_block + max_partials * 2, max_partials, "ABS FREQ", alpha1, alpha2,
 "Absolute frequency
@@ -291,14 +353,16 @@ with the left mouse button (spectrum A) or the right
 mouse button (spectrum B).
 
 Scrollwheel can be used to zoom, while the scroll-bar 
-can be used to pan.
-"  
+can be used to pan. Hold ctrl and/or shift to make 
+precision adjustments. Hold alt to shift all partials
+at once.
+", two_blocks, 2
   ); /* Freq */
 
   tmp = 0.2 * freq_damp + 1.2; // freq_damp - Value between -6 and -1 (linearly mapped) => [0, 1]
   alpha1 = 0.2 + 0.7 * (1 - tmp);
-  alpha2 = 0.3 + 0.7 * tmp;
-  decay.draw_array(102, xc, yc + 3 * vert_step, wc, vert_size, bin_width, bin_offset, -8, 0, memory_block + max_partials * 4, max_partials, "DECAY", alpha1, alpha2,
+  alpha2 = 0.3 + 0.7 * tmp; // -8
+  decay.draw_array(102, xc, yc + 3 * vert_step, wc, vert_size, bin_width, bin_offset, -12, 0, memory_block + max_partials * 4, max_partials, "DECAY", alpha1, alpha2,
 "Decay
 
 Set the decay time for each partial.Each column 
@@ -313,8 +377,9 @@ with the left mouse button (spectrum A) or the right
 mouse button (spectrum B).
 
 Scrollwheel can be used to zoom, while the scroll-bar 
-can be used to pan.
-"); /* Decay */
+can be used to pan. Hold alt to shift all partials
+at once.
+", two_blocks, 3); /* Decay */
   
   over = (mouse_x > xc) && (mouse_x < (xc + wc)) && (mouse_y > yc) && (mouse_y < (yc + hc));
   ((mouse_cap == 0) && over) ? (
