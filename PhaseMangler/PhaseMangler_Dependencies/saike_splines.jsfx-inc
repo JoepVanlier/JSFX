@@ -67,18 +67,20 @@ global()
   memcpy(yloc, temp_y, n_points);
 );
 
-function update_spline(n_points, xloc, yloc, c1, c2, c3, temp_x, temp_y)
+function update_spline(n_points, xloc, yloc, spline_mem, temp_x, temp_y)
 local(dx, dydx, tmp, idx,
       dydx_next, dydx_current,
       dx_current, dx_next, avg_dx,
       inv_dx,
-      c1_current, cm)
+      c1_current, cm,
+      c1, c2, c3)
 global()
 (
   // Initialize coeffs
-  memset(c1, 0, n_points);
-  memset(c2, 0, n_points);
-  memset(c3, 0, n_points);
+  memset(spline_mem, 0, n_points * 3);
+  c1 = spline_mem;
+  c2 = spline_mem + n_points;
+  c3 = spline_mem + n_points * 2;
 
   // Calculate differences
   dx = temp_x;
@@ -130,12 +132,12 @@ global()
 );
 
 function update_spline()
-instance(xloc, yloc, temp_x, temp_y, c1, c2, c3, indices, n_points)
-local()
+instance(xloc, yloc, temp_x, temp_y, spline_mem, indices, n_points)
+local(tmp)
 global()
 (
   this.sort_spline(n_points, xloc, yloc, indices, temp_x, temp_y);
-  this.update_spline(n_points, xloc, yloc, c1, c2, c3, temp_x, temp_y)
+  this.update_spline(n_points, xloc, yloc, spline_mem, temp_x, temp_y);
 );
 
 function read_from_sliders()
@@ -170,7 +172,7 @@ global()
 
 function read_data()
 local(idx)
-instance(x_sliders, y_sliders, max_nodes, xloc, yloc)
+instance(x_sliders, y_sliders, max_nodes, xloc, yloc, busy)
 global()
 (
   // If we are reading to/from sliders, do so here.
@@ -189,19 +191,21 @@ global()
 function push_data()
 local()
 global()
-instance()
+instance(data_pushed)
 (
   this.write_to_sliders();
-  this.read_data();
+  data_pushed = 1;
 );
 
-
 function eval_spline(x)
-instance(xloc, yloc, c1, c2, c3, n_points)
-local()
-local(diff, diff_sq, idx, x_ptr)
+instance(xloc, yloc, spline_mem, n_points)
+local(c1, c2, c3, diff, diff_sq, idx, x_ptr)
 global()
 (
+  c1 = spline_mem;
+  c2 = spline_mem + n_points;
+  c3 = spline_mem + n_points * 2;
+
   idx = -1;
   x_ptr = xloc - 1;
   
@@ -218,6 +222,52 @@ global()
   diff_sq = diff * diff;
         
   yloc[idx] + c1[idx] * diff + c2[idx] * diff_sq + c3[idx] * diff * diff_sq
+);
+
+/* Duplication to avoid if-statement :( */
+function eval_spline_gfx(x)
+instance(xloc_gfx, yloc_gfx, spline_mem_gfx, n_points_gfx)
+local(c1, c2, c3, diff, diff_sq, idx, x_ptr)
+global()
+(
+  c1 = spline_mem_gfx;
+  c2 = spline_mem_gfx + n_points_gfx;
+  c3 = spline_mem_gfx + n_points_gfx * 2;
+
+  idx = -1;
+  x_ptr = xloc_gfx - 1;
+  
+  while(
+    idx += 1;
+    x_ptr += 1;
+    
+    x >= x_ptr[] && (idx < n_points_gfx)
+  );
+  
+  idx = max(0, idx - 1);
+  
+  diff = x - xloc_gfx[idx];
+  diff_sq = diff * diff;
+        
+  yloc_gfx[idx] + c1[idx] * diff + c2[idx] * diff_sq + c3[idx] * diff * diff_sq
+);
+
+function spline_block()
+local()
+global()
+instance(
+  gfx_locked, spline_mem, spline_mem_gfx, xloc_gfx, yloc_gfx, xloc, yloc, n_points_gfx, n_points,
+  data_pushed, /* Was data pushed? Update the spline */
+)
+(
+  !gfx_locked ? (
+    memcpy(spline_mem_gfx, spline_mem, 3 * n_points);
+    memcpy(xloc_gfx, xloc, n_points);
+    memcpy(yloc_gfx, yloc, n_points);
+    n_points_gfx = n_points;
+  );
+  
+  data_pushed ? this.read_data();
 );
 
 function handle_mouse(x, y, w, h)
@@ -315,23 +365,24 @@ instance(x_sliders, y_sliders, xloc, yloc, indices, n_points, start_slider, grab
 function draw(x, y, w, h)
 local(cx, cs, ds, x_cur, y_cur, y_new, x_new, ymin, ymax, in)
 global(gfx_x, gfx_y, gfx_a)
-instance(xloc, yloc, n_points, over, anim, next_in)
+instance(xloc, yloc, n_points, over, anim, next_in, gfx_locked)
 (
   this.handle_mouse(x, y, w, h);
-
+  
+  gfx_locked = 1;
   gfx_x = x;
-  gfx_y = y + h * (1.0 - this.eval_spline(0));
+  gfx_y = y + h * (1.0 - this.eval_spline_gfx(0));
   cx = 0;
   cs = 0;
   ds = 1 / w;
   x_cur = x + cx;
-  y_cur = y + h * (1.0 - this.eval_spline(cs));
+  y_cur = y + h * (1.0 - this.eval_spline_gfx(cs));
   ymin = y + 0.5 * h;
   ymax = y + 1.5 * h;
   colormodel(1.0);
   loop(w,
     x_new = x + cx;
-    y_new = y + h * (1.0 - this.eval_spline(cs));
+    y_new = y + h * (1.0 - this.eval_spline_gfx(cs));
     next_in = (y_new < ymax) && (y_new > ymin);
 
     y_new = min(max(y_new, ymin), ymax);
@@ -368,6 +419,7 @@ instance(xloc, yloc, n_points, over, anim, next_in)
     );
     cx += 1;
   );
+  gfx_locked = 0;
   
   /* Debugging
   gfx_x = 0;
@@ -386,10 +438,13 @@ local(SPLINE_SIZE, idx, dx)
 global()
 instance(
   x_sliders, y_sliders,
-  xloc, yloc, indices,
+  xloc, yloc,
+  xloc_gfx, yloc_gfx,
+  indices,
   initialized,
   temp_x, temp_y,
-  c1, c2, c3,
+  spline_mem,
+  spline_mem_gfx,
   n_points,
   MAX_NODES,
   start_slider,
@@ -408,9 +463,10 @@ instance(
   freemem = (indices = freemem) + SPLINE_SIZE;
   freemem = (temp_x = freemem) + SPLINE_SIZE;
   freemem = (temp_y = freemem) + SPLINE_SIZE;
-  freemem = (c1 = freemem) + SPLINE_SIZE;
-  freemem = (c2 = freemem) + SPLINE_SIZE;
-  freemem = (c3 = freemem) + SPLINE_SIZE;
+  freemem = (spline_mem = freemem) + 3 * SPLINE_SIZE;
+  freemem = (spline_mem_gfx = freemem) + 3 * SPLINE_SIZE;
+  freemem = (xloc_gfx = freemem) + SPLINE_SIZE;
+  freemem = (yloc_gfx = freemem) + SPLINE_SIZE;
   
   // Initialize as a straight line
   this.read_data();
