@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.33
+version: 0.35
 author: Joep Vanlier
-changelog: Correct range model selection.
+changelog: Fix bug non-MIDI mode (keyboard was no longer triggering). Fix bug play mode 1 (impulses were being sent). Refactor bigger update tick internals (handle this at the top level). Start work on glide mode.
 license: MIT
 provides:
   partials_dependencies/*
@@ -68,7 +68,7 @@ import saike_modal_impulses.jsfx-inc
 MAX_CUSTOM_PARTIALS = 1024;
 
 gfx_ext_retina = 1;
-version = 2;
+version = 3;
 
 string1.used_partials = string2.used_partials = string3.used_partials = string4.used_partials = string5.used_partials = 0;
 
@@ -163,14 +163,32 @@ instance()
   (2/(1+exp(-2*x)) - 1)
 );
 
+
+function update_freq()
+local()
+global(stft, k_glide, big_tick)
+instance(freq, target_freq)
+(
+  freq += k_glide * (target_freq - freq);
+  
+  big_tick ? (
+    stft ? (
+      this.set_pars_stft(freq);
+    ) : (
+      freq ? this.set_pars_td(freq);
+    );
+  );
+);
+
 function set_pars(f_0, vel)
 local()
 global(
   stft,
   relative_position, damp, freq_damp, inharmonic,
   position_vel, damp_vel, freq_damp_vel, inharmonic_vel,
+  glide,
 )
-instance(base_damp, f_damp, inharm, rel_position)
+instance(base_damp, f_damp, inharm, rel_position, freq, target_freq)
 (
   // position 0 to 1
   // damp -2 to 2
@@ -181,10 +199,11 @@ instance(base_damp, f_damp, inharm, rel_position)
   f_damp = 10^(min(max(-6, freq_damp + freq_damp_vel * vel), -1));
   inharm = 10^(min(max(-4, inharmonic + inharmonic_vel * vel), 0));
 
-  stft ? (
-    this.set_pars_stft(f_0);
+  ((!glide) || (freq == 0)) ? (
+    freq = f_0;
+    target_freq = f_0;
   ) : (
-    f_0 ? this.set_pars_td(f_0);
+    target_freq = f_0;
   );
 );
 
@@ -251,7 +270,6 @@ global()
   
   state += rate * (current_target - state);
 );
-
 
 function update_notes()
 instance(notes_on, active_note_mem, active_note_vel, active_note_state,
@@ -332,12 +350,7 @@ local(ref_pitch, scaling
 
 function force_update()
 (
-  string1.ticker += 1000;
-  string2.ticker += 1000;
-  string3.ticker += 1000;
-  string4.ticker += 1000;
-  string5.ticker += 1000;
-  midi.update_notes();
+  update_ticker = 0;
 );
 
 initialize_memory();
@@ -348,8 +361,12 @@ settings_changed = 1;
 settings_changed = 1;
 
 @block
+sample_time = 1 / srate;
+glide_decay = 12.0 / 1000;  // Decay in seconds
+k_glide = - sample_time * log(0.5) / glide_decay;
+
 midi_input = (play_mode >= 1);
-(play_mode != last_play_mode) ? (
+(floor(play_mode) != floor(last_play_mode)) ? (
   memset(midi.active_note_mem, 0, 5);
   midi.notes_on = 0;
   settings_changed = 1;
@@ -404,6 +421,10 @@ instance(active_note_mem, active_note_vel, notes_on)
 );
 
 midi.curSample += 1;
+!midi_input ? (
+  midi.update_fixed_notes();
+);
+
 midi.notes_remain ? (
   // Reset if MIDI stuff updated
   midi.midi_sample(midi_input) ? (
@@ -411,15 +432,27 @@ midi.notes_remain ? (
   );
 );
 
-!midi_input ? (
-  midi.update_fixed_notes();
+big_tick = update_ticker == 0;
+update_ticker += 1;
+(update_ticker > 128) ? (
+  update_ticker = 0;
 );
+
+big_tick ? (
+  midi.update_notes();
+);
+midi.note_on0 ? string1.update_freq();
+midi.note_on1 ? string2.update_freq();
+midi.note_on2 ? string3.update_freq();
+midi.note_on3 ? string4.update_freq();
+midi.note_on4 ? string5.update_freq();
+
 
 f_hn = 0;
 f_b = 0;
 
 stft ? (
-  (play_mode >= 1) ? (
+  (play_mode >= 2) ? (
     f_h += string1.impulse.eval_impulse() * 4;
     f_h += string2.impulse.eval_impulse() * 4;
     f_h += string3.impulse.eval_impulse() * 4;
@@ -533,7 +566,9 @@ file_var(0, version);
 
 file_var(0, MAX_CUSTOM_PARTIALS);
 file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
-version = 2;
+
+(version < 3) ? ( glide = 0; ) : ( file_var(0, glide); );
+version = 3;
 
 @gfx 1080 280
 //scaling = gfx_ext_retina == 2 ? 1 : 0;
@@ -1545,7 +1580,7 @@ logo.draw_logo(logomem, rle_mem, 0.45, 6, 6);
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.33 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.35 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
