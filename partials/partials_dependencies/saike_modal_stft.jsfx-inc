@@ -1,95 +1,124 @@
 @init
-function fft_mem(freemem, _fft_size)
-instance(fft_size
-         overlap_factor,
-         fft_interval,
-         in_fft_mem, out_fft_mem, window_mem,
-         input_mem, output_mem,
-         input_idx, fft_idx, output_idx,
-         fft_scaling_factor,
-         buffer_size)
+function fft_mem(freemem, _max_fft_size)
+instance(
+  max_fft_size,
+  buffer_size,
+  in_fft_mem, out_fft_mem, window_mem, input_mem, output_mem
+)
 global()
-local(gain, i, r, a0, a1, a2, a3, a4)
+local()
 (
-  fft_size = _fft_size;
+  max_fft_size = _max_fft_size;
   buffer_size = 65536;
   
   /* Make sure we start on a boundary */
   freemem = ceil(freemem / 65536) * 65536;
-  freemem = (in_fft_mem = freemem) + 2 * fft_size;
-  memset(in_fft_mem, 0, 2 * fft_size);
-  freemem = (out_fft_mem = freemem) + 2 * fft_size;
-  memset(out_fft_mem, 0, 2 * fft_size);
-  freemem = (window_mem = freemem) + 2 * fft_size;
-  memset(window_mem, 0, 2 * fft_size);
+  freemem = (in_fft_mem = freemem) + 2 * max_fft_size;
+  freemem = (out_fft_mem = freemem) + 2 * max_fft_size;
+  freemem = (window_mem = freemem) + 2 * max_fft_size;
   freemem = (input_mem = freemem) + buffer_size;
-  memset(input_mem, 0, buffer_size);
   freemem = (output_mem = freemem) + buffer_size;
-  memset(output_mem, 0, buffer_size);
-  
-  // Hann
-  a0 = 0.5;
-  a1 = 0.5;
-  a2 = a3 = a4 = 0;
-  overlap_factor = fft_size / ceil(fft_size/4);
-  gain = 5 / 0.375;//0.5 * 0.55;
-  
-  // Blackmann-Harris
-  
-  a0 = 0.35875;
-  a1 = 0.48829;
-  a2 = 0.14128;
-  a3 = 0.01168;
-  a4 = 0;
-  overlap_factor = fft_size / ceil(fft_size/3); // Actually attained overlap with a target of 3
-//  gain = 0.25 / 0.35875;
-  gain = 5 / 0.25796335495;
-  
-  fft_idx = output_idx = input_idx = 0;
-  fft_interval = fft_size / overlap_factor;
-  fft_scaling_factor = gain / overlap_factor / overlap_factor / fft_size / fft_size;
-    
-  i = 0;
-  loop(2 * fft_size,
-    r = (i + 0.5) / (2 * fft_size);
-    window_mem[i] = sqrt(fft_scaling_factor) * (a0 - a1 * cos(2 * $pi * r) + a2 * cos(4 * $pi * r) - a3 * cos(6 * $pi * r) + a4 * cos(8 * $pi * r));
-    i += 1;
-  );
   
   freemem
 );
 
-function string_mem(freemem, _fft_size, _fft_interval, _in_fft_mem, _out_fft_mem)
+
+function init_stft(_fft_size)
+instance(
+  max_fft_size
+  fft_size,
+  buffer_size,
+  
+  overlap_factor,
+  fft_interval,
+  in_fft_mem, out_fft_mem, window_mem,
+  input_mem, output_mem,
+  input_idx, fft_idx, output_idx,
+  fft_scaling_factor,
+)
+local(gain, i, r, a0, a1, a2, a3, a4)
+global()
+(
+  (fft_size != _fft_size) ? (    
+    fft_size = min(_fft_size, max_fft_size);
+    memset(in_fft_mem, 0, 2 * max_fft_size);
+    memset(out_fft_mem, 0, 2 * max_fft_size);
+    memset(window_mem, 0, 2 * max_fft_size);
+    memset(input_mem, 0, buffer_size);
+    memset(output_mem, 0, buffer_size);
+  
+    // Hann
+    a0 = 0.5;
+    a1 = 0.5;
+    a2 = a3 = a4 = 0;
+    overlap_factor = fft_size / ceil(fft_size/4);
+    gain = 5 / 0.375;//0.5 * 0.55;
+    
+    // Blackmann-Harris
+    
+    a0 = 0.35875;
+    a1 = 0.48829;
+    a2 = 0.14128;
+    a3 = 0.01168;
+    a4 = 0;
+    overlap_factor = fft_size / ceil(fft_size/3); // Actually attained overlap with a target of 3
+  //  gain = 0.25 / 0.35875;
+    gain = 5 / 0.25796335495;
+    
+    fft_idx = output_idx = input_idx = 0;
+    fft_interval = fft_size / overlap_factor;
+    fft_scaling_factor = gain / overlap_factor / overlap_factor / fft_size / fft_size;
+      
+    i = 0;
+    loop(2 * fft_size,
+      r = (i + 0.5) / (2 * fft_size);
+      window_mem[i] = sqrt(fft_scaling_factor) * (a0 - a1 * cos(2 * $pi * r) + a2 * cos(4 * $pi * r) - a3 * cos(6 * $pi * r) + a4 * cos(8 * $pi * r));
+      i += 1;
+    );
+    1
+  ) : 0;
+);
+
+function string_mem(freemem, _in_fft_mem, _out_fft_mem)
 instance(
   max_partial,
   bin_mem, coeff_mem, mix_mem, state_mem,
-  fft_size, fft_interval,
   in_fft_mem, out_fft_mem,
-  ticker,
-  fft_idx,
 )
 local()
 global()
 (
   // Allocate memory for this string, note that in and out fft_mem have to be preallocated.
-  ticker = 0;
   max_partial = 1024;
   freemem = (bin_mem = freemem) + 2 * max_partial;
-  memset(bin_mem, 0, 2 * max_partial);
   freemem = (coeff_mem = freemem) + 2 * max_partial;
-  memset(coeff_mem, 0, 2 * max_partial);
   freemem = (mix_mem = freemem) + 2 * max_partial;
-  memset(mix_mem, 0, 2 * max_partial);
   freemem = (state_mem = freemem) + 2 * max_partial;
-  memset(state_mem, 0, 2 * max_partial);
   
-  fft_idx = 0;
-  fft_size = _fft_size;
-  fft_interval = _fft_interval;
   in_fft_mem = _in_fft_mem;
   out_fft_mem = _out_fft_mem;
   
   freemem
+);
+
+function string_init(_fft_size, _fft_interval)
+local()
+instance(
+  max_partial, ticker,
+  bin_mem, coeff_mem, mix_mem, state_mem,
+  fft_idx, fft_size, fft_interval
+)
+global()
+(
+  memset(bin_mem, 0, 2 * max_partial);
+  memset(coeff_mem, 0, 2 * max_partial);
+  memset(mix_mem, 0, 2 * max_partial);
+  memset(state_mem, 0, 2 * max_partial);
+  
+  ticker = 0;
+  fft_idx = 0;
+  fft_size = _fft_size;
+  fft_interval = _fft_interval;
 );
 
 function set_pars_stft_basic(f_0)

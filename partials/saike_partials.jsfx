@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.36
+version: 0.37
 author: Joep Vanlier
-changelog: Expose glide/legato mode to UI. Reduce STFT artefacts that happen in glide mode when resonator switches bin. Allow glide time to be customized.
+changelog: Make FFT size configurable.
 license: MIT
 provides:
   partials_dependencies/*
@@ -35,6 +35,7 @@ slider20:second_note=52<0,127,1>-Midi note 2
 slider21:third_note=60<0,127,1>-Midi note 3
 slider22:fourth_note=64<0,127,1>-Midi note 4
 slider23:fifth_note=48<0,127,1>-Midi note 5
+slider24:fft_choice=1<0,4,1>-fft size
 slider52:glide_speed=0<0,1,1>-Glide [10-1000ms]
 slider53:legacy_gain=0<0,1,1>-Legacy mode
 slider54:brightness_vel=0<0,1,0.0001>-Brightness vel
@@ -85,15 +86,37 @@ force_fb.init_knob(0, 15.0, 1.0, 11, 0);
 partials.init_knob(16, 64, 32, 12, 0);
 glide_knob.init_knob(0, 1, 0, 52, 0);
 
+function stft_init()
+local()
+global(
+  string1.string_init, string2.string_init, string3.string_init, string4.string_init, string5.string_init,
+  stft_mem.init_stft,
+  stft_mem.fft_size, stft_mem.fft_interval,
+  fft_choice,
+)
+instance()
+(
+  stft_mem.init_stft(64 * (1 << fft_choice)) ? (
+    string1.string_init(stft_mem.fft_size, stft_mem.fft_interval);
+    string2.string_init(stft_mem.fft_size, stft_mem.fft_interval);
+    string3.string_init(stft_mem.fft_size, stft_mem.fft_interval);
+    string4.string_init(stft_mem.fft_size, stft_mem.fft_interval);
+    string5.string_init(stft_mem.fft_size, stft_mem.fft_interval);
+  );
+);
+
 function initialize_memory()
 local(logo_handle, freemem, lowcut, lowcut_freq, delay_ms, count)
 instance()
 global(
   rle_mem, logomem, logo_line_count,
+  gfx_stft_mem.init_stft,
+  stft_mem.init_stft,
   stft_mem.fft_mem, string1.string_mem, string2.string_mem, string3.string_mem, string4.string_mem, string5.string_mem,
   stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem,
   gfx_stft_mem.fft_mem, gfx_string.string_mem, gfx_stft_mem.in_fft_mem, gfx_stft_mem.out_fft_mem,
   gfx_stft_mem.fft_size, gfx_stft_mem.fft_interval,
+  gfx_string.string_init,
   bessel_roots,
   midi.init_midi,
   buffer.init_buffer,
@@ -102,18 +125,22 @@ global(
   srate,
   MAX_CUSTOM_PARTIALS,
   custom_partial_mem,
+  fft_choice,
 )
 (
   freemem = 0;
-  freemem = stft_mem.fft_mem(freemem, 64 * 4);
-  freemem = string1.string_mem(freemem, stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
-  freemem = string2.string_mem(freemem, stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
-  freemem = string3.string_mem(freemem, stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
-  freemem = string4.string_mem(freemem, stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
-  freemem = string5.string_mem(freemem, stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  freemem = stft_mem.fft_mem(freemem, 64 * 16);  // We allocate the maximum mem block here
+  freemem = string1.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  freemem = string2.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  freemem = string3.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  freemem = string4.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  freemem = string5.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  stft_init();
   
   freemem = gfx_stft_mem.fft_mem(freemem, 512);
-  freemem = gfx_string.string_mem(freemem, gfx_stft_mem.fft_size, gfx_stft_mem.fft_interval, gfx_stft_mem.in_fft_mem, gfx_stft_mem.out_fft_mem);
+  freemem = gfx_string.string_mem(freemem, gfx_stft_mem.in_fft_mem, gfx_stft_mem.out_fft_mem);
+  gfx_stft_mem.init_stft(512);
+  gfx_string.string_init(gfx_stft_mem.fft_size, gfx_stft_mem.fft_interval);
   
   freemem = (bessel_roots = freemem) + 2048;
   memset(bessel_roots, 0, 2048);
@@ -204,7 +231,10 @@ instance(base_damp, f_damp, inharm, rel_position, freq, target_freq)
   rel_position = min(max(0, relative_position + position_vel * vel), 1);
   base_damp = 10^(min(max(-2, damp + damp_vel * vel), 2));
   f_damp = 10^(min(max(-6, freq_damp + freq_damp_vel * vel), -1));
-  inharm = 10^(min(max(-4, inharmonic + inharmonic_vel * vel), 0));
+  
+  inharm = inharm * 0.8 + 0.2 * 10^(min(max(-4, inharmonic + inharmonic_vel * vel), 0));
+  
+  
 
   ((!glide) || (freq == 0)) ? (
     freq = f_0;
@@ -381,6 +411,8 @@ settings_changed = 1;
 
 @slider
 settings_changed = 1;
+
+stft_init();
 
 @block
 sample_time = 1 / srate;
