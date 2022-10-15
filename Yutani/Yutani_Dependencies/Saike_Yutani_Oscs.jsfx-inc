@@ -72,6 +72,91 @@ instance(t1, t2, t3, t4, t5, t6, t7, yn)
   t7.phase = 0.03256;
 );
 
+function init_glottis_model(tension)
+instance(norm, alpha, omega, shift, ishift, eps, time_e, dc_fix)
+local(r_d, r_a, r_k, r_g, time_a, time_p, coord, delta, integral, sin_time_end)
+global()
+(
+  r_d = 2.7 - (2.7 - 0.5) * tension;
+  r_a = 0.048 * r_d - 0.01;
+  r_k = 0.118 * r_d + 0.224;
+  
+  coord = 0.5 + 1.2 * r_k;
+  r_g = 0.25 * r_k * coord / (0.11 * r_d - r_a * coord);
+  
+  time_a = r_a;
+  time_p = 1.0 / (2.0 * r_g);
+  time_e = time_p + time_p * r_k;
+  
+  eps = 1.0 / time_a;
+  shift = exp(- eps * (1.0 - time_e));
+  ishift = 1.0 / (1.0 - shift);
+  delta = 1.0 - shift;
+  
+  integral = 0.5 * (time_e - time_p) - (time_a * (shift - 1.0) + (1.0 - time_e) * shift) / delta;
+  
+  omega = $pi / time_p;
+  sin_time_end = sin(omega * time_e);
+  
+  alpha = log(- $pi * sin_time_end * integral / (time_p * 2)) / (time_p * 0.5 - time_e);
+  norm = - 1.0 / (sin_time_end * exp(alpha * time_e));
+  
+  // Tension / DC curve was fitted with a polynomial.
+  dc_fix = - 0.031587518840272985 * tension * tension + 0.07600662216938714 * tension - 0.032157810830499414;
+);
+
+function eval_glottis_model(t)
+local()
+global()
+instance(norm, alpha, omega, shift, ishift, eps, time_e)
+(
+  t >= 1.0 ? t -= 1.0;
+  t > time_e ? (
+    (- exp(- eps * (t - time_e)) + shift) * ishift
+  ) : (
+    norm * exp(alpha * t) * sin(omega * t)
+  )
+);
+
+function _basic_os_elliptical(x)
+local(y)
+global()
+instance(s1, s2, s3, s4, s5, s6, s7, s8)
+(
+  y = 0.00160811268695777 * x + s1;
+  s1 = -0.002690023465284187 * x - -5.754080145740055 * y + s2;
+  s2 = 0.005114259115904927 * x - 15.442306479203816 * y + s3;
+  s3 = -0.004200113297822007 * x - -24.96856414196681 * y + s4;
+  s4 = 0.005571998780190968 * x - 26.46093598823714 * y + s5;
+  s5 = -0.004200113297822011 * x - -18.76056410655989 * y + s6;
+  s6 = 0.005114259115904929 * x - 8.675239800010395 * y + s7;
+  s7 = -0.002690023465284186 * x - -2.3907945048600663 * y + s8;
+  s8 = 0.0016081126869577696 * x - 0.3008177359868148 * y;
+  
+  y
+);
+
+function eval_glottis_4x(dt)
+local(os_dt, y)
+global(glottis_position)
+instance(t, dc_fix, last_glottis)
+(
+  (last_glottis != glottis_position) ? (
+    this.init_glottis_model(glottis_position);
+  );
+  last_glottis = glottis_position;
+
+  os_dt = 0.25 * dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)); t += os_dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)); t += os_dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)); t += os_dt;
+  y = this.os._basic_os_elliptical(this.eval_glottis_model(t)) - dc_fix; t += os_dt;
+  
+  t >= 1.0 ? t -= 1.0;
+  
+  y
+);
+
 function ssaw(dt)
 local(from_phase)
 global(srate, ssaw_detune)
@@ -1534,6 +1619,8 @@ local(idt, decay)
     this.comb_osc(-decay, 0.5 * idt)
   ) : ( type == 7 ) ? (
     this.ssaw(dt);
+  ) : ( type == 8 ) ? (
+    this.eval_glottis_4x(dt);
   );
 );
 
@@ -1639,7 +1726,7 @@ local(osc1_amp, osc2_amp, y, error1, error2)
 (
   error1 = target_dt1 - dt1;
   error2 = target_dt2 - dt2;
-
+  
   // Exponential glide
   dt1 += k_glide * error1;
   dt2 += k_glide * error2;
