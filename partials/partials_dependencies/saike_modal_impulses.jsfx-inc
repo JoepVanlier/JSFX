@@ -64,10 +64,86 @@ instance()
   impulse_init_2 = sin(ip - 2.0 * w); 
 );
 
+function init_glottis_model(tension)
+instance(norm, alpha, omega, shift, ishift, eps, time_e, dc_fix)
+local(r_d, r_a, r_k, r_g, time_a, time_p, coord, delta, integral, sin_time_end)
+global()
+(
+  r_d = 2.7 - (2.7 - 0.5) * tension;
+  r_a = 0.048 * r_d - 0.01;
+  r_k = 0.118 * r_d + 0.224;
+  
+  coord = 0.5 + 1.2 * r_k;
+  r_g = 0.25 * r_k * coord / (0.11 * r_d - r_a * coord);
+  
+  time_a = r_a;
+  time_p = 1.0 / (2.0 * r_g);
+  time_e = time_p + time_p * r_k;
+  
+  eps = 1.0 / time_a;
+  shift = exp(- eps * (1.0 - time_e));
+  ishift = 1.0 / (1.0 - shift);
+  delta = 1.0 - shift;
+  
+  integral = 0.5 * (time_e - time_p) - (time_a * (shift - 1.0) + (1.0 - time_e) * shift) / delta;
+  
+  omega = $pi / time_p;
+  sin_time_end = sin(omega * time_e);
+  
+  alpha = log(- $pi * sin_time_end * integral / (time_p * 2)) / (time_p * 0.5 - time_e);
+  norm = - 1.0 / (sin_time_end * exp(alpha * time_e));
+  
+  // Tension / DC curve was fitted with a polynomial.
+  dc_fix = - 0.031587518840272985 * tension * tension + 0.07600662216938714 * tension - 0.032157810830499414;
+);
+
+function _basic_os_elliptical(x)
+local(y)
+global()
+instance(s1, s2, s3, s4, s5, s6, s7, s8)
+(
+  y = 0.0007868740588125253 * x + s1;
+  s1 = -0.0007670892790420622 * x - -5.781087104768547 * y + s2;
+  s2 = 0.0019303662582700637 * x - 15.54871954784845 * y + s3;
+  s3 = -0.000765483630777322 * x - -25.161125911631977 * y + s4;
+  s4 = 0.0019383391529283905 * x - 26.658540156050964 * y + s5;
+  s5 = -0.0007654836307773235 * x - -18.87946192303874 * y + s6;
+  s6 = 0.0019303662582700629 * x - 8.713110997933239 * y + s7;
+  s7 = -0.0007670892790420616 * x - -2.394469933585077 * y + s8;
+  s8 = 0.0007868740588125258 * x - 0.30013172567281354 * y;
+
+  y
+);
+
+function eval_glottis_model(t)
+local()
+global()
+instance(norm, alpha, omega, shift, ishift, eps, time_e)
+(
+  t >= 1.0 ? t -= 1.0;
+  t > time_e ? (
+    (- exp(- eps * (t - time_e)) + shift) * ishift
+  ) : (
+    norm * exp(alpha * t) * sin(omega * t)
+  )
+);
+
+function eval_glottis_4x(t, dt)
+local(os_dt)
+global(srate)
+instance(dc_fix)
+(
+  os_dt = 0.25 * dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)); t += os_dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)); t += os_dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)); t += os_dt;
+  this.os._basic_os_elliptical(this.eval_glottis_model(t)) - dc_fix
+);
+
 function update_impulse_note(state, inverse_brightness)
 instance(
   impulse_type, clipped_inverse,
-  t, y1, y2, len, scale,
+  t, y1, y2, len, scale, released, osc_time,
 )
 local()
 global(
@@ -79,6 +155,7 @@ global(
   
   /* State 1 is press, -1 is release */
   (state > 0) ? (
+    released = 0;
     t = 0;
     impulse_type = floor(play_mode) - 1;
     ((impulse_type == 1) || (impulse_type == 2)) ? (
@@ -89,24 +166,38 @@ global(
       scale = pow(10, 1 - 3 * clipped_inverse);
       impulse_type == 2 ? this._impulse_svf(1.0 - clipped_inverse, 0);
     ) : ( impulse_type == 3 ) ? (
-      len = impulse_length * 1000;
-    );
+      y1 = impulse_init_1;
+      y2 = impulse_init_2;
+      len = impulse_length;
+      this._impulse_svf(1.0 - clipped_inverse, 0);
+    )/* : ( impulse_type == 4 ) ? (
+      // LF-model
+      osc_time > 1.0 ? osc_time = 0.0;
+      y1 = impulse_init_1;
+      y2 = impulse_init_2;
+      len = impulse_length;
+      this.glottis.init_glottis_model(1.0 - clipped_inverse);
+    );*/
+  ) : ( state < -0.1 ) ? (
+    released = 1;
   );
 );
 
-
-function eval_impulse()
+function eval_impulse(freq)
 local(y0, loc)
-global(impulse_window_coeff, impulse_halflength)
+global(impulse_window_coeff, impulse_halflength, srate)
 instance(
   impulse_type,
   t, y1, y2,
-  b0, b1, b2, white, pink,
+  b0, b1, b2, white, pink, glot,
   len, scale,
+  released, dt
+  osc_time,
 )
 (
   t += 1;
   (t < len) ? (
+    // Rise phase
     (impulse_type == 1) ? (
       y0 = impulse_window_coeff * y1 - y2;
       y2 = y1;
@@ -128,7 +219,10 @@ instance(
       
       this._impulse_svf_lp(5000 * (y0 + 1) * pink);
     ) : (impulse_type == 3) ? (
-      // Breathy (placeholder)
+      // Breathy
+      y0 = impulse_window_coeff * y1 - y2;
+      y2 = y1;
+      y1 = y0;
       
       // Cheapo pink noise
       // Stolen from: https://www.firstpr.com.au/dsp/pink-noise/#Filtering
@@ -137,18 +231,57 @@ instance(
       b1 = 0.96300 * b1 + white * 0.2965164;
       b2 = 0.57000 * b2 + white * 1.0526913;
       pink = b0 + b1 + b2 + white * 0.1848;
-      2000 * pink 
-    );
+      this._impulse_svf_lp(1000 * y0 * pink);
+    )/* : (impulse_type == 4) ? (
+      // Glottis
+      y0 = impulse_window_coeff * y1 - y2;
+      y2 = y1;
+      y1 = y0;
+      
+      dt = freq / srate;
+      glot = this.glottis.eval_glottis_4x(osc_time, dt);
+      osc_time += dt;
+      osc_time = osc_time >= 1.0 ? osc_time - 1.0 : osc_time;
+      glot * y0 * 300
+    );*/
   ) : (
-    0
+    // Release phase
+    (impulse_type == 3) ? (
+      (t == len) ? y1 = 1.0;
+      white = rand() - 0.5;
+      b0 = 0.99765 * b0 + white * 0.0990460;
+      b1 = 0.96300 * b1 + white * 0.2965164;
+      b2 = 0.57000 * b2 + white * 1.0526913;
+      pink = b0 + b1 + b2 + white * 0.1848;
+      released ? (
+        y1 *= 0.999;
+      );
+      
+      this._impulse_svf_lp(1000 * y0 * pink);
+    )/* : (impulse_type == 4) ? (
+      (t == len) ? y1 = 1.0;
+      dt = freq / srate;
+      glot = this.glottis.eval_glottis_4x(osc_time, dt);
+      osc_time += dt;
+      osc_time = osc_time >= 1.0 ? osc_time - 1.0 : osc_time;
+      released ? (
+        y1 *= 0.999;
+      );
+      
+      glot * y1 * 300
+    );*/
   )
 );
 
 function impulse_alive(fft_size)
 local()
 global()
-instance(t, len)
+instance(t, len, y1, released, impulse_type)
 (
-  t < (len + fft_size)
+  ((impulse_type == 3) || (impulse_type == 4)) ? (
+    (y1 > 0.00001) || released
+  ) : (
+    t < (len + fft_size)
+  );
 );
 
