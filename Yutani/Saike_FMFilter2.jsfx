@@ -1,8 +1,8 @@
 desc:Saike FM Filter 2
 tags: audio-rate filters
-version: 0.13
+version: 0.14
 author: Joep Vanlier
-changelog: Fix retina issue.
+changelog: Add MIDI option to always trigger on note on (irrespective of whether there was a previous one).
 license: MIT
 about:
   # An FM filter plugin
@@ -37,8 +37,8 @@ slider6:placeholder=0<0,1,1>-Deprecated
 slider7:placeholder=0<0,1,1>-Deprecated
 slider8:placeholder=0<0,1,1>-Deprecated
 slider9:glide_time=.4<0,1,.00001>-Deprecated
-slider10:amplitude_envelope_mode=0<0,3,1{Off,MIDI,Threshold,Proportional}>-Amplitude Envelope Mode
-slider11:filter_envelope_mode=0<0,3,1{Off,MIDI,Threshold,Proportional}>-Filter Envelope Mode
+slider10:amplitude_envelope_mode=0<0,3,1{Off,MIDI Legato,Threshold,MIDI Triggered,Proportional}>-Amplitude Envelope Mode
+slider11:filter_envelope_mode=0<0,4,1{Off,MIDI Legato,Threshold,MIDI Triggered,Proportional}>-Filter Envelope Mode
 slider12:reset_fm_on_release=0<0,1,1>-reset_fm_on_release
 slider13:placeholder=0<0,1,1>-Deprecated
 slider14:placeholder=0<0,1,1>-Deprecated
@@ -468,12 +468,20 @@ m_notes_on = midi.notesOn > 0;
 amp_envelope = 
   (amplitude_envelope_mode == 0) ? 1 :
   (amplitude_envelope_mode == 1) ? amp_env.update_envelope(m_notes_on) : 
-  (amplitude_envelope_mode == 2) ? amp_env.follower(max(abs(spl0), abs(spl1)) > amp_sustain) : 0;
+  (amplitude_envelope_mode == 2) ? amp_env.follower(max(abs(spl0), abs(spl1)) > amp_sustain) :
+  (amplitude_envelope_mode == 3) ? (
+    midi.newNote ? amp_env.tEnvelope = 0;
+    amp_env.update_envelope(m_notes_on)
+  ) : 0;
 
 cutoff_envelope = 
   (filter_envelope_mode == 0) ? 0 :
   (filter_envelope_mode == 1) ? cutoff_env.update_envelope(m_notes_on) :
-  (filter_envelope_mode == 2) ? cutoff_env.follower(max(abs(spl0), abs(spl1)) > cutoff_sustain) : 0;
+  (filter_envelope_mode == 2) ? cutoff_env.follower(max(abs(spl0), abs(spl1)) > cutoff_sustain) : 
+  (filter_envelope_mode == 3) ? (
+    midi.newNote ? cutoff_env.tEnvelope = 0;
+    cutoff_env.update_envelope(m_notes_on)
+  ) : 0;
 
 
 // Filter modulation section
@@ -1157,9 +1165,10 @@ FILTER_MODE_SELECT_BUTTON = 11;
 gfx_setfont(KNOB_FONT);
 y_ref = cY - 1.25*knobSize - 1;
 drawSelectionButton("Off", cX - 2*knobSize, y_ref + 0.5*y_move, ww, hh, 0, FILTER_MODE_SELECT_BUTTON, "No filter modulation.");
-drawSelectionButton("MIDI", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI.");
-drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 2, FILTER_MODE_SELECT_BUTTON, "Thresholded.");
-//drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 3, FILTER_MODE_SELECT_BUTTON, "Proportional to input RMS.");
+drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
+drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
+drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, FILTER_MODE_SELECT_BUTTON, "Thresholded.");
+//drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 4, FILTER_MODE_SELECT_BUTTON, "Proportional to input RMS.");
 
 cX += 1.25 * knobSpacing;
 
@@ -1206,7 +1215,7 @@ cX += 2.5 * knobSize;
 
 envSustainKnob.knob_set("", filter_envelope_mode > 0, cutoff_sustain);
 
-( filter_envelope_mode < 2 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
+( (filter_envelope_mode < 2) || filter_envelope_mode == 3 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
 : ( filter_envelope_mode == 2 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
 
 dial_animation ? (
@@ -1521,8 +1530,9 @@ gfx_setfont(KNOB_FONT);
 y_ref = cY - 1.25*knobSize - 1;
 
 drawSelectionButton("Off", cX - 2*knobSize, y_ref + 0.5*y_move, ww, hh, 0, AMPLITUDE_SELECT_BUTTON, "No amplitude modulation.");
-drawSelectionButton("MIDI", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI.");
-drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 2, AMPLITUDE_SELECT_BUTTON, "Thresholded.");
+drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
+drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
+drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, AMPLITUDE_SELECT_BUTTON, "Thresholded.");
 //drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Proportional to input RMS.");
 
 cX += 1.25 * knobSpacing;
@@ -1574,7 +1584,7 @@ activeModifier == 1 ? ( ampDecayKnob.knob_modifier_processMouse(0, amp_decay_vel
 cX += 2.5 * knobSize;
 
 ampSustainKnob.knob_set("", amplitude_envelope_mode > 0, amp_sustain);
-( amplitude_envelope_mode < 2 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
+( (amplitude_envelope_mode < 2) || amplitude_envelope_mode == 3 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
 : ( amplitude_envelope_mode == 2 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
 
 dial_animation ? (
