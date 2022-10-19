@@ -1,8 +1,8 @@
 desc:Saike FM Filter 2
 tags: audio-rate filters
-version: 0.14
+version: 0.15
 author: Joep Vanlier
-changelog: Add MIDI option to always trigger on note on (irrespective of whether there was a previous one).
+changelog: Add MIDI option to always trigger on note on (irrespective of whether there was a previous one). Fix LFO labels not showing up correctly. Fix issue with amplitude envelope settings not being stored. Fix issue with envelope variable accidentally being shared between amp and filter envelope. Did some preparatory work for improving the threshold mode.
 license: MIT
 about:
   # An FM filter plugin
@@ -90,9 +90,9 @@ slider52:placeholder=0<0,1,1>-Deprecated
 slider53:fb=0<0, 1, .000001>-Feedback
 
 slider54:placeholder=0<0,1,1>-Deprecated
-slider55:placeholder=0<0,1,1>-Deprecated
-slider56:placeholder=0<0,1,1>-Deprecated
-slider57:placeholder=0<0,1,1>-Deprecated
+slider55:amp_atk=0<0,1,0.000001>-Amplitude Envelope Attack
+slider56:amp_decay=0<0,1,0.000001>-Amplitude Envelopep Decay
+slider57:amp_sustain=0<0,1,0.00001>-Amplitude Envelope Sustain
 slider58:pitchBendRange=0<0,12,1>-Pitch bend range
 
 slider59:f_lfo_amnt=0<0,1,.00001>-Free LFO amount
@@ -129,6 +129,74 @@ lastOversample = 0;
 two_pi = 2 * $pi;
 freemem = 0;
 
+function init_tresh_window(freemem, buffer_size)
+instance()
+local()
+global()
+(
+  this.initBuffer(freemem, freemem + buffer_size);
+  
+  freemem + buffer_size
+);
+
+function update_thresh_window(thresh, env)
+instance(read_ptr, write_ptr)
+local()
+global()
+(
+  read_ptr = write_ptr;
+  this.writeBuffer(thresh);
+  this.writeBuffer(env);
+);
+
+function draw_thresh_window(x, y, w, h)
+instance(buffer, buffer_max, read_ptr)
+local(samples_per_pixel, sample_count, ptr, acc_thresh, acc_env, icount, thresh_last, env_last,
+      xp, yp)
+global()
+(
+  sample_count = 20000;
+  samples_per_pixel = max(1, floor(sample_count / w));
+  icount = 1.0 / samples_per_pixel;
+  
+  gfx_set(0, 0, 0, 0.7);
+  gfx_rect(x, y, w, h);
+  
+  xp = x + w;
+  ptr = read_ptr - 4;
+  thresh_last = ptr[];
+  env_last = ptr[1];
+  loop(w,
+    acc_thresh = 0;
+    acc_env = 0;
+    
+    loop(samples_per_pixel,
+      acc_thresh = max(acc_thresh, ptr[]);
+      acc_env += ptr[1];
+      ptr -= 2;
+      ptr < buffer ? ptr += (buffer_max - buffer) - 1;
+    );
+    acc_env *= icount;
+    gfx_set(0.2, 1.0, 0.2, 0.1);
+    gfx_line(xp, y + h, xp - 1, y + h - acc_env * h, 1);
+    gfx_set(0.2, 1.0, 0.2, 1.0);
+    gfx_line(xp, y + h - env_last * h, xp - 1, y + h - acc_env * h, 1);
+    gfx_line(xp, y + h - env_last * h - 1, xp - 1, y + h - acc_env * h - 1, 1);
+    gfx_set(1.0, 0.2, 1.0, 0.1);
+    gfx_line(xp, y + h, xp - 1, y + h - acc_thresh * h, 1);
+    gfx_set(1.0, 0.2, 1.0, 1.0);
+    gfx_line(xp, y + h - thresh_last * h, xp - 1, y + h - acc_thresh * h, 1);
+    gfx_line(xp, y + h - thresh_last * h - 1, xp - 1, y + h - acc_thresh * h - 1, 1);
+    xp -= 1;
+    
+    thresh_last = acc_thresh;
+    env_last = acc_env;
+  );
+  
+  //gfx_set(0.1, 0.3, 0.1, 1.0);
+  //gfx_rect(x - 1, y - 1, w + 2, h + 2, 0);
+);
+
 freemem = (midimem = freemem) + 32768;
 freemem = (note_history = freemem) + 32768;
 midi.initializeMIDI(midimem, note_history, 1, 1);
@@ -145,6 +213,9 @@ freemem = (sinc_tmp = freemem) + 10000;
 
 freemem = (l_buffer = freemem) + 2001;
 freemem = (r_buffer = freemem) + 2001;
+
+freemem = filter_thresh.init_tresh_window(freemem, 50000);
+freemem = amplitude_thresh.init_tresh_window(freemem, 50000);
 
 // Chorus materials
 l_delay.initBuffer(l_buffer, l_buffer + 2000);
@@ -468,8 +539,13 @@ m_notes_on = midi.notesOn > 0;
 amp_envelope = 
   (amplitude_envelope_mode == 0) ? 1 :
   (amplitude_envelope_mode == 1) ? amp_env.update_envelope(m_notes_on) : 
-  (amplitude_envelope_mode == 2) ? amp_env.follower(max(abs(spl0), abs(spl1)) > amp_sustain) :
-  (amplitude_envelope_mode == 3) ? (
+  (amplitude_envelope_mode == 2) ? (
+    amp_meter = max(abs(spl0), abs(spl1));
+    amplitude_env = amp_env.follower(amp_meter > amp_sustain);
+    
+    amplitude_thresh.update_thresh_window(amp_meter, amplitude_env);
+    amp_env
+  ) : (amplitude_envelope_mode == 3) ? (
     midi.newNote ? amp_env.tEnvelope = 0;
     amp_env.update_envelope(m_notes_on)
   ) : 0;
@@ -477,7 +553,13 @@ amp_envelope =
 cutoff_envelope = 
   (filter_envelope_mode == 0) ? 0 :
   (filter_envelope_mode == 1) ? cutoff_env.update_envelope(m_notes_on) :
-  (filter_envelope_mode == 2) ? cutoff_env.follower(max(abs(spl0), abs(spl1)) > cutoff_sustain) : 
+  (filter_envelope_mode == 2) ? (
+    filt_meter = max(abs(spl0), abs(spl1));
+    filt_env = cutoff_env.follower(filt_meter > cutoff_sustain);
+    
+    filter_thresh.update_thresh_window(filt_meter, filt_env);
+    filt_env
+  ) : 
   (filter_envelope_mode == 3) ? (
     midi.newNote ? cutoff_env.tEnvelope = 0;
     cutoff_env.update_envelope(m_notes_on)
@@ -904,811 +986,867 @@ gfx_setfont(HINT_FONT, "Arial", floor(13 * (1+fontscaling)));
 TOGGLE_FONT = 9;
 gfx_setfont(TOGGLE_FONT, "Arial", floor(13 * (1+fontscaling)));
 
+
+function drive_panel()
+(
+  nextPanel = drawPanel(s_DRIVE, cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight, 1);
+  
+  style == 0 ? (
+    hotness_meter = tanh(54*sqrt(hotness_rmsq));
+    gfx_set(hotness_meter+.1, .1, .1, hotness_meter);
+    gfx_rect(cX - 2.5*knobSpacing+1, cY - .28*panelHeight, 9, 9);
+  );
+  
+  driveKnob.knob_set(sprintf(1, "%.1f dB", drive), 1, (drive + 6)/54);
+  driveKnob.drawKnob(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", 1.0);
+  dial_animation ? (
+    driveKnob.knob_draw_modifier((current_drive - drive) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    driveKnob.knob_draw_modifier((current_drive - drive) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  driveKnob.knob_draw_modifier(drive_vel / 54, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( driveKnob.knob_modifier_processMouse(0, drive_vel / 54) ? ( drive_vel = driveKnob.value * 54; );
+  ) : driveKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 6/54+.000001) ? ( drive = driveKnob.value * 54 - 6; slider_automate(drive); );
+   
+  cX += 2.5 * knobSize;
+  
+  postBoost.knob_set(sprintf(1, "%.1f dB", boost), 1, (boost + 6)/54);
+  postBoost.drawKnob(cX, cY, knobSize, "Output Gain", "Output Gain", 1.0);
+  dial_animation ? (
+    postBoost.knob_draw_modifier((current_boost - boost) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    postBoost.knob_draw_modifier((current_boost - boost) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  postBoost.knob_draw_modifier(boost_vel / 54, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( postBoost.knob_modifier_processMouse(0, boost_vel / 54) ? ( boost_vel = postBoost.value * 54; );
+  ) : postBoost.knob_processMouse(mouse_x, mouse_y, mouse_cap, 6/54+.000001) ? ( boost = postBoost.value * 54 - 6; slider_automate(boost); );
+
+  cX = nextPanel + panelSpacing;
+);
+
+function filter_panel()
+(
+  nextPanel = drawPanel(s_FILTER, cX, cY - .53*panelHeight + .2*knobSize, 22.75*knobSpacing, panelHeight, 1);
+  
+  cX += 2 * knobSpacing;
+  cX += knobSize;
+  gfx_setfont(KNOB_FONT);
+  y_move = .4 * knobSize;
+  ww = 1.5*knobSize;
+  hh = .35 * knobSize;
+  FILTER_SELECT_BUTTON = 25;
+  y_ref = cY - 1.25*knobSize - 1;
+  drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON, "2-pole linear state variable filter (12 dB/oct).");
+  drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON, "4-pole linear state variable filter (12 dB/oct)");
+  drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, FILTER_SELECT_BUTTON, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).");
+  drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, FILTER_SELECT_BUTTON, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).");
+  drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, FILTER_SELECT_BUTTON, "2-pole linear state variable filter where\nthe approximate resonance is rectified.");
+  drawSelectionButton("Steiner", cX - 2*knobSize, y_ref + 5*y_move, ww, hh, 15, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.");
+  drawSelectionButton("SteinerA", cX - 2*knobSize, y_ref + 6*y_move, ww, hh, 16, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.");
+  
+  drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, FILTER_SELECT_BUTTON, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).");
+  drawSelectionButton("MS-20A", cX - 0.25*knobSize, y_ref + 1*y_move, ww, hh, 6, FILTER_SELECT_BUTTON, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).");
+  drawSelectionButton("Moog", cX - 0.25*knobSize, y_ref + 2*y_move, ww, hh, 3, FILTER_SELECT_BUTTON, "Moog emulation (24 dB/oct).");
+  drawSelectionButton("Ladder", cX - 0.25*knobSize, y_ref + 3*y_move, ww, hh, 4, FILTER_SELECT_BUTTON, "Ladder filter with two stages (12 dB/oct).");
+  drawSelectionButton("303", cX - 0.25*knobSize, y_ref + 4*y_move, ww, hh, 5, FILTER_SELECT_BUTTON, "Blaukraut's 303 filter emulation");
+  drawSelectionButton("nlSVF2p", cX - 0.25*knobSize, y_ref + 5*y_move, ww, hh, 10, FILTER_SELECT_BUTTON, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+  drawSelectionButton("nlSVF4p", cX - 0.25*knobSize, y_ref + 6*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+  
+  drawSelectionButton("Bent 4p", cX + 1.5*knobSize, y_ref, ww, hh, 17, FILTER_SELECT_BUTTON, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.");
+  drawSelectionButton("Pillow2p", cX + 1.5*knobSize, y_ref + 1*y_move, ww, hh, 18, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter");
+  drawSelectionButton("Pillow4p", cX + 1.5*knobSize, y_ref + 2*y_move, ww, hh, 19, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter");
+  drawSelectionButton("Pillow2pA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 20, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter w/ clipper in feedback");
+  drawSelectionButton("Pillow4pA", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 21, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter w/ clipper in feedback");
+  drawSelectionButton("Pillow2pS", cX + 1.5*knobSize, y_ref + 5*y_move, ww, hh, 22, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
+  drawSelectionButton("Pillow4pS", cX + 1.5*knobSize, y_ref + 6*y_move, ww, hh, 23, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
+  
+  cX += 4.25*knobSize;
+  
+  center = .5 * sampling_ratio * srate * exp( (1-clamp(cutoff, 0, .99)) * log(20/22050) );
+  cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff);
+  cutoffKnob.drawKnob(cX, cY, knobSize, "Cutoff", "Filter Cutoff", 1.0);
+  
+  dial_animation ? (
+    cutoffKnob.knob_draw_modifier(sliderCutoffL - cutoff, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    cutoffKnob.knob_draw_modifier(sliderCutoffR - cutoff, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  
+  cutoffKnob.knob_draw_modifier(cutoff_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  cutoffKnob.knob_draw_modifier(cutoff_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  cutoffKnob.knob_draw_modifier(cutoff_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+  
+  activeModifier == 3 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_flfo) ? ( cutoff_flfo = cutoffKnob.value; );
+  ) : activeModifier == 2 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_mod) ? ( cutoff_mod = cutoffKnob.value; );
+  ) : activeModifier == 1 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_vel) ? ( cutoff_vel = cutoffKnob.value; );
+  ) : cutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff = cutoffKnob.value; slider_automate(cutoff); check_safety(); );
+  
+  cX += knobSize*2.5;
+  resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), 1, resonance);
+  resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Filter Resonance", 1.0);
+  dial_animation ? (
+    resonanceKnob.knob_draw_modifier(sliderReso - resonance, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    resonanceKnob.knob_draw_modifier(sliderReso - resonance, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  resonanceKnob.knob_draw_modifier(reso_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  resonanceKnob.knob_draw_modifier(reso_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  resonanceKnob.knob_draw_modifier(reso_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+  activeModifier == 3 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_flfo) ? ( reso_flfo = resonanceKnob.value; );
+  ) : activeModifier == 2 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_mod) ? ( reso_mod = resonanceKnob.value; );
+  ) : activeModifier == 1 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_vel) ? ( reso_vel = resonanceKnob.value; );
+  ) : resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
+   
+  cX += knobSize*2.7;
+  
+  morphKnob.knob_set("", 1, morph);
+  morphKnob.drawKnob(cX, cY, knobSize, "Morph", "Filter Morph", 1.0);
+  
+  dial_animation ? (
+    morphKnob.knob_draw_modifier(sliderMorphL - morph, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    morphKnob.knob_draw_modifier(sliderMorphR - morph, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  
+  morphKnob.knob_draw_modifier(morph_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( morphKnob.knob_modifier_processMouse(0, morph_vel) ? ( morph_vel = morphKnob.value; );
+  ) : morphKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( morph = morphKnob.value; slider_automate(morph); );
+  
+  
+  gfx_set(1,1,1,1);
+  drawKnobLabels(knobSize*1.25, 0, "LP");
+  drawKnobLabels(knobSize*1.25, 1/4, "BP");
+  drawKnobLabels(knobSize*1.25, 2/4, "HP");
+  drawKnobLabels(knobSize*1.25, 3/4, "BR");
+  drawKnobLabels(knobSize*1.25, 4/4, "LP");
+  
+  cX += knobSize*2.65;
+  
+  keyFollowKnob.active = 1;
+  keyFollowKnob.value = key_follow;
+  keyFollowKnob.drawKnob(cX, cY, knobSize, "Follow", "Follow MIDI pitch", 1.0);
+  
+  keyFollowKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+    key_follow = keyFollowKnob.value;
+    slider_automate(key_follow);
+  );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function fm_panel()
+(
+  nextPanel = drawPanel(s_FFM, cX, cY - .53*panelHeight + .2*knobSize, 13.5*knobSpacing, panelHeight, 1);
+  cX += 2.375*knobSize;
+  gfx_setfont(KNOB_FONT);
+  y_move = .4 * knobSize;
+  ww = 1.3*knobSize;
+  hh = .35 * knobSize;
+  FM_MODE_BUTTON = 37;
+  drawSelectionButton("MIDI Sin", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, FM_MODE_BUTTON, -1);
+  drawSelectionButton("MIDI |Sin|", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 1, FM_MODE_BUTTON, -1);
+  drawSelectionButton("MIDI Tri", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 4, FM_MODE_BUTTON, -1);
+  drawSelectionButton("Self", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 2, FM_MODE_BUTTON, -1);
+  drawSelectionButton("Self Abs", cX - 2*knobSize, cY-1.1*knobSize + 5*y_move, ww, hh, 3, FM_MODE_BUTTON, -1);
+  drawSelectionButton("MIDI Sqr", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 5, FM_MODE_BUTTON, -1);
+  cX += .65*knobSize;
+  
+  fmlevelKnob.knob_set("", 1, fm_amnt);
+  fmLevelKnob.drawKnob(cX, cY, knobSize, "FM Level", "FM Level\nLevel of FM modulation", 1.0);
+  
+  resetFmToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, reset_fm_on_release, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on release.\n\nBy default, the FM phase resets on note. This enables\nan additional reset on release as well.");
+  reset_fm_on_release = resetFmToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  dial_animation ? (
+    fmlevelKnob.knob_draw_modifier(current_fm_amnt - fm_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    fmlevelKnob.knob_draw_modifier(current_fm_amnt - fm_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  fmLevelKnob.knob_draw_modifier(fm_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  fmLevelKnob.knob_draw_modifier(fm_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  fmLevelKnob.knob_draw_modifier(fm_amnt_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+  activeModifier == 3 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_flfo) ? ( fm_amnt_flfo = fmLevelKnob.value; );
+  ) : activeModifier == 2 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_mod) ? ( fm_amnt_mod = fmLevelKnob.value; );
+  ) : activeModifier == 1 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_vel) ? ( fm_amnt_vel = fmLevelKnob.value; );
+  ) : fmLevelKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fm_amnt = fmLevelKnob.value; slider_automate(fm_amnt); );
+   
+  
+  cX += 2.5 * knobSize;
+  
+  fm_mode == 2 || fm_mode == 3 ? (
+    fmCutoffKnob.active = 1;
+    fmCutoffKnob.value = fm_cutoff;
+    center = .5 * srate * exp( (1-fm_cutoff) * log(20/22050) );
+    center < 1000 ? (
+      fmCutoffKnob.label = sprintf(1, "%d Hz", center);
+    ) : (
+      fmCutoffKnob.label = sprintf(1, "%.1f kHz", center/1000);
+    );
+    fmCutoffKnob.drawKnob(cX, cY, knobSize, "FM cutoff", "FM Cutoff\n\nCutoff used to filter signal that\ncontrols the cutoff.", .5);
+    fmCutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? (
+      fm_cutoff = fmCutoffKnob.value;
+      slider_automate(fm_cutoff);
+    );
+  ) : (
+    fmRateKnob.active = 1;
+    fmRateKnob.value = (fm_factor+8)/16;
+    fmRateKnob.label = sprintf(1, "%.1f x", 2^floor(fm_factor));
+    fmRateKnob.drawKnob(cX, cY, knobSize, "FM factor", "FM factor.\n\nFilter cutoff will oscillate with\nthis factor times the MIDI pitch's\nfrequency.", .5);
+    fmRateKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
+      fm_factor = fmRateKnob.value * 16 - 8;
+      slider_automate(fm_factor);
+    );
+  );
+  cX += 2.5 * knobSize;
+  
+  fmPhaseKnob.knob_set("", 1, fm_spread);
+  fmPhaseKnob.drawKnob(cX, cY, knobSize, "FM Spread", "FM Phase difference", 1.0);
+  dial_animation ? (
+    fmPhaseKnob.knob_draw_modifier((current_fm_spread - fm_spread), bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    fmPhaseKnob.knob_draw_modifier((current_fm_spread - fm_spread), bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  fmPhaseKnob.knob_draw_modifier(fm_spread_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( fmPhaseKnob.knob_modifier_processMouse(0, fm_spread_vel) ? ( fm_spread_vel = fmPhaseKnob.value; );
+  ) : fmPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fm_spread = fmPhaseKnob.value; slider_automate(fm_spread); );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function feedback_panel()
+(
+  nextPanel = drawPanel(s_FB, cX, cY - .53*panelHeight + .2*knobSize, 4.15*knobSpacing, panelHeight, 1);
+  
+  cX += 1.4 * knobSize;
+  feedbackTwoToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, fb_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Direct feedback mode. Directly routes output to drive. Can be used to massively distort the input.");
+  fb_mode = feedbackTwoToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  feedbackKnob.active = !(filter_type == 0 || filter_type == 2);
+  feedbackKnob.value = fb;
+  feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Are you crazy?", 0);
+  dial_animation ? (
+    feedbackKnob.knob_draw_modifier(current_fb - fb, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    feedbackKnob.knob_draw_modifier(current_fb - fb, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  feedbackKnob.knob_draw_modifier(fb_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( feedbackKnob.knob_modifier_processMouse(0, fb_vel) ? ( fb_vel = feedbackKnob.value; );
+  ) : feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fb = feedbackKnob.value; slider_automate(fb); );
+);
+
+function filter_envelope_panel()
+(
+  // FILTER ENVELOPE
+  pwidth = 17.5 + 1.65 * 0;
+  nextPanel = drawPanel(s_FILT_ENV, cX, cY - .53*panelHeight + .2*knobSize, pwidth * knobSpacing, panelHeight, 1);
+  
+  style == 0 ? (
+    gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
+    gfx_rect(cX - 2.5*knobSpacing + 1, cY - .4*panelHeight - 1, 9 * (1+scaling), 9 * (1+scaling));
+  ) : (
+    sz = 10 * (1+scaling);
+    xref = cX + .5 * knobSpacing;
+    yref = cY - .54*panelHeight;
+    gfx_set(.1, midiChange*.7+.1, .1, midiChange); midiChange *= .95;
+    gfx_rect(xref - .5 * sz, yref - .5 * sz - 1, sz, sz);
+    
+    r = 20*(1+scaling);
+    loop(12,
+      r -= 2*(1+scaling);
+      gfx_set(.5, 1, .5, .5*midiChange / r);
+      gfx_circle(xref - 1, yref - 3, r, 1);
+    );
+  );
+  
+  cX += 2 * knobSpacing + knobSize;
+  
+  FILTER_MODE_SELECT_BUTTON = 11;
+  gfx_setfont(KNOB_FONT);
+  y_ref = cY - 1.25*knobSize - 1;
+  drawSelectionButton("Off", cX - 2*knobSize, y_ref + 0.5*y_move, ww, hh, 0, FILTER_MODE_SELECT_BUTTON, "No filter modulation.");
+  drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
+  drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
+  drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, FILTER_MODE_SELECT_BUTTON, "Thresholded.");
+  //drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 4, FILTER_MODE_SELECT_BUTTON, "Proportional to input RMS.");
+  
+  cX += knobSpacing;
+  
+  envAmountKnob.knob_set(sprintf(4, "   %d %%%%", 100*env_amnt), filter_envelope_mode > 0, env_amnt * .5 + .5);
+  envAmountKnob.drawKnob(cX, cY, knobSize, "- Amount +", "Envelope Amount", 1.0);
+  dial_animation ? (
+    envAmountKnob.knob_draw_modifier((current_env_amnt - env_amnt)*.5, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    envAmountKnob.knob_draw_modifier((current_env_amnt - env_amnt)*.5, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  envAmountKnob.knob_draw_modifier(env_amnt_vel * .5, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( envAmountKnob.knob_modifier_processMouse(0, env_amnt_vel * .5) ? ( env_amnt_vel = envAmountKnob.value * 2; );
+  ) : envAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( env_amnt = envAmountKnob.value * 2 - 1; slider_automate(env_amnt); );
+  
+  
+  cX += knobSize*2.5;
+  tempo_sync_envelopes ? ( envAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), filter_envelope_mode > 0, cutoff_atk);
+  ) : envAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_envelope_mode > 0, cutoff_atk);
+  envAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
+  dial_animation ? (
+    envAttackKnob.knob_draw_modifier(current_cutoff_atk - cutoff_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    envAttackKnob.knob_draw_modifier(current_cutoff_atk - cutoff_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  envAttackKnob.knob_draw_modifier(cutoff_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( envAttackKnob.knob_modifier_processMouse(0, cutoff_atk_vel) ? ( cutoff_atk_vel = envAttackKnob.value; );
+  ) : envAttackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_atk = envAttackKnob.value; slider_automate(cutoff_atk); );
+  
+  cutoffResetToggle.inactive = filter_envelope_mode == 0;
+  cutoffResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, cutoff_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on note.\n\nTurning this off changes the mode to a mode where\nthe amplitude no longer goes to 90%% in the set time.\n\nThis means that consecutive hits get increasingly higher\ncutoff values. The 303 is one of the classic synths that\nhad this characteristic.");
+  cutoff_reset = cutoffResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += knobSize*2.5;
+  tempo_sync_envelopes ? ( envDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), filter_envelope_mode > 0, cutoff_decay);
+  ) : envDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_envelope_mode > 0, cutoff_decay );
+  envDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
+  dial_animation ? (
+    envDecayKnob.knob_draw_modifier(current_cutoff_decay - cutoff_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    envDecayKnob.knob_draw_modifier(current_cutoff_decay - cutoff_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  envDecayKnob.knob_draw_modifier(cutoff_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( envDecayKnob.knob_modifier_processMouse(0, cutoff_decay_vel) ? ( cutoff_decay_vel = envDecayKnob.value; );
+  ) : envDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_decay = envDecayKnob.value; slider_automate(cutoff_decay); );
+  
+  cX += 2.5 * knobSize;
+  
+  envSustainKnob.knob_set("", filter_envelope_mode > 0, cutoff_sustain);
+  
+  ( (filter_envelope_mode < 2) || filter_envelope_mode == 3 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
+  : ( filter_envelope_mode == 2 ) ? (
+    //filter_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4);
+    envSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
+  );
+  
+  dial_animation ? (
+    envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  envSustainKnob.knob_draw_modifier(cutoff_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( envSustainKnob.knob_modifier_processMouse(0, cutoff_sustain_vel) ? ( cutoff_sustain_vel = envSustainKnob.value; );
+  ) : envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function amp_envelope_panel()
+(
+  pwidth = 17.5 + 1.65 * 0;
+  nextPanel = drawPanel(s_AMP_ENV, cX, cY - .53*panelHeight + .2*knobSize, pwidth*knobSpacing, panelHeight, 1);
+  
+  style == 0 ? (
+    gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
+    gfx_rect(cX - 2.5*knobSpacing + 1, cY - .4*panelHeight - 1, 9 * (1+scaling), 9 * (1+scaling));
+  ) : (
+    sz = 10 * (1+scaling);
+    xref = cX + 0.5*knobSpacing;
+    yref = cY - .54*panelHeight;
+    gfx_set(.1, midiChange*.7+.1, .1, midiChange); midiChange *= .95;
+    gfx_rect(xref - .5 * sz, yref - .5 * sz - 1, sz, sz);
+    
+    r = 20*(1+scaling);
+    loop(12,
+      r -= 2*(1+scaling);
+      gfx_set(.5, 1, .5, .5*midiChange / r);
+      gfx_circle(xref - 1, yref - 3, r, 1);
+    );
+  );
+  
+  cX += 2 * knobSpacing + knobSize;
+  
+  AMPLITUDE_SELECT_BUTTON = 10;
+  gfx_setfont(KNOB_FONT);
+  y_ref = cY - 1.25*knobSize - 1;
+  
+  drawSelectionButton("Off", cX - 2*knobSize, y_ref + 0.5*y_move, ww, hh, 0, AMPLITUDE_SELECT_BUTTON, "No amplitude modulation.");
+  drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
+  drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
+  drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, AMPLITUDE_SELECT_BUTTON, "Thresholded.");
+  //drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Proportional to input RMS.");
+  
+  cX += 1 * knobSpacing;
+  
+  ampAccentKnob.active = amplitude_envelope_mode > 0;
+  ampAccentKnob.value = (amp_accent + 1) / 2;
+  ampAccentKnob.drawKnob(cX, cY, knobSize, "- Accent +", "Accent", 1.0);
+  ampAccentKnob.label = sprintf(16, "   %d %%%%", 100*amp_accent);
+  ampAccentKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    amp_accent = ampAccentKnob.value * 2 - 1;
+    slider_automate(amp_accent);
+  );
+  
+  preampToggle.inactive = amplitude_envelope_mode == 0;
+  preampToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, amp_before_filter, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this places the amplitude envelope before the filter.\nThis takes away some control over the amplitude envelope,\nbut allows you to hear the filter decay.\n");
+  amp_before_filter = preampToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += knobSize*2.5;
+  resetToggle.inactive = amplitude_envelope_mode == 0;
+  resetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on note.");
+  reset = resetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  tempo_sync_envelopes ? ( ampAttackKnob.knob_set(getFastEnvelopeLabel(amp_atk), amplitude_envelope_mode > 0, amp_atk);
+  ) : ampAttackKnob.knob_set(amp_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_atk))), amplitude_envelope_mode > 0, amp_atk);
+  ampAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
+  dial_animation ? (
+    ampAttackKnob.knob_draw_modifier(current_amp_atk - amp_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    ampAttackKnob.knob_draw_modifier(current_amp_atk - amp_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  ampAttackKnob.knob_draw_modifier(amp_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( ampAttackKnob.knob_modifier_processMouse(0, amp_atk_vel) ? ( amp_atk_vel = ampAttackKnob.value; );
+  ) : ampAttackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_atk = ampAttackKnob.value; slider_automate(amp_atk); );
+  
+  
+  cX += knobSize*2.5;
+  
+  tempo_sync_envelopes ? ( ampDecayKnob.knob_set(getFastEnvelopeLabel(amp_decay), amplitude_envelope_mode > 0, amp_decay);
+  ) : ampDecayKnob.knob_set(amp_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*amp_decay))), amplitude_envelope_mode > 0, amp_decay);
+  ampDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
+  dial_animation ? (
+    ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  ampDecayKnob.knob_draw_modifier(amp_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( ampDecayKnob.knob_modifier_processMouse(0, amp_decay_vel) ? ( amp_decay_vel = ampDecayKnob.value; );
+  ) : ampDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_decay = ampDecayKnob.value; slider_automate(amp_decay); );
+   
+  
+  cX += 2.5 * knobSize;
+  
+  ampSustainKnob.knob_set("", amplitude_envelope_mode > 0, amp_sustain);
+  ( (amplitude_envelope_mode < 2) || amplitude_envelope_mode == 3 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
+  : ( amplitude_envelope_mode == 2 ) ? (
+    ampSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
+    //amplitude_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4);
+  );
+  
+  dial_animation ? (
+    ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  ampSustainKnob.knob_draw_modifier(amp_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( ampSustainKnob.knob_modifier_processMouse(0, amp_sustain_vel) ? ( amp_sustain_vel = ampSustainKnob.value; );
+  ) : ampSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_sustain = ampSustainKnob.value; slider_automate(amp_sustain); );
+  
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function cutoff_lfo_panel()
+(
+  nextPanel = drawPanel(s_CLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, c_lfo_enabled);
+  
+  cX += 2 * knobSpacing;
+  
+  cutoffLFOAmountKnob.active = c_lfo_enabled;
+  cutoffLFOAmountKnob.value = c_lfo_amnt;
+  cutoffLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
+  draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), c_lfo_type, c_lfo_center_phase, c_lfo_time);
+  dial_animation ? (
+    cutoffLFOAmountKnob.knob_draw_modifier(current_c_lfo_amnt - c_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    cutoffLFOAmountKnob.knob_draw_modifier(current_c_lfo_amnt - c_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+  activeModifier == 3 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_flfo) ? ( c_lfo_amnt_flfo = cutoffLFOAmountKnob.value; );
+  ) : activeModifier == 2 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_mod) ? ( c_lfo_amnt_mod = cutoffLFOAmountKnob.value; );
+  ) : activeModifier == 1 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_vel) ? ( c_lfo_amnt_vel = cutoffLFOAmountKnob.value; );
+  ) : (
+    mouse_cap == 2 && lcap == 0 ? (
+      cutoffLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+        c_lfo_type += 1;
+        c_lfo_type > max_lfo_types ? c_lfo_type = 0;
+      );
+    ) : ( mouse_cap == 3 && lcap == 2 ) ? (
+      cutoffLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+        c_lfo_type -= 1;
+        c_lfo_type < 0 ? c_lfo_type = max_lfo_types - 1;
+        cutoffLFOAmountKnob.lastLeftClick = -10000; /* Prevent double click from triggering from this */
+      );
+    ) : (
+      cutoffLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+        c_lfo_amnt = cutoffLFOAmountKnob.value;
+        slider_automate(c_lfo_amnt);
+      );
+    );
+  );
+  
+  cutoffLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LFO.");
+  c_lfo_enabled = cutoffLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cutoffLfoResetToggle.inactive = !c_lfo_enabled;
+  cutoffLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+  c_lfo_reset = cutoffLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5 * knobSize;
+  cutoffSyncToggle.inactive = !c_lfo_enabled;
+  cutoffSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
+  c_lfo_sync = cutoffSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cutoffLFOSpeedKnob.active = c_lfo_enabled;
+  cutoffLFOSpeedKnob.value = c_lfo_speed / 20;
+  c_lfo_sync ? (
+    cutoffLFOSpeedKnob.label = cutoff_LFO.tempoLabel;
+  ) : (
+    cutoffLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(c_lfo_speed/15) - 1);
+  );
+  cutoffLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
+  dial_animation ? (
+    cutoffLFOSpeedKnob.knob_draw_modifier((current_c_lfo_speed_slider*15 - c_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    cutoffLFOSpeedKnob.knob_draw_modifier((current_c_lfo_speed_slider*15 - c_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_flfo / 20, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
+  activeModifier == 3 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_flfo / 20) ? ( c_lfo_speed_flfo = cutoffLFOSpeedKnob.value * 20; );
+  ) : activeModifier == 2 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_mod / 20) ? ( c_lfo_speed_mod = cutoffLFOSpeedKnob.value * 20; );
+  ) : activeModifier == 1 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_vel / 20) ? ( c_lfo_speed_vel = cutoffLFOSpeedKnob.value * 20; );
+  ) : (
+    cutoffLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+      c_lfo_speed = cutoffLFOSpeedKnob.value * 20;
+      updateTempo();
+      slider_automate(c_lfo_speed);
+    );
+  );
+  
+  cX += 1.85 * knobSize;
+  cutoffLFOLRPhaseKnob.active = c_lfo_enabled;
+  cutoffLFOLRPhaseKnob.value = (c_lfo_phase + 1) * .5;
+  cutoffLFOLRPhaseKnob.drawKnob(cX, cY + .65*knobSize, .5*knobSize, "", "Cutoff LFO Pan Phase", 1.0);
+  cutoffLFOLRPhaseKnob.label = "LR";
+  cutoffLFOLRPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    c_lfo_phase = 2 * cutoffLFOLRPhaseKnob.value - 1;
+    slider_automate(c_lfo_phase);
+  );
+  
+  
+  cutoffLFOPhaseKnob.active = c_lfo_enabled;
+  cutoffLFOPhaseKnob.value = (c_lfo_center_phase + 1) * .5;
+  cutoffLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
+  cutoffLFOPhaseKnob.label = "Φ";
+  cutoffLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    c_lfo_center_phase = 2 * cutoffLFOPhaseKnob.value - 1;
+    slider_automate(c_lfo_center_phase);
+  );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function morph_lfo_panel()
+(
+  nextPanel = drawPanel(s_MLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, m_lfo_enabled);
+  cX += 2 * knobSpacing;
+  morphLFOAmountKnob.active = m_lfo_enabled;
+  morphLFOAmountKnob.value = m_lfo_amnt;
+  morphLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Morph LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
+  draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), m_lfo_type, m_lfo_center_phase, m_lfo_time);
+  dial_animation ? (
+    morphLFOAmountKnob.knob_draw_modifier(current_m_lfo_amnt - m_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    morphLFOAmountKnob.knob_draw_modifier(current_m_lfo_amnt - m_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  morphLFOAmountKnob.knob_draw_modifier(m_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  morphLFOAmountKnob.knob_draw_modifier(m_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  activeModifier == 2 ? ( morphLFOAmountKnob.knob_modifier_processMouse(0, m_lfo_amnt_mod) ? ( m_lfo_amnt_mod = morphLFOAmountKnob.value; );
+  ) : activeModifier == 1 ? ( morphLFOAmountKnob.knob_modifier_processMouse(0, m_lfo_amnt_vel) ? ( m_lfo_amnt_vel = morphLFOAmountKnob.value; );
+  ) : (
+    mouse_cap == 2 && lcap == 0 ? (
+      morphLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+        m_lfo_type += 1;
+        m_lfo_type > max_lfo_types ? m_lfo_type = 0;
+      );
+    ) : ( mouse_cap == 3 && lcap == 2 ) ? (
+      morphLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+        m_lfo_type -= 1;
+        m_lfo_type < 0 ? m_lfo_type = max_lfo_types - 1;
+        morphLFOAmountKnob.lastLeftClick = -10000;
+      );
+    ) : (
+      morphLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( m_lfo_amnt = morphLFOAmountKnob.value; slider_automate(m_lfo_amnt); );
+    );
+  );
+  
+  morphLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LFO.");
+  m_lfo_enabled = morphLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  morphLfoResetToggle.inactive = !m_lfo_enabled;
+  morphLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+  m_lfo_reset = morphLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5 * knobSize;
+  morphSyncToggle.inactive = !m_lfo_enabled;
+  morphSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
+  m_lfo_sync = morphSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  morphLFOSpeedKnob.active = m_lfo_enabled;
+  morphLFOSpeedKnob.value = m_lfo_speed / 20;
+  m_lfo_sync ? (
+    morphLFOSpeedKnob.label = morph_LFO.tempoLabel;
+  ) : (
+    morphLFOSpeedKnob.label = sprintf(5, "%.1f Hz", 10^(m_lfo_speed/15) - 1);
+  );
+  morphLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Morph LFO frequency", 1.0);
+  dial_animation ? (
+    morphLFOSpeedKnob.knob_draw_modifier((current_m_lfo_speed_slider*15 - m_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    morphLFOSpeedKnob.knob_draw_modifier((current_m_lfo_speed_slider*15 - m_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  morphLFOSpeedKnob.knob_draw_modifier(m_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  morphLFOSpeedKnob.knob_draw_modifier(m_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  activeModifier == 2 ? ( morphLFOSpeedKnob.knob_modifier_processMouse(0, m_lfo_speed_mod/20) ? ( m_lfo_speed_mod = morphLFOSpeedKnob.value * 20; );
+  ) : activeModifier == 1 ? ( morphLFOSpeedKnob.knob_modifier_processMouse(0, m_lfo_speed_vel/20) ? ( m_lfo_speed_vel = morphLFOSpeedKnob.value * 20; );
+  ) : (
+    morphLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+      m_lfo_speed = morphLFOSpeedKnob.value * 20;
+      updateTempo();
+      slider_automate(m_lfo_speed);
+    );
+  );
+  
+  cX += 1.85 * knobSize;
+  
+  morphLFOLRPhaseKnob.active = m_lfo_enabled;
+  morphLFOLRPhaseKnob.value = (m_lfo_phase + 1) * .5;
+  morphLFOLRPhaseKnob.drawKnob(cX, cY + .65*knobSize, .5*knobSize, "", "Morph Pan LFO Phase", 1.0);
+  morphLFOLRPhaseKnob.label = "LR";
+  morphLFOLRPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    m_lfo_phase = 2 * morphLFOLRPhaseKnob.value - 1;
+    slider_automate(m_lfo_phase);
+  );
+  
+  morphLFOPhaseKnob.active = m_lfo_enabled;
+  morphLFOPhaseKnob.value = (m_lfo_center_phase + 1) * .5;
+  morphLFOPhaseKnob.drawKnob(cX, cY - .6 * knobSize, .5*knobSize, "", "Morph LFO Phase", 1.0);
+  morphLFOPhaseKnob.label = "Φ";
+  morphLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    m_lfo_center_phase = 2 * morphLFOPhaseKnob.value - 1;
+    slider_automate(m_lfo_center_phase);
+  );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function free_lfo_panel()
+(
+  nextPanel = drawPanel(s_FLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, c_lfo_enabled);
+  
+  cX += 2 * knobSpacing;
+  
+  freeLFOAmountKnob.active = f_lfo_enabled;
+  freeLFOAmountKnob.value = f_lfo_amnt;
+  freeLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
+  draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), f_lfo_type, f_lfo_center_phase, f_lfo_time);
+  dial_animation ? (
+    freeLFOAmountKnob.knob_draw_modifier(current_f_lfo_amnt - f_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    freeLFOAmountKnob.knob_draw_modifier(current_f_lfo_amnt - f_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  freeLFOAmountKnob.knob_draw_modifier(f_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  freeLFOAmountKnob.knob_draw_modifier(f_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
+  activeModifier == 2 ? ( freeLFOAmountKnob.knob_modifier_processMouse(0, f_lfo_amnt_mod) ? ( f_lfo_amnt_mod = freeLFOAmountKnob.value; );
+  ) : activeModifier == 1 ? ( freeLFOAmountKnob.knob_modifier_processMouse(0, f_lfo_amnt_vel) ? ( f_lfo_amnt_vel = freeLFOAmountKnob.value; );
+  ) : (
+    mouse_cap == 2 && lcap == 0 ? (
+      freeLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+        f_lfo_type += 1;
+        f_lfo_type > max_lfo_types ? f_lfo_type = 0;
+      );
+    ) : ( mouse_cap == 3 && lcap == 2 ) ? (
+      freeLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
+        f_lfo_type -= 1;
+        f_lfo_type < 0 ? f_lfo_type = max_lfo_types - 1;
+        freeLFOAmountKnob.lastLeftClick = -10000; /* Prevent double click from triggering from this */
+      );
+    ) : (
+      freeLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+        f_lfo_amnt = freeLFOAmountKnob.value;
+        slider_automate(f_lfo_amnt);
+      );
+    );
+  );
+  
+  freeLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+  f_lfo_enabled = freeLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  freeLfoResetToggle.inactive = !f_lfo_enabled;
+  freeLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
+  f_lfo_reset = freeLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5 * knobSize;
+  freeSyncToggle.inactive = !f_lfo_enabled;
+  freeSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
+  f_lfo_sync = freeSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  freeLFOSpeedKnob.active = f_lfo_enabled;
+  freeLFOSpeedKnob.value = f_lfo_speed / 20;
+  f_lfo_sync ? (
+    freeLFOSpeedKnob.label = free_LFO.tempoLabel;
+  ) : (
+    freeLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(f_lfo_speed/15) - 1);
+  );
+  freeLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
+  dial_animation ? (
+    freeLFOSpeedKnob.knob_draw_modifier((current_f_lfo_speed_slider*15 - f_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    freeLFOSpeedKnob.knob_draw_modifier((current_f_lfo_speed_slider*15 - f_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  freeLFOSpeedKnob.knob_draw_modifier(f_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  freeLFOSpeedKnob.knob_draw_modifier(f_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod1_color_a, 2);
+  activeModifier == 2 ? ( freeLFOSpeedKnob.knob_modifier_processMouse(0, f_lfo_speed_mod / 20) ? ( f_lfo_speed_mod = freeLFOSpeedKnob.value * 20; );
+  ) : activeModifier == 1 ? ( freeLFOSpeedKnob.knob_modifier_processMouse(0, f_lfo_speed_vel / 20) ? ( f_lfo_speed_vel = freeLFOSpeedKnob.value * 20; );
+  ) : (
+    freeLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
+      f_lfo_speed = freeLFOSpeedKnob.value * 20;
+      updateTempo();
+      slider_automate(f_lfo_speed);
+    );
+  );
+  
+  cX += 1.85 * knobSize;
+  
+  freeLFOPhaseKnob.active = f_lfo_enabled;
+  freeLFOPhaseKnob.value = (f_lfo_center_phase + 1) * .5;
+  freeLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
+  freeLFOPhaseKnob.label = "Φ";
+  freeLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    f_lfo_center_phase = 2 * freeLFOPhaseKnob.value - 1;
+    slider_automate(f_lfo_center_phase);
+  );
+  
+  handleModifier("LINK", cX - .5 * knobSize, cY + .65 * knobSize, knobSize, knobSize, 3);
+);
+
+function dist_panel()
+(
+  nextPanel = drawPanel(s_DIST, cX, cY - .53*panelHeight + .2*knobSize, 7.7*knobSpacing, panelHeight, shaper);
+  cX += 2.05 * knobSpacing;
+  shaperToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, shaper, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable waveshaper.");
+  shaper = shaperToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  higainToggle.inactive = !shaper;
+  higainToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, higain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "High gain mode.");
+  higain = higainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  distKnob.knob_set(sprintf(1, "%.1f dB", current_ceiling), shaper, current_ceiling / 48);
+  distKnob.drawKnob(cX, cY, knobSize, "Distortion", "Distortion level\n\nDistortion applied post-filter.", 0);
+  dial_animation ? (
+    distKnob.knob_draw_modifier((cur_ceiling - current_ceiling) / 48, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+    distKnob.knob_draw_modifier((cur_ceiling - current_ceiling) / 48, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+  );
+  distKnob.knob_draw_modifier(current_ceiling_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+  activeModifier == 1 ? ( distKnob.knob_modifier_processMouse(0, current_ceiling_vel / 48) ? ( current_ceiling_vel = distKnob.value * 48; );
+  ) : distKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( current_ceiling = distKnob.value * 48; slider_automate(current_ceiling); );
+   
+  cX += 2.5 * knobSize;
+  
+  warmthKnob.active = shaper;
+  warmthKnob.value = (warmth + 12) / 24;
+  warmthKnob.drawKnob(cX, cY, knobSize, "Warmth", "Distortion warmth.\n\nApplies pre- and post-emphasis filters.", .5);
+  warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    warmth = warmthKnob.value * 24 - 12;
+    slider_automate(warmth);
+  );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function effects_panel()
+(
+  // Effects panel
+  nextPanel = drawPanel(s_FX, cX, cY - .53*panelHeight + .2*knobSize, 4.125*knobSpacing, panelHeight, 1);
+  
+  cX += 1.375 * knobSize;
+  chorusKnob.knob_set("", 1, chorus_enabled / 2);
+  chorusKnob.drawKnob(cX, cY, knobSize, "Space", "Bass preserving spatializer (pairs well with delay!)", 1.0);
+  chorusKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+    chorus_enabled = chorusKnob.value * 2;
+  );
+  
+  cX = nextPanel + panelSpacing;
+);
+
+function options_panel()
+(
+  showOptions = 1;
+  showOptions ? (
+    cX = nextPanel + panelSpacing;
+    
+    nextPanel = drawPanel(s_OPTS, cX, cY - .53*panelHeight + .2*knobSize, 11.25*knobSpacing, panelHeight, 1);
+    cX += 2*knobSpacing;
+    
+    tempoSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, tempo_sync_envelopes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use tempo synced envelopes.");
+    tempo_sync_envelopes_tmp = tempoSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    tempo_sync_envelopes != tempo_sync_envelopes_tmp ? (
+      tempo_sync_envelopes = tempo_sync_envelopes_tmp;
+      tempo_sync_envelopes ? (
+        amp_atk = to_synced(amp_atk, 1.0);
+        amp_decay = to_synced(amp_decay, 0.1);
+        cutoff_atk = to_synced(cutoff_atk, 1.0);
+        cutoff_decay = to_synced(cutoff_decay, 0.1);
+      ) : (
+        amp_atk = to_non_synced(amp_atk, 1.0);
+        amp_decay = to_non_synced(amp_decay, 0.1);
+        cutoff_atk = to_non_synced(cutoff_atk, 1.0);
+        cutoff_decay = to_non_synced(cutoff_decay, 0.1);
+      );
+    );
+    
+    
+    oversamplingKnob.active = 1;
+    oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
+      oversamplingKnob.value = (oversampling - 1) / 7;
+    );
+    oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "Change the oversampling ratio. Some filters need this for stability.\nNote that it severely affects CPU cost though.", 1.0);
+    oversamplingKnob.label = sprintf(7, "x%d", oversampling);
+    oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
+      newOversampling = floor(oversamplingKnob.value * 7 + 1);
+      floor(newOversampling) != overSampling ? (
+        oversampling = newOversampling;
+        slider_automate(oversampling);
+        updateSlider();
+      );
+    );
+    
+    dcCorrectionToggle.label = sprintf(34, "");
+    dcCorrectionToggle.drawToggle(cX + 0.9 * knobSize, cy-knobSize, .15*knobSize, .15*knobSize, fix_dc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Block DC.");
+    fix_dc = dcCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    cX += 2.5 * knobSize;
+    inertiaKnob.active = 1;
+    inertiaKnob.value = inertia / 200;
+    inertiaKnob.label = sprintf(8, "%d ms", inertia);
+    inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "Sets how quickly parameters respond to changes.", 1.0);
+    inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
+      inertia = inertiaKnob.value * 200;
+      slider_automate(inertia);
+    );
+    
+    legacyToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, legacy_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "In previous versions of FM Filter 2,\n the filter range was always mapped\nto the full range from zero to\n0.934 * Nyquist. This meant that\npresets were samplerate dependent.\n\nIn the newer version, the range always\nruns from 0 to 20.6 kHz (irrespective of\nsample rate).\n\nWhen this button is enabled, the\nold mode is returned.");
+    legacy_mode = legacyToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    cX += 2.5 * knobSize;
+    pitchBendKnob.active = 1;
+    pitchBendKnob.value = pitchBendRange / 12;
+    pitchBendKnob.label = sprintf(8, "%d st", floor(pitchBendRange));
+    pitchBendKnob.drawKnob(cX, cY, knobSize, "Bend range", "Pitch bend range.", 1.0);
+    pitchBendKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
+      pitchBendRange = pitchBendKnob.value * 12;
+      slider_automate(pitchBendRange);
+    );
+  );
+  
+  cX = nextPanel + panelSpacing;
+);
+
 cX = xOrigin;
 cY = yOrigin;
-
-nextPanel = drawPanel(s_DRIVE, cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 7.75*knobSpacing, panelHeight, 1);
-
-style == 0 ? (
-  hotness_meter = tanh(54*sqrt(hotness_rmsq));
-  gfx_set(hotness_meter+.1, .1, .1, hotness_meter);
-  gfx_rect(cX - 2.5*knobSpacing+1, cY - .28*panelHeight, 9, 9);
-);
-
-driveKnob.knob_set(sprintf(1, "%.1f dB", drive), 1, (drive + 6)/54);
-driveKnob.drawKnob(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", 1.0);
-dial_animation ? (
-  driveKnob.knob_draw_modifier((current_drive - drive) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  driveKnob.knob_draw_modifier((current_drive - drive) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-driveKnob.knob_draw_modifier(drive_vel / 54, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( driveKnob.knob_modifier_processMouse(0, drive_vel / 54) ? ( drive_vel = driveKnob.value * 54; );
-) : driveKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 6/54+.000001) ? ( drive = driveKnob.value * 54 - 6; slider_automate(drive); );
- 
-cX += 2.5 * knobSize;
-
-postBoost.knob_set(sprintf(1, "%.1f dB", boost), 1, (boost + 6)/54);
-postBoost.drawKnob(cX, cY, knobSize, "Output Gain", "Output Gain", 1.0);
-dial_animation ? (
-  postBoost.knob_draw_modifier((current_boost - boost) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  postBoost.knob_draw_modifier((current_boost - boost) / 54, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-postBoost.knob_draw_modifier(boost_vel / 54, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( postBoost.knob_modifier_processMouse(0, boost_vel / 54) ? ( boost_vel = postBoost.value * 54; );
-) : postBoost.knob_processMouse(mouse_x, mouse_y, mouse_cap, 6/54+.000001) ? ( boost = postBoost.value * 54 - 6; slider_automate(boost); );
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_FILTER, cX, cY - .53*panelHeight + .2*knobSize, 22.75*knobSpacing, panelHeight, 1);
-
-cX += 2 * knobSpacing;
-cX += knobSize;
-gfx_setfont(KNOB_FONT);
-y_move = .4 * knobSize;
-ww = 1.5*knobSize;
-hh = .35 * knobSize;
-FILTER_SELECT_BUTTON = 25;
-y_ref = cY - 1.25*knobSize - 1;
-drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON, "2-pole linear state variable filter (12 dB/oct).");
-drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON, "4-pole linear state variable filter (12 dB/oct)");
-drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, FILTER_SELECT_BUTTON, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).");
-drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, FILTER_SELECT_BUTTON, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).");
-drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, FILTER_SELECT_BUTTON, "2-pole linear state variable filter where\nthe approximate resonance is rectified.");
-drawSelectionButton("Steiner", cX - 2*knobSize, y_ref + 5*y_move, ww, hh, 15, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.");
-drawSelectionButton("SteinerA", cX - 2*knobSize, y_ref + 6*y_move, ww, hh, 16, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.");
-
-drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, FILTER_SELECT_BUTTON, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).");
-drawSelectionButton("MS-20A", cX - 0.25*knobSize, y_ref + 1*y_move, ww, hh, 6, FILTER_SELECT_BUTTON, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).");
-drawSelectionButton("Moog", cX - 0.25*knobSize, y_ref + 2*y_move, ww, hh, 3, FILTER_SELECT_BUTTON, "Moog emulation (24 dB/oct).");
-drawSelectionButton("Ladder", cX - 0.25*knobSize, y_ref + 3*y_move, ww, hh, 4, FILTER_SELECT_BUTTON, "Ladder filter with two stages (12 dB/oct).");
-drawSelectionButton("303", cX - 0.25*knobSize, y_ref + 4*y_move, ww, hh, 5, FILTER_SELECT_BUTTON, "Blaukraut's 303 filter emulation");
-drawSelectionButton("nlSVF2p", cX - 0.25*knobSize, y_ref + 5*y_move, ww, hh, 10, FILTER_SELECT_BUTTON, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
-drawSelectionButton("nlSVF4p", cX - 0.25*knobSize, y_ref + 6*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
-
-drawSelectionButton("Bent 4p", cX + 1.5*knobSize, y_ref, ww, hh, 17, FILTER_SELECT_BUTTON, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.");
-drawSelectionButton("Pillow2p", cX + 1.5*knobSize, y_ref + 1*y_move, ww, hh, 18, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter");
-drawSelectionButton("Pillow4p", cX + 1.5*knobSize, y_ref + 2*y_move, ww, hh, 19, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter");
-drawSelectionButton("Pillow2pA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 20, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter w/ clipper in feedback");
-drawSelectionButton("Pillow4pA", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 21, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter w/ clipper in feedback");
-drawSelectionButton("Pillow2pS", cX + 1.5*knobSize, y_ref + 5*y_move, ww, hh, 22, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
-drawSelectionButton("Pillow4pS", cX + 1.5*knobSize, y_ref + 6*y_move, ww, hh, 23, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
-
-cX += 4.25*knobSize;
-
-center = .5 * sampling_ratio * srate * exp( (1-clamp(cutoff, 0, .99)) * log(20/22050) );
-cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff);
-cutoffKnob.drawKnob(cX, cY, knobSize, "Cutoff", "Filter Cutoff", 1.0);
-
-dial_animation ? (
-  cutoffKnob.knob_draw_modifier(sliderCutoffL - cutoff, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  cutoffKnob.knob_draw_modifier(sliderCutoffR - cutoff, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-
-cutoffKnob.knob_draw_modifier(cutoff_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-cutoffKnob.knob_draw_modifier(cutoff_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-cutoffKnob.knob_draw_modifier(cutoff_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
-
-activeModifier == 3 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_flfo) ? ( cutoff_flfo = cutoffKnob.value; );
-) : activeModifier == 2 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_mod) ? ( cutoff_mod = cutoffKnob.value; );
-) : activeModifier == 1 ? ( cutoffKnob.knob_modifier_processMouse(0, cutoff_vel) ? ( cutoff_vel = cutoffKnob.value; );
-) : cutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff = cutoffKnob.value; slider_automate(cutoff); check_safety(); );
-
-cX += knobSize*2.5;
-resonanceKnob.knob_set(sprintf(1, "%.1f", resonance), 1, resonance);
-resonanceKnob.drawKnob(cX, cY, knobSize, "Resonance", "Filter Resonance", 1.0);
-dial_animation ? (
-  resonanceKnob.knob_draw_modifier(sliderReso - resonance, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  resonanceKnob.knob_draw_modifier(sliderReso - resonance, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-resonanceKnob.knob_draw_modifier(reso_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-resonanceKnob.knob_draw_modifier(reso_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-resonanceKnob.knob_draw_modifier(reso_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
-activeModifier == 3 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_flfo) ? ( reso_flfo = resonanceKnob.value; );
-) : activeModifier == 2 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_mod) ? ( reso_mod = resonanceKnob.value; );
-) : activeModifier == 1 ? ( resonanceKnob.knob_modifier_processMouse(0, reso_vel) ? ( reso_vel = resonanceKnob.value; );
-) : resonanceKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( resonance = resonanceKnob.value; slider_automate(resonance); );
- 
-cX += knobSize*2.7;
-
-morphKnob.knob_set("", 1, morph);
-morphKnob.drawKnob(cX, cY, knobSize, "Morph", "Filter Morph", 1.0);
-
-dial_animation ? (
-  morphKnob.knob_draw_modifier(sliderMorphL - morph, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  morphKnob.knob_draw_modifier(sliderMorphR - morph, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-
-morphKnob.knob_draw_modifier(morph_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( morphKnob.knob_modifier_processMouse(0, morph_vel) ? ( morph_vel = morphKnob.value; );
-) : morphKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( morph = morphKnob.value; slider_automate(morph); );
-
-
-gfx_set(1,1,1,1);
-drawKnobLabels(knobSize*1.25, 0, "LP");
-drawKnobLabels(knobSize*1.25, 1/4, "BP");
-drawKnobLabels(knobSize*1.25, 2/4, "HP");
-drawKnobLabels(knobSize*1.25, 3/4, "BR");
-drawKnobLabels(knobSize*1.25, 4/4, "LP");
-
-
-cX += knobSize*2.65;
-
-keyFollowKnob.active = 1;
-keyFollowKnob.value = key_follow;
-keyFollowKnob.drawKnob(cX, cY, knobSize, "Follow", "Follow MIDI pitch", 1.0);
-
-keyFollowKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
-  key_follow = keyFollowKnob.value;
-  slider_automate(key_follow);
-);
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_FFM, cX, cY - .53*panelHeight + .2*knobSize, 13.5*knobSpacing, panelHeight, 1);
-cX += 2.375*knobSize;
-gfx_setfont(KNOB_FONT);
-y_move = .4 * knobSize;
-ww = 1.3*knobSize;
-hh = .35 * knobSize;
-FM_MODE_BUTTON = 37;
-drawSelectionButton("MIDI Sin", cX - 2*knobSize, cY-1.1*knobSize, ww, hh, 0, FM_MODE_BUTTON, -1);
-drawSelectionButton("MIDI |Sin|", cX - 2*knobSize, cY-1.1*knobSize + 3*y_move, ww, hh, 1, FM_MODE_BUTTON, -1);
-drawSelectionButton("MIDI Tri", cX - 2*knobSize, cY-1.1*knobSize + 2*y_move, ww, hh, 4, FM_MODE_BUTTON, -1);
-drawSelectionButton("Self", cX - 2*knobSize, cY-1.1*knobSize + 4*y_move, ww, hh, 2, FM_MODE_BUTTON, -1);
-drawSelectionButton("Self Abs", cX - 2*knobSize, cY-1.1*knobSize + 5*y_move, ww, hh, 3, FM_MODE_BUTTON, -1);
-drawSelectionButton("MIDI Sqr", cX - 2*knobSize, cY-1.1*knobSize + y_move, ww, hh, 5, FM_MODE_BUTTON, -1);
-cX += .65*knobSize;
-
-fmlevelKnob.knob_set("", 1, fm_amnt);
-fmLevelKnob.drawKnob(cX, cY, knobSize, "FM Level", "FM Level\nLevel of FM modulation", 1.0);
-
-resetFmToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, reset_fm_on_release, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on release.\n\nBy default, the FM phase resets on note. This enables\nan additional reset on release as well.");
-reset_fm_on_release = resetFmToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-dial_animation ? (
-  fmlevelKnob.knob_draw_modifier(current_fm_amnt - fm_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  fmlevelKnob.knob_draw_modifier(current_fm_amnt - fm_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-fmLevelKnob.knob_draw_modifier(fm_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-fmLevelKnob.knob_draw_modifier(fm_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-fmLevelKnob.knob_draw_modifier(fm_amnt_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
-activeModifier == 3 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_flfo) ? ( fm_amnt_flfo = fmLevelKnob.value; );
-) : activeModifier == 2 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_mod) ? ( fm_amnt_mod = fmLevelKnob.value; );
-) : activeModifier == 1 ? ( fmLevelKnob.knob_modifier_processMouse(0, fm_amnt_vel) ? ( fm_amnt_vel = fmLevelKnob.value; );
-) : fmLevelKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fm_amnt = fmLevelKnob.value; slider_automate(fm_amnt); );
- 
-
-cX += 2.5 * knobSize;
-
-fm_mode == 2 || fm_mode == 3 ? (
-  fmCutoffKnob.active = 1;
-  fmCutoffKnob.value = fm_cutoff;
-  center = .5 * srate * exp( (1-fm_cutoff) * log(20/22050) );
-  center < 1000 ? (
-    fmCutoffKnob.label = sprintf(1, "%d Hz", center);
-  ) : (
-    fmCutoffKnob.label = sprintf(1, "%.1f kHz", center/1000);
-  );
-  fmCutoffKnob.drawKnob(cX, cY, knobSize, "FM cutoff", "FM Cutoff\n\nCutoff used to filter signal that\ncontrols the cutoff.", .5);
-  fmCutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 1) ? (
-    fm_cutoff = fmCutoffKnob.value;
-    slider_automate(fm_cutoff);
-  );
-) : (
-  fmRateKnob.active = 1;
-  fmRateKnob.value = (fm_factor+8)/16;
-  fmRateKnob.label = sprintf(1, "%.1f x", 2^floor(fm_factor));
-  fmRateKnob.drawKnob(cX, cY, knobSize, "FM factor", "FM factor.\n\nFilter cutoff will oscillate with\nthis factor times the MIDI pitch's\nfrequency.", .5);
-  fmRateKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
-    fm_factor = fmRateKnob.value * 16 - 8;
-    slider_automate(fm_factor);
-  );
-);
-cX += 2.5 * knobSize;
-
-fmPhaseKnob.knob_set("", 1, fm_spread);
-fmPhaseKnob.drawKnob(cX, cY, knobSize, "FM Spread", "FM Phase difference", 1.0);
-dial_animation ? (
-  fmPhaseKnob.knob_draw_modifier((current_fm_spread - fm_spread), bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  fmPhaseKnob.knob_draw_modifier((current_fm_spread - fm_spread), bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-fmPhaseKnob.knob_draw_modifier(fm_spread_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( fmPhaseKnob.knob_modifier_processMouse(0, fm_spread_vel) ? ( fm_spread_vel = fmPhaseKnob.value; );
-) : fmPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fm_spread = fmPhaseKnob.value; slider_automate(fm_spread); );
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_FB, cX, cY - .53*panelHeight + .2*knobSize, 4.15*knobSpacing, panelHeight, 1);
-
-cX += 1.4 * knobSize;
-feedbackTwoToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, fb_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Direct feedback mode. Directly routes output to drive. Can be used to massively distort the input.");
-fb_mode = feedbackTwoToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-feedbackKnob.active = !(filter_type == 0 || filter_type == 2);
-feedbackKnob.value = fb;
-feedbackKnob.drawKnob(cX, cY, knobSize, "Feedback", "Are you crazy?", 0);
-dial_animation ? (
-  feedbackKnob.knob_draw_modifier(current_fb - fb, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  feedbackKnob.knob_draw_modifier(current_fb - fb, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-feedbackKnob.knob_draw_modifier(fb_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( feedbackKnob.knob_modifier_processMouse(0, fb_vel) ? ( fb_vel = feedbackKnob.value; );
-) : feedbackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fb = feedbackKnob.value; slider_automate(fb); );
-
+drive_panel();
+filter_panel();
+fm_panel();
+feedback_panel();
 cX = xOrigin - 2*knobSpacing;
 cY = cY + 4 * knobSize;
-
-// FILTER ENVELOPE
-nextPanel = drawPanel(s_FILT_ENV, cX, cY - .53*panelHeight + .2*knobSize, 17.5*knobSpacing, panelHeight, 1);
-
-style == 0 ? (
-  gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
-  gfx_rect(cX - 2.5*knobSpacing + 1, cY - .4*panelHeight - 1, 9 * (1+scaling), 9 * (1+scaling));
-) : (
-  sz = 10 * (1+scaling);
-  xref = cX + .5 * knobSpacing;
-  yref = cY - .54*panelHeight;
-  gfx_set(.1, midiChange*.7+.1, .1, midiChange); midiChange *= .95;
-  gfx_rect(xref - .5 * sz, yref - .5 * sz - 1, sz, sz);
-  
-  r = 20*(1+scaling);
-  loop(12,
-    r -= 2*(1+scaling);
-    gfx_set(.5, 1, .5, .5*midiChange / r);
-    gfx_circle(xref - 1, yref - 3, r, 1);
-  );
-);
-
-cX += 2 * knobSpacing + knobSize;
-
-FILTER_MODE_SELECT_BUTTON = 11;
-gfx_setfont(KNOB_FONT);
-y_ref = cY - 1.25*knobSize - 1;
-drawSelectionButton("Off", cX - 2*knobSize, y_ref + 0.5*y_move, ww, hh, 0, FILTER_MODE_SELECT_BUTTON, "No filter modulation.");
-drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
-drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
-drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, FILTER_MODE_SELECT_BUTTON, "Thresholded.");
-//drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 4, FILTER_MODE_SELECT_BUTTON, "Proportional to input RMS.");
-
-cX += 1.25 * knobSpacing;
-
-envAmountKnob.knob_set(sprintf(4, "   %d %%%%", 100*env_amnt), filter_envelope_mode > 0, env_amnt * .5 + .5);
-envAmountKnob.drawKnob(cX, cY, knobSize, "- Amount +", "Envelope Amount", 1.0);
-dial_animation ? (
-  envAmountKnob.knob_draw_modifier((current_env_amnt - env_amnt)*.5, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  envAmountKnob.knob_draw_modifier((current_env_amnt - env_amnt)*.5, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-envAmountKnob.knob_draw_modifier(env_amnt_vel * .5, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( envAmountKnob.knob_modifier_processMouse(0, env_amnt_vel * .5) ? ( env_amnt_vel = envAmountKnob.value * 2; );
-) : envAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( env_amnt = envAmountKnob.value * 2 - 1; slider_automate(env_amnt); );
-
-
-cX += knobSize*2.5;
-tempo_sync_envelopes ? ( envAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), filter_envelope_mode > 0, cutoff_atk);
-) : envAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_envelope_mode > 0, cutoff_atk);
-envAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
-dial_animation ? (
-  envAttackKnob.knob_draw_modifier(current_cutoff_atk - cutoff_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  envAttackKnob.knob_draw_modifier(current_cutoff_atk - cutoff_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-envAttackKnob.knob_draw_modifier(cutoff_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( envAttackKnob.knob_modifier_processMouse(0, cutoff_atk_vel) ? ( cutoff_atk_vel = envAttackKnob.value; );
-) : envAttackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_atk = envAttackKnob.value; slider_automate(cutoff_atk); );
-
-cutoffResetToggle.inactive = filter_envelope_mode == 0;
-cutoffResetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, cutoff_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on note.\n\nTurning this off changes the mode to a mode where\nthe amplitude no longer goes to 90%% in the set time.\n\nThis means that consecutive hits get increasingly higher\ncutoff values. The 303 is one of the classic synths that\nhad this characteristic.");
-cutoff_reset = cutoffResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cX += knobSize*2.5;
-tempo_sync_envelopes ? ( envDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), filter_envelope_mode > 0, cutoff_decay);
-) : envDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_envelope_mode > 0, cutoff_decay );
-envDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
-dial_animation ? (
-  envDecayKnob.knob_draw_modifier(current_cutoff_decay - cutoff_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  envDecayKnob.knob_draw_modifier(current_cutoff_decay - cutoff_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-envDecayKnob.knob_draw_modifier(cutoff_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( envDecayKnob.knob_modifier_processMouse(0, cutoff_decay_vel) ? ( cutoff_decay_vel = envDecayKnob.value; );
-) : envDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_decay = envDecayKnob.value; slider_automate(cutoff_decay); );
-
-cX += 2.5 * knobSize;
-
-envSustainKnob.knob_set("", filter_envelope_mode > 0, cutoff_sustain);
-
-( (filter_envelope_mode < 2) || filter_envelope_mode == 3 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
-: ( filter_envelope_mode == 2 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
-
-dial_animation ? (
-  envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-envSustainKnob.knob_draw_modifier(cutoff_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( envSustainKnob.knob_modifier_processMouse(0, cutoff_sustain_vel) ? ( cutoff_sustain_vel = envSustainKnob.value; );
-) : envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_CLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, c_lfo_enabled);
-
-cX += 2 * knobSpacing;
-
-cutoffLFOAmountKnob.active = c_lfo_enabled;
-cutoffLFOAmountKnob.value = c_lfo_amnt;
-cutoffLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
-draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), c_lfo_type, c_lfo_center_phase, c_lfo_time);
-dial_animation ? (
-  cutoffLFOAmountKnob.knob_draw_modifier(current_c_lfo_amnt - c_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  cutoffLFOAmountKnob.knob_draw_modifier(current_c_lfo_amnt - c_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-cutoffLFOAmountKnob.knob_draw_modifier(c_lfo_amnt_flfo, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
-activeModifier == 3 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_flfo) ? ( c_lfo_amnt_flfo = cutoffLFOAmountKnob.value; );
-) : activeModifier == 2 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_mod) ? ( c_lfo_amnt_mod = cutoffLFOAmountKnob.value; );
-) : activeModifier == 1 ? ( cutoffLFOAmountKnob.knob_modifier_processMouse(0, c_lfo_amnt_vel) ? ( c_lfo_amnt_vel = cutoffLFOAmountKnob.value; );
-) : (
-  mouse_cap == 2 && lcap == 0 ? (
-    cutoffLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
-      c_lfo_type += 1;
-      c_lfo_type > max_lfo_types ? c_lfo_type = 0;
-    );
-  ) : ( mouse_cap == 3 && lcap == 2 ) ? (
-    cutoffLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
-      c_lfo_type -= 1;
-      c_lfo_type < 0 ? c_lfo_type = max_lfo_types - 1;
-      cutoffLFOAmountKnob.lastLeftClick = -10000; /* Prevent double click from triggering from this */
-    );
-  ) : (
-    cutoffLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
-      c_lfo_amnt = cutoffLFOAmountKnob.value;
-      slider_automate(c_lfo_amnt);
-    );
-  );
-);
-
-cutoffLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LFO.");
-c_lfo_enabled = cutoffLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cutoffLfoResetToggle.inactive = !c_lfo_enabled;
-cutoffLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
-c_lfo_reset = cutoffLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cX += 2.5 * knobSize;
-cutoffSyncToggle.inactive = !c_lfo_enabled;
-cutoffSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, c_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
-c_lfo_sync = cutoffSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cutoffLFOSpeedKnob.active = c_lfo_enabled;
-cutoffLFOSpeedKnob.value = c_lfo_speed / 20;
-cutoffLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
-c_lfo_sync ? (
-  cutoffLFOSpeedKnob.label = cutoff_LFO.tempoLabel;
-) : (
-  cutoffLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(c_lfo_speed/15) - 1);
-);
-dial_animation ? (
-  cutoffLFOSpeedKnob.knob_draw_modifier((current_c_lfo_speed_slider*15 - c_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  cutoffLFOSpeedKnob.knob_draw_modifier((current_c_lfo_speed_slider*15 - c_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-cutoffLFOSpeedKnob.knob_draw_modifier(c_lfo_speed_flfo / 20, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod3_color_a, 3);
-activeModifier == 3 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_flfo / 20) ? ( c_lfo_speed_flfo = cutoffLFOSpeedKnob.value * 20; );
-) : activeModifier == 2 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_mod / 20) ? ( c_lfo_speed_mod = cutoffLFOSpeedKnob.value * 20; );
-) : activeModifier == 1 ? ( cutoffLFOSpeedKnob.knob_modifier_processMouse(0, c_lfo_speed_vel / 20) ? ( c_lfo_speed_vel = cutoffLFOSpeedKnob.value * 20; );
-) : (
-  cutoffLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
-    c_lfo_speed = cutoffLFOSpeedKnob.value * 20;
-    updateTempo();
-    slider_automate(c_lfo_speed);
-  );
-);
-
-cX += 1.85 * knobSize;
-cutoffLFOLRPhaseKnob.active = c_lfo_enabled;
-cutoffLFOLRPhaseKnob.value = (c_lfo_phase + 1) * .5;
-cutoffLFOLRPhaseKnob.drawKnob(cX, cY + .65*knobSize, .5*knobSize, "", "Cutoff LFO Pan Phase", 1.0);
-cutoffLFOLRPhaseKnob.label = "LR";
-cutoffLFOLRPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  c_lfo_phase = 2 * cutoffLFOLRPhaseKnob.value - 1;
-  slider_automate(c_lfo_phase);
-);
-
-
-cutoffLFOPhaseKnob.active = c_lfo_enabled;
-cutoffLFOPhaseKnob.value = (c_lfo_center_phase + 1) * .5;
-cutoffLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
-cutoffLFOPhaseKnob.label = "Φ";
-cutoffLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  c_lfo_center_phase = 2 * cutoffLFOPhaseKnob.value - 1;
-  slider_automate(c_lfo_center_phase);
-);
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_MLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, m_lfo_enabled);
-cX += 2 * knobSpacing;
-morphLFOAmountKnob.active = m_lfo_enabled;
-morphLFOAmountKnob.value = m_lfo_amnt;
-morphLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Morph LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
-draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), m_lfo_type, m_lfo_center_phase, m_lfo_time);
-dial_animation ? (
-  morphLFOAmountKnob.knob_draw_modifier(current_m_lfo_amnt - m_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  morphLFOAmountKnob.knob_draw_modifier(current_m_lfo_amnt - m_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-morphLFOAmountKnob.knob_draw_modifier(m_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-morphLFOAmountKnob.knob_draw_modifier(m_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( morphLFOAmountKnob.knob_modifier_processMouse(0, m_lfo_amnt_mod) ? ( m_lfo_amnt_mod = morphLFOAmountKnob.value; );
-) : activeModifier == 1 ? ( morphLFOAmountKnob.knob_modifier_processMouse(0, m_lfo_amnt_vel) ? ( m_lfo_amnt_vel = morphLFOAmountKnob.value; );
-) : (
-  mouse_cap == 2 && lcap == 0 ? (
-    morphLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
-      m_lfo_type += 1;
-      m_lfo_type > max_lfo_types ? m_lfo_type = 0;
-    );
-  ) : ( mouse_cap == 3 && lcap == 2 ) ? (
-    morphLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
-      m_lfo_type -= 1;
-      m_lfo_type < 0 ? m_lfo_type = max_lfo_types - 1;
-      morphLFOAmountKnob.lastLeftClick = -10000;
-    );
-  ) : (
-    morphLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( m_lfo_amnt = morphLFOAmountKnob.value; slider_automate(m_lfo_amnt); );
-  );
-);
-
-morphLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable LFO.");
-m_lfo_enabled = morphLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-morphLfoResetToggle.inactive = !m_lfo_enabled;
-morphLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
-m_lfo_reset = morphLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cX += 2.5 * knobSize;
-morphSyncToggle.inactive = !m_lfo_enabled;
-morphSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, m_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
-m_lfo_sync = morphSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-morphLFOSpeedKnob.active = m_lfo_enabled;
-morphLFOSpeedKnob.value = m_lfo_speed / 20;
-morphLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Morph LFO frequency", 1.0);
-m_lfo_sync ? (
-  morphLFOSpeedKnob.label = morph_LFO.tempoLabel;
-) : (
-  morphLFOSpeedKnob.label = sprintf(5, "%d Hz", 10^(m_lfo_speed/15) - 1);
-);
-dial_animation ? (
-  morphLFOSpeedKnob.knob_draw_modifier((current_m_lfo_speed_slider*15 - m_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  morphLFOSpeedKnob.knob_draw_modifier((current_m_lfo_speed_slider*15 - m_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-morphLFOSpeedKnob.knob_draw_modifier(m_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-morphLFOSpeedKnob.knob_draw_modifier(m_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( morphLFOSpeedKnob.knob_modifier_processMouse(0, m_lfo_speed_mod/20) ? ( m_lfo_speed_mod = morphLFOSpeedKnob.value * 20; );
-) : activeModifier == 1 ? ( morphLFOSpeedKnob.knob_modifier_processMouse(0, m_lfo_speed_vel/20) ? ( m_lfo_speed_vel = morphLFOSpeedKnob.value * 20; );
-) : (
-  morphLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
-    m_lfo_speed = morphLFOSpeedKnob.value * 20;
-    updateTempo();
-    slider_automate(m_lfo_speed);
-  );
-);
-
-cX += 1.85 * knobSize;
-
-morphLFOLRPhaseKnob.active = m_lfo_enabled;
-morphLFOLRPhaseKnob.value = (m_lfo_phase + 1) * .5;
-morphLFOLRPhaseKnob.drawKnob(cX, cY + .65*knobSize, .5*knobSize, "", "Morph Pan LFO Phase", 1.0);
-morphLFOLRPhaseKnob.label = "LR";
-morphLFOLRPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  m_lfo_phase = 2 * morphLFOLRPhaseKnob.value - 1;
-  slider_automate(m_lfo_phase);
-);
-
-morphLFOPhaseKnob.active = m_lfo_enabled;
-morphLFOPhaseKnob.value = (m_lfo_center_phase + 1) * .5;
-morphLFOPhaseKnob.drawKnob(cX, cY - .6 * knobSize, .5*knobSize, "", "Morph LFO Phase", 1.0);
-morphLFOPhaseKnob.label = "Φ";
-morphLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  m_lfo_center_phase = 2 * morphLFOPhaseKnob.value - 1;
-  slider_automate(m_lfo_center_phase);
-);
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_FLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, c_lfo_enabled);
-
-cX += 2 * knobSpacing;
-
-freeLFOAmountKnob.active = f_lfo_enabled;
-freeLFOAmountKnob.value = f_lfo_amnt;
-freeLFOAmountKnob.drawKnob(cX, cY, knobSize, "Amount", "Cutoff LFO Amount.\n\nPress RMB to toggle forward.\nGo backwards by pressing LMB while still\nholding RMB from the forward toggle.\nPress LMB and drag to change amount.", 1.0);
-draw_lfo(cX - 15*(1+scaling), cY - 10*(1+scaling), 30*(1+scaling), 20*(1+scaling), f_lfo_type, f_lfo_center_phase, f_lfo_time);
-dial_animation ? (
-  freeLFOAmountKnob.knob_draw_modifier(current_f_lfo_amnt - f_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  freeLFOAmountKnob.knob_draw_modifier(current_f_lfo_amnt - f_lfo_amnt, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-freeLFOAmountKnob.knob_draw_modifier(f_lfo_amnt_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-freeLFOAmountKnob.knob_draw_modifier(f_lfo_amnt_mod, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod2_color_a, 2);
-activeModifier == 2 ? ( freeLFOAmountKnob.knob_modifier_processMouse(0, f_lfo_amnt_mod) ? ( f_lfo_amnt_mod = freeLFOAmountKnob.value; );
-) : activeModifier == 1 ? ( freeLFOAmountKnob.knob_modifier_processMouse(0, f_lfo_amnt_vel) ? ( f_lfo_amnt_vel = freeLFOAmountKnob.value; );
-) : (
-  mouse_cap == 2 && lcap == 0 ? (
-    freeLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
-      f_lfo_type += 1;
-      f_lfo_type > max_lfo_types ? f_lfo_type = 0;
-    );
-  ) : ( mouse_cap == 3 && lcap == 2 ) ? (
-    freeLFOAmountKnob.knob_over(mouse_x, mouse_y) ? (
-      f_lfo_type -= 1;
-      f_lfo_type < 0 ? f_lfo_type = max_lfo_types - 1;
-      freeLFOAmountKnob.lastLeftClick = -10000; /* Prevent double click from triggering from this */
-    );
-  ) : (
-    freeLFOAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
-      f_lfo_amnt = freeLFOAmountKnob.value;
-      slider_automate(f_lfo_amnt);
-    );
-  );
-);
-
-freeLfoEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
-f_lfo_enabled = freeLfoEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-freeLfoResetToggle.inactive = !f_lfo_enabled;
-freeLfoResetToggle.drawToggle(cX+knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset LFO on note on.");
-f_lfo_reset = freeLfoResetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cX += 2.5 * knobSize;
-freeSyncToggle.inactive = !f_lfo_enabled;
-freeSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, f_lfo_sync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Sync rate to tempo.");
-f_lfo_sync = freeSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-freeLFOSpeedKnob.active = f_lfo_enabled;
-freeLFOSpeedKnob.value = f_lfo_speed / 20;
-f_lfo_sync ? (
-  freeLFOSpeedKnob.label = free_LFO.tempoLabel;
-) : (
-  freeLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(f_lfo_speed/15) - 1);
-);
-freeLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
-dial_animation ? (
-  freeLFOSpeedKnob.knob_draw_modifier((current_f_lfo_speed_slider*15 - f_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  freeLFOSpeedKnob.knob_draw_modifier((current_f_lfo_speed_slider*15 - f_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-freeLFOSpeedKnob.knob_draw_modifier(f_lfo_speed_vel / 20, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-freeLFOSpeedKnob.knob_draw_modifier(f_lfo_speed_mod / 20, bipolar, mod2_color_r, mod2_color_g, mod2_color_b, mod1_color_a, 2);
-activeModifier == 2 ? ( freeLFOSpeedKnob.knob_modifier_processMouse(0, f_lfo_speed_mod / 20) ? ( f_lfo_speed_mod = freeLFOSpeedKnob.value * 20; );
-) : activeModifier == 1 ? ( freeLFOSpeedKnob.knob_modifier_processMouse(0, f_lfo_speed_vel / 20) ? ( f_lfo_speed_vel = freeLFOSpeedKnob.value * 20; );
-) : (
-  freeLFOSpeedKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? (
-    f_lfo_speed = freeLFOSpeedKnob.value * 20;
-    updateTempo();
-    slider_automate(f_lfo_speed);
-  );
-);
-
-cX += 1.85 * knobSize;
-
-freeLFOPhaseKnob.active = f_lfo_enabled;
-freeLFOPhaseKnob.value = (f_lfo_center_phase + 1) * .5;
-freeLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
-freeLFOPhaseKnob.label = "Φ";
-freeLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  f_lfo_center_phase = 2 * freeLFOPhaseKnob.value - 1;
-  slider_automate(f_lfo_center_phase);
-);
-
-handleModifier("LINK", cX - .5 * knobSize, cY + .65 * knobSize, knobSize, knobSize, 3);
-
+filter_envelope_panel();
+cutoff_lfo_panel();
+morph_lfo_panel();
+free_lfo_panel();
 cX = xOrigin - 2*knobSpacing;
 cY = cY + 4 * knobSize;
-
-nextPanel = drawPanel(s_AMP_ENV, cX, cY - .53*panelHeight + .2*knobSize, 17.5*knobSpacing, panelHeight, 1);
-
-style == 0 ? (
-  gfx_set(midiChange*.4+.1, .1, .1, midiChange); midiChange *= .9;
-  gfx_rect(cX - 2.5*knobSpacing + 1, cY - .4*panelHeight - 1, 9 * (1+scaling), 9 * (1+scaling));
-) : (
-  sz = 10 * (1+scaling);
-  xref = cX + 0.5*knobSpacing;
-  yref = cY - .54*panelHeight;
-  gfx_set(.1, midiChange*.7+.1, .1, midiChange); midiChange *= .95;
-  gfx_rect(xref - .5 * sz, yref - .5 * sz - 1, sz, sz);
-  
-  r = 20*(1+scaling);
-  loop(12,
-    r -= 2*(1+scaling);
-    gfx_set(.5, 1, .5, .5*midiChange / r);
-    gfx_circle(xref - 1, yref - 3, r, 1);
-  );
-);
-
-cX += 2 * knobSpacing + knobSize;
-
-AMPLITUDE_SELECT_BUTTON = 10;
-gfx_setfont(KNOB_FONT);
-y_ref = cY - 1.25*knobSize - 1;
-
-drawSelectionButton("Off", cX - 2*knobSize, y_ref + 0.5*y_move, ww, hh, 0, AMPLITUDE_SELECT_BUTTON, "No amplitude modulation.");
-drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
-drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
-drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, AMPLITUDE_SELECT_BUTTON, "Thresholded.");
-//drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Proportional to input RMS.");
-
-cX += 1.25 * knobSpacing;
-
-ampAccentKnob.active = amplitude_envelope_mode > 0;
-ampAccentKnob.value = (amp_accent + 1) / 2;
-ampAccentKnob.drawKnob(cX, cY, knobSize, "- Accent +", "Accent", 1.0);
-ampAccentKnob.label = sprintf(16, "   %d %%%%", 100*amp_accent);
-ampAccentKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  amp_accent = ampAccentKnob.value * 2 - 1;
-  slider_automate(amp_accent);
-);
-
-preampToggle.inactive = amplitude_envelope_mode == 0;
-preampToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, amp_before_filter, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enabling this places the amplitude envelope before the filter.\nThis takes away some control over the amplitude envelope,\nbut allows you to hear the filter decay.\n");
-amp_before_filter = preampToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-cX += knobSize*2.5;
-resetToggle.inactive = amplitude_envelope_mode == 0;
-resetToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, reset, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Reset envelope on note.");
-reset = resetToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-tempo_sync_envelopes ? ( ampAttackKnob.knob_set(getFastEnvelopeLabel(amp_atk), amplitude_envelope_mode > 0, amp_atk);
-) : ampAttackKnob.knob_set(amp_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_atk))), amplitude_envelope_mode > 0, amp_atk);
-ampAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
-dial_animation ? (
-  ampAttackKnob.knob_draw_modifier(current_amp_atk - amp_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  ampAttackKnob.knob_draw_modifier(current_amp_atk - amp_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-ampAttackKnob.knob_draw_modifier(amp_atk_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( ampAttackKnob.knob_modifier_processMouse(0, amp_atk_vel) ? ( amp_atk_vel = ampAttackKnob.value; );
-) : ampAttackKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_atk = ampAttackKnob.value; slider_automate(amp_atk); );
-
-
-cX += knobSize*2.5;
-
-tempo_sync_envelopes ? ( ampDecayKnob.knob_set(getFastEnvelopeLabel(amp_decay), amplitude_envelope_mode > 0, amp_decay);
-) : ampDecayKnob.knob_set(amp_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*amp_decay))), amplitude_envelope_mode > 0, amp_decay);
-ampDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
-dial_animation ? (
-  ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-ampDecayKnob.knob_draw_modifier(amp_decay_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( ampDecayKnob.knob_modifier_processMouse(0, amp_decay_vel) ? ( amp_decay_vel = ampDecayKnob.value; );
-) : ampDecayKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_decay = ampDecayKnob.value; slider_automate(amp_decay); );
- 
-
-cX += 2.5 * knobSize;
-
-ampSustainKnob.knob_set("", amplitude_envelope_mode > 0, amp_sustain);
-( (amplitude_envelope_mode < 2) || amplitude_envelope_mode == 3 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
-: ( amplitude_envelope_mode == 2 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
-
-dial_animation ? (
-  ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-ampSustainKnob.knob_draw_modifier(amp_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( ampSustainKnob.knob_modifier_processMouse(0, amp_sustain_vel) ? ( amp_sustain_vel = ampSustainKnob.value; );
-) : ampSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_sustain = ampSustainKnob.value; slider_automate(amp_sustain); );
-
-
-cX = nextPanel + panelSpacing;
-
-nextPanel = drawPanel(s_DIST, cX, cY - .53*panelHeight + .2*knobSize, 7.7*knobSpacing, panelHeight, shaper);
-cX += 2.05 * knobSpacing;
-shaperToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, shaper, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable waveshaper.");
-shaper = shaperToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-higainToggle.inactive = !shaper;
-higainToggle.drawToggle(cX+knobSize-2, cy-knobSize, .15*knobSize, .15*knobSize, higain, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "High gain mode.");
-higain = higainToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-
-distKnob.knob_set(sprintf(1, "%.1f dB", current_ceiling), shaper, current_ceiling / 48);
-distKnob.drawKnob(cX, cY, knobSize, "Distortion", "Distortion level\n\nDistortion applied post-filter.", 0);
-dial_animation ? (
-  distKnob.knob_draw_modifier((cur_ceiling - current_ceiling) / 48, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-  distKnob.knob_draw_modifier((cur_ceiling - current_ceiling) / 48, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-);
-distKnob.knob_draw_modifier(current_ceiling_vel / 48, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-activeModifier == 1 ? ( distKnob.knob_modifier_processMouse(0, current_ceiling_vel / 48) ? ( current_ceiling_vel = distKnob.value * 48; );
-) : distKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( current_ceiling = distKnob.value * 48; slider_automate(current_ceiling); );
- 
-cX += 2.5 * knobSize;
-
-warmthKnob.active = shaper;
-warmthKnob.value = (warmth + 12) / 24;
-warmthKnob.drawKnob(cX, cY, knobSize, "Warmth", "Distortion warmth.\n\nApplies pre- and post-emphasis filters.", .5);
-warmthKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  warmth = warmthKnob.value * 24 - 12;
-  slider_automate(warmth);
-);
-
-cX = nextPanel + panelSpacing;
-
-// Effects panel
-nextPanel = drawPanel(s_FX, cX, cY - .53*panelHeight + .2*knobSize, 4.125*knobSpacing, panelHeight, 1);
-
-cX += 1.375 * knobSize;
-chorusKnob.knob_set("", 1, chorus_enabled / 2);
-chorusKnob.drawKnob(cX, cY, knobSize, "Space", "Bass preserving spatializer (pairs well with delay!)", 1.0);
-chorusKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
-  chorus_enabled = chorusKnob.value * 2;
-);
-  
-showOptions = 1;
-showOptions ? (
-  cX = nextPanel + panelSpacing;
-  
-  nextPanel = drawPanel(s_OPTS, cX, cY - .53*panelHeight + .2*knobSize, 11.25*knobSpacing, panelHeight, 1);
-  cX += 2*knobSpacing;
-  
-  tempoSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, tempo_sync_envelopes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use tempo synced envelopes.");
-  tempo_sync_envelopes_tmp = tempoSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-  tempo_sync_envelopes != tempo_sync_envelopes_tmp ? (
-    tempo_sync_envelopes = tempo_sync_envelopes_tmp;
-    tempo_sync_envelopes ? (
-      amp_atk = to_synced(amp_atk, 1.0);
-      amp_decay = to_synced(amp_decay, 0.1);
-      cutoff_atk = to_synced(cutoff_atk, 1.0);
-      cutoff_decay = to_synced(cutoff_decay, 0.1);
-    ) : (
-      amp_atk = to_non_synced(amp_atk, 1.0);
-      amp_decay = to_non_synced(amp_decay, 0.1);
-      cutoff_atk = to_non_synced(cutoff_atk, 1.0);
-      cutoff_decay = to_non_synced(cutoff_decay, 0.1);
-    );
-  );
-  
-  
-  oversamplingKnob.active = 1;
-  oversampling != floor(oversamplingKnob.value * 7 + 1) ? (
-    oversamplingKnob.value = (oversampling - 1) / 7;
-  );
-  oversamplingKnob.drawKnob(cX, cY, knobSize, "Oversampling", "Change the oversampling ratio. Some filters need this for stability.\nNote that it severely affects CPU cost though.", 1.0);
-  oversamplingKnob.label = sprintf(7, "x%d", oversampling);
-  oversamplingKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? (
-    newOversampling = floor(oversamplingKnob.value * 7 + 1);
-    floor(newOversampling) != overSampling ? (
-      oversampling = newOversampling;
-      slider_automate(oversampling);
-      updateSlider();
-    );
-  );
-  
-  dcCorrectionToggle.label = sprintf(34, "");
-  dcCorrectionToggle.drawToggle(cX + 0.9 * knobSize, cy-knobSize, .15*knobSize, .15*knobSize, fix_dc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Block DC.");
-  fix_dc = dcCorrectionToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-  
-  cX += 2.5 * knobSize;
-  inertiaKnob.active = 1;
-  inertiaKnob.value = inertia / 200;
-  inertiaKnob.label = sprintf(8, "%d ms", inertia);
-  inertiaKnob.drawKnob(cX, cY, knobSize, "Inertia", "Sets how quickly parameters respond to changes.", 1.0);
-  inertiaKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
-    inertia = inertiaKnob.value * 200;
-    slider_automate(inertia);
-  );
-  
-  legacyToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, legacy_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "In previous versions of FM Filter 2,\n the filter range was always mapped\nto the full range from zero to\n0.934 * Nyquist. This meant that\npresets were samplerate dependent.\n\nIn the newer version, the range always\nruns from 0 to 20.6 kHz (irrespective of\nsample rate).\n\nWhen this button is enabled, the\nold mode is returned.");
-  legacy_mode = legacyToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-  
-  cX += 2.5 * knobSize;
-  pitchBendKnob.active = 1;
-  pitchBendKnob.value = pitchBendRange / 12;
-  pitchBendKnob.label = sprintf(8, "%d st", floor(pitchBendRange));
-  pitchBendKnob.drawKnob(cX, cY, knobSize, "Bend range", "Pitch bend range.", 1.0);
-  pitchBendKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 60/200) ? (
-    pitchBendRange = pitchBendKnob.value * 12;
-    slider_automate(pitchBendRange);
-  );
-);
-
-cX += 2.25 * knobSize;
-
+amp_envelope_panel();
+effects_panel();
+dist_panel();
+options_panel();
+cX += 0.75 * knobSize;
 handleModifier("VEL", cX, cY - 1.15 * knobSize, knobSize, knobSize, 1);
 handleModifier("MOD", cX, cY + .5 * knobSize, knobSize, knobSize, 2);
 
