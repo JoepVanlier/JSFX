@@ -1,8 +1,8 @@
 desc:Saike FM Filter 2
 tags: audio-rate filters
-version: 0.17
+version: 0.18
 author: Joep Vanlier
-changelog: Add mode that allows having filter dynamics be proportional to RMS.
+changelog: Add lower threshold to RMS mode.
 license: MIT
 about:
   # An FM filter plugin
@@ -78,12 +78,12 @@ slider44:cutoff_atk=0.5<0,1,.0001>-Cutoff Attack
 slider45:cutoff_decay=0.5<0,1,.0001>-Cutoff Decay
 slider46:cutoff_sustain=0<0,1,.0001>-Cutoff Sustain
 
-slider47:placeholder=0<0,1,1>-Placeholder
+slider47:cutoff_low_thresh=0<0,1,0.000001>-Cutoff lower threshold (RMS mode only)
 
 slider48:current_ceiling=0<0,48,1>-Distortion level [dB]
 slider49:warmth=0<-12,12,1>-Warmth
 
-slider50:placeholder=0<0,1,1>-Deprecated
+slider50:amplitude_low_thresh=0<0,1,1>-Amplitude lower threshold (RMS mode only)
 slider51:placeholder=0<0,1,1>-Deprecated
 slider52:placeholder=0<0,1,1>-Deprecated
 
@@ -194,16 +194,47 @@ global()
   sqrt(running_tally / current_window)
 );
 
-function draw_thresh_window(x, y, w, h, normalized_thresh_value)
-instance(buffer, buffer_max, read_ptr, grabbed, last_cap, last_mouse_y)
+function checkline(x, ty, w, h, label)
+local(tol, over, ww, hh)
+global(mouse_cap, mouse_x, mouse_y, gfx_x, gfx_y)
+instance()
+(
+  tol = 6;
+  gfx_set(0.3, 0.3, 1, 1);
+  gfx_line(x, ty, x + w, ty);
+  gfx_line(x, ty - 1, x + w, ty - 1);
+  
+  label ? (
+    gfx_measurestr(label, ww, hh);
+    gfx_x = x;
+    gfx_y = ty - hh - 2;
+    gfx_printf(label);
+  );
+  
+  over = (mouse_x > x) && (mouse_x < (x + w)) && (mouse_y > (ty - tol)) && (mouse_y < (ty + tol));
+  over ? (
+    gfx_set(0.5, 0.4, 1, 1.0 * abs(sin(3 * time_precise())));
+    gfx_line(x, ty + 1, x + w, ty + 1);
+    gfx_line(x, ty - 2, x + w, ty - 2);
+  );
+  
+  over
+);
+
+// Unfortunately, the second threshold is handled based on a instance side effect. The second
+// threshold only appears when normalized_lower_thresh is set to a value < 10. When doing so, 
+// it will emit a value in the instance variable lower_thresh_changed when changed. The same 
+// rules apply, if the value is below 10, then it was changed.
+function draw_thresh_window(x, y, w, h, normalized_thresh_value, normalized_lower_thresh)
+instance(buffer, buffer_max, read_ptr, grabbed, last_cap, last_mouse_y, lower_thresh_changed)
 local(samples_per_pixel, sample_count, ptr, acc_thresh, acc_env, icount, thresh_last, env_last,
       xp, yp, min_val, max_val, scale, loga,
-      transformed_thresh_value, ty, over, tol
-      new_value)
-global(mouse_cap, mouse_x, mouse_y)
+      transformed_thresh_value, over, over_lower,
+      new_value, transformed_lower_thresh_value)
+global(mouse_cap, mouse_y)
 (
   new_value = normalized_thresh_value;
-  tol = 6;
+  lower_thresh_changed = 10; // zero means it was unchanged
   sample_count = 20000;
   samples_per_pixel = max(1, floor(sample_count / w));
   icount = 1.0 / samples_per_pixel;
@@ -218,40 +249,43 @@ global(mouse_cap, mouse_x, mouse_y)
     scale = h / (max_val - min_val);
     
     transformed_thresh_value = 10 * log10(normalized_thresh_value) -  min_val;
+    transformed_lower_thresh_value = normalized_lower_thresh < 10 ? 10 * log10(normalized_lower_thresh) -  min_val : 10;
   ) : (
     min_val = 0;
     max_val = 1;
     scale = h;
     transformed_thresh_value = normalized_thresh_value;
+    transformed_lower_thresh_value = normalized_lower_thresh < 10 ? normalized_lower_thresh : 10;
   );
   
-  ty = y + h - scale * transformed_thresh_value;
-  gfx_set(0.3, 0.3, 1, 1);
-  gfx_line(x, ty, x + w, ty);
-  gfx_line(x, ty - 1, x + w, ty - 1);
-  
-  over = (mouse_x > x) && (mouse_x < (x + w)) && (mouse_y > (ty - tol)) && (mouse_y < (ty + tol));
-  over ? (
-    gfx_set(0.5, 0.4, 1, 1.0 * abs(sin(3 * time_precise())));
-    gfx_line(x, ty + 1, x + w, ty + 1);
-    gfx_line(x, ty - 2, x + w, ty - 2);
-  );
   
   grabbed ? (
     (mouse_cap & 1) == 0 ? (
       grabbed = 0;
     ) : (
-      new_value = transformed_thresh_value - (mouse_y - last_mouse_y) / scale;
-      new_value = min(max_val - min_val, max(0, new_value));
-      loga ? (
-        new_value = pow(10, (new_value + min_val) / 10);
+      (grabbed == 1) ? (
+        new_value = transformed_thresh_value - (mouse_y - last_mouse_y) / scale;
+        new_value = min(max_val - min_val, max(0, new_value));
+        loga ? (
+          new_value = pow(10, (new_value + min_val) / 10);
+        );
+      ) : (grabbed == 2) ? (
+        lower_thresh_changed = transformed_lower_thresh_value - (mouse_y - last_mouse_y) / scale;
+        lower_thresh_changed = min(max_val - min_val, max(0, lower_thresh_changed));
+        loga ? (
+          lower_thresh_changed = pow(10, (lower_thresh_changed + min_val) / 10);
+        );
       );
     );
   );
   
+  over = checkline(x, y + h - scale * transformed_thresh_value, w, h, 0);
+  over_lower = (normalized_lower_thresh < 10) ? checkline(x, y + h - scale * transformed_lower_thresh_value, w, h, " Low");
   (mouse_cap & 1 == 1) && (last_cap == 0) ? (
     over ? (
       grabbed = 1;
+    ) : ( over_lower ) ? (
+      grabbed = 2;
     );
   );
   
@@ -661,7 +695,8 @@ amp_envelope =
     amp_env.update_envelope(m_notes_on)
   ) : (amplitude_envelope_mode == 4) ? (
     amp_meter = amplitude_rms.rms_window(spl0 * spl0 + spl1 * spl1, current_amplitude_rms_window);
-    amp_env = min(1.0, amp_meter / current_amp_sustain);
+    amp_env = max(0.0, min(1.0, (amp_meter - amplitude_low_thresh) / (current_amp_sustain - amplitude_low_thresh)));
+    
     amp_env = pow(amp_env, exp(TENSION_FACTOR * (current_amp_decay - 0.5)));
     amplitude_thresh.update_thresh_window(amp_meter, amp_env);
     amp_env
@@ -683,7 +718,7 @@ cutoff_envelope =
   ) : (filter_envelope_mode == 4) ? (
     filt_meter = filter_rms.rms_window(spl0 * spl0 + spl1 * spl1, current_filter_rms_window);
     
-    filt_env = min(1.0, filt_meter / current_cutoff_sustain);
+    filt_env = max(0.0, min(1.0, (filt_meter - cutoff_low_thresh) / (current_cutoff_sustain - cutoff_low_thresh)));
     filt_env = pow(filt_env, exp(TENSION_FACTOR * (current_cutoff_decay - 0.5)));
     
     filter_thresh.update_thresh_window(filt_meter, filt_env);
@@ -1442,10 +1477,14 @@ function filter_envelope_panel()
     ) : envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
     
   ) : ( filter_envelope_mode == 2 || filter_envelope_mode == 4 ) ? (
-    new_sustain = filter_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4, cutoff_sustain);
+    new_sustain = filter_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4, cutoff_sustain, filter_envelope_mode == 4 ? cutoff_low_thresh : 10);
     (cutoff_sustain != new_sustain) ? (
       slider_automate(cutoff_sustain = new_sustain);
     );
+    (filter_thresh.lower_thresh_changed < 10) ? (
+      slider_automate(cutoff_low_thresh = filter_thresh.lower_thresh_changed);
+    );
+    
     
     //envSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
   );
@@ -1524,7 +1563,7 @@ function amp_envelope_panel()
   
   tempo_sync_envelopes ? ( ampDecayKnob.knob_set(getFastEnvelopeLabel(amp_decay), amplitude_envelope_mode > 0, amp_decay);
   ) : ampDecayKnob.knob_set(amplitude_envelope_mode == 4 ? "" : amp_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*amp_decay))), amplitude_envelope_mode > 0, amp_decay);
-  ampDecayKnob.drawKnob(cX, cY, knobSize, filter_envelope_mode == 4 ? "Shape" : "Decay",  filter_envelope_mode == 4 ? "Response shape\n\nCenter is neutral (linear)" : "Decay Time", 1.0);
+  ampDecayKnob.drawKnob(cX, cY, knobSize, amplitude_envelope_mode == 4 ? "Shape" : "Decay",  amplitude_envelope_mode == 4 ? "Response shape\n\nCenter is neutral (linear)" : "Decay Time", 1.0);
   dial_animation ? (
     ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
     ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -1549,9 +1588,12 @@ function amp_envelope_panel()
     ) : ampSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_sustain = ampSustainKnob.value; slider_automate(amp_sustain); );
   ) : ( amplitude_envelope_mode == 2 || amplitude_envelope_mode == 4 ) ? (
     //ampSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
-    new_sustain = amplitude_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4, amp_sustain);
+    new_sustain = amplitude_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4, amp_sustain, amplitude_envelope_mode == 4 ? amplitude_low_thresh : 10);
     (amp_sustain != new_sustain) ? (
       slider_automate(amp_sustain = new_sustain);
+    );
+    (amplitude_thresh.lower_thresh_changed < 10) ? (
+      slider_automate(amplitude_low_thresh = amplitude_thresh.lower_thresh_changed);
     );
   );
   
