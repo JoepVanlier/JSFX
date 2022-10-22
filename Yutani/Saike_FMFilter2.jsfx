@@ -1,8 +1,8 @@
 desc:Saike FM Filter 2
 tags: audio-rate filters
-version: 0.15
+version: 0.17
 author: Joep Vanlier
-changelog: Add MIDI option to always trigger on note on (irrespective of whether there was a previous one). Fix LFO labels not showing up correctly. Fix issue with amplitude envelope settings not being stored. Fix issue with envelope variable accidentally being shared between amp and filter envelope. Did some preparatory work for improving the threshold mode.
+changelog: Add mode that allows having filter dynamics be proportional to RMS.
 license: MIT
 about:
   # An FM filter plugin
@@ -122,6 +122,7 @@ import Saike_Yutani_LFOs.jsfx-inc
 import Saike_Yutani_Delays.jsfx-inc
 
 @init
+TENSION_FACTOR = log(2) * 4;
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
 style = 1;
 lastOversample = 0;
@@ -136,7 +137,7 @@ global()
 (
   this.initBuffer(freemem, freemem + buffer_size);
   
-  freemem + buffer_size
+  freemem + buffer_size + 2
 );
 
 function update_thresh_window(thresh, env)
@@ -149,12 +150,60 @@ global()
   this.writeBuffer(env);
 );
 
-function draw_thresh_window(x, y, w, h)
-instance(buffer, buffer_max, read_ptr)
-local(samples_per_pixel, sample_count, ptr, acc_thresh, acc_env, icount, thresh_last, env_last,
-      xp, yp)
+function init_rms_window(buffer, max_samples)
+local()
+instance(current_samples, buffer_start, buffer_end, current_window, write_ptr, running_tally)
 global()
 (
+  write_ptr = buffer_start = buffer;
+  buffer_end = buffer_start + max_samples;
+  current_window = -1; // Force reinit
+  running_tally = 0;
+  
+  buffer_start 
+);
+
+function rms_window(sample, target_window)
+instance(buffer_start, buffer_end, write_ptr, current_window, running_tally)
+local(read_ptr)
+global()
+(
+  target_window = floor(target_window);
+  (target_window != current_window) ? (
+    current_window = target_window;
+    // Rerun window
+    read_ptr = write_ptr - current_window;
+    read_ptr < buffer_start ? read_ptr += buffer_end - buffer_start;
+    
+    running_tally = 0;
+    loop(current_window,
+      running_tally += read_ptr[];
+      read_ptr += 1;
+      read_ptr == buffer_end ? read_ptr = buffer_start;
+    );
+  );
+
+  read_ptr = write_ptr - current_window;
+  read_ptr < buffer_start ? read_ptr += buffer_end - buffer_start;
+  running_tally += sample - read_ptr[];
+
+  write_ptr[] = sample;
+  write_ptr += 1;
+  write_ptr == buffer_end ? write_ptr = buffer_start;
+
+  sqrt(running_tally / current_window)
+);
+
+function draw_thresh_window(x, y, w, h, normalized_thresh_value)
+instance(buffer, buffer_max, read_ptr, grabbed, last_cap, last_mouse_y)
+local(samples_per_pixel, sample_count, ptr, acc_thresh, acc_env, icount, thresh_last, env_last,
+      xp, yp, min_val, max_val, scale, loga,
+      transformed_thresh_value, ty, over, tol
+      new_value)
+global(mouse_cap, mouse_x, mouse_y)
+(
+  new_value = normalized_thresh_value;
+  tol = 6;
   sample_count = 20000;
   samples_per_pixel = max(1, floor(sample_count / w));
   icount = 1.0 / samples_per_pixel;
@@ -162,10 +211,54 @@ global()
   gfx_set(0, 0, 0, 0.7);
   gfx_rect(x, y, w, h);
   
-  xp = x + w;
+  loga = 1;
+  loga ? (
+    min_val = -32;
+    max_val = 0;
+    scale = h / (max_val - min_val);
+    
+    transformed_thresh_value = 10 * log10(normalized_thresh_value) -  min_val;
+  ) : (
+    min_val = 0;
+    max_val = 1;
+    scale = h;
+    transformed_thresh_value = normalized_thresh_value;
+  );
+  
+  ty = y + h - scale * transformed_thresh_value;
+  gfx_set(0.3, 0.3, 1, 1);
+  gfx_line(x, ty, x + w, ty);
+  gfx_line(x, ty - 1, x + w, ty - 1);
+  
+  over = (mouse_x > x) && (mouse_x < (x + w)) && (mouse_y > (ty - tol)) && (mouse_y < (ty + tol));
+  over ? (
+    gfx_set(0.5, 0.4, 1, 1.0 * abs(sin(3 * time_precise())));
+    gfx_line(x, ty + 1, x + w, ty + 1);
+    gfx_line(x, ty - 2, x + w, ty - 2);
+  );
+  
+  grabbed ? (
+    (mouse_cap & 1) == 0 ? (
+      grabbed = 0;
+    ) : (
+      new_value = transformed_thresh_value - (mouse_y - last_mouse_y) / scale;
+      new_value = min(max_val - min_val, max(0, new_value));
+      loga ? (
+        new_value = pow(10, (new_value + min_val) / 10);
+      );
+    );
+  );
+  
+  (mouse_cap & 1 == 1) && (last_cap == 0) ? (
+    over ? (
+      grabbed = 1;
+    );
+  );
+  
   ptr = read_ptr - 4;
-  thresh_last = ptr[];
-  env_last = ptr[1];
+  thresh_last =  max(0, min(h, loga ? scale * (10 * log10(ptr[0]) - min_val) : scale * ptr[0]));
+  env_last = ptr[1] * h;
+  xp = x + w;
   loop(w,
     acc_thresh = 0;
     acc_env = 0;
@@ -176,25 +269,36 @@ global()
       ptr -= 2;
       ptr < buffer ? ptr += (buffer_max - buffer) - 1;
     );
-    acc_env *= icount;
+    acc_env *= icount * h;
+    
+    acc_thresh = loga ? scale * (10 * log10(acc_thresh) - min_val) : scale * acc_thresh;
+    acc_thresh = max(0, min(h, acc_thresh));
+    
     gfx_set(0.2, 1.0, 0.2, 0.1);
-    gfx_line(xp, y + h, xp - 1, y + h - acc_env * h, 1);
+    gfx_line(xp, y + h, xp - 1, y + h - acc_env, 1);
     gfx_set(0.2, 1.0, 0.2, 1.0);
-    gfx_line(xp, y + h - env_last * h, xp - 1, y + h - acc_env * h, 1);
-    gfx_line(xp, y + h - env_last * h - 1, xp - 1, y + h - acc_env * h - 1, 1);
+    gfx_line(xp, y + h - env_last, xp - 1, y + h - acc_env, 1);
+    gfx_line(xp, y + h - env_last - 1, xp - 1, y + h - acc_env - 1, 1);
     gfx_set(1.0, 0.2, 1.0, 0.1);
-    gfx_line(xp, y + h, xp - 1, y + h - acc_thresh * h, 1);
+    gfx_line(xp, y + h, xp - 1, y + h - acc_thresh, 1);
     gfx_set(1.0, 0.2, 1.0, 1.0);
-    gfx_line(xp, y + h - thresh_last * h, xp - 1, y + h - acc_thresh * h, 1);
-    gfx_line(xp, y + h - thresh_last * h - 1, xp - 1, y + h - acc_thresh * h - 1, 1);
+    gfx_line(xp, y + h - thresh_last, xp - 1, y + h - acc_thresh, 1);
+    gfx_line(xp, y + h - thresh_last - 1, xp - 1, y + h - acc_thresh - 1, 1);
     xp -= 1;
     
     thresh_last = acc_thresh;
     env_last = acc_env;
   );
   
+  
+  
   //gfx_set(0.1, 0.3, 0.1, 1.0);
   //gfx_rect(x - 1, y - 1, w + 2, h + 2, 0);
+  
+  last_cap = mouse_cap;
+  last_mouse_y = mouse_y;
+  
+  new_value
 );
 
 freemem = (midimem = freemem) + 32768;
@@ -216,6 +320,10 @@ freemem = (r_buffer = freemem) + 2001;
 
 freemem = filter_thresh.init_tresh_window(freemem, 50000);
 freemem = amplitude_thresh.init_tresh_window(freemem, 50000);
+
+rms_buffer_size = 0.4 * 96000;
+freemem = filter_rms.init_rms_window(freemem, rms_buffer_size);
+freemem = amplitude_rms.init_rms_window(freemem, rms_buffer_size);
 
 // Chorus materials
 l_delay.initBuffer(l_buffer, l_buffer + 2000);
@@ -375,6 +483,9 @@ loop(199,
 updateSlider();
 
 @block
+current_filter_rms_window = 0.003 * 10^(2*cutoff_atk) * srate;
+current_amplitude_rms_window = 0.003 * 10^(2*amp_atk) * srate;
+
 sampling_ratio = legacy_mode ? 1 : 44100 / srate;
 sampling_factor = oversampling / sampling_ratio;
 isampling_factor = 1 / sampling_factor;
@@ -548,6 +659,12 @@ amp_envelope =
   ) : (amplitude_envelope_mode == 3) ? (
     midi.newNote ? amp_env.tEnvelope = 0;
     amp_env.update_envelope(m_notes_on)
+  ) : (amplitude_envelope_mode == 4) ? (
+    amp_meter = amplitude_rms.rms_window(spl0 * spl0 + spl1 * spl1, current_amplitude_rms_window);
+    amp_env = min(1.0, amp_meter / current_amp_sustain);
+    amp_env = pow(amp_env, exp(TENSION_FACTOR * (current_amp_decay - 0.5)));
+    amplitude_thresh.update_thresh_window(amp_meter, amp_env);
+    amp_env
   ) : 0;
 
 cutoff_envelope = 
@@ -563,6 +680,14 @@ cutoff_envelope =
   (filter_envelope_mode == 3) ? (
     midi.newNote ? cutoff_env.tEnvelope = 0;
     cutoff_env.update_envelope(m_notes_on)
+  ) : (filter_envelope_mode == 4) ? (
+    filt_meter = filter_rms.rms_window(spl0 * spl0 + spl1 * spl1, current_filter_rms_window);
+    
+    filt_env = min(1.0, filt_meter / current_cutoff_sustain);
+    filt_env = pow(filt_env, exp(TENSION_FACTOR * (current_cutoff_decay - 0.5)));
+    
+    filter_thresh.update_thresh_window(filt_meter, filt_env);
+    filt_env
   ) : 0;
 
 
@@ -1229,7 +1354,7 @@ function feedback_panel()
 function filter_envelope_panel()
 (
   // FILTER ENVELOPE
-  pwidth = 17.5 + 1.65 * 0;
+  pwidth = 17.5 + 1.65;
   nextPanel = drawPanel(s_FILT_ENV, cX, cY - .53*panelHeight + .2*knobSize, pwidth * knobSpacing, panelHeight, 1);
   
   style == 0 ? (
@@ -1259,7 +1384,7 @@ function filter_envelope_panel()
   drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
   drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, FILTER_MODE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
   drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, FILTER_MODE_SELECT_BUTTON, "Thresholded.");
-  //drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 4, FILTER_MODE_SELECT_BUTTON, "Proportional to input RMS.");
+  drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 4.5*y_move, ww, hh, 4, FILTER_MODE_SELECT_BUTTON, "Proportional to input RMS.");
   
   cX += knobSpacing;
   
@@ -1273,11 +1398,10 @@ function filter_envelope_panel()
   activeModifier == 1 ? ( envAmountKnob.knob_modifier_processMouse(0, env_amnt_vel * .5) ? ( env_amnt_vel = envAmountKnob.value * 2; );
   ) : envAmountKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( env_amnt = envAmountKnob.value * 2 - 1; slider_automate(env_amnt); );
   
-  
   cX += knobSize*2.5;
   tempo_sync_envelopes ? ( envAttackKnob.knob_set(getFastEnvelopeLabel(cutoff_atk), filter_envelope_mode > 0, cutoff_atk);
   ) : envAttackKnob.knob_set(cutoff_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*cutoff_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*cutoff_atk))), filter_envelope_mode > 0, cutoff_atk);
-  envAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
+  envAttackKnob.drawKnob(cX, cY, knobSize, filter_envelope_mode == 4 ? "RMS window" : "Attack", filter_envelope_mode == 4 ? "RMS window" : "Attack Time", 1.0);
   dial_animation ? (
     envAttackKnob.knob_draw_modifier(current_cutoff_atk - cutoff_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
     envAttackKnob.knob_draw_modifier(current_cutoff_atk - cutoff_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -1292,8 +1416,8 @@ function filter_envelope_panel()
   
   cX += knobSize*2.5;
   tempo_sync_envelopes ? ( envDecayKnob.knob_set(getFastEnvelopeLabel(cutoff_decay), filter_envelope_mode > 0, cutoff_decay);
-  ) : envDecayKnob.knob_set(cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_envelope_mode > 0, cutoff_decay );
-  envDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
+  ) : envDecayKnob.knob_set(filter_envelope_mode == 4 ? "" : cutoff_decay > .5 ? sprintf(19, "%d ms", (30 * 10^(2*cutoff_decay))) : sprintf(19, "%.1f ms", (30 * 10^(2*cutoff_decay))), filter_envelope_mode > 0, cutoff_decay );
+  envDecayKnob.drawKnob(cX, cY, knobSize, filter_envelope_mode == 4 ? "Shape" : "Decay", filter_envelope_mode == 4 ? "Response shape\n\nCenter is neutral (linear)" : "Decay Time", 1.0);
   dial_animation ? (
     envDecayKnob.knob_draw_modifier(current_cutoff_decay - cutoff_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
     envDecayKnob.knob_draw_modifier(current_cutoff_decay - cutoff_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -1306,26 +1430,32 @@ function filter_envelope_panel()
   
   envSustainKnob.knob_set("", filter_envelope_mode > 0, cutoff_sustain);
   
-  ( (filter_envelope_mode < 2) || filter_envelope_mode == 3 ) ? envSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
-  : ( filter_envelope_mode == 2 ) ? (
-    //filter_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4);
-    envSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
+  ( (filter_envelope_mode < 2) || filter_envelope_mode == 3 ) ? (
+    envSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0);
+    
+    dial_animation ? (
+      envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+      envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+    );
+    envSustainKnob.knob_draw_modifier(cutoff_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+    activeModifier == 1 ? ( envSustainKnob.knob_modifier_processMouse(0, cutoff_sustain_vel) ? ( cutoff_sustain_vel = envSustainKnob.value; );
+    ) : envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
+    
+  ) : ( filter_envelope_mode == 2 || filter_envelope_mode == 4 ) ? (
+    new_sustain = filter_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4, cutoff_sustain);
+    (cutoff_sustain != new_sustain) ? (
+      slider_automate(cutoff_sustain = new_sustain);
+    );
+    
+    //envSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
   );
-  
-  dial_animation ? (
-    envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-    envSustainKnob.knob_draw_modifier(current_cutoff_sustain - cutoff_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-  );
-  envSustainKnob.knob_draw_modifier(cutoff_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-  activeModifier == 1 ? ( envSustainKnob.knob_modifier_processMouse(0, cutoff_sustain_vel) ? ( cutoff_sustain_vel = envSustainKnob.value; );
-  ) : envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
   
   cX = nextPanel + panelSpacing;
 );
 
 function amp_envelope_panel()
 (
-  pwidth = 17.5 + 1.65 * 0;
+  pwidth = 17.5 + 1.65;
   nextPanel = drawPanel(s_AMP_ENV, cX, cY - .53*panelHeight + .2*knobSize, pwidth*knobSpacing, panelHeight, 1);
   
   style == 0 ? (
@@ -1356,7 +1486,7 @@ function amp_envelope_panel()
   drawSelectionButton("MIDI L", cX - 2*knobSize, y_ref + 1.5*y_move, ww, hh, 1, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Legato).\n\nOnly keydown from no keys constitutes a press.");
   drawSelectionButton("MIDI T", cX - 2*knobSize, y_ref + 2.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Enable envelope by MIDI (Trigger).\n\nTrigger on all key downs.");
   drawSelectionButton("Thresh", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 2, AMPLITUDE_SELECT_BUTTON, "Thresholded.");
-  //drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 3.5*y_move, ww, hh, 3, AMPLITUDE_SELECT_BUTTON, "Proportional to input RMS.");
+  drawSelectionButton("RMS", cX - 2*knobSize, y_ref + 4.5*y_move, ww, hh, 4, AMPLITUDE_SELECT_BUTTON, "Proportional to input RMS.");
   
   cX += 1 * knobSpacing;
   
@@ -1380,7 +1510,7 @@ function amp_envelope_panel()
   
   tempo_sync_envelopes ? ( ampAttackKnob.knob_set(getFastEnvelopeLabel(amp_atk), amplitude_envelope_mode > 0, amp_atk);
   ) : ampAttackKnob.knob_set(amp_atk > .5 ? sprintf(1, "%d ms", (3 * 10^(2*amp_atk))) : sprintf(1, "%.1f ms", (3 * 10^(2*amp_atk))), amplitude_envelope_mode > 0, amp_atk);
-  ampAttackKnob.drawKnob(cX, cY, knobSize, "Attack", "Attack Time", 1.0);
+  ampAttackKnob.drawKnob(cX, cY, knobSize, filter_envelope_mode == 4 ? "RMS window" : "Attack", filter_envelope_mode == 4 ? "RMS window" : "Attack Time", 1.0);
   dial_animation ? (
     ampAttackKnob.knob_draw_modifier(current_amp_atk - amp_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
     ampAttackKnob.knob_draw_modifier(current_amp_atk - amp_atk, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -1393,8 +1523,8 @@ function amp_envelope_panel()
   cX += knobSize*2.5;
   
   tempo_sync_envelopes ? ( ampDecayKnob.knob_set(getFastEnvelopeLabel(amp_decay), amplitude_envelope_mode > 0, amp_decay);
-  ) : ampDecayKnob.knob_set(amp_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*amp_decay))), amplitude_envelope_mode > 0, amp_decay);
-  ampDecayKnob.drawKnob(cX, cY, knobSize, "Decay", "Decay Time", 1.0);
+  ) : ampDecayKnob.knob_set(amplitude_envelope_mode == 4 ? "" : amp_decay > .5 ? sprintf(1, "%d ms", (30 * 10^(2*amp_decay))) : sprintf(1, "%.1f ms", (30 * 10^(2*amp_decay))), amplitude_envelope_mode > 0, amp_decay);
+  ampDecayKnob.drawKnob(cX, cY, knobSize, filter_envelope_mode == 4 ? "Shape" : "Decay",  filter_envelope_mode == 4 ? "Response shape\n\nCenter is neutral (linear)" : "Decay Time", 1.0);
   dial_animation ? (
     ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
     ampDecayKnob.knob_draw_modifier(current_amp_decay - amp_decay, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -1407,20 +1537,23 @@ function amp_envelope_panel()
   cX += 2.5 * knobSize;
   
   ampSustainKnob.knob_set("", amplitude_envelope_mode > 0, amp_sustain);
-  ( (amplitude_envelope_mode < 2) || amplitude_envelope_mode == 3 ) ? ampSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0)
-  : ( amplitude_envelope_mode == 2 ) ? (
-    ampSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
-    //amplitude_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4);
+  ( (amplitude_envelope_mode < 2) || amplitude_envelope_mode == 3 ) ? (
+    ampSustainKnob.drawKnob(cX, cY, knobSize, "Sustain", "Sustain %", 1.0);
+    
+    dial_animation ? (
+      ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
+      ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
+    );
+    ampSustainKnob.knob_draw_modifier(amp_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+    activeModifier == 1 ? ( ampSustainKnob.knob_modifier_processMouse(0, amp_sustain_vel) ? ( amp_sustain_vel = ampSustainKnob.value; );
+    ) : ampSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_sustain = ampSustainKnob.value; slider_automate(amp_sustain); );
+  ) : ( amplitude_envelope_mode == 2 || amplitude_envelope_mode == 4 ) ? (
+    //ampSustainKnob.drawKnob(cX, cY, knobSize, "Threshold", "Threshold [V]", 1.0);
+    new_sustain = amplitude_thresh.draw_thresh_window(cX - knobSize, cY - knobSize, knobSize * 3.4, knobSize * 2.4, amp_sustain);
+    (amp_sustain != new_sustain) ? (
+      slider_automate(amp_sustain = new_sustain);
+    );
   );
-  
-  dial_animation ? (
-    ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
-    ampSustainKnob.knob_draw_modifier(current_amp_sustain - amp_sustain, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
-  );
-  ampSustainKnob.knob_draw_modifier(amp_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
-  activeModifier == 1 ? ( ampSustainKnob.knob_modifier_processMouse(0, amp_sustain_vel) ? ( amp_sustain_vel = ampSustainKnob.value; );
-  ) : ampSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( amp_sustain = ampSustainKnob.value; slider_automate(amp_sustain); );
-  
   
   cX = nextPanel + panelSpacing;
 );
