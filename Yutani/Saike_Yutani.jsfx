@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.77
+version: 0.78
 author: Joep Vanlier
-changelog: Fix in FM Filter2 dependency (envelope follower).
+changelog: Fix rate indicator LFOs. Add pitch bend semitone control.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -89,7 +89,7 @@ slider43:env_amnt=0<-1,1,.0001>-Envelope Amount
 slider44:cutoff_atk=0.5<0,1,.0001>-Cutoff Attack
 slider45:cutoff_decay=0.5<0,1,.0001>-Cutoff Decay
 slider46:cutoff_sustain=0<0,1,.0001>-Cutoff Sustain
-slider47:subosc_shape=0<0,1,1>-SubOsc Shape
+slider47:subosc_shape=0<0,4,1>-SubOsc Shape
 
 slider48:current_ceiling=0<0,48,1>-Distortion level [dB]
 slider49:warmth=0<-12,12,1>-Warmth
@@ -121,10 +121,10 @@ out_pin:right output
 import Saike_Yutani_Delays.jsfx-inc
 import Saike_Yutani_midilib.jsfx-inc
 import Saike_Yutani_distortion.jsfx-inc
-import Saike_Yutani_Oscs.jsfx-inc
 import Saike_Yutani_Envelope.jsfx-inc
 import Saike_Yutani_interpolators.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
+import Saike_Yutani_Oscs.jsfx-inc
 import Saike_Yutani_oversampling.jsfx-inc
 import Saike_Yutani_upsamplers.jsfx-inc
 import Saike_Yutani_widgets.jsfx-inc
@@ -192,6 +192,8 @@ freemem = oscs.oscsInitBuffer(freemem);
 freemem = oscs2.oscsInitBuffer(freemem);
 freemem = oscs3.oscsInitBuffer(freemem);
 freemem = oscs4.oscsInitBuffer(freemem);
+
+freemem = initialize_vowel(freemem);
 
 function initialize_interpolators()
 (
@@ -400,6 +402,8 @@ file_var(0, ssaw_detune);
 file_var(0, comb_time);
 file_var(0, glottis_position);
 
+file_var(0, pitch_bend_range);
+
 loop(197,
   file_var(0, 0);
 );
@@ -408,6 +412,7 @@ loop(197,
 updateSlider();
 
 @block
+pb_range = floor(pitch_bend_range) + 2;
 //israte_t60 = 1.0 / (pow(10, 1 - 0.2 * comb_time) * srate);
 israte_t60 = 1.0 / (exp(2.302585092994046 - 0.4605170185988092 * comb_time) * srate);
 
@@ -420,6 +425,7 @@ isampling_factor = 1 / sampling_factor;
 
 israte = 1.0 / srate;
 israte_radian = 2.0*$pi*israte;
+
 vib_factor = 16 * $pi * israte;
 midi.processMIDIBlock(); 
 
@@ -611,7 +617,7 @@ lf_update_step % 8 == 0 ? (
   
   current_vib_amount = cl01(vibrato_amount + vibrato_amount_vel * midi.lastVel + vibrato_amount_mod * mod_level);
   current_vib_frequency = clamp(vibrato_frequency + vibrato_frequency_vel * midi.lastVel + vibrato_frequency_mod * mod_level, 0, 10);
-  bend = 2 * midi.pitchBend + current_vib_amount * sin(current_vib_frequency * ss * vib_factor);
+  bend = pb_range * midi.pitchBend + current_vib_amount * sin(current_vib_frequency * ss * vib_factor);
   pitch_bend = 2^(bend * 0.08333333333333333333333333333333);
   
   update_osc_pitch(0);
@@ -1015,6 +1021,15 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
       spl1 += sub_osc_sig;
     );
   );
+
+vowel_enabled ? (
+  css += 1;
+  //1 - cutoff_envelope, 1);//
+  //1.0 - cutoff_envelope , 1); //
+  osc_vowel_filter.initvowel(abs(sin(css * 0.00005)), 1);
+  spl0 = spl0 + tanh(osc_vowel_filter.eval_vowel(spl0));
+  spl1 = spl1 + tanh(osc_vowel_filter.eval_vowel_b(spl1));
+);
 
 spl0 += spl_0;
 spl1 += spl_1;
@@ -1900,6 +1915,25 @@ activeModifier == 1 ? ( fmPhaseKnob.knob_modifier_processMouse(0, fm_spread_vel)
 ) : fmPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0) ? ( fm_spread = fmPhaseKnob.value; slider_automate(fm_spread); );
 
 
+/*
+Vowel filter: Not ready for release
+cX = nextPanel + panelSpacing;
+nextPanel = drawPanel(s_VOWEL, cX, cY - .53*panelHeight + .2*knobSize, 1.5 * knobSize + 2 * knobSpacing, panelHeight, 1);
+
+cX += 2 * knobSpacing;
+
+vowelEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, vowel_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable vowel filter.");
+vowel_enabled = vowelEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+vowelKnob.active = vowel_enabled;
+vowelKnob.value = vowel_position;
+vowelKnob.drawKnob(cX, cY, knobSize, "Vowel", "Vowel", 1.0);
+vowelKnob.label = "Φ";
+vowelKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  vowel_position = vowelKnob.value;
+  //slider_automate(f_lfo_center_phase);  This slider does not exist
+);
+*/
 
 cX = nextPanel + panelSpacing;
 
@@ -2139,12 +2173,12 @@ c_lfo_sync = cutoffSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 cutoffLFOSpeedKnob.active = c_lfo_enabled;
 cutoffLFOSpeedKnob.value = c_lfo_speed / 20;
-cutoffLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
 c_lfo_sync ? (
   cutoffLFOSpeedKnob.label = cutoff_LFO.tempoLabel;
 ) : (
   cutoffLFOSpeedKnob.label = sprintf(3, "%.1f Hz", 10^(c_lfo_speed/15) - 1);
 );
+cutoffLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Cutoff LFO frequency", 1.0);
 dial_animation ? (
   cutoffLFOSpeedKnob.knob_draw_modifier((current_c_lfo_speed_slider*15 - c_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
   cutoffLFOSpeedKnob.knob_draw_modifier((current_c_lfo_speed_slider*15 - c_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -2230,12 +2264,12 @@ m_lfo_sync = morphSyncToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
 morphLFOSpeedKnob.active = m_lfo_enabled;
 morphLFOSpeedKnob.value = m_lfo_speed / 20;
-morphLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Morph LFO frequency", 1.0);
 m_lfo_sync ? (
   morphLFOSpeedKnob.label = morph_LFO.tempoLabel;
 ) : (
   morphLFOSpeedKnob.label = sprintf(5, "%d Hz", 10^(m_lfo_speed/15) - 1);
 );
+morphLFOSpeedKnob.drawKnob(cX, cY, knobSize, "Rate", "Morph LFO frequency", 1.0);
 dial_animation ? (
   morphLFOSpeedKnob.knob_draw_modifier((current_m_lfo_speed_slider*15 - m_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, -.1);
   morphLFOSpeedKnob.knob_draw_modifier((current_m_lfo_speed_slider*15 - m_lfo_speed)/20, bipolar, dial_position_color_r, dial_position_color_g, dial_position_color_b, 1.0, .1);
@@ -2370,11 +2404,11 @@ cX += 1.85 * knobSize;
 
 freeLFOPhaseKnob.active = f_lfo_enabled;
 freeLFOPhaseKnob.value = (f_lfo_center_phase + 1) * .5;
-freeLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
+freeLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Free LFO Phase", 1.0);
 freeLFOPhaseKnob.label = "Φ";
 freeLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
   f_lfo_center_phase = 2 * freeLFOPhaseKnob.value - 1;
-  slider_automate(f_lfo_center_phase);
+  //slider_automate(f_lfo_center_phase);  This slider does not exist
 );
 
 handleModifier("LINK", cX - .5 * knobSize, cY + .65 * knobSize, knobSize, knobSize, 3);
@@ -2508,7 +2542,7 @@ showOptions = 1;
 showOptions ? (
   cX = nextPanel + panelSpacing;
   
-  nextPanel = drawPanel(s_OPTS, cX, cY - .53*panelHeight + .2*knobSize, 10.75*knobSpacing, panelHeight, 1);
+  nextPanel = drawPanel(s_OPTS, cX, cY - .53*panelHeight + .2*knobSize, 14.25 * knobSpacing, panelHeight, 1);
   cX += 2*knobSpacing;
   
   tempoSyncToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, tempo_sync_envelopes, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use tempo synced envelopes.");
@@ -2557,6 +2591,15 @@ showOptions ? (
   
   legacyToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, legacy_mode, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "In previous versions of Yutani, the\nfilter range was always mapped\nto the full range from zero to\n0.934 * Nyquist. This meant that\npresets were samplerate dependent.\n\nIn the newer version, the range always\nruns from 0 to 20.6 kHz (irrespective of\nsample rate).\n\nWhen this button is enabled, the\nold mode is returned.");
   legacy_mode = legacyToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  
+  cX += 2.5 * knobSize;
+  pitchBendKnob.active = 1;
+  pitchBendKnob.value = (pitch_bend_range + 2) / 12;
+  pitchBendKnob.label = sprintf(8, "%d st", floor(pitch_bend_range) + 2);
+  pitchBendKnob.drawKnob(cX, cY, knobSize, "Bend range", "Pitch bend range.", 1.0);
+  pitchBendKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 40/200) ? (
+    pitch_bend_range = pitchBendKnob.value * 12 - 2;
+  );
 );
 
 cX += 3.5 * knobSpacing;
