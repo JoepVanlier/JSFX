@@ -9,8 +9,7 @@ safety_limit_moog = 0.25; // Above this level the model suffers from numerical d
 safety_limit_resa = 0.89; // Above this level the model suffers from numerical difficulties. Ensures fc < fs/4.
 safety_limit_svf = 0.9;//0.94;//0.9;
 safety_limit_svf2 = 0.85;
-
-current_safety_moog = (1.0 - log(safety_limit_moog * oversampling) / log(20/22050));
+safety_limit_pir = 0.96;
 
   function tanh(x)
   local()
@@ -39,6 +38,13 @@ function check_safety()
     );
   );
   
+  ((filter_type == 26) && (oversampling == 1)) ? (
+    cutoff > safety_limit_pir ? (
+      slider_automate(cutoff = safety_limit_pir);
+      warning = 75;
+    );
+  );
+  
   (filter_type == 3) || (filter_type == 4) ?
   (
     cutoff > current_safety_moog ? (
@@ -54,7 +60,7 @@ function check_safety()
     );
   );
   
-  (filter_type == 18) || (filter_type == 19) || (filter_type == 20) || (filter_type == 21) || (filter_type == 22) || (filter_type == 23) ? (
+  (filter_type == 18) || (filter_type == 19) || (filter_type == 20) || (filter_type == 21) || (filter_type == 22) || (filter_type == 23) || (filter_type == 24) || (filter_type == 25) ? (
     (cutoff > safety_limit_resa) && (oversampling == 1) ? (
       slider_automate(cutoff = safety_limit_resa);
       warning = 75;
@@ -570,6 +576,250 @@ function eval_linearSVF_BR(v0)
     (2/(1+em2x))-1
   );
   
+  function init_moog3(cutoff, resonance)
+  local(fs, fc, g, p0s, nmp, gN, kgN, p0g, tmp, acc)
+  global(srate, sampling_factor)
+  instance(VT2, rg1, rg2, rg3, qg1, qg2, qg3, si1, sf1, sg1, si2, sf2, sg2, k0g, k0s, VT2i, q0s, r1s, k)
+  (
+    k    = resonance * 8;
+    fs   = srate * sampling_factor;
+    fc   = 0.5 * srate * exp( (1-cutoff) * log(20/22050) );
+    
+    g    = tan($pi / fs * fc) / sqrt(1 + k ^ 0.6666666666666666 - k ^ 0.3333333333333333);
+    VT2  = 0.052;
+    VT2i = 19.23076923076923;
+  
+    // Ladder stages
+    p0s = 1.0 / (1.0 + g);
+    q0s = 1.0 - g;
+    r1s = -g;
+    k0s = VT2 * g * p0s;
+  
+    // Global filter
+    nmp = (1.0 - p0s);
+    gN  = nmp * nmp * nmp;
+    kgN = k * gN;
+    p0g = 1.0 / (1.0 + kgN);
+    k0g = -VT2i * p0g;
+  
+    rg1 = -3.0*kgN;
+    rg2 = -3.0*kgN;
+    rg3 = - kgN;
+    acc = tmp = p0s*(g - 1.0);
+    qg1 = -3.0*(kgN + acc);
+    acc = acc*tmp;
+    qg2 = -3.0*(kgN + acc);
+    acc = acc*tmp;
+    qg3 = - (kgN + acc); 
+  );
+  
+  function eval_moog3(x)
+  local(yi, yd, yf)
+  global()
+  instance(yo, y, A, B, rg1, rg2, rg3, qg1, qg2, qg3, si1, sf1, sg1, si2, sf2, sg2, si3, sf3, sg3, k0g, k0s, VT2i, q0s, r1s, k)
+  (
+    yo = tanh(k0g * (x + sg1));
+    A = yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf1);
+    y    = yd + si1;
+    yo   = tanh(VT2i * y);
+    B    = yo;
+  
+    si1 = yd + y;
+    sf1 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf2);
+    y    = yd + si2;
+    yo   = tanh(VT2i * y);
+  
+    si2 = yd + y;
+    sf2 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf3);
+    y    = yd + si3;
+    yo   = tanh(VT2i * y);
+  
+    si3 = yd + y;
+    sf3 = r1s * yi - q0s * yo;
+  
+    yf = k * y;
+  
+    sg1 = rg1 * x + qg1 * yf + sg2;
+    sg2 = rg2 * x + qg2 * yf + sg3;
+  
+    sg3 = rg3 * x + qg3 * yf;
+  );
+  
+  function mix_moog3(x, choice, frac)
+  local()
+  global()
+  instance(VT, VT2, VT2i, A, B, y, yo, k, f1, f2)
+  (
+    this.eval_moog3(x*VT2);
+    
+    (choice == 0) ? (
+      f1 = y * (1 + k); // LP
+      f2 = VT2 * (2*B - 2*yo); // BP
+    ) : (choice == 1) ? (
+      f1 = VT2 * (2*B - 2*yo); // BP
+      f2 = VT2 * (A - B); // HP
+    ) : (choice == 2) ? (
+      frac = frac * frac;
+      frac = frac * frac;
+      f1 = VT2 * (A - B); // HP
+      f2 = -VT2 * (2*B-2*yo-A); // BR
+    ) : (choice == 3) ? (
+      f1 = -VT2 * (2*B-2*yo-A); // BR
+      f2 = y * (1 + k); // LP
+    );
+    
+    (f2 * frac + f1 * (1.0-frac))*VT2i;
+  );
+  
+  function init_moog6(cutoff, resonance)
+  local(fs, fc, g, p0s, nmp, gN, kgN, p0g, tmp, acc)
+  global(srate, sampling_factor)
+  instance(VT2, rg1, rg2, rg3, rg4, rg5, rg6, qg1, qg2, qg3, qg4, qg5, qg6, si1, sf1, sg1, si2, sf2, sg2, si3, sf3, sg3, si4, sf4, sg4, si5, sf5, sg5, si6, sf6, sg6, k0g, k0s, VT2i, q0s, r1s, k)
+  (
+    k    = resonance * 2.3703703703703694;
+    fs   = srate * sampling_factor;
+    fc   = 0.5 * srate * exp( (1-cutoff) * log(20/22050) );
+    g    = tan($pi / fs * fc) / sqrt(1 + k ^ 0.3333333333333333 - 2 * k ^ 0.16666666666666666 * 0.8660254037844387);
+
+    VT2  = 0.052;
+    VT2i = 19.23076923076923;
+  
+    // Ladder stages
+    p0s = 1.0 / (1.0 + g);
+    q0s = 1.0 - g;
+    r1s = -g;
+    k0s = VT2 * g * p0s;
+  
+    // Global filter
+    nmp = (1.0 - p0s);
+    gN  = nmp ^ 6;
+    kgN = k * gN;
+    p0g = 1.0 / (1.0 + kgN);
+    k0g = -VT2i * p0g;
+  
+    rg1 = -6.0*kgN;
+    rg2 = -15.0*kgN;
+    rg3 = -20.0*kgN;
+    rg4 = -15.0*kgN;
+    rg5 = -6.0*kgN;
+    rg6 = -1.0*kgN;
+    acc = tmp = p0s*(g - 1.0);
+    qg1 = -6.0*(kgN + acc);
+    acc = acc*tmp;
+    qg2 = -15.0*(kgN + acc);
+    acc = acc*tmp;
+    qg3 = -20.0*(kgN + acc);
+    acc = acc*tmp;
+    qg4 = -15.0*(kgN + acc);
+    acc = acc*tmp;
+    qg5 = -6.0*(kgN + acc);
+    acc = acc*tmp;
+    qg6 = -1.0*(kgN + acc);
+  );
+  
+  function eval_moog6(x)
+  local(yi, yd, yf)
+  global()
+  instance(yo, y, A, B, rg1, rg2, rg3, rg4, rg5, rg6, qg1, qg2, qg3, qg4, qg5, qg6, si1, sf1, sg1, si2, sf2, sg2, si3, sf3, sg3, si4, sf4, sg4, si5, sf5, sg5, si6, sf6, sg6, k0g, k0s, VT2i, q0s, r1s, k)
+  (
+    yo = tanh(k0g * (x + sg1));
+    A = yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf1);
+    y    = yd + si1;
+    yo   = tanh(VT2i * y);
+    B    = yo;
+  
+    si1 = yd + y;
+    sf1 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf2);
+    y    = yd + si2;
+    yo   = VT2i * y;
+  
+    si2 = yd + y;
+    sf2 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf3);
+    y    = yd + si3;
+    yo   = VT2i * y;
+  
+    si3 = yd + y;
+    sf3 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf4);
+    y    = yd + si4;
+    yo   = VT2i * y;
+  
+    si4 = yd + y;
+    sf4 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf5);
+    y    = yd + si5;
+    yo   = VT2i * y;
+  
+    si5 = yd + y;
+    sf5 = r1s * yi - q0s * yo;
+  
+    yi   = yo;
+    yd   = k0s * (yi + sf6);
+    y    = yd + si6;
+    yo   = VT2i * y;
+  
+    si6 = yd + y;
+    sf6 = r1s * yi - q0s * yo;
+    
+    yf = k * y;
+  
+    sg1 = rg1 * x + qg1 * yf + sg2;
+    sg2 = rg2 * x + qg2 * yf + sg3;
+    sg3 = rg3 * x + qg3 * yf + sg4;
+    sg4 = rg4 * x + qg4 * yf + sg5;
+    sg5 = rg5 * x + qg5 * yf + sg6;
+  
+    sg6 = rg6 * x + qg6 * yf;
+  );
+  
+  function mix_moog6(x, choice, frac)
+  local()
+  global()
+  instance(VT, VT2, VT2i, A, B, y, yo, k, f1, f2)
+  (
+    this.eval_moog6(x*VT2);
+    
+    (choice == 0) ? (
+      f1 = y * (1 + k); // LP
+      f2 = VT2 * (2*B - 2*yo); // BP
+    ) : (choice == 1) ? (
+      f1 = VT2 * (2*B - 2*yo); // BP
+      f2 = VT2 * (A - B); // HP
+    ) : (choice == 2) ? (
+      frac = frac * frac;
+      frac = frac * frac;
+      f1 = VT2 * (A - B); // HP
+      f2 = -VT2 * (2*B-2*yo-A); // BR
+    ) : (choice == 3) ? (
+      f1 = -VT2 * (2*B-2*yo-A); // BR
+      f2 = y * (1 + k); // LP
+    );
+    
+    (f2 * frac + f1 * (1.0-frac))*VT2i;
+  );
+  
   function init_moog2(cutoff, resonance)
   local(fs, fc, g, p0s, nmp, gN, kgN, p0g, tmp, acc)
   global(srate, sampling_factor)
@@ -578,7 +828,7 @@ function eval_linearSVF_BR(v0)
     k    = resonance*120;
 
     fs   = srate * sampling_factor;
-    fc   = .5 * srate * exp( (1-cutoff) * log(20/22050) );    
+    fc   = .5 * srate * exp( (1-cutoff) * log(20/22050) );
     g    = tan($pi / fs * fc) / sqrt(1 + k);
     
     VT2  = 0.052;
@@ -592,7 +842,7 @@ function eval_linearSVF_BR(v0)
   
     // Global filter
     nmp = (1.0 - p0s);
-    gN  = nmp ^ 2;
+    gN  = nmp * nmp;
     kgN = k * gN;
     p0g = 1.0 / (1.0 + kgN);
     k0g = -VT2i * p0g;
@@ -777,7 +1027,56 @@ function eval_linearSVF_BR(v0)
     );
     
     (f2 * frac + f1 * (1.0-frac))*VT2i
-  );  
+  );
+  
+function init_1p_tpt_based(freq, resonance)
+instance(coeff, b1, b2, b3, K, a0)
+local(i1g, gg, f0, g, ga)
+global(isampling_factor)
+(
+  K = 2 * resonance;
+  f0 = exp( (1 - freq) * log(20/22050) ) * isampling_factor;
+  g = tan(.5 * $pi * f0);
+  i1g = 1.0 / (1.0 + g);
+  coeff = g * i1g;
+  ga = 2.0 * coeff - 1.0;
+  b1 = ga * coeff;
+  b2 = ga * i1g;
+  b3 = 2.0 * i1g;
+  a0 = 1.0 / (1.0 + K * ga * coeff * coeff);
+);
+
+function eval_1p_tpt_based(u, choice, frac)
+instance(coeff, a0, b1, b2, b3, s1, s2, s3, K)
+local(y, v, out, fb)
+global()
+(
+  fb = K * (b1 * s1 + b2 * s2 + b3 * s3);
+  
+  fb *= 1.5;
+  fb > 0.3 ? fb = 0.3;
+  fb < -0.3 ? fb = -0.3;
+  
+  y = a0 * (u - fb);
+  y = y > 0 ? y / (1.0 + abs(y + 0.5 * y * y)) : y / (1.0 + abs(y));;
+  
+  // LP
+  v = coeff * (y - s1);
+  y = v + s1;
+  s1 = y + v;
+  
+  // LP
+  v = coeff * (y - s2);
+  y = v + s2;
+  s2 = y + v;
+  
+  // AP
+  v = y - s3;
+  s3 = s3 + 2 * coeff * v;
+  y = s3 - v;
+  
+  y
+);
   
   function f_g_asym(s)
   local()
@@ -2165,7 +2464,7 @@ instance(
   filter_choiceL, frac_morphL, i_morphL,
   filter_choiceR, frac_morphR, i_morphR,
 )
-global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf, safety_limit_svf2, safety_limit_resa)
+global(oversampling, safety_limit_pir, safety_limit_ms20, safety_limit_moog, current_safety_moog, safety_limit_svf, safety_limit_svf2, safety_limit_resa)
 (
   (filter_type < 10) ?(
     filter_type == 0 ? (
@@ -2327,6 +2626,25 @@ global(oversampling, safety_limit_ms20, safety_limit_moog, current_safety_moog, 
       R.init_steiner(sliderCutoffR, sliderReso / 2, sliderMorphL);
       L2.init_steiner(sliderCutoffL * (0.93 + 0.07 * sliderCutoffL), sliderReso / 2, sliderMorphL);
       R2.init_steiner(sliderCutoffR * (0.93 + 0.07 * sliderCutoffR), sliderReso / 2, sliderMorphL);
+    ) : ( filter_type == 24 ) ? (
+      sliderCutoffL = sliderCutoffL > current_safety_moog ? current_safety_moog : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > current_safety_moog ? current_safety_moog : sliderCutoffR;
+      
+      L.moog3.init_moog3(sliderCutoffL, sliderReso);
+      R.moog3.init_moog3(sliderCutoffR, sliderReso);
+    ) : ( filter_type == 25 ) ? (
+      sliderCutoffL = sliderCutoffL > current_safety_moog ? current_safety_moog : sliderCutoffL;
+      sliderCutoffR = sliderCutoffR > current_safety_moog ? current_safety_moog : sliderCutoffR;
+      
+      L.moog6.init_moog6(sliderCutoffL, sliderReso);
+      R.moog6.init_moog6(sliderCutoffR, sliderReso);
+    ) : ( filter_type == 26 ) ? (
+      (oversampling == 1) ? (
+        sliderCutoffL = sliderCutoffL > safety_limit_pir ? safety_limit_pir : sliderCutoffL;
+        sliderCutoffR = sliderCutoffR > safety_limit_pir ? safety_limit_pir : sliderCutoffR;
+      );
+      L.hla.init_1p_tpt_based(sliderCutoffL, sliderReso);
+      R.hla.init_1p_tpt_based(sliderCutoffR, sliderReso);
     );
   );
   
@@ -2435,6 +2753,15 @@ global(ssl, ssr, epsilon)
       ) : ( filter_type == 23 ) ? (
         ssl = L2.eval_steiner_rav_stacc(L.eval_steiner_rav_stacc(ssl));
         ssr = R2.eval_steiner_rav_stacc(R.eval_steiner_rav_stacc(ssr));
+      ) : ( filter_type == 24 ) ? (
+        ssl = L.moog3.mix_moog3(ssl, filter_choiceL, frac_morphL);
+        ssr = R.moog3.mix_moog3(ssr, filter_choiceR, frac_morphR);
+      ) : ( filter_type == 25 ) ? (
+        ssl = L.moog6.mix_moog6(ssl, filter_choiceL, frac_morphL);
+        ssr = R.moog6.mix_moog6(ssr, filter_choiceR, frac_morphR);
+      ) : ( filter_type == 26 ) ? (
+        ssl = L.hla.eval_1p_tpt_based(ssl, filter_choiceL, frac_morphL);
+        ssr = R.hla.eval_1p_tpt_based(ssr, filter_choiceL, frac_morphL);
       );
     );
   );
