@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.79
+version: 0.80
 author: Joep Vanlier
-changelog: New filter
+changelog: New filter. Fix issue with cutoff envelope jittering when automating via the UI.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -64,7 +64,7 @@ slider22:detune3=0<-1, 1, .00001>-Detune [semitones]
 slider23:amp4=0<0, 1,.00001>-Voice 4 [%]
 slider24:detune4=0<-1, 1, .00001>-Detune [semitones]
 
-slider25:filter_type=1<0,26,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA,Muck,Pill2p,Pill4p,Pill2p Aggro,Pill4p Aggro,Pill2p Stacc,Pill4p Stacc,Ladder3,Ladder6,HLadder}>Filter type
+slider25:filter_type=1<0,26,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA,Muck,Pill2p,Pill4p,Pill2p Aggro,Pill4p Aggro,Pill2p Stacc,Pill4p Stacc,Ladder3,Ladder6,HLadder}>-Filter type
 slider26:drive=0<-32,48,1>-Filter Drive (dB)
 slider27:boost=0<-6,48,1>-Post Boost (dB)
 slider28:cutoff=.6<0,1,.0001>-Cutoff
@@ -473,7 +473,7 @@ post_sub = subosc_vol && subosc_enabled && !subosc_pre;
 m_state = max(0.9999 * m_state, max(midi.lastNotesOn, m_out_last));
 audio_running = m_state > 0.00000000001;
 
-function updateCurrentVelocitySettings()
+function updateCurrentVelocitySettings(update_env)
 (
   shouldUpdateCurrentVelocitySettings = 0;
 
@@ -517,19 +517,22 @@ function updateCurrentVelocitySettings()
   current_cutoff_decay = cl01(cutoff_decay + cutoff_decay_vel * midi.lastVel);
   current_cutoff_sustain = cl01(cutoff_sustain + cutoff_sustain_vel * midi.lastVel);
   
-  tempo_sync_envelopes ? (
-    amp_env.calc_times_sync(current_amp_atk, current_amp_decay, current_amp_sustain);
-    pitch_env.calc_times_sync(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
-    cutoff_env.calc_times_sync(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
-  ) : (
-    amp_env.calc_times(current_amp_atk, current_amp_decay, current_amp_sustain);
-    pitch_env.calc_times(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
-    cutoff_env.calc_times(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+  update_env ? (
+    tempo_sync_envelopes ? (
+      amp_env.calc_times_sync(current_amp_atk, current_amp_decay, current_amp_sustain);
+      pitch_env.calc_times_sync(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
+      cutoff_env.calc_times_sync(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+    ) : (
+      amp_env.calc_times(current_amp_atk, current_amp_decay, current_amp_sustain);
+      pitch_env.calc_times(cl01(pitch_atk + pitch_atk_vel), cl01(pitch_decay + pitch_decay_vel), 0);
+      cutoff_env.calc_times(current_cutoff_atk, current_cutoff_decay, current_cutoff_sustain);
+    );
+    !cutoff_reset ? cutoff_env.k_rise = .25*cutoff_env.k_rise; /* Allow it to creep up a bit more */
   );
 );
 
 // Force an update when knobs are touched
-shouldUpdateCurrentVelocitySettings ? updateCurrentVelocitySettings();
+shouldUpdateCurrentVelocitySettings ? updateCurrentVelocitySettings(0);
 
 pdc_delay == 0 ? (
   spl_0 = spl0;
@@ -671,7 +674,7 @@ local()
   : (note_mode == 3) ? ( 1 );
  
   new_trigger && (mmsg == 1) ? (
-    updateCurrentVelocitySettings();
+    updateCurrentVelocitySettings(1);
     
     c_lfo_reset ? c_lfo_time = c_lfo_center_phase;
     m_lfo_reset ? m_lfo_time = m_lfo_center_phase;
@@ -683,7 +686,6 @@ local()
     amp_env.reset_envelope(reset && amp_before_filter);
     pitch_env.reset_envelope();
     cutoff_env.reset_envelope(cutoff_reset);
-    !cutoff_reset ? cutoff_env.k_rise = .25*cutoff_env.k_rise;
 
      pwm_master_active = slider(OSC1_SELECT) == 4;
      pwm_dt = cl01(pwm_rate + pwm_rate_vel) * 10.0/srate; //.0002;
@@ -1743,7 +1745,7 @@ activeModifier == 1 ? ( postBoost.knob_modifier_processMouse(0, boost_vel / 54) 
 
 cX = nextPanel + panelSpacing;
 
-nextPanel = drawPanel(s_FILTER, cX, cY - .53*panelHeight + .2*knobSize, 22.75*knobSpacing, panelHeight, 1);
+nextPanel = drawPanel(s_FILTER, cX, cY - .53*panelHeight + .2*knobSize, 25.25*knobSpacing, panelHeight, 1);
 
 cX += knobSize + 2 * knobSpacing;
 gfx_setfont(KNOB_FONT);
@@ -1776,8 +1778,13 @@ drawSelectionButton("Pillow4pA", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 21
 drawSelectionButton("Pillow2pS", cX + 1.5*knobSize, y_ref + 5*y_move, ww, hh, 22, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
 drawSelectionButton("Pillow4pS", cX + 1.5*knobSize, y_ref + 6*y_move, ww, hh, 23, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
 
+drawSelectionButton("Ladder3", cX + 3.25*knobSize, y_ref + 0*y_move, ww, hh, 24, FILTER_SELECT_BUTTON, "Ladder filter");
+drawSelectionButton("Ladder6", cX + 3.25*knobSize, y_ref + 1*y_move, ww, hh, 25, FILTER_SELECT_BUTTON, "Ladder filter");
+drawSelectionButton("LadderAP", cX + 3.25*knobSize, y_ref + 2*y_move, ww, hh, 26, FILTER_SELECT_BUTTON, "2-pole ladder filter with allpass filter for resonance. Drive this one hard.");
 
-cX += 4.25*knobSize;
+
+
+cX += 6*knobSize;
 center = .5 * sampling_ratio * srate * exp( (1-clamp(cutoff, 0, .99)) * log(20/22050) );
 cutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), 1, cutoff);
 cutoffKnob.drawKnob(cX, cY, knobSize, "Cutoff", "Filter Cutoff", 1.0);
