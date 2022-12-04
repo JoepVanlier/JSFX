@@ -1,8 +1,10 @@
 desc:Saike Not OTT (ALPHA)
 tags: multiband compression
-version: 0.16
+version: 0.17
 author: Joep Vanlier
-changelog: Fix rendering issues retina display
+changelog: Adjust epsilon
+provides:  
+  nott.jsfx.rpl
 about:
   # Multiband Compressor.
   Compressor design based on: Giannoulis et al, "Digital Dynamic Range Compressor Design - A Tutorial and Analysis", Journal of the Audio Engineering Society 60(6)
@@ -64,6 +66,7 @@ slider38:Gain3=0<-48,48,0.00001>-Gain 3
 slider39:Gain4=0<-48,48,0.00001>-Gain 4
 slider40:Gain5=0<-48,48,0.00001>-Gain 5
 
+slider40:gain_circuit=0<0,1,1>-Gain circuit
 slider41:coupled=1<0,1,{False,True}>-Couple L/R?
 slider42:fixdc=0<0,1,1>-DC offset filter
 slider43:input_gain=0<-32,32,.001>Input gain
@@ -78,7 +81,6 @@ slider63:FIR_quality=0<0,2,{Normal,High,Ultra}>-FIR Quality
 slider64:agc=0<0,2,1{OFF,active adjustment,fixed}>Gain Compensation (experimental)
 
 @init
-eps = 10^(epsilon);
 //function fft_real(x, y)
 //(
 //  1
@@ -247,6 +249,45 @@ update_gain_now();
     ) : xG;
   );
 
+  /* Gain computer */
+  function calcGain(xG)
+  instance(thresh_lower, thresh_upper, iratio_lower, iratio_upper, ratio_upper)
+  local(diff, tmp)
+  global()
+  (
+    ( xG < thresh_lower ) ? (
+      diff = xG - thresh_lower;
+      tmp = thresh_lower + diff * iratio_lower;
+    ) : ( xG > thresh_upper ) ? (
+      diff = xG - thresh_upper;
+      thresh_upper + diff * iratio_upper
+    ) : xG
+  );
+  
+  /* Gain computer */
+  function calcGainUpper(xG)
+  instance(thresh_lower, thresh_upper, iratio_lower, iratio_upper, ratio_upper)
+  local(diff, tmp)
+  global()
+  (
+    ( xG > thresh_upper ) ? (
+      diff = xG - thresh_upper;
+      thresh_upper + diff * iratio_upper
+    ) : xG;
+  );
+  
+  /* Gain computer */
+  function calcGainLower(xG)
+  instance(thresh_lower, thresh_upper, iratio_lower, iratio_upper, ratio_upper)
+  local(diff, tmp)
+  global()
+  (
+    ( xG < thresh_lower ) ? (
+      diff = xG - thresh_lower;
+      thresh_lower + diff * iratio_lower
+    ) : xG;
+  ); 
+
   function setCompressorOptions(thrlow, thrhigh, ratlow, rathigh, s_atk, s_rel, min_attack, max_attack, min_decay, max_decay)
     instance(rt, at, thresh_upper, thresh_lower, ratio_upper, ratio_lower, iratio_upper, iratio_lower, attack, release)
     global(srate)
@@ -273,29 +314,48 @@ update_gain_now();
   // Topology 3:
   /* Level detection log domain */
   function compressor_gain(x)
-    instance( rt, at, yL, 
-              ya, outGain )
-    global(eps)
-    local(xL, yG, xG)
+    instance(rt, at, yL, xx, ya, xG, yL2)
+    global(eps, gain_circuit)
+    local(xL, yG, xL2)
     (
-      (abs(x) > 10 * eps) ? (
-        xG  = 20 * log10(abs(x) + eps); /* Peak */
-      );
-      
-       /* Calculate the gain curve */
-      yG = this.calcGain(xG);
-      xL  = xG - yG;
-     
-      // Update smooth peak detector (peak)
-      xL > yL ? (
-        yL = at * yL + (1.0-at) * xL;
+      gain_circuit ? (
+        // Two explicit stages
+        xG  = 20 * log10(abs(yL));
+        
+        // Calculate the gain curve
+        yG = this.calcGain(xG);
+        xL = max(abs(x), 0.000001);
+        
+        // Update smooth peak detector (peak)
+        xL > yL ? (
+          yL = at * yL + (1.0 - at) * xL;
+        ) : (
+          ya = max( xL, rt * ya + (1.0-rt) * xL );
+          yL = at * yL + (1.0 - at) * ya;
+        );
+        
+        // Return gain correction
+        - (yG - xG);
       ) : (
-        ya = max( xL, rt * ya + (1.0-rt) * xL );
-        yL = at * yL + (1.0-at) * ya;
+        (abs(x) > 10 * eps) ? (
+          xG  = 20 * log10(abs(x) + eps); /* Peak */
+          
+          /* Calculate the gain curve */
+          yG = this.calcGain(xG);
+          xL  = xG - yG;
+         
+          // Update smooth peak detector (peak)
+          xL > yL ? (
+            yL = at * yL + (1.0 - at) * xL;
+          ) : (
+            ya = max( xL, rt * ya + (1.0-rt) * xL );
+            yL = at * yL + (1.0 - at) * ya;
+          );
+        );
+       
+        // Return gain correction
+        yL
       );
-     
-      // Return gain correction
-      yL
     );
     
   /* Very flat 6-pole butterworth made of cascade of cytomics' SVF */
@@ -1889,14 +1949,16 @@ function hzLabel(dy, label)
     gfx_printf(19, label);
   );
   
-function drawRatio(th, sliderIdx, down)
+function drawRatio(th, sliderIdx, down, threshSliderIdx)
 instance(x, y, w, h)
-local(hh, v, frac, ratio, sw, sh)
+local(hh, v, frac, ratio, sw, sh, q)
 global(threshRange, lineR, lineG, lineB, lineA,
        gfx_x, gfx_y, gfx_a, hide_ratio)
 (
   gfx_set(lineR, lineG, lineB, .1 * lineA);
   v = slider(sliderIdx);
+  q = slider(threshSliderIdx);
+  
   frac = 6;
   loop(4,
     hh = frac * th / threshRange / exp(1.1 * v * v);
@@ -1914,9 +1976,15 @@ global(threshRange, lineR, lineG, lineB, lineA,
     
     gfx_measurestr(6, sw, sh);
     gfx_x = x + 0.05 * w; gfx_y = y + 0.5 * h - (down ? -sh : 2 * sh);
+    
+    gfx_drawstr(6);
+    
+    sprintf(6, "%.3g dB", q);
+    gfx_measurestr(6, sw, sh);
+    
+    gfx_x = x + 0.95 * w - sw; gfx_y = y + 0.5 * h - (down ? -sh : 2 * sh);    
+    gfx_drawstr(6);
   );
-  
-  gfx_drawstr(6);
 );
 
 
@@ -2042,11 +2110,11 @@ function drawBands()
     topLayer = 0; // Make sure selected band ends up on top.
     ( Cuts == 0 ) ? (
        red();
-       h1.drawRatio(h, ratioHighIdx + 0, 0);
+       h1.drawRatio(h, ratioHighIdx + 0, 0, threshHighIdx);
        h1.fancyLineH(x, y1, x+w-2, y1);
        blue();
        h6.fancyLineH(x, y6, x+w-2, y6);
-       h6.drawRatio(h, ratioLowIdx + 0, 1);
+       h6.drawRatio(h, ratioLowIdx + 0, 1, threshLowIdx);
        red();
        c1.fancyCircle(x + .5*w, y1, 0, mute1, solo1, bypassBand1);
        
@@ -2057,14 +2125,14 @@ function drawBands()
        red();
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x+w-2, y2);
-       h1.drawRatio(h, ratioHighIdx + 0, 0);
-       h2.drawRatio(h, ratioHighIdx + 1, 0);
+       h1.drawRatio(h, ratioHighIdx + 0, 0, threshHighIdx);
+       h2.drawRatio(h, ratioHighIdx + 1, 0, threshHighIdx + 1);
        
        blue();
        h6.fancyLineH(x,  y6, x1-2, y6);       
        h7.fancyLineH(x1, y7, x+w-2, y7);
-       h6.drawRatio(h, ratioLowIdx + 0, 1);
-       h7.drawRatio(h, ratioLowIdx + 1, 1);
+       h6.drawRatio(h, ratioLowIdx + 0, 1, threshLowIdx);
+       h7.drawRatio(h, ratioLowIdx + 1, 1, threshLowIdx + 1);
         
        red();
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
@@ -2083,16 +2151,16 @@ function drawBands()
        h1.fancyLineH(x,  y1, x1-2, y1);
        h2.fancyLineH(x1, y2, x2-2, y2);
        h3.fancyLineH(x2, y3, x+w-2, y3);
-       h1.drawRatio(h, ratioHighIdx + 0, 0);
-       h2.drawRatio(h, ratioHighIdx + 1, 0);
-       h3.drawRatio(h, ratioHighIdx + 2, 0);
+       h1.drawRatio(h, ratioHighIdx + 0, 0, threshHighIdx);
+       h2.drawRatio(h, ratioHighIdx + 1, 0, threshHighIdx + 1);
+       h3.drawRatio(h, ratioHighIdx + 2, 0, threshHighIdx + 2);
        blue();
        h6.fancyLineH(x,  y6, x1-2, y6);
        h7.fancyLineH(x1, y7, x2-2, y7);
        h8.fancyLineH(x2, y8, x+w-2, y8);
-       h6.drawRatio(h, ratioLowIdx + 0, 1);
-       h7.drawRatio(h, ratioLowIdx + 1, 1);
-       h8.drawRatio(h, ratioLowIdx + 2, 1);
+       h6.drawRatio(h, ratioLowIdx + 0, 1, threshLowIdx);
+       h7.drawRatio(h, ratioLowIdx + 1, 1, threshLowIdx + 1);
+       h8.drawRatio(h, ratioLowIdx + 2, 1, threshLowIdx + 2);
        red();
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
        c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
@@ -2122,20 +2190,20 @@ function drawBands()
        h2.fancyLineH(x1, y2, x2-2, y2);
        h3.fancyLineH(x2, y3, x3-2, y3);
        h4.fancyLineH(x3, y4, x+w-2, y4);
-       h1.drawRatio(h, ratioHighIdx + 0, 0);
-       h2.drawRatio(h, ratioHighIdx + 1, 0);
-       h3.drawRatio(h, ratioHighIdx + 2, 0);
-       h4.drawRatio(h, ratioHighIdx + 3, 0);
+       h1.drawRatio(h, ratioHighIdx + 0, 0, threshHighIdx);
+       h2.drawRatio(h, ratioHighIdx + 1, 0, threshHighIdx + 1);
+       h3.drawRatio(h, ratioHighIdx + 2, 0, threshHighIdx + 2);
+       h4.drawRatio(h, ratioHighIdx + 3, 0, threshHighIdx + 3);
        
        blue();
        h6.fancyLineH(x,  y6, x1-2, y6);
        h7.fancyLineH(x1, y7, x2-2, y7);
        h8.fancyLineH(x2, y8, x3-2, y8);
        h9.fancyLineH(x3, y9, x+w-2, y9);
-       h6.drawRatio(h, ratioLowIdx + 0, 1);
-       h7.drawRatio(h, ratioLowIdx + 1, 1);
-       h8.drawRatio(h, ratioLowIdx + 2, 1);
-       h9.drawRatio(h, ratioLowIdx + 3, 1);
+       h6.drawRatio(h, ratioLowIdx + 0, 1, threshLowIdx);
+       h7.drawRatio(h, ratioLowIdx + 1, 1, threshLowIdx + 1);
+       h8.drawRatio(h, ratioLowIdx + 2, 1, threshLowIdx + 2);
+       h9.drawRatio(h, ratioLowIdx + 3, 1, threshLowIdx + 3);
        red();
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
        c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
@@ -2172,22 +2240,22 @@ function drawBands()
        h3.fancyLineH(x2, y3, x3-2, y3);
        h4.fancyLineH(x3, y4, x4-2, y4);
        h5.fancyLineH(x4, y5, x+w-2, y5);
-       h1.drawRatio(h, ratioHighIdx + 0, 0);
-       h2.drawRatio(h, ratioHighIdx + 1, 0);
-       h3.drawRatio(h, ratioHighIdx + 2, 0);
-       h4.drawRatio(h, ratioHighIdx + 3, 0);
-       h5.drawRatio(h, ratioHighIdx + 4, 0);
+       h1.drawRatio(h, ratioHighIdx + 0, 0, threshHighIdx);
+       h2.drawRatio(h, ratioHighIdx + 1, 0, threshHighIdx + 1);
+       h3.drawRatio(h, ratioHighIdx + 2, 0, threshHighIdx + 2);
+       h4.drawRatio(h, ratioHighIdx + 3, 0, threshHighIdx + 3);
+       h5.drawRatio(h, ratioHighIdx + 4, 0, threshHighIdx + 4);
        blue();
        h6.fancyLineH(x,  y6, x1-2, y6);
        h7.fancyLineH(x1, y7, x2-2, y7);
        h8.fancyLineH(x2, y8, x3-2, y8);
        h9.fancyLineH(x3, y9, x4-2, y9);
        h10.fancyLineH(x4, y10, x+w-2, y10);
-       h6.drawRatio(h, ratioLowIdx + 0, 1);
-       h7.drawRatio(h, ratioLowIdx + 1, 1);
-       h8.drawRatio(h, ratioLowIdx + 2, 1);
-       h9.drawRatio(h, ratioLowIdx + 3, 1);
-       h10.drawRatio(h, ratioLowIdx + 4, 1);
+       h6.drawRatio(h, ratioLowIdx + 0, 1, threshHighIdx);
+       h7.drawRatio(h, ratioLowIdx + 1, 1, threshHighIdx + 1);
+       h8.drawRatio(h, ratioLowIdx + 2, 1, threshHighIdx + 2);
+       h9.drawRatio(h, ratioLowIdx + 3, 1, threshHighIdx + 3);
+       h10.drawRatio(h, ratioLowIdx + 4, 1, threshHighIdx + 4);
        red();
        c1.fancyCircle(.5*x + .5*x1, y1, 0, mute1, solo1, bypassBand1);
        c2.fancyCircle(x1 + .5*(x2-x1), y2, 0, mute2, solo2, bypassBand2);
@@ -2224,7 +2292,7 @@ function drawBands()
          topLayer = 1;
        );
     );
-  );  
+  );
   
 function initSpectrum(memoryOffset, fftSize, srate)
   global(newUI)
@@ -2480,7 +2548,6 @@ file_var(0, hide_ratio);
 file_var(0, band_mode);
 
 update_gain_now();
-eps = 10^(epsilon);
 
 @slider
 filterBank.setCompOptions();
@@ -2489,7 +2556,8 @@ filterBank.setCompOptions();
 lbnd = active_threshold > -319.0 ? 10^(active_threshold/20) : 0;
 
 gate_speed = srate / 5;  // 5 Hz gate
-eps = 10^(epsilon);
+//eps = 10^(epsilon);
+eps = 0.0000009;
 
 smoothing_const = 20/srate;
 filterBank.setCompOptions();
@@ -3256,7 +3324,7 @@ solo5 ? play5 = 1;
   function processSample()
   (  
     FIR ? (
-      filterBank.resetBands();   
+      filterBank.resetBands();
       cPosNew = filterBank.b1.doFIR(inL, inR, F1Block1, F1Block2, fftCalcSize, firSize, FIR1, cPos);
       ( cuts > 0 ) ? ( filterBank.b2.doFIR(inL, inR, F2Block1, F2Block2, fftCalcSize, firSize, FIR2, cPos); );
       ( cuts > 1 ) ? ( filterBank.b3.doFIR(inL, inR, F3Block1, F3Block2, fftCalcSize, firSize, FIR3, cPos); );
@@ -3563,6 +3631,11 @@ solo5 ? play5 = 1;
   x_dist = 45 * (1 + scaling);
   y_dist = 20 * (1 + scaling);
 
+  advanced ? (
+    gfx_set(0.0, 0.0, 0.0, 0.7);
+    gfx_rect(x_base - 0.5 * toggle_size, y_base - 0.5 * toggle_size, toggle_size * 17, 8 * y_dist);
+  );
+  
   tFIR.label = "FIR";  
   tFIR.drawToggle(x_base, y_base, toggle_size, toggle_size, FIR, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Linear phase FIR mode.\n\nLinear phase filters preserve the phase relations between this\nand other tracks but introduce a higher CPU cost and latency.\nEnable only when needed for its linear phase properties.\n\nNote: Modulation of the frequency when in FIR mode can cause crackles.");
   FIR = tFIR.processMouseToggle(mouse_x, mouse_y, mouse_cap);
@@ -3584,6 +3657,10 @@ solo5 ? play5 = 1;
     tCouple.label = "Coupled L/R";  
     tCouple.drawToggle(x_base, y_base + 2 * y_dist, toggle_size, toggle_size, coupled, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Couple left and right compressor.");
     coupled = tCouple.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    gainCircuit.label = "Harsh gain circuit";  
+    gainCircuit.drawToggle(x_base, y_base + 7 * y_dist, toggle_size, toggle_size, gain_circuit, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Harsher gain circuit.");
+    gain_circuit = gainCircuit.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
     tDC.label = "Filter DC (not linear phase!)";  
     tDC.drawToggle(x_base, y_base + 3 * y_dist, toggle_size, toggle_size, fixdc, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Filters DC by applying a high pass on the output.");
