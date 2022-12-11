@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.20
+version: 0.21
 author: Joep Vanlier
-changelog: Fix bug in MIDI handling that would sometimes drop the first note.
+changelog: Added note probabilities. Use mouse scrollwheel to change note probability.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -231,7 +231,7 @@ file_version = 3;
 
 @block
 function process_sequence(current_pattern_index, block_position)
-local(current_pattern, idx, current_idx, audio_octave, current_row, new_note, mod, vel)
+local(current_pattern, idx, current_idx, audio_octave, current_row, new_note, mod, vel, to_play)
 global(
   pattern_buffer,
   extra_octaves,
@@ -254,6 +254,7 @@ global(
   cc1_choice, cc2_choice, cc3_choice, cc4_choice,
   min_cc1, min_cc2, min_cc3, min_cc4,
   max_cc1, max_cc2, max_cc3, max_cc4,
+  proba
 )
 (
   (sequencer_index != last_sequencer_index) ? (
@@ -280,14 +281,21 @@ global(
       loop(polyphony,
         current_row = current_pattern + (idx + MAX_POLYPHONY * audio_octave) * max_segments;
         current_idx = idx + MAX_POLYPHONY * audio_octave;
+        to_play = current_row[sequencer_index];
         
-        (current_row[sequencer_index] == 0) ? (
+        // Disable based on probability
+        to_play > 0 ? (
+          proba = to_play % 16; // Get probability
+          (rand() * 15 + 1 < proba) ? to_play = 0;
+        );
+        
+        (to_play == 0) ? (
           // No note / Terminate one if it is playing
           (notes_in_flight[current_idx] > 0) ? (
             midisend(block_position, $x80, notes_in_flight[current_idx], 0);
             notes_in_flight[current_idx] = 0;
           );
-        ) : (current_row[sequencer_index] == 1) ? (
+        ) : (to_play > 0) ? (
           // If something playing, stop before starting new note
           (notes_in_flight[current_idx] > 0) ? (
             midisend(block_position, $x80, notes_in_flight[current_idx], 0);
@@ -363,7 +371,7 @@ micro_view = gfx_ext_flags & 1;
 setup_theme();
 current_cursor = randomize_toggle.value ? 32515 : 32512;
 
-function mouse_wheel_values(mem, idx, n_segments, max_value)
+function mouse_wheel_values(mem, idx, n_segments, max_value, sgn)
 local(start_idx, end_idx, ptr, old, value)
 global(mouse_wheel)
 (
@@ -389,7 +397,7 @@ global(mouse_wheel)
       ptr = mem + start_idx;
       loop(end_idx - start_idx,
         old = ptr[];
-        value = abs(old) + sign(mouse_wheel);
+        value = abs(old) + sgn * sign(mouse_wheel);
         value = min(max(1, value), max_value);
         ptr[] = sign(old) * value;
         ptr += 1;
@@ -464,7 +472,7 @@ global(label_width, block_width, block_spacing, selected_details,
        DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO,
        randomize_toggle.value,
        micro_view)
-local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
+local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, cur_height)
 (
   x = floor(x);
   set_row_color(row_index);
@@ -488,16 +496,20 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   connect_size = 2 * (1 + scaling) + 2 * micro_view;
   loop(n_segments,
     current = ptr[];
+    cur_height = (abs(current) - 1) * block_width / 16;
     abs(current) > 0 ? (
       active_r = row_color_r;
       active_g = row_color_g;
       active_b = row_color_b;
-      printed_value = max_value > 1 ? abs(current) : 0;
+//      printed_value = max_value > 1 ? abs(current) : 0;
+      printed_value = 0;
       (abs(last) == abs(current)) && (current < 0) ? (
         nice_rect(x, y, block_width, block_width, printed_value, active_r, active_g, active_b);
-        connecting_rect(x - connect_size, y + 1, 2 * connect_size, block_width - 1, printed_value, active_r, active_g, active_b);
+        connecting_rect(x - connect_size, y + 1, 2 * connect_size + 1, block_width - 1, printed_value, active_r, active_g, active_b);
+        gfx_set(0, 0, 0, 0.5); gfx_rect(x - connect_size - 1, y, block_width + 2 * connect_size, cur_height);
       ) : (
         nice_rect(x, y, block_width, block_width, printed_value, active_r, active_g, active_b);
+        gfx_set(0, 0, 0, 0.5); gfx_rect(x, y, block_width, cur_height);
       );
     ) : (
       printed_value = 0;
@@ -519,7 +531,7 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   
   y_over = (mouse_y > y) && (mouse_y < (y + block_width));
    
-  y_over ? hinter.updateHintTime("LMB - Create block\nRMB remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all");
+  y_over ? hinter.updateHintTime("LMB - Create block\nRMB - remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all\nShift + Drag - Drag block\nShift + RMB - Copy/paste block\nScrollwheel - Alter note probability");
    
   (captured_by == me) ? dragging = 1;
   
@@ -531,7 +543,7 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   
   // Allow increasing / decreasing value by mouse_wheel
   y_over && (idx > 0 && idx < n_segments) ? (
-    mouse_wheel_values(mem, idx, n_segments, max_value);
+    mouse_wheel_values(mem, idx, n_segments, max_value, -1);
   );
  
   // Drag out new items
@@ -571,10 +583,10 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
       start_idx = ptr;
       // Left or right mouse drag
       captured_by > 0 ? (
-        target = ((last_cap & 4) > 0) ? 0 : abs(mem[ptr]) + 1;
-        target > max_value ? target = max_value;
+        target = ((last_cap & 4) > 0) ? 0 : max(1, abs(mem[ptr]));
+        //target > max_value ? target = max_value;
       ) : (
-        target = abs(mem[ptr]) - 1;
+        target = 0;//abs(mem[ptr]) - 1;
         target < 0 ? target = 0; // max_value;
       );
       // Negative values mean a continuation
@@ -837,7 +849,7 @@ loop(extra_octaves + 1,
   loop(polyphony,
     note = current_arp[polyphony - c_idx - 1];
     label = identify_note(note > 0 ? note + 12 * current_octave : 0);
-    yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 1, "");
+    yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 15, "");
     row_idx += 1;
     c_idx += 1;
   );
