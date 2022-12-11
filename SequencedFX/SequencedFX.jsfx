@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.105
+version: 0.106
 author: Joep Vanlier
-changelog: Allow upscaling
+changelog: Add probabilities.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -78,6 +78,7 @@ slider64:midi_note_pattern_select=120<0,127,1>-First Pattern
 
 options:maxmem=34000000
 options:no_meter
+options:want_all_kb
 in_pin:left input
 in_pin:right input
 out_pin:left output
@@ -2261,6 +2262,26 @@ reset_sample = current_sample + crossfade_samples;
 reset_sample > loop_length ? reset_sample -= loop_length;
 reset_index = floor(to_index * reset_sample);
 
+function apply_probability(x)
+local(value, probability, sgn)
+global()
+(
+  sgn = (x == 0) ? 1 : sign(x);
+  value = abs(x) & 31;
+  
+  // Only positive values are impacted by probability
+  value > 0 ? (
+    probability = (x & 480) >> 5;
+    (rand() * 16) <= probability ? (
+      value = 0;
+    );
+  );
+  
+  sgn * value
+);
+
+// test = apply_probability(1 + (15 << 5));
+
 //////////////////////////////////////////////////////////////////////////
 // SEQUENCER HANDLING
 function seek_next(position, continue_until, max_value)
@@ -2289,7 +2310,8 @@ just_started || (reset_index != last_reset_index) ? (
   );
 
   reset_enabled ? (
-    reset = abs(reset_values[reset_index]);
+    reset = abs(apply_probability(reset_values[reset_index]));
+    reset = apply_probability(reset);
     ((reset > 0) || (reset_index == 0)) ? (
       // New target position is now
       target_position = 0;
@@ -2400,7 +2422,7 @@ just_started ? (
 // Non delayed sequences
 (sequencer_index != last_sequencer_index) ? (
   slowdown_enabled ? (
-    speed = abs(speed_values[sequencer_index]);
+    speed = abs(apply_probability(speed_values[sequencer_index]));
     
     // Fractional speed
     (slowdown_scaling == 1) ? (
@@ -2415,7 +2437,7 @@ just_started ? (
   ) : ( speed = 1 );
   
   // Reverse it?
-  (reverse_enabled && abs(reverse_values[sequencer_index]) == 1) ? speed = -speed;
+  (reverse_enabled && abs(apply_probability(reverse_values[sequencer_index])) == 1) ? speed = -speed;
   
   // Calculate the actual offset speed.
   // This is given by - (relative_speed - speed of incoming audio)
@@ -2423,7 +2445,7 @@ just_started ? (
   speed = 1.0 - speed;
   
   previous_filter_target = filter_target;
-  filter_target = filt_values[sequencer_index];
+  filter_target = apply_probability(filt_values[sequencer_index]);
   filter_target == 1 ? (
     filter.filter_envelope.reset = 0;
     filter.filter_envelope.reset_envelope();
@@ -2431,7 +2453,7 @@ just_started ? (
   filter_target = abs(filter_target);
   
   previous_filter2_target = filter2_target;
-  filter2_target = filt2_values[sequencer_index];
+  filter2_target = apply_probability(filt2_values[sequencer_index]);
   filter2_target == 1 ? (
     filter2.filter_envelope.reset = 0;
     filter2.filter_envelope.reset_envelope();
@@ -2439,7 +2461,7 @@ just_started ? (
   filter2_target = abs(filter2_target);
   
   previous_modulation = modulation_target;
-  modulation_target = modulation_fx_values[sequencer_index];
+  modulation_target = apply_probability(modulation_fx_values[sequencer_index]);
   modulation_target == 1 ? (
     modulation_effect.envelope.reset = 0;
     modulation_effect.envelope.reset_envelope();
@@ -2447,23 +2469,23 @@ just_started ? (
   );
   filter2_target = abs(filter2_target);
   
-  gate_target = gate_values[sequencer_index];
+  gate_target = apply_probability(gate_values[sequencer_index]);
   gate_target == 1 ? (
     gate_envelope.reset = 0;
     gate_envelope.reset_envelope();
   );
   gate_target = abs(gate_target);
   
-  reverb_target = reverb_values[sequencer_index];
+  reverb_target = apply_probability(reverb_values[sequencer_index]);
   reverb_target == 1 ? (
     verb_envelope.reset = 0;
     verb_envelope.reset_envelope();
   );
   reverb_target = abs(reverb_target);
   
-  degrade_target = abs(degrade_values[sequencer_index]);
+  degrade_target = abs(apply_probability(degrade_values[sequencer_index]));
   
-  tapestop_target = tapestop_enabled ? tapestop_values[sequencer_index] : 0;
+  tapestop_target = tapestop_enabled ? apply_probability(tapestop_values[sequencer_index]) : 0;
   (tapestop_target > 0) ? (
     tapestop_envelope.calc_times_universal(current_tapestop_decay, current_tapestop_decay, 0);
     stop_factor = 1;
@@ -2476,11 +2498,11 @@ just_started ? (
   );
   tapestop_target = abs(tapestop_target);
   
-  karplus_target = abs(karplus_values[sequencer_index]);
-  pitch_shifter_target = abs(pitch_shifter_values[sequencer_index]);
-  freq_pitch_shifter_target = abs(freq_pitch_shifter_values[sequencer_index]);
-  delay_target = abs(delay_values[sequencer_index]);
-  chorus_target = abs(chorus_values[sequencer_index]);
+  karplus_target = abs(apply_probability(karplus_values[sequencer_index]));
+  pitch_shifter_target = abs(apply_probability(pitch_shifter_values[sequencer_index]));
+  freq_pitch_shifter_target = abs(apply_probability(freq_pitch_shifter_values[sequencer_index]));
+  delay_target = abs(apply_probability(delay_values[sequencer_index]));
+  chorus_target = abs(apply_probability(chorus_values[sequencer_index]));
   
   dyn_speed = speed;
   
@@ -2922,7 +2944,7 @@ local(label, txt_w, txt_h, power_intensity, power_intensity, rr, gg, bb, er, eg,
   rr = base_r * pv;
   gg = base_g * pv;
   bb = base_b * pv;
-  this.nice_rect_color(x, y, w, h, value != 0 ? sprintf(1, "%d", value) : 0, rr, gg, bb, er, eg, eb);
+  this.nice_rect_color(x, y, w, h, value != 0 ? sprintf(1, "%d", value & 31) : 0, rr, gg, bb, er, eg, eb);
 );
 
 function connecting_rect(x, y, w, h, value, powered, base_r, base_g, base_b)
@@ -3151,7 +3173,32 @@ global()
   );
 );
 
-function mouse_wheel_values(mem, idx, n_segments, max_value)
+function change_value(ptr, change, min_value, max_value, is_probability)
+local(old, value, old_sign)
+global()
+(
+  old = ptr[];
+  old_sign = old == 0 ? 1 : sign(old);
+  is_probability ? (
+    // Second 4 bits are used for probability
+    value = ((abs(old) & 480) >> 5) - change;
+    value = min(max(0, value), 15);
+    
+    // Overwrite second bits
+    old = old_sign * ((abs(old) - (abs(old) & 480) + (value << 5)));
+  ) : (
+    // First 5 value bits are used for base effect
+    value = (abs(old) & 31) + change;
+    value = min(max(min_value, value), max_value);
+    
+    // If the value is zero, we just wipe it all, since probability makes no sense for "no effect"
+    // Otherwise, we overwrite first value bits with new data
+    old = value == 0 ? 0 : old_sign * (abs(old) - (abs(old) & 31) + value);
+  );
+  old
+);
+
+function mouse_wheel_values(mem, idx, n_segments, max_value, is_probability)
 local(start_idx, end_idx, ptr, old, value)
 global(mouse_wheel)
 (
@@ -3176,10 +3223,7 @@ global(mouse_wheel)
       
       ptr = mem + start_idx;
       loop(end_idx - start_idx,
-        old = ptr[];
-        value = abs(old) + sign(mouse_wheel);
-        value = min(max(1, value), max_value);
-        ptr[] = sign(old) * value;
+        ptr[] = change_value(ptr, sign(mouse_wheel), 1, max_value, is_probability);
         ptr += 1;
       );
     );
@@ -3271,8 +3315,8 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   shift_drag(y_over, me, mem, idx);
   
   // Allow increasing / decreasing value by mouse_wheel
-  y_over && (idx > 0 && idx < n_segments) ? (
-    mouse_wheel_values(mem, idx, n_segments, max_value);
+  y_over && (idx > -1 && idx < n_segments) ? (
+    mouse_wheel_values(mem, idx, n_segments, max_value, (mouse_cap & 16) > 0);
   );
  
   // Drag out new items
@@ -3336,11 +3380,9 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
       start_idx = ptr;
       // Left or right mouse drag
       captured_by > 0 ? (
-        target = ((last_cap & 4) > 0) ? 0 : abs(mem[ptr]) + 1;
-        target > max_value ? target = max_value;
+        target = ((last_cap & 4) > 0) ? 0 : change_value(mem + ptr, 1, 0, max_value, 0);// abs(mem[ptr]) + 1;
       ) : (
-        target = abs(mem[ptr]) - 1;
-        target < 0 ? target = 0; // max_value;
+        target = change_value(mem + ptr, - 1, 0, max_value, 0); //abs(mem[ptr]) - 1;
       );
       // Negative values mean a continuation
       mem[ptr] = target;
@@ -4782,3 +4824,4 @@ critical_error ? (
   gfx_printf("PLEASE NOTIFY ME OF THIS");
 );
 
+gfx_getchar();
