@@ -139,6 +139,8 @@ Features:
 - Select pattern by incoming MIDI note.
 - Choose to set times in the plugin by time or beats.
 - Randomize tracks.
+- Copy pasting patterns or blocks.
+- Effect probabilities (ctrl + mouse scrollwheel).
 - Choose from a large number of effects:
   - Effects that modify the playhead: Slowdown, Tape stop, Retrigger, Reverse.
   - Chorus / Phaser / Flaser module.
