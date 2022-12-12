@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.106
+version: 0.107
 author: Joep Vanlier
-changelog: Add probabilities.
+changelog: Add implementation of effect probabilities. Hold CTRL or command key to change probabilities. Made tooltip more informative.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -2265,19 +2265,21 @@ reset_index = floor(to_index * reset_sample);
 function apply_probability(x)
 local(value, probability, sgn)
 global()
+instance(status)
 (
   sgn = (x == 0) ? 1 : sign(x);
   value = abs(x) & 31;
   
-  // Only positive values are impacted by probability
-  value > 0 ? (
+  // Probabilistic decision is made on start of block only!
+  x > 0 ? (
+    status = 1;
     probability = (x & 480) >> 5;
-    (rand() * 16) <= probability ? (
-      value = 0;
+    ((16 * rand()) <= probability) ? (
+      status = 0;
     );
   );
   
-  sgn * value
+  sgn * value * status
 );
 
 // test = apply_probability(1 + (15 << 5));
@@ -2310,8 +2312,7 @@ just_started || (reset_index != last_reset_index) ? (
   );
 
   reset_enabled ? (
-    reset = abs(apply_probability(reset_values[reset_index]));
-    reset = apply_probability(reset);
+    reset = abs(reset_prob.apply_probability(reset_values[reset_index]));
     ((reset > 0) || (reset_index == 0)) ? (
       // New target position is now
       target_position = 0;
@@ -2331,7 +2332,7 @@ just_started || (reset_index != last_reset_index) ? (
   
   retrigger_enabled ? (
     // If positive, seek to last negative with the same value.
-    retrig = retrig_values[reset_index];
+    retrig = retrig_prob.apply_probability(retrig_values[reset_index]);
     
     retrig > 0 ? (
       jump_schedule.reset_jump();
@@ -2422,7 +2423,7 @@ just_started ? (
 // Non delayed sequences
 (sequencer_index != last_sequencer_index) ? (
   slowdown_enabled ? (
-    speed = abs(apply_probability(speed_values[sequencer_index]));
+    speed = abs(speed_prob.apply_probability(speed_values[sequencer_index]));
     
     // Fractional speed
     (slowdown_scaling == 1) ? (
@@ -2437,7 +2438,7 @@ just_started ? (
   ) : ( speed = 1 );
   
   // Reverse it?
-  (reverse_enabled && abs(apply_probability(reverse_values[sequencer_index])) == 1) ? speed = -speed;
+  (reverse_enabled && abs(reverse_prob.apply_probability(reverse_values[sequencer_index])) == 1) ? speed = -speed;
   
   // Calculate the actual offset speed.
   // This is given by - (relative_speed - speed of incoming audio)
@@ -2445,7 +2446,7 @@ just_started ? (
   speed = 1.0 - speed;
   
   previous_filter_target = filter_target;
-  filter_target = apply_probability(filt_values[sequencer_index]);
+  filter_target = filt1_prob.apply_probability(filt_values[sequencer_index]);
   filter_target == 1 ? (
     filter.filter_envelope.reset = 0;
     filter.filter_envelope.reset_envelope();
@@ -2453,7 +2454,7 @@ just_started ? (
   filter_target = abs(filter_target);
   
   previous_filter2_target = filter2_target;
-  filter2_target = apply_probability(filt2_values[sequencer_index]);
+  filter2_target = filt2_prob.apply_probability(filt2_values[sequencer_index]);
   filter2_target == 1 ? (
     filter2.filter_envelope.reset = 0;
     filter2.filter_envelope.reset_envelope();
@@ -2461,7 +2462,7 @@ just_started ? (
   filter2_target = abs(filter2_target);
   
   previous_modulation = modulation_target;
-  modulation_target = apply_probability(modulation_fx_values[sequencer_index]);
+  modulation_target = modfx_prob.apply_probability(modulation_fx_values[sequencer_index]);
   modulation_target == 1 ? (
     modulation_effect.envelope.reset = 0;
     modulation_effect.envelope.reset_envelope();
@@ -2469,23 +2470,23 @@ just_started ? (
   );
   filter2_target = abs(filter2_target);
   
-  gate_target = apply_probability(gate_values[sequencer_index]);
+  gate_target = gate_prob.apply_probability(gate_values[sequencer_index]);
   gate_target == 1 ? (
     gate_envelope.reset = 0;
     gate_envelope.reset_envelope();
   );
   gate_target = abs(gate_target);
   
-  reverb_target = apply_probability(reverb_values[sequencer_index]);
+  reverb_target = reverb_prob.apply_probability(reverb_values[sequencer_index]);
   reverb_target == 1 ? (
     verb_envelope.reset = 0;
     verb_envelope.reset_envelope();
   );
   reverb_target = abs(reverb_target);
   
-  degrade_target = abs(apply_probability(degrade_values[sequencer_index]));
+  degrade_target = abs(degrade_prob.apply_probability(degrade_values[sequencer_index]));
   
-  tapestop_target = tapestop_enabled ? apply_probability(tapestop_values[sequencer_index]) : 0;
+  tapestop_target = tapestop_enabled ? tapestop_prob.apply_probability(tapestop_values[sequencer_index]) : 0;
   (tapestop_target > 0) ? (
     tapestop_envelope.calc_times_universal(current_tapestop_decay, current_tapestop_decay, 0);
     stop_factor = 1;
@@ -2498,11 +2499,11 @@ just_started ? (
   );
   tapestop_target = abs(tapestop_target);
   
-  karplus_target = abs(apply_probability(karplus_values[sequencer_index]));
-  pitch_shifter_target = abs(apply_probability(pitch_shifter_values[sequencer_index]));
-  freq_pitch_shifter_target = abs(apply_probability(freq_pitch_shifter_values[sequencer_index]));
-  delay_target = abs(apply_probability(delay_values[sequencer_index]));
-  chorus_target = abs(apply_probability(chorus_values[sequencer_index]));
+  karplus_target = abs(karplus_prob.apply_probability(karplus_values[sequencer_index]));
+  pitch_shifter_target = abs(pitchshift_prob.apply_probability(pitch_shifter_values[sequencer_index]));
+  freq_pitch_shifter_target = abs(freq_shift_prob.apply_probability(freq_pitch_shifter_values[sequencer_index]));
+  delay_target = abs(delay_prob.apply_probability(delay_values[sequencer_index]));
+  chorus_target = abs(chorus_prob.apply_probability(chorus_values[sequencer_index]));
   
   dyn_speed = speed;
   
@@ -2699,6 +2700,7 @@ current_master_db += d_master_gain;
 
 @gfx 1009 755
 current_cursor = randomize_toggle.value ? 32515 : 32512;
+change_proba = (mouse_cap & 4) > 0;
 
 function convert_tempos(target_sync_mode)
 local()
@@ -2924,7 +2926,7 @@ global(font_r, font_g, font_b, gfx_x, gfx_y)
   
   label > 0 ? (
     gfx_measurestr(label, txt_w, txt_h);
-    gfx_x = x - 0.5 * (txt_w - w);
+    gfx_x = x - ceil(0.5 * (txt_w - w));
     gfx_y = y - 0.5 * (txt_h - h);
     gfx_set(font_r, font_g, font_b, 1.0);
     gfx_printf(label);
@@ -2944,7 +2946,7 @@ local(label, txt_w, txt_h, power_intensity, power_intensity, rr, gg, bb, er, eg,
   rr = base_r * pv;
   gg = base_g * pv;
   bb = base_b * pv;
-  this.nice_rect_color(x, y, w, h, value != 0 ? sprintf(1, "%d", value & 31) : 0, rr, gg, bb, er, eg, eb);
+  this.nice_rect_color(x, y, w, h, value != 0 ? sprintf(1, "%d", value) : 0, rr, gg, bb, er, eg, eb);
 );
 
 function connecting_rect(x, y, w, h, value, powered, base_r, base_g, base_b)
@@ -3246,8 +3248,8 @@ global(label_width, block_width, block_spacing, selected_details,
        row_color_r, row_color_g, row_color_b, printed_value,
        start_idx, selected_row, dragging, drag_mode, current_cursor, drag_row_index, drag_color_idx, DRAG_STRING, drag_ref_x, drag_ref_y,
        DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO,
-       randomize_toggle.value)
-local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b)
+       randomize_toggle.value, change_proba)
+local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, cur_height, tmp)
 (
   set_row_color(row_index);
   nice_rect(x, y, label_width - 1, block_width, 0, slider(power_slider), row_color_r * .8, row_color_g * .8, row_color_b * .8);
@@ -3275,14 +3277,21 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   x += block_width;
   ptr = mem;
   target = 0;
-  connect_size = 1.5 * (1 + scaling);
+  connect_size = 2.5 * (1 + scaling);
   loop(n_segments,
     current = ptr[];
+
+    tmp = (abs(current) & 480) >> 5;
+    cur_height = block_width * tmp / 16;
     abs(current) > 0 ? (
       active_r = row_color_r;
       active_g = row_color_g;
       active_b = row_color_b;
-      printed_value = max_value > 1 && slider(power_slider) ? abs(current) : 0;
+      change_proba ? (
+        printed_value = slider(power_slider) ? (100 - 100 * tmp / 16) : 0;
+      ) : (
+        printed_value = max_value > 1 && slider(power_slider) ? abs(current) & 31 : 0;
+      );
     ) : (
       active_r = base_r;
       active_g = base_g;
@@ -3292,8 +3301,10 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
     (abs(last) == abs(current)) && (current < 0) ? (
       nice_rect(x, y, block_width, block_width, printed_value, slider(power_slider), active_r, active_g, active_b);
       connecting_rect(x - connect_size, y + 1, 2 * connect_size, block_width - 1, printed_value, slider(power_slider), active_r, active_g, active_b);
+      gfx_set(0, 0, 0, 0.5); gfx_rect(x - connect_size, y, block_width + 2 * connect_size, cur_height);
     ) : (
       nice_rect(x, y, block_width, block_width, printed_value, slider(power_slider), active_r, active_g, active_b);
+      gfx_set(0, 0, 0, 0.5); gfx_rect(x, y, block_width, cur_height);
     );
     target == 0 ? (gfx_set(1.0, 1.0, 1.0, 0.05); gfx_rect(x, y, block_width, block_width));
     x += block_spacing + block_width;
@@ -3304,7 +3315,9 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   
   y_over = (mouse_y > y) && (mouse_y < (y + block_width));
   
-  mouse_x < x && y_over ? hinter.updateHintTime(hint);
+  mouse_x < x && y_over ? hinter.updateHintTime(
+    sprintf(32,"%s%s", hint, "\n\nWhen hovering over pattern:\nLMB - Create block\nRMB - remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all\nShift + Drag - Drag block\nShift + RMB - Copy/paste block\nCtrl + Scrollwheel - Alter note probability")
+  );
   
   (captured_by == me) ? dragging = 1;
   
@@ -3316,7 +3329,7 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   
   // Allow increasing / decreasing value by mouse_wheel
   y_over && (idx > -1 && idx < n_segments) ? (
-    mouse_wheel_values(mem, idx, n_segments, max_value, (mouse_cap & 16) > 0);
+    mouse_wheel_values(mem, idx, n_segments, max_value, change_proba);
   );
  
   // Drag out new items
@@ -3629,7 +3642,7 @@ draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 gfx_set(1, 1, 1, .1);
 gfx_x = 150 * (1+scaling);
 gfx_y = 30 * (1+scaling);
-gfx_printf("v0.105");
+gfx_printf("v0.107");
 
 scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
