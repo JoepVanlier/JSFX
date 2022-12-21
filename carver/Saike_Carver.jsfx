@@ -36,6 +36,7 @@ out_pin:right output
 
 import saike_carver_effects.jsfx-inc
 import saike_carver_fft_view.jsfx-inc
+import saike_carver_pitchlib.jsfx-inc
 
 @init
 inertia_factor = 0.001;
@@ -94,6 +95,10 @@ global()
   BUF_SIZE = 96000;
   freemem = this.l.init_buffer(freemem, BUF_SIZE);
   freemem = this.r.init_buffer(freemem, BUF_SIZE);
+  freemem = this.l.pitch_shifter.alloc_shifter(freemem, 4*4096);
+  freemem = this.r.pitch_shifter.alloc_shifter(freemem, 4*4096);
+  this.l.pitch_shifter.update_shifter();
+  this.r.pitch_shifter.update_shifter();
   
   freemem
 );
@@ -166,15 +171,17 @@ global(srate)
   (choice == 2) ? (
     // Frequency shifter
     this.freq_shifter.init_cheapest_freq_shifter(
-     0.5 * exp((1.0 - cur_mod1) * log(1/22050)) * srate
+     0.5 * exp((1.0 - cur_mod1) * log(1/22050)) * 44100
     );
   ) : (choice == 3) ? (
-    this.srate_reduction.init_srate_reduction(cur_mod1, cur_mod2);
+    this.srate_reduction.init_srate_reduction(44100 * exp((cur_mod1) * log(500/22050)), cur_mod2);
   ) : (choice == 4) ? (
     delay = exp((1.0 - cur_mod1) * log(1/22050)) * srate;
   ) : (choice == 5) ? (
     crush_step_size = 0.5 * exp(- 5 * (1.0 - cur_mod1));
     icrush_step_size = 1 / crush_step_size;
+  ) : (choice == 6) ? (
+    this.pitch_shifter.setPitchShifterSpeed((2^(24 * cur_mod1 / 12))-1.0);
   ) : (choice == 201) ? (
     // Vibrato kinda lame for this
     delay = exp((1.0 - cur_mod1) * log(1/22050)) * srate;
@@ -185,6 +192,57 @@ global(srate)
       0.5 * exp((1.0 - cur_mod1) * log(20/22050)) * srate,
       cur_mod2
     );
+  );
+);
+
+function choice_to_string(choice)
+local()
+global()
+instance()
+(
+  (choice == 1) ? (
+    "Tanh"
+  ) : (choice == 2) ? (
+    "Frequency shifter"
+  ) : (choice == 3) ? (
+    "Sample rate reduction"
+  ) : (choice == 4) ? (
+    "Comb"
+  ) : (choice == 5) ? (
+    "Crush"
+  ) : (choice == 6) ? (
+    "Pitch shift"
+  );
+);
+
+function print_string(choice, value)
+local(val)
+global(srate)
+instance()
+(
+  (choice == 2) ? (
+    val = 0.5 * exp((1.0 - value) * log(1/22050)) * 44100;
+    val > 999 ? (
+      sprintf(25, "%1.4g kHz", val / 1000)
+    ) : (
+      sprintf(25, "%d Hz", val)
+    );
+  ) : (choice == 3) ? (
+    val = 44100 * exp((value) * log(500/22050));
+    val > 999 ? (
+      sprintf(25, "%1.4g kHz", val / 1000)
+    ) : (
+      sprintf(25, "%d Hz", val)
+    );
+  ) : (choice == 4) ? (
+    val = exp((1.0 - value) * log(1/22050));
+    sprintf(25, "%d ms / %d Hz", val * 1000, 1 / val)
+  ) : (choice == 5) ? (
+    val = log(1 / (0.5 * exp(- 5 * (1.0 - value)))) / log(2);
+    sprintf(25, "%.5g", val);
+  ) : (choice == 6) ? (
+    val = 24 * value;
+    sprintf(25, "%.5g", val);
   );
 );
 
@@ -244,7 +302,7 @@ global(inertia_factor, tmp, tmp2)
     tmp2 = (tmp - floor(tmp)) / crush_step_size;  // Probability
     ((floor(tmp) + (rand() < tmp2)) * crush_step_size - v0) * this.m1
   ) : (current_effect = 6) ? (
-    - v0
+    this.pitch_shifter.pitchShifterUpdate(v0)
   ) : (current_effect == 201) ? (
     // Vibrato is kinda lame for this
     t += dt;
@@ -352,10 +410,10 @@ global()
   - 60 * (position - y - h) / h
 );
 
-function effect_ui(x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color, slider_idx)
-local(radius, over, dx, dy, menu_selection)
+function effect_ui(me, x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color, slider_idx)
+local(radius, over, dx, dy, menu_selection, speed)
 instance(l, r, c_freq, c_gain, xp, yp, not_moved)
-global(srate, gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap, mouse_wheel, last_cap, last_x, last_y, tt, grabbed)
+global(srate, gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap, mouse_wheel, last_cap, last_x, last_y, tt, grabbed, last_over)
 (
   this.l.draw_bell(x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color);
   this.r.draw_bell(x, y, w, h, floor_db, ceil_db, min_freq, max_freq, color);
@@ -388,6 +446,18 @@ global(srate, gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap, mouse_wheel, last_cap, 
   over ? (
     gfx_set(0.7, 0.5, 1, 0.7 + 0.3 * sin(5 * time_precise()));
     gfx_circle(xp, yp, 0.8 * radius, 1);
+    
+    last_over = me;
+  );
+  
+  (last_over == me) ? (
+    gfx_x = 5;
+    gfx_y = 5;
+    gfx_set(1, 1, 1, 1);
+    gfx_printf(choice_to_string(this.l_choice));
+    gfx_x = 5;
+    gfx_y = 15;
+    gfx_printf(print_string(this.l_choice, this.c_mod1));
   );
   
   gfx_set(1, 1, 1, 1);
@@ -416,7 +486,10 @@ global(srate, gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap, mouse_wheel, last_cap, 
       slider_automate(slider_idx);
       slider(slider_idx + 2) = min(60, max(0, slider(slider_idx + 2) + to_g(mouse_y, y, h) - to_g(last_y, y, h)));
     ) : (
-      slider(slider_idx + 3) = min(1, max(0, slider(slider_idx + 3) - (mouse_y - last_y) / h ));
+      speed = 1;
+      (mouse_cap & 4 > 0) ? speed *= 0.5;
+      (mouse_cap & 8 > 0) ? speed *= 0.25;
+      slider(slider_idx + 3) = min(1, max(0, slider(slider_idx + 3) - speed * (mouse_y - last_y) / h ));
     );
   );
   
@@ -505,10 +578,10 @@ out_gfx_fft.render_fft(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, db_step_si
 
 ceil_db = 120;
 floor_db = -60;
-effect_choice > 0 ? effect1.effect_ui(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 1);
-effect_choice2 > 0 ? effect2.effect_ui(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 7);
-effect_choice3 > 0 ? effect3.effect_ui(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 13);
-effect_choice4 > 0 ? effect4.effect_ui(x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 19);
+effect_choice > 0 ? effect1.effect_ui(1, x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 1);
+effect_choice2 > 0 ? effect2.effect_ui(2, x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 7);
+effect_choice3 > 0 ? effect3.effect_ui(3, x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 13);
+effect_choice4 > 0 ? effect4.effect_ui(4, x_wnd, y_wnd, w_wnd, h_wnd, floor_db, ceil_db, 20, srate / 2, 0.8, 19);
 
 last_cap = mouse_cap;
 last_x = mouse_x;
