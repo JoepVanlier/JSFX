@@ -146,12 +146,29 @@ Features:
   - Chorus / Phaser / Flaser module.
   - Pitch shifter.
   - Degradation effects (sample rate and bitrate reduction).
-  - Two non-linear envelope controlled multimode filters (choose from 15 filter types, with several non-linear ones).
+  - Two non-linear envelope controlled multimode filters (choose from several filter types, with several non-linear ones).
   - Volume envelope.
   - Reverb.
   - Pitched Delay (delay with delaylength such that it produces tonal sounds).
   - Amplitude / Ring modulation module.
   - Tempo synchronized delay.
+  - Frequency shifter.
+
+## Saike MIDI ARP - MIDI arpeggiator
+
+![proba_midi](https://user-images.githubusercontent.com/19836026/209694279-c76af602-3c55-4f5d-948e-5062c9bb2638.gif)
+
+This utility allows for arpeggiating incoming MIDI data. Basically, the idea is to play chords and then this tool will arpeggiate them out.
+
+Features:
+- Velocity automation.
+- Modwheel automation.
+- Supports docking into TCP/MCP.
+- Note probabilities.
+- Copy pasting patterns or blocks.
+- Playing over multiple octaves.
+- Control Change automation.
+- Synchronize the patterns to the host, free or MIDI.
 
 ## Ravager - Extreme upwards compressor
 ![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
