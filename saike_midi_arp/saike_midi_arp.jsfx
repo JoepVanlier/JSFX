@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.25
+version: 0.26
 author: Joep Vanlier
-changelog: Allow randomizing note blocks (lmb in randomize mode) and probabilities (rmb in randomize mode) separately.
+changelog: Allow setting the in/out channel.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -34,6 +34,8 @@ slider20:min_cc4=1<0,127,1>-Minimum Assignable CC4
 slider21:max_cc4=127<0,128,1>-Maximum Assignable CC4
 slider22:dummy=0<0,1,1>-Dummy for undo
 slider23:swing=0<-50,50,1>-Swing
+slider24:in_channel=0<0,16,1>-In channel
+slider25:out_channel=1<1,16,1>-Out channel
 
 in_pin:left input
 in_pin:right input
@@ -255,7 +257,8 @@ global(
   cc1_choice, cc2_choice, cc3_choice, cc4_choice,
   min_cc1, min_cc2, min_cc3, min_cc4,
   max_cc1, max_cc2, max_cc3, max_cc4,
-  proba
+  proba,
+  out_channel,
 )
 (
   (sequencer_index != last_sequencer_index) ? (
@@ -267,13 +270,13 @@ global(
     
     enable_mod ? (
       mod = modulator1_values[sequencer_index] * (max_modwheel - min_modwheel) + min_modwheel;
-      midisend(block_position, $xB0, 1, mod);
+      midisend(block_position, $xB0 + (out_channel - 1), 1, mod);
     );
-     
-    enable_cc1 ? midisend(block_position, $xB0, cc1_choice, midi_cc_1[sequencer_index] * (max_cc1 - min_cc1) + min_cc1);
-    enable_cc2 ? midisend(block_position, $xB0, cc2_choice, midi_cc_2[sequencer_index] * (max_cc2 - min_cc2) + min_cc2);
-    enable_cc3 ? midisend(block_position, $xB0, cc3_choice, midi_cc_3[sequencer_index] * (max_cc3 - min_cc3) + min_cc3);
-    enable_cc4 ? midisend(block_position, $xB0, cc4_choice, midi_cc_4[sequencer_index] * (max_cc4 - min_cc4) + min_cc4);
+    
+    enable_cc1 ? midisend(block_position, $xB0 + (out_channel - 1), cc1_choice, midi_cc_1[sequencer_index] * (max_cc1 - min_cc1) + min_cc1);
+    enable_cc2 ? midisend(block_position, $xB0 + (out_channel - 1), cc2_choice, midi_cc_2[sequencer_index] * (max_cc2 - min_cc2) + min_cc2);
+    enable_cc3 ? midisend(block_position, $xB0 + (out_channel - 1), cc3_choice, midi_cc_3[sequencer_index] * (max_cc3 - min_cc3) + min_cc3);
+    enable_cc4 ? midisend(block_position, $xB0 + (out_channel - 1), cc4_choice, midi_cc_4[sequencer_index] * (max_cc4 - min_cc4) + min_cc4);
     
     audio_octave = 0;
     cpos = max(cpos, block_position);
@@ -293,19 +296,19 @@ global(
         (to_play == 0) ? (
           // No note / Terminate one if it is playing
           (notes_in_flight[current_idx] > 0) ? (
-            midisend(block_position, $x80, notes_in_flight[current_idx], 0);
+            midisend(block_position, $x80 + (out_channel - 1), notes_in_flight[current_idx], 0);
             notes_in_flight[current_idx] = 0;
           );
         ) : (to_play > 0) ? (
           // If something playing, stop before starting new note
           (notes_in_flight[current_idx] > 0) ? (
-            midisend(block_position, $x80, notes_in_flight[current_idx], 0);
+            midisend(block_position, $x80 + (out_channel - 1), notes_in_flight[current_idx], 0);
             notes_in_flight[current_idx] = 0;
           );
           // Start new note
           (current_arp[idx] > 0) ? (
             new_note = current_arp[idx] + 12 * audio_octave;
-            midisend(block_position + 1, $x90, new_note, vel);
+            midisend(block_position + 1, $x90 + (out_channel - 1), new_note, vel);
             notes_in_flight[current_idx] = new_note;
           );
         );
@@ -725,6 +728,41 @@ instance(start_idx, y_loc, h, subdiv, snap, randomize)
   );
   
   y += h + block_spacing;
+);
+
+function setup_menu_string(str_var, value, start)
+local(s, i)
+global()
+(
+  s = sprintf(str_var, "");
+  i = start;
+  loop(17 - start ,
+    i == 0 ? (
+      s = sprintf(str_var, "%s|%s%sAny", s, (i == 16) ? "<" : "", (i == value) ? "!" : "");
+    ) : (
+      s = sprintf(str_var, "%s|%s%s%d", s, (i == 16) ? "<" : "", (i == value) ? "!" : "", i);
+    );
+    
+    i += 1;
+  );
+  
+  s
+);
+
+mouse_y < (yc + block_width) ? (
+  mouse_cap & 2 == 2 ? (
+    gfx_x = mouse_x;
+    gfx_y = mouse_y;
+    
+    menu_selection = gfx_showmenu(sprintf(8, ">In channel%s|>Out channel%s", setup_menu_string(8, in_channel, 0), setup_menu_string(9, out_channel, 1)));
+    (menu_selection > 0) ? (
+      menu_selection < 18 ? (
+        slider_automate(in_channel = menu_selection - 1);
+      ) : (
+        slider_automate(out_channel = menu_selection - 17);
+      );
+    );
+  );
 );
 
 ctrl_spacing = 1;
