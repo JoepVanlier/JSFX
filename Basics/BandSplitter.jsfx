@@ -1,8 +1,8 @@
 desc:Saike 4-pole BandSplitter
 tags: bandsplitter
-version: 0.14
+version: 0.15
 author: Joep Vanlier
-changelog: Prevent overlapping labels when scaling down on retina display.
+changelog: Allow absolute frequency placement mode (instead of having each frequency relative to the last).
 provides:
   BandJoiner.jsfx
   BandSplitter_phasematcher.jsfx
@@ -41,6 +41,7 @@ slider8:Drive3=0<-40,60,.1>-Drive 3 (dB)
 slider9:Drive4=0<-40,60,.1>-Drive 4 (dB)
 slider10:Drive5=0<-40,60,.1>-Drive 5 (dB)
 
+slider59:abs_placement=0<0,1,1>-Absolute placement
 slider60:FIR_quality=0<0,2,{Normal,High,Ultra}>-FIR Quality
 slider61:FIR=0<0,1,1>-FIR mode
 
@@ -294,10 +295,10 @@ function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
 
   function f_trafo(freq)
   local()
-  global()
+  global(srate)
   instance()
   (
-    exp( (1-freq) * log(20/22050) )
+    0.5 * srate * exp( (1-freq) * log(20/22050) )
   );  
 
   function initBands()
@@ -672,7 +673,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
          solo1, solo2, solo3, solo4, solo5,
          driveMin, driveMax, maxCuts,
          hinter.updateHintTime,
-         selectedBand, gfx_x, gfx_y, srate )
+         selectedBand, gfx_x, gfx_y, srate, abs_placement )
   local(dx, dy, over, dys,
         F1, F2, F3, F4,
         leftClick, rightClick, doubleClick,
@@ -696,15 +697,22 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
     
     x_over = -1;
     
-    F1 = Freq1;
-    F2 = Freq1  + Freq2 * (1 - Freq1);
-    F3 = F2     + Freq3 * (1 - F2);
-    F4 = F3     + Freq4 * (1 - F3);
+    abs_placement ? (
+      F1 = clamp(Freq1, 0, 1);
+      F2 = clamp(Freq2, F1, cuts > 2 ? F3 : 1);
+      F3 = clamp(Freq3, F2, cuts > 3 ? F4 : 1);
+      F4 = clamp(Freq4, F3, 1.0);
+    ) : (
+      F1 = Freq1;
+      F2 = Freq1  + Freq2 * (1 - Freq1);
+      F3 = F2     + Freq3 * (1 - F2);
+      F4 = F3     + Freq4 * (1 - F3);
+    );
 
-    F1hz = .5*f_trafo(F1)*srate;
-    F2hz = .5*f_trafo(F2)*srate;
-    F3hz = .5*f_trafo(F3)*srate;
-    F4hz = .5*f_trafo(F4)*srate;
+    F1hz = f_trafo(F1);
+    F2hz = f_trafo(F2);
+    F3hz = f_trafo(F3);
+    F4hz = f_trafo(F4);
         
     ( cap == 3 && mouse_cap & 1 == 1 ) ? (
       dy = mouse_y - ly;
@@ -726,26 +734,41 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
       lb = .02;
       dragging == 1 ? ( 
         F1 = this.pixelToWindowRatio(x1 - x + dx);
-        slider_automate( Freq1 = clamp( F1, lb, 1 ) );
-        slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-F1), 0, 1 ) );
+        abs_placement ? (
+          slider_automate( Freq1 = clamp( F1, lb, 1 ) );
+        ) : (
+          slider_automate( Freq1 = clamp( F1, lb, 1 ) );
+          slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-F1), 0, 1 ) );
+        );
       );
       dragging == 2 ? ( 
         F2 = this.pixelToWindowRatio(x2 - x + dx);
-        slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-Freq1), 0, 1 ) );
-        F2 = Freq1  + Freq2 * (1 - Freq1);
-        slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1) );
+        abs_placement ? (
+          slider_automate( Freq2 = clamp(F2, F1, cuts > 2 ? F3 : 1));
+        ) : (
+          slider_automate( Freq2 = clamp( (F2 - Freq1) / (1-Freq1), 0, 1 ) );
+          F2 = Freq1  + Freq2 * (1 - Freq1);
+          slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1) );
+        );
       );
       dragging == 3 ? ( 
         F3 = this.pixelToWindowRatio(x3 - x + dx);
-        slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1 ) );
-        F3 = F2     + Freq3 * (1 - F2);
-        slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
+        abs_placement ? (
+          slider_automate( Freq3 = clamp( F3, F2, cuts > 3 ? F4 : 1 ) );          
+        ) : (
+          slider_automate( Freq3 = clamp( (F3 - F2) / (1-F2), 0, 1 ) );
+          F3 = F2     + Freq3 * (1 - F2);
+          slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
+        );
       );
       dragging == 4 ? ( 
         F4 = this.pixelToWindowRatio(x4 - x + dx);
-        slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
+        abs_placement ? (
+          slider_automate( Freq4 = clamp( F4, F3, 1.0 ) );
+        ) : (
+          slider_automate( Freq4 = clamp( (F4 - F3) / (1-F3), 0, 1 ) );
+        );
       );
-
     ) : ( cap == 1 && mouse_cap & 1 == 1 ) ? (
       dnoisefloor_freq -= .5*(mouse_y-ly);
       dnoisefloor_freq > 35 ? dnoisefloor_freq = 35;
@@ -796,8 +819,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         hinter.updateHintTime("LMB + Drag - Modify crossover frequency\nRMB - Remove frequency cut\nRMB anywhere else - Add frequency cut");
         v1.over = 1;
         leftClick ? ( cap = 2; dragging = 1; );
-        rightClick ? ( 
-          Freq2 = ( Freq2 * ( 1 - Freq1 ) + ( Freq1 - 0 ) ) / ( 1 - 0 );
+        rightClick ? (
+          !abs_placement ? ( Freq2 = ( Freq2 * ( 1 - Freq1 ) + ( Freq1 - 0 ) ) / ( 1 - 0 ); );
           remBand(0);
         );
       ) : ( v2.isOver(mouse_x, mouse_y) ) && ( cuts > 1 ) ? (
@@ -805,7 +828,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         v2.over = 1;
         leftClick ? ( cap = 2; dragging = 2; );
         rightClick ? ( 
-          Freq3 = ( Freq3 * ( 1 - Freq2 ) + ( Freq2 - 0 ) ) / ( 1 - 0 );
+          !abs_placement ? ( Freq3 = ( Freq3 * ( 1 - Freq2 ) + ( Freq2 - 0 ) ) / ( 1 - 0 ) );
           remBand(1);
         );
       ) : ( v3.isOver(mouse_x, mouse_y) ) && ( cuts > 2 ) ? (
@@ -813,7 +836,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         v3.over = 1;
         leftClick ? ( cap = 2; dragging = 3; );
         rightClick ? ( 
-          Freq4 = ( Freq4 * ( 1 - Freq3 ) + ( Freq3 - 0 ) ) / ( 1 - 0 );
+          !abs_placement ? ( Freq4 = ( Freq4 * ( 1 - Freq3 ) + ( Freq3 - 0 ) ) / ( 1 - 0 ) );
           remBand(2);
         );
       ) : ( v4.isOver(mouse_x, mouse_y) ) && ( cuts > 3 ) ? (
@@ -860,7 +883,7 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         rightClick && (cuts < maxCuts) ? ( 
           addBand(0);
           mpos = this.pixelToWindowRatio(mouse_x);
-          Freq2 = ( Freq2 * (1-0) + 0 - mpos ) / ( 1 - mpos );
+          !abs_placement ? ( Freq2 = ( Freq2 * (1-0) + 0 - mpos ) / ( 1 - mpos ); );
           Freq1 = mpos;
         );
       ) : ( overRect( h2.x, y, h2.w, h, mouse_x, mouse_y ) && ( cuts > 0 )  ) ? (
@@ -868,26 +891,38 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         rightClick && (cuts < maxCuts) ? ( 
           addBand(1);
           mpos = this.pixelToWindowRatio(mouse_x);
-          Freq3 = ( Freq3 * (1-Freq1) + Freq1 - mpos ) / ( 1 - mpos );
-          Freq2 = ( mpos - Freq1 ) / ( 1 - Freq1 );
+          !abs_placement ? (
+            Freq3 = ( Freq3 * (1-Freq1) + Freq1 - mpos ) / ( 1 - mpos );
+            Freq2 = ( mpos - Freq1 ) / ( 1 - Freq1 );
+          ) : (
+            Freq2 = mpos;
+          );
         );
       ) : ( overRect( h3.x, y, h3.w, h, mouse_x, mouse_y ) && ( cuts > 1 ) ) ? (
         leftClick ? selectedBand = 2;
         rightClick && (cuts < maxCuts) ? ( 
           addBand(2);
           mpos = this.pixelToWindowRatio(mouse_x);
-          F2 = Freq1  + Freq2 * (1 - Freq1);
-          Freq4 = ( Freq4 * (1-F2) + F2 - mpos ) / ( 1 - mpos );
-          Freq3 = ( mpos - F2 ) / ( 1 - F2 );
+          !abs_placement ? (
+            F2 = Freq1  + Freq2 * (1 - Freq1);
+            Freq4 = ( Freq4 * (1-F2) + F2 - mpos ) / ( 1 - mpos );
+            Freq3 = ( mpos - F2 ) / ( 1 - F2 );
+          ) : (
+            Freq3 = mpos;
+          );
         );
       ) : ( overRect( h4.x, y, h4.w, h, mouse_x, mouse_y ) && ( cuts > 2 ) ) ? (
         leftClick ? selectedBand = 3;
         rightClick && (cuts < maxCuts) ? ( 
           addBand(3);
           mpos = this.pixelToWindowRatio(mouse_x);
-          F2 = Freq1  + Freq2 * (1 - Freq1);
-          F3 = F2     + Freq3 * (1 - F2);
-          Freq4 = ( mpos - F3 ) / ( 1 - F3 );
+          !abs_placement ? (
+            F2 = Freq1  + Freq2 * (1 - Freq1);
+            F3 = F2     + Freq3 * (1 - F2);
+            Freq4 = ( mpos - F3 ) / ( 1 - F3 );
+          ) : (
+            Freq4 = mpos;
+          );
         );
       ) : ( overRect( h5.x, y, h5.w, h, mouse_x, mouse_y ) && ( cuts > 3 ) ) ? (
         leftClick ? selectedBand = 4;
@@ -1006,17 +1041,24 @@ function updateBands()
   global(Freq1,   Freq2,   Freq3,   Freq4,
          Ceil1,   Ceil2,   Ceil3,   Ceil4,
          Drive1,  Drive2,  Drive3,  Drive4,  Drive5,
-         fftSize, driveRange, driveMax)
+         fftSize, driveRange, driveMax, abs_placement, cuts)
   instance(x, y, w, h, hzoffset,
            x1,  x2,  x3,  x4,  x5,  /* Frequencies          */
            y1,  y2,  y3,  y4,  y5,  /* Drives               */
            )
   local(F1, F2, F3, F4, F5, wsc, hfft, lmin, irange, dmax)
   (
-    F1 = Freq1;
-    F2 = Freq1  + Freq2 * (1 - Freq1);
-    F3 = F2     + Freq3 * (1 - F2);
-    F4 = F3     + Freq4 * (1 - F3);
+    abs_placement ? (
+      F1 = clamp(Freq1, 0, 1);
+      F2 = clamp(Freq2, F1, cuts > 2 ? F3 : 1);
+      F3 = clamp(Freq3, F2, cuts > 3 ? F4 : 1);
+      F4 = clamp(Freq4, F3, 1.0);
+    ) : (
+      F1 = Freq1;
+      F2 = Freq1  + Freq2 * (1 - Freq1);
+      F3 = F2     + Freq3 * (1 - F2);
+      F4 = F3     + Freq4 * (1 - F3);
+    );
     
     hfft = 0.5*fftSize;
     lmin = log(20/22050);
@@ -1838,7 +1880,7 @@ solo5 ? play5 = 1;
   local(fptr1, fptr2, fptr3, fptr4, fptr5, middle, i, M)
   global(Cuts, Freq1, Freq2, Freq3, Freq4, FIR, FIR_quality,
          FIR1, FIR2, FIR3, FIR4, FIR5, bufferDist,
-         firSize, fftCalcSize, band_mode, lband_mode)
+         firSize, fftCalcSize, band_mode, lband_mode, abs_placement)
   instance( F1,  F2,  F3,  F4
             LF1, LF2, LF3, LF4            /* Lowpass left */
             LA_F2,                        /* Allpass frequency 2 left */
@@ -1850,11 +1892,13 @@ solo5 ? play5 = 1;
             RA_F4, RA_F4_2, RA_F4_3,      /* Allpass frequency 4 right */
             lcuts, lFIR, lFIR_quality,
             lF1, lF2, lF3, lF4,
+            labs_placement,
             updateRequired
             )
   (
       updateRequired = 0;
-      updateRequired = ( 
+      updateRequired = (
+        ( labs_placement != abs_placement ) ||
         ( lF1 != Freq1 ) ||
         ( lF2 != Freq2 ) ||
         ( lF3 != Freq3 ) ||
@@ -1871,6 +1915,7 @@ solo5 ? play5 = 1;
         firSize = 512*M;
         fftCalcSize = 1024*M;
         lband_mode = band_mode;
+        labs_placement = abs_placement;
       
         lF1 = Freq1;
         lF2 = Freq2;
@@ -1880,10 +1925,17 @@ solo5 ? play5 = 1;
         lFIR_quality = FIR_quality;
         lcuts = cuts;
       
-        F1 = Freq1;
-        F2 = Freq1  + Freq2 * (1 - Freq1);
-        F3 = F2     + Freq3 * (1 - F2);
-        F4 = F3     + Freq4 * (1 - F3);
+        abs_placement ? (
+          F1 = clamp(Freq1, 0, 1);
+          F2 = clamp(Freq2, F1, cuts > 2 ? F3 : 1);
+          F3 = clamp(Freq3, F2, cuts > 3 ? F4 : 1);
+          F4 = clamp(Freq4, F3, 1.0);
+        ) : (
+          F1 = Freq1;
+          F2 = Freq1  + Freq2 * (1 - Freq1);
+          F3 = F2     + Freq3 * (1 - F2);
+          F4 = F3     + Freq4 * (1 - F3);
+        );
           
         (cuts==1) ? (
           LF1.init_LR2(Freq1);
