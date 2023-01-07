@@ -2,7 +2,7 @@ desc:Saike 4-pole phase matcher for IIR BandSplitter
 tags: phasematcher for bandsplitter
 version: 0.06
 author: Joep Vanlier
-changelog: Allow absolute frequency placement mode (instead of having each frequency relative to the last).
+changelog: Include absolute positioning mode (frequency-wise). This mode is hidden from the user for now (still being tested).
 provides:
 license: MIT
 
@@ -201,10 +201,10 @@ function fancyCircle(x1, y1, rin, mute, solo, bypass)
 
   function f_trafo(freq)
   local()
-  global(srate)
+  global(srate, freq_max, norm_freq_min)
   instance()
   (
-    0.5 * srate * exp( (1-freq) * log(20/22050) )
+    freq_max * exp( (1-freq) * log(norm_freq_min) )
   );  
 
   function initBands()
@@ -427,8 +427,7 @@ function drawBackface()
 
 // Draws the FFT Grid, frequency axis and dB axis
 function drawGrid()
-  global( fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT,
-             )
+  global(fftSize, srate, gfx_x, gfx_y, grid_alpha, scaling, GRID_FONT, norm_freq_max)
   instance(x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset,
            grid_color_r, grid_color_g, grid_color_b, grid_color_a )
   local(xx, i, wsc, N, xl)
@@ -442,7 +441,7 @@ function drawGrid()
     
     gfx_setfont(GRID_FONT);
     loop(16,
-      xx = x + log(i*fftSize/srate-hzoffset)*wsc;
+      xx = x + log(i*fftSize/(2 * srate * norm_freq_max)-hzoffset)*wsc;
       gfx_set( grid_color_r, grid_color_g, grid_color_b, grid_color_a );
       gfx_line(xx, y, xx, y+h);
       
@@ -554,11 +553,11 @@ function overRect(x, y, w, h, mx, my)
 
 function pixelToWindowRatio(x_loc)
   instance(x, y, w, h, hzoffset)
-  global(fftSize)
+  global(fftSize, norm_freq_min)
   local(lmin, wsc, hfft)
   (
     hfft  = 0.5*fftSize;
-    lmin  = log(20/22050);
+    lmin  = log(norm_freq_min);
     wsc   = w/log(1+fftSize*0.5-hzoffset);
     
     1-log( (exp((x_loc)/wsc) + hzoffset)/hfft )/lmin
@@ -792,10 +791,8 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
         rightClick && (cuts < maxCuts) ? ( 
           addBand(0);
           mpos = this.pixelToWindowRatio(mouse_x);
-          !abs_placement ? (
-            Freq2 = ( Freq2 * (1-0) + 0 - mpos ) / ( 1 - mpos );
-            Freq1 = mpos;
-          );
+          !abs_placement ? ( Freq2 = ( Freq2 * (1-0) + 0 - mpos ) / ( 1 - mpos ); );
+          Freq1 = mpos;
         );
       ) : ( overRect( h2.x, y, h2.w, h, mouse_x, mouse_y ) && ( cuts > 0 )  ) ? (
         leftClick ? selectedBand = 1;
@@ -863,9 +860,9 @@ function fftWindow_processMouse(mouse_x, mouse_y, mouse_cap)
   );
 
 function drawFFT(fill, r, g, b, a)
-  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft )
+  global(scaling, fftSize, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, srate, gfx_mode, dsteps_fft, FIR1, norm_freq_max)
   instance(hstep, x, y, w, h, recPtr, window, rStart, rEnd, fftLoc, floorLevel, hzoffset)
-  local(copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
+  local(step, copyval, stepsize, buf, i, ixsc, txl, tx, ty, wsc, fill, tx0, lx0, lx, ly, ty2, ly2, fill_slast, fill_slmin, cum, cumelem)
   (
     this.calcFFT();
  
@@ -873,10 +870,10 @@ function drawFFT(fill, r, g, b, a)
     cumelem = 0;
     i = 0;
     ixsc = 0;
-    wsc = w/log(1+fftsize*0.5-hzoffset);
+    wsc = w/log(fftsize*0.5-hzoffset);
     fill_slmin = y;
 
-    buf = fftLoc + fftsize*0.5 - 2;
+    buf = fftLoc + fftsize*0.5;
     stepsize = floor((4+dsteps_fft)*(1+scaling));
     copyval = buf[];
     loop( stepsize*200,
@@ -888,21 +885,21 @@ function drawFFT(fill, r, g, b, a)
     gfx_b = b;
     gfx_a = a;
  
-    hstep = .5 * stepsize;
-    buf = fftLoc+2;
+    hstep = 0.5 * stepsize;
+    buf = fftLoc;
     txl = x;
     lx = x;
-    ly = y - max(buf[], -floorLevel)*h / floorLevel;
-    buf += 1;
+    ly = y - max(buf[2], -floorLevel)*h / floorLevel;
+    step = 1.0 / (2*norm_freq_max);
+    
     loop(fftsize*0.5+stepsize*200,
-      tx = floor(x + log(1.0+ixsc-hzoffset)*wsc);
-      cum = max(cum, buf[]);
+      tx = floor(x + log(ixsc - hzoffset)*wsc);
+      cum = max(cum, tx > 0 ? buf[] : -10000);
       cumelem += 1;
       
-      ( (tx != txl) && (tx-txl > stepsize) && tx > x && i && ( tx < (x+w+stepsize) ) ) ? // 
+      ( (tx != txl) && (tx-txl > stepsize) && tx > x && i && ( tx < (x+w+stepsize) ) ) ?
       ( 
         ty = y - max(cum, -floorLevel)*h / floorLevel;
-        //ty = y - log(cum)+100;
         txl = floor(tx);
         
         tx = min(tx, x+w);
@@ -933,7 +930,7 @@ function drawFFT(fill, r, g, b, a)
         lx=tx; ly=ty; ly2=ty2; cum = -1000000; cumelem = 0;
       );
       
-      buf+=1; i+=1; ixsc+=1;
+      buf+=1; i+=1; ixsc+=step;
     );
   );
   
@@ -952,7 +949,8 @@ function updateBands()
   global(Freq1,   Freq2,   Freq3,   Freq4,
          Ceil1,   Ceil2,   Ceil3,   Ceil4,
          Drive1,  Drive2,  Drive3,  Drive4,  Drive5,
-         fftSize, driveRange, driveMax, abs_placement, cuts)
+         fftSize, driveRange, driveMax, abs_placement, cuts,
+         norm_freq_min)
   instance(x, y, w, h, hzoffset,
            x1,  x2,  x3,  x4,  x5,  /* Frequencies          */
            y1,  y2,  y3,  y4,  y5,  /* Drives               */
@@ -972,7 +970,7 @@ function updateBands()
     );
     
     hfft = 0.5*fftSize;
-    lmin = log(20/22050);
+    lmin = log(norm_freq_min);
     
     wsc = w/log(1+fftSize*0.5-hzoffset);
     x1 = ( x + log( hfft * exp( (1-F1) * lmin ) - hzoffset ) * wsc );
@@ -1290,7 +1288,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
   (
     slope     = 3;
   
-    hzoffset  = 20*fftSize/srate;
+    hzoffset  = 10*fftSize/srate;
     window    = memoryOffset + fftSize + (fftSize*0.5 - 1);
   
     // Start and end of the buffer
@@ -1392,6 +1390,16 @@ file_var(0, solo5);
 @slider
 
 @block
+absolute_frequencies ? (
+  freq_max = 24000;
+  norm_freq_min = 20.0 / freq_max;
+  norm_freq_max = freq_max / srate;
+) : (
+  freq_max = 0.5 * srate;
+  norm_freq_min = 20.0 / 22050;
+  norm_freq_max = 0.5;
+);
+
 !mute1 ? play1 = 1 : play1 = 0;
 !mute2 ? play2 = 1 : play2 = 0;
 !mute3 ? play3 = 1 : play3 = 0;
@@ -1407,11 +1415,11 @@ solo5 ? play5 = 1;
 
 @sample
   function init_LR2(freq)
-    global(srate)
+    global(srate, norm_freq_min, norm_freq_max)
     local(f0, ct, st, div)
     instance(k, a1, a2, a3)
     (
-      f0 = .5 * $pi * exp( (1-freq) * log(20/22050) );
+      f0 = norm_freq_max * $pi * exp( (1-freq) * log(norm_freq_min) );
       k = sqrt(2); /* Note the different peak resonance because we're combining 2 SVFs into the Linkwitz-Riley structure */
 
       ct = cos(f0);
@@ -1445,11 +1453,11 @@ solo5 ? play5 = 1;
     );
   
   function init_AP1(freq)
-    global(srate)
+    global(srate, norm_freq_min, norm_freq_max)
     instance(k)
     local(f0, st)
     (
-      f0 = 0.5 * $pi * exp((1 - freq) * log(20/22050));
+      f0 = norm_freq_max * $pi * exp((1 - freq) * log(norm_freq_min));
       st = sin(f0);
       k = st / (st + cos(f0));
     );
