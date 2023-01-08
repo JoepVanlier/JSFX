@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.112
+version: 0.113
 author: Joep Vanlier
-changelog: Add option to only randomize probabilities. In randomize mode, left click randomizes blocks. Right click randomizes probabilities.
+changelog: Make filter settings sample-rate independent (legacy mode is available through a button). Added pillow filters (from Yutani/FM Filter2). Added vowel filter.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -61,7 +61,7 @@ slider22:modulation_enabled=0<0,1,1>-Modulation enabled
 slider23:filter2_enabled=0<0,1,1>-Filter enabled
 slider24:delay_enabled=0<0,1,1>-Delay enabled
 
-slider25:filter_type=1<0,17,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA}>-Filter type
+slider25:filter_type=1<0,26,1{Linear,MS-20,Linear x2,Moog,Ladder,303,MS-20 asym,DblRes,DualPeak,TriplePeak,svf nl 2p,svf nl 4p,svf nl 2p inc,svf nl 4p inc,rectified resonance,Steiner,SteinerA,Muck,Pill2p,Pill4p,Pill2p Aggro,Pill4p Aggro,Pill2p Stacc,Pill4p Stacc,Ladder3,Ladder6,HLadder}>-Filter type
 slider26:drive=0<-6,48,1>-Filter Drive (dB)
 slider27:cutoff_start=.6<0,1,.0001>-Cutoff Start
 slider28:cutoff_final=.6<0,1,.0001>-Cutoff Finish
@@ -94,7 +94,7 @@ import saike_seqs_pitchlib.jsfx-inc
 
 @init
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
-CURRENT_VERSION = 8;
+CURRENT_VERSION = 9;
 version = CURRENT_VERSION;
 DRAG_STRING = 50;
 DRAG_BLOCK = 1;
@@ -419,7 +419,7 @@ FREQ_SLIDER_1000 = 11;
 function knob_set_display(type, in_active)
 instance(label, active, value, scale, min_value)
 local(center)
-global(srate, tempo_sync_envelopes, getFastEnvelopeLabel,
+global(srate, sampling_ratio, tempo_sync_envelopes, getFastEnvelopeLabel,
        DB_SLIDER,
        FREQ_SLIDER,
        NORMALIZED_SLIDER,
@@ -439,7 +439,7 @@ global(srate, tempo_sync_envelopes, getFastEnvelopeLabel,
     label = sprintf(1, "%.1f dB", value * scale + min_value);
   ) : ( type == FREQ_SLIDER ) ? (
     // Frequency slider
-    center = .5 * srate * exp( (1 - value) * log(20/22050) );
+    center = .5 * sampling_ratio * srate * exp( (1 - value) * log(20/22050) );
     label = center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000)
   ) : ( type == NORMALIZED_SLIDER ) ? (
     label = sprintf(1, "%.1f", value)
@@ -1156,7 +1156,6 @@ r_delay.initBuffer(delay_buffer_r, delay_buffer_r + 0.5 * BUF_SIZE);
 l_chorus.initBuffer(chorus_buffer_l, chorus_buffer_l + CHORUS_SIZE);
 r_chorus.initBuffer(chorus_buffer_r, chorus_buffer_r + CHORUS_SIZE);
 
-
 // Sample locations are recorded as [memory location, length]
 freemem = (samplelocs = freemem) + 10;
 idx = 0;
@@ -1166,6 +1165,7 @@ loop(10,
 );
 
 freemem = verb.init_reverb(freemem);
+freemem = initialize_vowel(freemem);
 
 interpolator_init();
 pattern_update();
@@ -1196,6 +1196,11 @@ init_playhead();
   current_freq_shifter_pitch = freqShifterPitchKnob.getCurrentValue();
 
 @block
+sampling_ratio = legacy_mode ? 1 : 44100 / srate;
+sampling_factor = oversampling / sampling_ratio;
+isampling_factor = 1 / sampling_factor;
+israte = 1.0 / srate;
+
 d_master_gain = (target_master_db - current_master_db) / samplesblock;
 radians_to_dt = 2.0 * $pi / srate;
 reset_head_offset = crossfade_samples * 0;
@@ -1582,6 +1587,11 @@ freqShifterWet.serialize_knob();
 finalOutputGain.serialize_knob();
 
 file_var(0, hide_pdc);
+(CURRENT_VERSION < 9) ? (
+  legacy_mode = 1;
+) : (
+  file_var(0, legacy_mode);
+);
 
 update_current_levels();
 current_master_db = target_master_db;
@@ -3677,7 +3687,7 @@ draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 gfx_set(1, 1, 1, .1);
 gfx_x = 150 * (1+scaling);
 gfx_y = 30 * (1+scaling);
-gfx_printf("v0.112");
+gfx_printf("v0.113");
 
 scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
@@ -4370,28 +4380,39 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   cX += knobSize;
   gfx_setfont(KNOB_FONT);
   y_move = .45 * knobSize;
-  ww = 1.5*knobSize;
+  ww = 1.25*knobSize;
   hh = .35 * knobSize;
   y_ref = cY - 0.9*knobSize - 1;
   
-  drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, -filter2_type, "2-pole linear state variable filter (12 dB/oct).") ? filter2_type = 0;
-  drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, -filter2_type, "4-pole linear state variable filter (12 dB/oct)") ? filter2_type = 2;
-  drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, -filter2_type, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).") ? filter2_type = 8;
-  drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, -filter2_type, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).") ? filter2_type = 9;
-  drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, -filter2_type, "2-pole linear state variable filter where\nthe approximate resonance is rectified.") ? filter2_type = 14;
+  cx_ref = floor(cX - 2.1 * knobSize);
+  cx_spacing = floor(1.33 * knobSize);
+  drawSelectionButton("Lin2p", cx_ref, y_ref, ww, hh, 0, -filter2_type, "2-pole linear state variable filter (12 dB/oct).") ? filter2_type = 0;
+  drawSelectionButton("Lin4p", cx_ref, y_ref + y_move, ww, hh, 2, -filter2_type, "4-pole linear state variable filter (12 dB/oct)") ? filter2_type = 2;
+  drawSelectionButton("Dual", cx_ref, y_ref + 2*y_move, ww, hh, 8, -filter2_type, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).") ? filter2_type = 8;
+  drawSelectionButton("Triple", cx_ref, y_ref + 3*y_move, ww, hh, 9, -filter2_type, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).") ? filter2_type = 9;
+  drawSelectionButton("Rect", cx_ref, y_ref + 4*y_move, ww, hh, 14, -filter2_type, "2-pole linear state variable filter where\nthe approximate resonance is rectified.") ? filter2_type = 14;
   
-  drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, -filter2_type, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).") ? filter2_type = 1;
-  drawSelectionButton("MS-20A", cX - .25*knobSize, y_ref + 1*y_move, ww, hh, 6, -filter2_type, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).") ? filter2_type = 6;
-  drawSelectionButton("Moog", cX - .25*knobSize, y_ref + 2*y_move, ww, hh, 3, -filter2_type, "Moog emulation (24 dB/oct).") ? filter2_type = 3;
-  drawSelectionButton("Ladder", cX - .25*knobSize, y_ref + 3*y_move, ww, hh, 4, -filter2_type, "Ladder filter with two stages (12 dB/oct).") ? filter2_type = 4;
-  drawSelectionButton("303", cX - .25*knobSize, y_ref + 4*y_move, ww, hh, 5, -filter2_type, "Blaukraut's 303 filter emulation") ? filter2_type = 5;
-  
-  drawSelectionButton("nlSVF2p", cX + 1.5*knobSize, y_ref + 0*y_move, ww, hh, 10, -filter2_type, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.") ? filter2_type = 10;
-  drawSelectionButton("nlSVF4p", cX + 1.5*knobSize, y_ref + 1*y_move, ww, hh, 11, -filter2_type, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.") ? filter2_type = 11;
-  drawSelectionButton("Steiner", cX + 1.5*knobSize, y_ref + 2*y_move, ww, hh, 15, -filter2_type, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.") ? filter2_type = 15;
-  drawSelectionButton("SteinerA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 16, -filter2_type, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.") ? filter2_type = 16;
-  drawSelectionButton("Bent", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 17, -filter2_type, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.") ? filter2_type = 17;
-  
+  cx_ref += cx_spacing;
+  drawSelectionButton("MS20", cx_ref, y_ref + 0*y_move, ww, hh, 1, -filter2_type, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).") ? filter2_type = 1;
+  drawSelectionButton("MS20A", cx_ref, y_ref + 1*y_move, ww, hh, 6, -filter2_type, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).") ? filter2_type = 6;
+  drawSelectionButton("Moog", cx_ref, y_ref + 2*y_move, ww, hh, 3, -filter2_type, "Moog emulation (24 dB/oct).") ? filter2_type = 3;
+  drawSelectionButton("Ladder", cx_ref, y_ref + 3*y_move, ww, hh, 4, -filter2_type, "Ladder filter with two stages (12 dB/oct).") ? filter2_type = 4;
+  drawSelectionButton("303", cx_ref, y_ref + 4*y_move, ww, hh, 5, -filter2_type, "Blaukraut's 303 filter emulation") ? filter2_type = 5;
+
+  cx_ref += cx_spacing;
+  drawSelectionButton("SVF2p", cx_ref, y_ref + 0*y_move, ww, hh, 10, -filter2_type, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.") ? filter2_type = 10;
+  drawSelectionButton("SVF4p", cx_ref, y_ref + 1*y_move, ww, hh, 11, -filter2_type, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.") ? filter2_type = 11;
+  drawSelectionButton("Steiner", cx_ref, y_ref + 2*y_move, ww, hh, 15, -filter2_type, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.") ? filter2_type = 15;
+  drawSelectionButton("SteinerA", cx_ref, y_ref + 3*y_move, ww, hh, 16, -filter2_type, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.") ? filter2_type = 16;
+  drawSelectionButton("Bent", cx_ref, y_ref + 4*y_move, ww, hh, 17, -filter2_type, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.") ? filter2_type = 17;
+
+  cx_ref += cx_spacing;
+  drawSelectionButton("Pill2p", cx_ref, y_ref + 0*y_move, ww, hh, 18, -filter2_type, "2-pole pillowy non-linear filter") ? filter2_type = 18;
+  drawSelectionButton("Pill4p", cx_ref, y_ref + 1*y_move, ww, hh, 19, -filter2_type, "4-pole pillowy non-linear filter") ? filter2_type = 19;
+  drawSelectionButton("Pill2p S", cx_ref, y_ref + 2*y_move, ww, hh, 22, -filter2_type, "2-pole pillowy non-linear filter w/ clipper in feedback and crossover dist") ? filter2_type = 22;
+  drawSelectionButton("Pill4p S", cx_ref, y_ref + 3*y_move, ww, hh, 23, -filter2_type, "4-pole pillowy non-linear filter w/ clipper in feedback and crossover dist") ? filter2_type = 23;
+  drawSelectionButton("Vowel", cx_ref, y_ref + 4*y_move, ww, hh, 27, -filter2_type, "Vowel filter") ? filter2_type = 27;
+
   cX += 4.25*knobSize;
   driveKnob2.knob_set_display(DB_SLIDER, filter2_enabled);
   driveKnob2.drawAndProcess(cX, cY, knobSize, "Drive", "Input Gain\n\nPushing this saturates the filter nicely.", current_drive2, 1, 1, 1);
@@ -4402,6 +4423,19 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   
   filterOnOffToggle2.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, filter_on_off2, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Turn filter on and off.\n\nEnabling this will bypass the filter when there is no block.");
   filter_on_off2 = filterOnOffToggle2.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  filterRange2.inactive = !filter2_enabled;
+  filterRange2.drawToggle(cX + 0.9 * knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, legacy_mode, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, 
+"Legacy preset mode (not
+recommended).
+
+Make filter vary over full 
+range. This makes presets 
+depend on the current sample 
+rate but allows a range 
+beyond 22050 Hz."
+);
+  legacy_mode = filterRange2.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   cX += 2.5*knobSize;
   cutoffEndKnob2.knob_set_display(FREQ_SLIDER, filter2_enabled);
@@ -4443,27 +4477,39 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   cX += knobSize;
   gfx_setfont(KNOB_FONT);
   y_move = .45 * knobSize;
-  ww = 1.5*knobSize;
+  ww = 1.25*knobSize;
   hh = .35 * knobSize;
   FILTER_SELECT_BUTTON = 25;
   y_ref = cY - 0.9*knobSize - 1;
-  drawSelectionButton("Lin 2p", cX - 2*knobSize, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON, "2-pole linear state variable filter (12 dB/oct).");
-  drawSelectionButton("Lin 4p", cX - 2*knobSize, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON, "4-pole linear state variable filter (12 dB/oct)");
-  drawSelectionButton("Dual", cX - 2*knobSize, y_ref + 2*y_move, ww, hh, 8, FILTER_SELECT_BUTTON, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).");
-  drawSelectionButton("Triple", cX - 2*knobSize, y_ref + 3*y_move, ww, hh, 9, FILTER_SELECT_BUTTON, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).");
-  drawSelectionButton("Rect", cX - 2*knobSize, y_ref + 4*y_move, ww, hh, 14, FILTER_SELECT_BUTTON, "2-pole linear state variable filter where\nthe approximate resonance is rectified.");
   
-  drawSelectionButton("MS-20", cX - 0.25*knobSize, y_ref + 0*y_move, ww, hh, 1, FILTER_SELECT_BUTTON, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).");
-  drawSelectionButton("MS-20A", cX - .25*knobSize, y_ref + 1*y_move, ww, hh, 6, FILTER_SELECT_BUTTON, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).");
-  drawSelectionButton("Moog", cX - .25*knobSize, y_ref + 2*y_move, ww, hh, 3, FILTER_SELECT_BUTTON, "Moog emulation (24 dB/oct).");
-  drawSelectionButton("Ladder", cX - .25*knobSize, y_ref + 3*y_move, ww, hh, 4, FILTER_SELECT_BUTTON, "Ladder filter with two stages (12 dB/oct).");
-  drawSelectionButton("303", cX - .25*knobSize, y_ref + 4*y_move, ww, hh, 5, FILTER_SELECT_BUTTON, "Blaukraut's 303 filter emulation");
+  cx_ref = floor(cX - 2.1 * knobSize);
+  cx_spacing = floor(1.33 * knobSize);
+  drawSelectionButton("Lin2p", cx_ref, y_ref, ww, hh, 0, FILTER_SELECT_BUTTON, "2-pole linear state variable filter (12 dB/oct).");
+  drawSelectionButton("Lin4p", cx_ref, y_ref + y_move, ww, hh, 2, FILTER_SELECT_BUTTON, "4-pole linear state variable filter (12 dB/oct)");
+  drawSelectionButton("Dual", cx_ref, y_ref + 2*y_move, ww, hh, 8, FILTER_SELECT_BUTTON, "2 2-pole state variable filters in series\nwhere one is placed at four times the cutoff.\nResonance peak is saturated (approximate).");
+  drawSelectionButton("Triple", cx_ref, y_ref + 3*y_move, ww, hh, 9, FILTER_SELECT_BUTTON, "3 2-pole state variable filters in series.\nCutoff frequencies are at one, two and four times the base cutoff.\nResonance peak is saturated (approximate).");
+  drawSelectionButton("Rect", cx_ref, y_ref + 4*y_move, ww, hh, 14, FILTER_SELECT_BUTTON, "2-pole linear state variable filter where\nthe approximate resonance is rectified.");
   
-  drawSelectionButton("nlSVF2p", cX + 1.5*knobSize, y_ref + 0*y_move, ww, hh, 10, FILTER_SELECT_BUTTON, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
-  drawSelectionButton("nlSVF4p", cX + 1.5*knobSize, y_ref + 1*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
-  drawSelectionButton("Steiner", cX + 1.5*knobSize, y_ref + 2*y_move, ww, hh, 15, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.");
-  drawSelectionButton("SteinerA", cX + 1.5*knobSize, y_ref + 3*y_move, ww, hh, 16, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.");
-  drawSelectionButton("Bent", cX + 1.5*knobSize, y_ref + 4*y_move, ww, hh, 17, FILTER_SELECT_BUTTON, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.");
+  cx_ref += cx_spacing;
+  drawSelectionButton("MS20", cx_ref, y_ref + 0*y_move, ww, hh, 1, FILTER_SELECT_BUTTON, "MS-20 emulation (12 dB/oct LP, BP, 6 dB/oct HP).");
+  drawSelectionButton("MS20A", cx_ref, y_ref + 1*y_move, ww, hh, 6, FILTER_SELECT_BUTTON, "MS-20 emulation with diode asymmetry (12 dB/oct LP, BP, 6 dB/oct HP).");
+  drawSelectionButton("Moog", cx_ref, y_ref + 2*y_move, ww, hh, 3, FILTER_SELECT_BUTTON, "Moog emulation (24 dB/oct).");
+  drawSelectionButton("Ladder", cx_ref, y_ref + 3*y_move, ww, hh, 4, FILTER_SELECT_BUTTON, "Ladder filter with two stages (12 dB/oct).");
+  drawSelectionButton("303", cx_ref, y_ref + 4*y_move, ww, hh, 5, FILTER_SELECT_BUTTON, "Blaukraut's 303 filter emulation");
+  
+  cx_ref += cx_spacing;
+  drawSelectionButton("SVF2p", cx_ref, y_ref + 0*y_move, ww, hh, 10, FILTER_SELECT_BUTTON, "2-pole non-linear state variable filter (12 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+  drawSelectionButton("SVF4p", cx_ref, y_ref + 1*y_move, ww, hh, 11, FILTER_SELECT_BUTTON, "4-pole non-linear state variable filter (24 dB/oct)\nwith asymmetry in the saturation which leads\nto flutter when driven.\n\nSounds nice at low resonances.");
+  drawSelectionButton("Steiner", cx_ref, y_ref + 2*y_move, ww, hh, 15, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (symmetric) feedback.\nBe warned, over 0.5 this filter goes into hard oscillation.\nThis sounds awful unless there's sufficient drive to choke it.\nResonance loss more dominant at HF.");
+  drawSelectionButton("SteinerA", cx_ref, y_ref + 3*y_move, ww, hh, 16, FILTER_SELECT_BUTTON, "2-pole non-linear Steiner filter with diode clipped (asymmetric) feedback.\nRaising the drive lowers the resonance (chokes it). Resonance loss more dominant at HF.");
+  drawSelectionButton("Bent", cx_ref, y_ref + 4*y_move, ww, hh, 17, FILTER_SELECT_BUTTON, "4-pole non-linear CMOS filter. Sounds extremely non-linear. Can lead a life of its own.");
+  
+  cx_ref += cx_spacing;
+  drawSelectionButton("Pill2p", cx_ref, y_ref + 0*y_move, ww, hh, 18, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter");
+  drawSelectionButton("Pill4p", cx_ref, y_ref + 1*y_move, ww, hh, 19, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter");
+  drawSelectionButton("Pill2p S", cx_ref, y_ref + 2*y_move, ww, hh, 22, FILTER_SELECT_BUTTON, "2-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
+  drawSelectionButton("Pill4p S", cx_ref, y_ref + 3*y_move, ww, hh, 23, FILTER_SELECT_BUTTON, "4-pole pillowy non-linear filter w/ clipper in feedback and crossover dist");
+  drawSelectionButton("Vowel", cx_ref, y_ref + 4*y_move, ww, hh, 27, FILTER_SELECT_BUTTON, "Vowel filter");
   
   cX += 4.25*knobSize;
   driveKnob.knob_set_display(DB_SLIDER, filter_enabled);
@@ -4475,6 +4521,19 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
   
   filterOnOffToggle.drawToggle(cX - knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, filter_on_off, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Turn filter on and off.\n\nEnabling this will bypass the filter when there is no block.");
   filter_on_off = filterOnOffToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+  filterRange.inactive = !filter_enabled;
+  filterRange.drawToggle(cX + 0.9 * knobSize, cY - knobSize, 0.15*knobSize, 0.15*knobSize, legacy_mode, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, 
+"Legacy preset mode (not
+recommended).
+
+Make filter vary over full 
+range. This makes presets 
+depend on the current sample 
+rate but allows a range 
+beyond 22050 Hz."
+  );
+  legacy_mode = filterRange.processMouseToggle(mouse_x, mouse_y, mouse_cap);
   
   cX += 2.5*knobSize;
   cutoffEndKnob.knob_set_display(FREQ_SLIDER, filter_enabled);
