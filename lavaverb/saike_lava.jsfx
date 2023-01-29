@@ -1,8 +1,8 @@
 desc:Lava Reverb (Saike) [ALPHA]
 tags: shimmer reverb
-version: 0.23
+version: 0.25
 author: Joep Vanlier
-changelog: Scale hints with window resolution.
+changelog: Added eco graphics mode for people who prefer to spend UI cycles on things relevant for audio.
 license: MIT
 provides:
   Lava_Dependencies/*
@@ -25,6 +25,7 @@ slider14:pitch=-1<-2,0,0.001>-Pitch
 slider15:modulation=0<0,400,0.001>-STFT modulation
 slider16:eco=0<0,1,1>-Economy
 slider17:freq_shift=0<0,1,0.000001>-Frequency Shift
+slider18:eco_graphics=0<0,1,1>-Eco graphics
 
 in_pin:left input
 in_pin:right input
@@ -366,33 +367,103 @@ gfx_rect(0, 0, gfx_w, gfx_h);
 
 ui_size = min(gfx_w, gfx_h);
 
-idx = 0;
-fsim.set_output(0, 0, ui_size, ui_size);
-//fsim.draw_to_field(fsim.last_dens, mouse_x, mouse_y, 13);
-fsim.draw_to_field(fsim.last_vx, mouse_x, mouse_y, 25 * (mouse_x - lx) / gfx_w + .1 * sign(mouse_x - lx));
-fsim.draw_to_field(fsim.last_vy, mouse_x, mouse_y, 25 * (mouse_y - ly) / gfx_h + .1 * sign(mouse_y - ly));
-
-(initialized == 0) ? (
-  kk = gfx_w;
-  fsim.set_output(0, 0, ui_size, ui_size);
-  fsim.nuke2(0.025);
-  loop(20,
-    fsim.circle_to_field(fsim.last_dens, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.03 * rand(), 10);
-    fsim.circle_to_field(fsim.last_vx, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 1 - 0.5);
-    fsim.circle_to_field(fsim.last_vy, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 1 - 0.5);
+/* Gradients are buffered to save rendering perf */
+function drawGradients(w, h, ui_size, gradient_bg)
+instance(lw, lh, lSpectrumH)
+global(gfx_mode, gfx_dest, bg_color_r, bg_color_g, bg_color_b, bg_color_a,
+       gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a)
+local(oldDest, oldMode, r, s)
+(
+  oldMode = gfx_mode;
+  gfx_mode = 0;
+  gfx_set(1,1,1,1);
+  ( ( lw != w ) || ( lh != h ) ) ? (
+    /* Only draw gradients when size changes */
+    gfx_x = gfx_y = 0;
+    lw = w;
+    lh = h;
+    oldDest = gfx_dest;
+    gfx_setimgdim(gradient_bg, w, h);
+    gfx_dest = gradient_bg;
+    
+    gfx_set(0, 0, 0, 1);
+    gfx_rect(0, 0, w, h);
+    gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);
+    gfx_rectto(w, h);
+    gfx_mode = 1;
+    s = 0;
+    loop(2,
+      r = s;
+      loop(30,
+        gfx_set(1.0, 0.4, 0.1, 0.6 - 0.02 * r);
+        gfx_circle(0.5 * ui_size, 0.5 * ui_size, 0.2 * ui_size + r, 0, 1);
+        r += 3.5;
+      );
+      r = s;
+      loop(30,
+        gfx_set(1.0, 0.4, 0.1, 0.6 - 0.02 * r);
+        gfx_circle(0.5 * ui_size, 0.5 * ui_size, 0.24 * ui_size + r, 0, 1);
+        r += 3.5;
+      );
+      r = s;
+      loop(30,
+        gfx_set(1.0, 0.4, 0.1, 0.6 - 0.02 * r);
+        gfx_circle(0.5 * ui_size, 0.5 * ui_size, 0.28 * ui_size + r, 0, 1);
+        r += 7;
+      );
+      r = s;
+      loop(30,
+        gfx_set(1.0, 0.4, 0.1, 0.6 - 0.015 * r);
+        gfx_circle(0.5 * ui_size, 0.5 * ui_size, 0.32 * ui_size + r, 0, 1);
+        r += 7;
+      );
+      s += 0.3;
+    );
+    gfx_set(bg_color_r, bg_color_g, bg_color_b, bg_color_a);    
+    gfx_gradrect(0, .9 * h, w, 0.1 * h, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .01, .01, .005, .0001);
+    gfx_gradrect(0, .93 * h, w, 0.07 * h, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .03, .01, .005, .0001);
+    gfx_gradrect(0, .8 * h, w, 0.2 * h, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .01, -.0001, .0001, .0001);      
+    gfx_gradrect(0, 0, w, h, gfx_r, gfx_g, gfx_b, .1, .00, .000, .0001, .0001, .001, -.0001, .0001, .0001);
+    
+    gfx_dest = oldDest;
   );
-  initialized = 1;
-  fsim.simulate(1.0);
+  
+  gfx_x = gfx_y = 0; gfx_a = .7 + rand()*rand()*.2;
+  gfx_blit(gradient_bg, 1, 0);
+  gfx_mode = oldMode;
 );
 
-fsim.circle_to_field(fsim.last_dens, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.03 * rand(), 1.5);
-fsim.circle_to_field(fsim.last_vx, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
-fsim.circle_to_field(fsim.last_vy, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
-
-fsim.darken_density(0.9975);
-
-fsim.simulate(1.0);
-fsim.draw_fast(fsim.dens);
+!eco_graphics ? (
+  idx = 0;
+  fsim.set_output(0, 0, ui_size, ui_size);
+  //fsim.draw_to_field(fsim.last_dens, mouse_x, mouse_y, 13);
+  fsim.draw_to_field(fsim.last_vx, mouse_x, mouse_y, 25 * (mouse_x - lx) / gfx_w + .1 * sign(mouse_x - lx));
+  fsim.draw_to_field(fsim.last_vy, mouse_x, mouse_y, 25 * (mouse_y - ly) / gfx_h + .1 * sign(mouse_y - ly));
+  
+  (initialized == 0) ? (
+    kk = gfx_w;
+    fsim.set_output(0, 0, ui_size, ui_size);
+    fsim.nuke2(0.025);
+    loop(20,
+      fsim.circle_to_field(fsim.last_dens, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.03 * rand(), 10);
+      fsim.circle_to_field(fsim.last_vx, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 1 - 0.5);
+      fsim.circle_to_field(fsim.last_vy, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 1 - 0.5);
+    );
+    initialized = 1;
+    fsim.simulate(1.0);
+  );
+  
+  fsim.circle_to_field(fsim.last_dens, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.03 * rand(), 1.5);
+  fsim.circle_to_field(fsim.last_vx, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
+  fsim.circle_to_field(fsim.last_vy, 0.5 * ui_size, 0.5 * ui_size, 0.33 + 0.02 * rand(), rand() * 0.25 - 0.125);
+  
+  fsim.darken_density(0.9975);
+  
+  fsim.simulate(1.0);
+  fsim.draw_fast(fsim.dens);
+) : (
+  drawGradients(gfx_w, gfx_h, ui_size, 1);
+);
 
 function current_pos(idx)
 local(n, cp, radius)
@@ -733,13 +804,20 @@ update_pos(4 * step); draw_glyph(4, xc, yc, -2.3, 0, algorithm == 4, "Spectral")
 gfx_x = 5;
 gfx_y = 5;
 gfx_setfont(7, "Arial", 12);
-over_eco  = (mouse_x > 0) && (mouse_y > 0) && (mouse_x < 60) & (mouse_y < 25);
+
+over_eco  = (mouse_x > 0) && (mouse_y > 0) && (mouse_x < 60) & (mouse_y < 15);
 eco_visible = 0.8 * eco_visible + 0.2 * (over_eco + 0.2 * eco);
-
 (over_eco) && (last_cap == 0) && (mouse_cap == 1) ? eco = 1 - eco;
-
 gfx_set(0.4 + 0.8 * eco, 0.4, 0.4, eco_visible);
 gfx_drawstr("(Eco mode)", 0);
+
+gfx_x = 5;
+gfx_y = 15;
+over_eco_gfx  = (mouse_x > 0) && (mouse_y > 15) && (mouse_x < 60) & (mouse_y < 30);
+eco_gfx_visible = 0.8 * eco_gfx_visible + 0.2 * (over_eco_gfx + 0.2 * eco_graphics);
+(over_eco_gfx) && (last_cap == 0) && (mouse_cap == 1) ? eco_graphics = 1 - eco_graphics;
+gfx_set(0.4 + 0.8 * eco_graphics, 0.4, 0.4, eco_gfx_visible);
+gfx_drawstr("(Eco graphics)", 0);
 
 hinter.drawhint();
 
