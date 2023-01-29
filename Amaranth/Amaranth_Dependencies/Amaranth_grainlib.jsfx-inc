@@ -82,7 +82,7 @@ function evaluateFade()
     )
   );
 
-function grainRead()
+function grainRead_LQ()
   local(out, frac,
         id0, id1, id2, id3,
         ism1, is0, is1, is2)
@@ -91,7 +91,61 @@ function grainRead()
            y0, y1, y2, b1, lOut, rOut, outL, outR,
            loc, hloc, ptrMin, ptrMax, 
            advance, hadvance, lmul, rmul)
-  global(oversamplingMode)
+  global()
+  (
+    ( idx < N3 ) ? (
+      ptr = 2*loc - floor(2*loc) + floor(loc)*2;
+      frac = loc - floor(loc);
+      ptr = floor(ptr);
+    
+      /* Evaluate the cosine grain windowing function */
+      idx < nTransition ? (
+        // Continue the window
+        y0 = b1 * y1 - y2;
+        y2 = y1;
+        y1 = y0;
+        out = .5*(y0+1);
+      ) : ( idx < N2 ) ? (
+        out = 1;
+      ) : (
+        ( idx == N2 ) ? (
+          this.grainPrepFall(nTransition);
+        );
+        
+        // Continue the window
+        y0 = b1 * y1 - y2;
+        y2 = y1;
+        y1 = y0;
+        out = .5*(y0+1);
+      );
+      
+      outL = out * lmul;
+      outR = out * rmul;
+      
+      // Simple linear interpolation to keep CPU cost in check
+      // Big step up from sample & hold, but not nearly as expensive as AA filters.
+      lOut = outL * (ptr[] * (1-frac) + ptr[2]*frac);
+      rOut = outR * (ptr[1] * (1-frac) + ptr[3]*frac);
+      
+      idx += 1;
+      loc += advance;
+      
+      loc > .5*ptrMax ? (
+        loc -= .5*(ptrMax - ptrMin);
+      );
+    ) : ( lOut = 0; rOut = 0; outL = 0; outR = 0; idx += 1; );
+  );
+
+function grainRead_HQ()
+  local(out, frac,
+        id0, id1, id2, id3,
+        ism1, is0, is1, is2)
+  instance(ptr, 
+           nTransition, N2, N3, idx,
+           y0, y1, y2, b1, lOut, rOut, outL, outR,
+           loc, hloc, ptrMin, ptrMax, 
+           advance, hadvance, lmul, rmul)
+  global()
   (
     ( idx < N3 ) ? (
       ptr = 2*loc - floor(2*loc) + floor(loc)*2;
@@ -122,35 +176,28 @@ function grainRead()
       outL = out * lmul;
       outR = out * rmul;
       
-      oversamplingMode == 0 ? (
-        // Simple linear interpolation to keep CPU cost in check
-        // Big step up from sample & hold, but not nearly as expensive as AA filters.
-        lOut = outL * (ptr[] * (1-frac) + ptr[2]*frac);
-        rOut = outR * (ptr[1] * (1-frac) + ptr[3]*frac);
-      ) : (
-        /* Higher order Hermite interpolation */
-        ism1 = ptr[-4];
-        is0 = ptr[-2];
-        is1 = ptr[];
-        is2 = ptr[2];
-        
-        id0 = is0;
-        id1 = 0.5*(is1 - ism1);
-        id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
-        id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
-        lOut = outL * (((id3*frac+id2)*frac+id1)*frac+id0);
-        
-        ism1 = ptr[-3];
-        is0 = ptr[-1];
-        is1 = ptr[1];
-        is2 = ptr[3];
-        
-        id0 = is0;
-        id1 = 0.5*(is1 - ism1);
-        id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
-        id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
-        rOut = outL * (((id3*frac+id2)*frac+id1)*frac+id0);
-      );
+      /* Higher order Hermite interpolation */
+      ism1 = ptr[-4];
+      is0 = ptr[-2];
+      is1 = ptr[];
+      is2 = ptr[2];
+      
+      id0 = is0;
+      id1 = 0.5*(is1 - ism1);
+      id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+      id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+      lOut = outL * (((id3*frac+id2)*frac+id1)*frac+id0);
+      
+      ism1 = ptr[-3];
+      is0 = ptr[-1];
+      is1 = ptr[1];
+      is2 = ptr[3];
+      
+      id0 = is0;
+      id1 = 0.5*(is1 - ism1);
+      id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+      id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+      rOut = outL * (((id3*frac+id2)*frac+id1)*frac+id0);
       
       idx += 1;
       loc += advance;
@@ -223,7 +270,7 @@ function grainDrawHeads(x, y, w, h, wb)
 
 function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist, overlapOrDist, spd, spdSpread, panSpread, reverseProbability, playing, readBufCur, readBufMin, readBufMax, writeBufCur, relPosition, pitchTimeInvariance, updateBuffer)
   local(grainVar, N, ptr, pan, dist, safetyFactor, lostBuffer, total, reverse, lowLatencyCompensation, cpan, cpan_l, cpan_r)
-  global(GRAINDISTMIN, GRAINDISTMAX, OVERLAPMAX, VARIANCEMIN, VARIANCEMAX, srate)
+  global(GRAINDISTMIN, GRAINDISTMAX, OVERLAPMAX, VARIANCEMIN, VARIANCEMAX, srate, oversamplingMode)
   instance(nextGrain, L, R, GL, GR, normalize, fixedGrainSize)
   (
     fixedGrainSize = 1;
@@ -300,21 +347,39 @@ function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist,
       : this.grain14.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 )
     );
     
-    this.grain0.grainRead();
-    this.grain1.grainRead();
-    this.grain2.grainRead();
-    this.grain3.grainRead();
-    this.grain4.grainRead();
-    this.grain5.grainRead();
-    this.grain6.grainRead();
-    this.grain7.grainRead();
-    this.grain8.grainRead();
-    this.grain9.grainRead();
-    this.grain10.grainRead();
-    this.grain11.grainRead();
-    this.grain12.grainRead();
-    this.grain13.grainRead();
-    this.grain14.grainRead();
+    oversamplingMode == 0 ? (
+      this.grain0.grainRead_LQ();
+      this.grain1.grainRead_LQ();
+      this.grain2.grainRead_LQ();
+      this.grain3.grainRead_LQ();
+      this.grain4.grainRead_LQ();
+      this.grain5.grainRead_LQ();
+      this.grain6.grainRead_LQ();
+      this.grain7.grainRead_LQ();
+      this.grain8.grainRead_LQ();
+      this.grain9.grainRead_LQ();
+      this.grain10.grainRead_LQ();
+      this.grain11.grainRead_LQ();
+      this.grain12.grainRead_LQ();
+      this.grain13.grainRead_LQ();
+      this.grain14.grainRead_LQ();
+    ) : (
+      this.grain0.grainRead_HQ();
+      this.grain1.grainRead_HQ();
+      this.grain2.grainRead_HQ();
+      this.grain3.grainRead_HQ();
+      this.grain4.grainRead_HQ();
+      this.grain5.grainRead_HQ();
+      this.grain6.grainRead_HQ();
+      this.grain7.grainRead_HQ();
+      this.grain8.grainRead_HQ();
+      this.grain9.grainRead_HQ();
+      this.grain10.grainRead_HQ();
+      this.grain11.grainRead_HQ();
+      this.grain12.grainRead_HQ();
+      this.grain13.grainRead_HQ();
+      this.grain14.grainRead_HQ();
+    );
     
     L = this.grain0.lOut + this.grain1.lOut + this.grain2.lOut + this.grain3.lOut + this.grain4.lOut + this.grain5.lOut + this.grain6.lOut + this.grain7.lOut + this.grain8.lOut + this.grain9.lOut + this.grain10.lOut  + this.grain11.lOut;  + this.grain12.lOut;  + this.grain13.lOut;  + this.grain14.lOut;
     R = this.grain0.rOut + this.grain1.rOut + this.grain2.rOut + this.grain3.rOut + this.grain4.rOut + this.grain5.rOut + this.grain6.rOut + this.grain7.rOut + this.grain8.rOut + this.grain9.rOut + this.grain10.rOut  + this.grain11.rOut   + this.grain12.rOut   + this.grain13.rOut   + this.grain14.rOut;
