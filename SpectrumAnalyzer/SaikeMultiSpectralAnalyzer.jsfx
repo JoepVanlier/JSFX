@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.22
+version: 5.0.23
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Make fewer things overlap on retina displays.
+changelog: Do work on sonogram display (WIP)
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -62,7 +62,7 @@ slider43:0<0,1,1{disabled,enabled}>-show theme
 slider44:0<0,1,1{disabled,enabled}>-freeze spectrum
 slider45:4<0,4,1{Average,Maximum,Loess,Adaptive,Fast}>-Smoothing method
 
-slider46:Dummy=0<0,1,1>-Dummy
+slider46:sonoGridAlpha=0<0,1,0.001>Sonogram Grid Alpha
 slider47:Dummy=0<0,1,1>-Dummy
 slider48:Dummy=0<0,1,1>-Dummy
 slider49:Dummy=0<0,1,1>-Dummy
@@ -915,11 +915,79 @@ function checkChannelButtons()
   hit > 0;
 );
 
+function sonoGrid(logarithmic, x, y, w, h, factor)
+global(spectrum_xmax, srate, gfx_x, gfx_y, sonoGridAlpha)
+local(f, i, tx, fmax, xscale, wsc, txt, xc, sw, sh, yc, last_y)
+instance(fmaxFactorf)
+(
+  f = 0;
+  fmaxFactorf = factor;
+  fmax = srate / factor;
+  xscale = 800 / (fmax - 4);
+  wsc = h / (log(1+.5*fmax*xscale));
+  last_y = -10000;
+  while(
+    logarithmic ? (
+      f += (f<100?10:f<1000?100:f<10000?1000:5000);
+      tx = log(1.0 + f * xscale) * wsc;
+      txt = f < 1000 ? sprintf(14, "%dHz", f) : sprintf(14, "%dkHz", f / 1000);
+    ) : (
+      factor < 1.1 ? (
+        f += 1000;
+        txt = sprintf(14, "%dkHz", f / 1000);
+      ) : ( factor < 2.5 ) ? (
+        f += 500;
+        txt = f < 1000 ? sprintf(14, "%dHz", f) : sprintf(14, "%.1fkHz", f / 1000);
+      ) : (
+        f += (f<100?10:f<1000?100:f<10000?200:5000);
+        txt = f < 1000 ? sprintf(14, "%dHz", f) : sprintf(14, "%.1fkHz", f / 1000);
+      );
+      tx = 2 * (f / fmax) * h;
+    );
+    yc = y + h - tx;
+    
+    gfx_set(0, 0, 0, sonoGridAlpha);    
+    gfx_line(x, yc, x + w, yc + 1);
+    gfx_line(x, yc, x + w, yc - 1);
+    
+    gfx_set(1, 1, 1, sonoGridAlpha);
+    gfx_line(x, yc, x + w, yc);
+  
+    gfx_measurestr(txt, sw, sh);
+    yc = y + h - tx - 0.5 * sh;
+    
+    // Don't print text on top of eachother
+    abs(last_y - yc) > 2 * sh ? (
+      xc = x + 3;
+      gfx_x = xc - 1;
+      gfx_y = yc;
+      gfx_set(0, 0, 0, 1);
+      gfx_printf(txt);
+      gfx_x = xc + 1;
+      gfx_y = yc;
+      gfx_printf(txt);
+      gfx_x = xc;
+      gfx_y = yc - 1;
+      gfx_printf(txt);
+      gfx_x = xc;
+      gfx_y = yc + 1;
+      gfx_printf(txt);
+      gfx_x = xc;
+      gfx_y = yc;
+      gfx_set(1, 1, 1, 1);
+      gfx_printf(txt);
+      last_y = yc;
+    );
+  
+    ((f < srate / 2) && (yc > (y + 3 * sh)))
+  );
+);
+
 SONOSURFACE2 = 3;
 function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, hp, logarithmic, fmaxFactor)
-  instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, N, norm, fmax)
+  instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, norm, fmax)
   globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode)
-  local(val)
+  local(val, f, accumulated_step, current_max, stepsize, N)
 (
   x = xp;
   y = yp;
@@ -960,28 +1028,35 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
     ( logarithmic == 0 ) ? 
     (
       // Actual FFT density is better than what we can display
-      N = .5*fmax/sonoSize;
-      norm = sonoScale/N;
-      ( N > 1 ) ?
+      gfx_x = sonoSizeX-1;
+      N = 0.5 * fmax / sonoSize;
+      stepsize = 1.0 / N;
+      norm = sonoScale / stepsize;
+      ( stepsize < 1 ) ?
       (
-        gfx_x = sonoSizeX-1;
-        loop(sonoSize,
-          cv = 0;
-          loop(N,
-            cv = cv + norm * sonogramBuffer[];
-            sonogramBuffer += 1;
+        current_max = 0;
+        accumulated_step = 0;
+        while(
+          current_max = max(current_max, sonogramBuffer[]);
+          sonogramBuffer += 1;
+          
+          accumulated_step += stepsize;
+          (accumulated_step > 1) ? (
+            sonoColorLoc = sonoColorMap + 3*ceil( (  invert + ( 1 - 2*invert ) * (1-exp(-norm * current_max))  )*255);   
+            gfx_setpixel(sonoColorLoc[],sonoColorLoc[1],sonoColorLoc[2]);
+            current_max = 0;
+            accumulated_step -= 1;
+            gfx_y -= 1;
           );
-        
-          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-cv))  )*255);   
-          gfx_setpixel(sonoColorLoc[],sonoColorLoc[1],sonoColorLoc[2]);
-          gfx_y -= 1;
+          
+          gfx_y > 0;
         );
-      ) : ( 
+      ) : (
         // Actual FFT density is crappier    
         N = 1/N;
         i = sonoSize;
         loop(sonoSize/N,
-          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-sonogramBuffer[]*sonoScale))  )*255);   
+          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-sonogramBuffer[]*sonoScale))  )*255);
           gfx_r = sonoColorLoc[];
           gfx_g = sonoColorLoc[1];
           gfx_b = sonoColorLoc[2];
@@ -995,7 +1070,7 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
       )
     ) : (
       tl = 0; val = 0;
-      loop(.5*fmax,
+      loop(0.5 * fmax,
         tx = log(1.0+i*xscale)*wsc;
         val = max(val, sonogramBuffer[]);
         
@@ -1014,6 +1089,30 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
         i += 1;
         sonogramBuffer += 1;
       );
+      
+      // TODO
+      
+/*      tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
+      while(
+        gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
+        dotext = drawtext && (tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
+           (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000) || (tx-ltxt)>.1*gfx_w);
+        tx > lx ? ( lx=tx+4; gfx_line(tx,spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
+        // NOTE: Note that the line above didn't have a rescale Y
+        gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
+        dotext ? (
+          ltxt = tx;
+          gfx_x = tx + 3;
+          gfx_y = gfx_h-gfx_texth-spectrum_yoffsetbottom;
+          gfx_line( gfx_x-3, gfx_y, gfx_x-3, gfx_y+gfx_texth );
+          f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
+        );
+        f += (f<100?10:f<1000?100:f<10000?1000:5000);
+        tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
+        tx < spectrum_xmax
+      );
+  */    
+      
     );
   );
   
@@ -1040,6 +1139,7 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);  
   gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h); */   
   gfx_mode = 0;
+  this.sonoGrid(logarithmic, x, y, w, h, fmaxFactor);
 );
 
 function to_x(f)
@@ -1828,6 +1928,12 @@ instance()
 );
 
 (mouse_cap & 1) ? (
+  (cap_mode == 0) ? (
+    drawHz = 1;
+  ) : (
+    drawHz = 0;
+  );
+
    !(last_mouse_cap & 1) ? (
       // Reset to defaults
        (cap_mode == 1||cap_mode == 4||cap_mode == 5||cap_mode == 6||cap_mode == 8||cap_mode == 9||cap_mode == 10||cap_mode ==30||cap_mode ==31
@@ -1978,8 +2084,7 @@ instance()
 
                  (      // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position 
                     (slider42 == 0) ? sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>3?slider29=0; slider_automate(slider29); old_w = 0 ):
-                    (slider42 == 0) ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0) :
-                    drawHz = 1;
+                    (slider42 == 0) ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0)
                 )                
           );
           
@@ -2060,7 +2165,7 @@ instance()
     ) :
     cap_mode == 8 && cap_last_y != mouse_y ? (
       // Sonogram
-      slider30 = drag_slider(slider30, 0, 15000, 100);
+      slider30 = drag_slider(slider30, 0, 35000, 100);
       old_w=0;
       slider_automate(slider30);
     ) :
