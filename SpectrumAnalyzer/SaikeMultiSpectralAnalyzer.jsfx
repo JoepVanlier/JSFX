@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.29
+version: 5.0.30
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Bugfix colormap legend.
+changelog: Add option for faster moving sonogram. Show cursor when dragging sono divider.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -85,6 +85,8 @@ options:no_meter
 options:gmem=saike_spectrum_analyzer
 
 @init
+sono_sample = 0;
+last_sono_sample = 0;
 version = 2;
 chNames = 800;
 memory_debugging = 0;
@@ -324,6 +326,7 @@ file_var(0, xscaleB);
 file_var(0, showNotes);
 file_var(0, legacy_style);
 file_var(0, hide_spectrum);
+file_var(0, fast_proc);
 
 @slider
 slider2 != lfloor ? old_w=0;
@@ -350,6 +353,7 @@ slider2 != lfloor ? (
 );
 
 @sample
+sono_sample += 1;
 updateSliders ? (
   updateSliders = 0;
   updateChannelSliders();
@@ -989,23 +993,18 @@ instance(fmaxFactorf)
 
 SONOSURFACE2 = 3;
 COLORLEGEND = 5;
-function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, hp, logarithmic, fmaxFactor)
-  instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, norm, fmax)
-  globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, COLORLEGEND, gfx_mode, slider2, scale_offset_db_user, micro_view, legacy_style)
-  local(sono_start_x, extra_scale, scaling, val, plot_val, f, accumulated_step, current_max, stepsize, N, better_scaling)
+function updateSono(sonogramBuffer, sonoColorMap, invert, sonoScale, logarithmic, fmaxFactor)
+instance(h, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, iv, sonosurf, blurred, tx, tl, i, xscale, wsc, cv, norm, fmax)
+globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, COLORLEGEND, gfx_mode, slider2, scale_offset_db_user, micro_view, legacy_style)
+local(extra_scale, scaling, val, plot_val, f, accumulated_step, current_max, stepsize, N, better_scaling)
 (
-  x = xp;
-  y = yp;
-  w = wp;
-  h = hp;
-
   sonosurf = SONOSURFACE;
   blurred  = SONOSURFACE2;    
   
   preSonoDest = gfx_dest;
   gfx_a = 1;
   //sonoSize  = 2048;
-  sonoSize  = hp;
+  sonoSize  = h;
   sonoSizeX = 256;
 
   // MaxF
@@ -1131,9 +1130,33 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
     );
   );
   
-  sono_start_x = x;
+  gfx_dest = preSonoDest;
+);
+
+function setPositionSono(xp, yp, wp, hp)
+global()
+instance(x, y, w, h)
+(
+  x = xp;
+  y = yp;
+  w = wp;
+  h = hp;
+);
+
+function drawSono(sonoColorMap, invert, sonoScale, logarithmic, fmaxFactor)
+instance(x, y, w, h, preSonoDest, sonoSize, sonoSizeX, sonosurf, blurred)
+globals(
+  slider44, gfx_dest, gfx_x, gfx_y, gfx_a, gfx_mode,
+  COLORLEGEND, scale_offset_db_user, micro_view, legacy_style, extra_scale,
+)
+local(sono_start_x, better_scaling, val, sonoColorLoc)
+(
+  sono_start_x = (better_scaling && !micro_view) ? x + 35 : x;
+  better_scaling = 1 - legacy_style;
+
   (better_scaling && !micro_view) ? (
     /* Draw color legend */
+    extra_scale = 0.001 * sonoScale;
     gfx_dest = COLORLEGEND;
     gfx_setimgdim(COLORLEGEND, 1, 255);
     val = 0;
@@ -1145,10 +1168,8 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
       val += 1;
     );
     gfx_dest = 0;
-    sono_start_x += 35;
   );
-  
-  
+
   // Draw the sonogram to the screen
   gfx_dest = preSonoDest;
   gfx_x = x;
@@ -1944,7 +1965,7 @@ instance()
       ((mouse_y > gfx_h-sono_yoffset_bottom-sono_size) && (mouse_y < gfx_h - sono_yoffset_bottom)) ? (
         gfx_x = mouse_x;
         gfx_y = mouse_y;
-        sprintf(22, ">Colormaps|%sMagma|%sMagma (inverted)|%sViridis|%sViridis (inverted)|%sInferno|%sInferno (inverted)|%sPlasma|%sPlasma (inverted)|%sTurbo|%sTurbo (inverted)|%sRed Blue|<%sRed Blue (inverted)|%sLogarithmic|%sShow Grid|%sLegacy style|%sShow only sonogram",
+        sprintf(22, ">Colormaps|%sMagma|%sMagma (inverted)|%sViridis|%sViridis (inverted)|%sInferno|%sInferno (inverted)|%sPlasma|%sPlasma (inverted)|%sTurbo|%sTurbo (inverted)|%sRed Blue|<%sRed Blue (inverted)|%sLogarithmic|%sShow Grid|%sLegacy style|%sShow only sonogram|%s4x speed",
         slider32 == 0 ? "!" : "",
         slider32 == 1 ? "!" : "",
         slider32 == 2 ? "!" : "",
@@ -1960,7 +1981,8 @@ instance()
         slider33 ? "!" : "",
         (sonoGridAlpha == 0) ? "": "!",
         legacy_style ? "!" : "",
-        hide_spectrum ? "!": ""
+        hide_spectrum ? "!": "",
+        fast_proc ? "!": ""
         );
         ret = gfx_showmenu(22);
         (ret > 0 && ret < 13) ? (
@@ -1973,6 +1995,8 @@ instance()
           legacy_style = 1 - legacy_style;
         ) : (ret == 16) ? (
           hide_spectrum = 1 - hide_spectrum;
+        ) : (ret == 17) ? (
+          fast_proc = 1 - fast_proc;
         );
       );
     );
@@ -2005,6 +2029,20 @@ instance()
     );
   );
 );
+
+over_sono_divider = !hide_spectrum && (mouse_y > (gfx_h-sono_yoffset_bottom-sono_size-14)) && (mouse_y < (gfx_h-sono_yoffset_bottom-sono_size + 14));
+
+over_sono_divider ? (
+  new_cursor = 32645;
+) : (
+  new_cursor = 32512;
+);
+
+(new_cursor != current_cursor) ? (
+  current_cursor = new_cursor;
+  gfx_setcursor(current_cursor, "arrow");
+);
+
 
 (mouse_cap & 1) ? (
   (cap_mode == 0) ? (
@@ -2167,7 +2205,7 @@ instance()
                 )                
           );
           
-          ( (mouse_y > (gfx_h-sono_yoffset_bottom-sono_size-14)) && (mouse_y < (gfx_h-sono_yoffset_bottom-sono_size + 14)) ) ?
+          ( over_sono_divider ) ?
           (
             !(cap_mode > 10 && cap_mode < 27) ? (
               cap_mode = 60;
@@ -2916,14 +2954,35 @@ mouse_cap > 0 ? (
   ) : ( slider29 == 0 ) ? (
     // Sonogram
     
+    sonogram.setPositionSono(gfx_x, gfx_y, sigw * gfx_w, sigh * gfx_h);
+    
     cmapidx = (floor(slider32/2) + 1);
     invert = slider32 - (floor(slider32/2))*2;
     ( selected > -1 ) ? (
-      // Make sure that the sonogram is still updated if it's not currently being rendered.       
-      (activeChannels[selected] == 0 || hide_spectrum) ? (
-        processFFT(recpositions[selected], fftworkspaces[selected], integrate_bufs[selected], shifts[selected], histsizes[selected], ccolor[0], ccolor[1], ccolor[2], 1, 0);
+      fast_proc ? (
+        last_sono_sample ? (
+          sono_step = (sono_sample - last_sono_sample) / 4;
+          ixx = - 4 * sono_step;
+          loop(4,
+            // Make sure that the sonogram is still updated if it's not currently being rendered.
+            processFFT(recpositions[selected] + ixx, fftworkspaces[selected], integrate_bufs[selected], shifts[selected], histsizes[selected], ccolor[0], ccolor[1], ccolor[2], 1, 0);
+            /* TO DO MAKE SONO WORK IN DIFF MODE */
+              
+            ixx += sono_step;
+            sonogram.updateSono(fftworkspaces[selected], cmapidx * 1000, invert, slider30, slider33, slider35);
+          );
+        );
+        last_sono_sample = sono_sample;
+      ) : (
+        // Make sure that the sonogram is still updated if it's not currently being rendered.
+        (activeChannels[selected] == 0 || hide_spectrum) ? (
+          processFFT(recpositions[selected], fftworkspaces[selected], integrate_bufs[selected], shifts[selected], histsizes[selected], ccolor[0], ccolor[1], ccolor[2], 1, 0);
+        );
+        sonogram.updateSono(fftworkspaces[selected], cmapidx * 1000, invert, slider30, slider33, slider35);
       );
-      sonogram.drawSono(fftworkspaces[selected], cmapidx * 1000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35);
+      
+      sonogram.drawSono(cmapidx * 1000, invert, slider30, slider33, slider35);
+      
       gfx_mode = 1;
       gfx_r = gfx_g = gfx_a = 1.0;
       gfx_measurestr("30 Hz", __, yhz);
@@ -2932,14 +2991,31 @@ mouse_cap > 0 ? (
 //      gfx_printf( "Ch: %d, Sc: %d", selected + 1, slider30 );
       !micro_view ? gfx_printf(" %d", selected + 1);
     ) : (
-      ( (showSum == 0) || (displayMode == 1) || hide_spectrum ) ? (
-        // Make sure that the sonogram is still updated if it's not currently being rendered.
-        processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 0);  
-        processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 0);
-        /* TO DO MAKE SONO WORK IN DIFF MODE */
+      fast_proc ? (
+        last_sono_sample ? (
+          sono_step = (sono_sample - last_sono_sample) / 4;
+          ixx = - 4 * sono_step;
+          loop(4,
+            // Make sure that the sonogram is still updated if it's not currently being rendered.
+            processFFT(sumposr + ixx, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 0);  
+            /* TO DO MAKE SONO WORK IN DIFF MODE */
+              
+            ixx += sono_step;
+            sonogram.updateSono(fftwr, cmapidx * 1000, invert, slider30, slider33, slider35);
+          );
+        );
+        last_sono_sample = sono_sample;
+      ) : (
+        ( (showSum == 0) || (displayMode == 1) || hide_spectrum ) ? (
+          // Make sure that the sonogram is still updated if it's not currently being rendered.
+          processFFT(sumposr, fftwr, ibufr, sumshr, sumhsr, halfshade, halfshade, halfshade, 0, 0);  
+          processFFT(sumposl, fftwl, ibufl, sumshl, sumhsl, shade, shade, shade, 0, 0);
+          /* TO DO MAKE SONO WORK IN DIFF MODE */
+        );
+        sonogram.updateSono(fftwr, cmapidx * 1000, invert, slider30, slider33, slider35 );
       );
-    
-      sonogram.drawSono( fftwr, cmapidx * 1000, invert, slider30, gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, slider33, slider35 );
+      sonogram.drawSono(cmapidx * 1000, invert, slider30, slider33, slider35);
+      
       gfx_mode = 0;
       (!hideUI && !micro_view) ? (
         gfx_r = gfx_g = gfx_a = 1.0;
