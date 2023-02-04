@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.23
+version: 5.0.24
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Do work on sonogram display (WIP)
+changelog: Make sonogram scale logarithmically. Fix bug with theme display. Don't draw sono grid in TCP/MCP. Switch theme with menu.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -986,8 +986,8 @@ instance(fmaxFactorf)
 SONOSURFACE2 = 3;
 function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, hp, logarithmic, fmaxFactor)
   instance(w, h, x, y, preSonoDest, preSonoX, preSonoY, sonoSize,sonoSizeX, sonoColorLoc, sonoColorMap, iv, sonosurf, blurred, tx, tl, i, xscale, logarithmic, wsc, cv, norm, fmax)
-  globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode)
-  local(val, f, accumulated_step, current_max, stepsize, N)
+  globals(slider44, gfx_dest, gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, fftsize, SONOSURFACE, SONOSURFACE2, gfx_mode, slider2, scale_offset_db_user, micro_view)
+  local(extra_scale, scaling, val, plot_val, f, accumulated_step, current_max, stepsize, N, better_scaling)
 (
   x = xp;
   y = yp;
@@ -1011,6 +1011,9 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   wsc      = sonoSize/(log(1+.5*fmax*xscale));
   
   // Start by drawing the previous buffer to this one
+  better_scaling = 1;
+  scaling = 0.5 * 20 / log(10);
+  extra_scale = 0.001 * sonoScale;
   ( slider44 == 0 ) ? (
     gfx_dest = sonosurf;
     gfx_setimgdim(sonosurf, sonoSizeX, sonoSize);
@@ -1042,7 +1045,18 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
           
           accumulated_step += stepsize;
           (accumulated_step > 1) ? (
-            sonoColorLoc = sonoColorMap + 3*ceil( (  invert + ( 1 - 2*invert ) * (1-exp(-norm * current_max))  )*255);   
+
+            better_scaling ? (
+              // Maximum value is given by: - scale_offset_db_user
+              // Minimum value is given by: slider2 - scale_offset_db_user
+              plot_val = scaling * log(current_max);
+              plot_val = min(1, max(0, (plot_val - scale_offset_db_user + extra_scale) / slider2));
+              !invert ? plot_val = 1 - plot_val;
+              sonoColorLoc = sonoColorMap + 3 * ceil(255 * plot_val);
+            ) : (
+              sonoColorLoc = sonoColorMap + 3*ceil((invert + (1 - 2 * invert) * (1 - exp(-norm * current_max))) * 255);
+            );
+            
             gfx_setpixel(sonoColorLoc[],sonoColorLoc[1],sonoColorLoc[2]);
             current_max = 0;
             accumulated_step -= 1;
@@ -1056,7 +1070,18 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
         N = 1/N;
         i = sonoSize;
         loop(sonoSize/N,
-          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(-sonogramBuffer[]*sonoScale))  )*255);
+        
+        better_scaling ? (
+          // Maximum value is given by: - scale_offset_db_user
+          // Minimum value is given by: slider2 - scale_offset_db_user
+          plot_val = scaling * log(sonogramBuffer[] * sonoScale);
+          plot_val = min(1, max(0, (plot_val - scale_offset_db_user + extra_scale) / slider2));
+          !invert ? plot_val = 1 - plot_val;
+          sonoColorLoc = sonoColorMap + 3 * ceil(255 * plot_val);
+        ) : (
+          sonoColorLoc = sonoColorMap + 3*ceil((invert + (1 - 2 * invert) * (1 - exp(- sonogramBuffer[] * sonoScale))) * 255);
+        );
+        
           gfx_r = sonoColorLoc[];
           gfx_g = sonoColorLoc[1];
           gfx_b = sonoColorLoc[2];
@@ -1075,8 +1100,17 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
         val = max(val, sonogramBuffer[]);
         
         (tx - tl) > 0.999999 ?
-        (  
-          sonoColorLoc = sonoColorMap + 3*ceil(  (  invert + ( 1 - 2*invert ) * (1-exp(- val*sonoScale))  )*255);
+        (
+          better_scaling ? (
+            // Maximum value is given by: - scale_offset_db_user
+            // Minimum value is given by: slider2 - scale_offset_db_user
+            plot_val = scaling * log(val);
+            plot_val = min(1, max(0, (plot_val - scale_offset_db_user + extra_scale) / slider2));
+            !invert ? plot_val = 1 - plot_val;
+            sonoColorLoc = sonoColorMap + 3 * ceil(255 * plot_val);
+          ) : (
+            sonoColorLoc = sonoColorMap + 3 * ceil((invert + (1 - 2*invert) * (1 - exp(- val * sonoScale))) * 255);
+          );
           val = 0;
           
           gfx_r = sonoColorLoc[];
@@ -1089,30 +1123,6 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
         i += 1;
         sonogramBuffer += 1;
       );
-      
-      // TODO
-      
-/*      tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
-      while(
-        gfx_r=gfx_g=gfx_b=intensity; gfx_a=0.8 * slider39 * slider40;
-        dotext = drawtext && (tx > gfx_x && f!=40 && f!=4000 && f != 15000 &&
-           (f<400 || f >= 1000 || f == 500) && (f<6000 || f>=10000) || (tx-ltxt)>.1*gfx_w);
-        tx > lx ? ( lx=tx+4; gfx_line(tx,spectrum_yoffset,tx,gfx_h - spectrum_yoffsetbottom - (dotext ? 0 : gfx_texth+2),0); );
-        // NOTE: Note that the line above didn't have a rescale Y
-        gfx_r=gfx_g=gfx_b=textintensity; gfx_a=0.9;
-        dotext ? (
-          ltxt = tx;
-          gfx_x = tx + 3;
-          gfx_y = gfx_h-gfx_texth-spectrum_yoffsetbottom;
-          gfx_line( gfx_x-3, gfx_y, gfx_x-3, gfx_y+gfx_texth );
-          f>=1000 ? gfx_printf("%dkHz",f*.001) : gfx_printf("%dHz",f);
-        );
-        f += (f<100?10:f<1000?100:f<10000?1000:5000);
-        tx = log(1.0+((f/srate-spectrum_xoffset)*2.0)*400) * wsc;
-        tx < spectrum_xmax
-      );
-  */    
-      
     );
   );
   
@@ -1139,7 +1149,7 @@ function drawSono(sonogramBuffer, sonoColorMap, invert, sonoScale, xp, yp, wp, h
   gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h);  
   gfx_blit(blurred, 1, 0, 0, 0, sonoSizeX, sonoSize, x, y, w, h); */   
   gfx_mode = 0;
-  this.sonoGrid(logarithmic, x, y, w, h, fmaxFactor);
+  !micro_view ? this.sonoGrid(logarithmic, x, y, w, h, fmaxFactor);
 );
 
 function to_x(f)
@@ -1894,9 +1904,16 @@ instance()
     );
 
     slider29 == 0 && cap_last_y != mouse_y ) ? (
-      sonogram.hit_button(mouse_x,mouse_y,-1) ? ( slider32 = cycle_slider(slider32, 0, 7, 1);
+      //sonogram.hit_button(mouse_x,mouse_y,-1) ? ( slider32 = cycle_slider(slider32, 0, 7, 1); );
+      (mouse_y > gfx_h-sono_yoffset_bottom-sono_size) ? (
+        gfx_x = mouse_x;
+        gfx_y = mouse_y;
+        ret = gfx_showmenu("Magma|Magma (inverted)|Viridis|Viridis (inverted)|Inferno|Infero (inverted)|Plasma|Plasma (inverted)");
+        (ret > 0) ? (
+          slider32 = ret - 1;
+        );
+      );
     );
-  );
 ) : (
   ( zoomMode == 1 ) ? (
     zoomMode = 2;
@@ -2075,10 +2092,10 @@ instance()
                  slider42 == 0 ? interpolation_button.hit_button(mouse_x, mouse_y, 51);
                  slider42 == 0 ? diff_mode_button.hit_button(mouse_x, mouse_y, 48);
                  slider42 == 0 ? scaling.hit_button(mouse_x,mouse_y,5);
-                 slider42 == 0 ? colormap.hit_button(mouse_x,mouse_y,7);              
+                 slider42 == 0 && slider43 == 1 ? colormap.hit_button(mouse_x,mouse_y,7);
                  slider42 == 0 ? smoothing_button.hit_button(mouse_x,mouse_y,6);
-                 slider42 == 0 ? alphalevel.hit_button(mouse_x,mouse_y,28);
-                 slider42 == 0 ? background_button.hit_button(mouse_x,mouse_y,30);                 
+                 slider42 == 0 && slider43 == 1 ? alphalevel.hit_button(mouse_x,mouse_y,28);
+                 slider42 == 0 && slider43 == 1 ? background_button.hit_button(mouse_x,mouse_y,30);
                  slider42 == 0 ? sonoScale.hit_button(mouse_x,mouse_y,10) ? :
                  slider42 == 0 ? smoothing_type.hit_button(mouse_x,mouse_y,45);
 
