@@ -1,0 +1,146 @@
+desc:Diffuser
+
+slider1:time_ms=5<2,800,1>time_ms
+slider2:seed=0<0,12311323,1>seed
+slider3:mode=0<0,1,1>mode
+slider4:shimmer=0<0,1,0.00001>shimmer
+slider5:shifter_down=0<0,1,0.00001>down
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_hadamard_diffusers.jsfx-inc
+import saike_splash_verb.jsfx-inc
+
+options:maxmem=220000000
+
+@init
+function update_sample_position(time_ms, seed, mode)
+(
+  (mode == 0) ? (
+    verb.in.in.in.set_sample_position_8(0.25 * time_ms / 1000, seed);
+    verb.in.in.set_sample_position_8(0.5 * time_ms / 1000, seed + seed);
+    verb.in.set_sample_position_8(0.75 * time_ms / 1000, seed + seed + seed);
+    verb.set_sample_position_8(time_ms / 1000, seed + seed + seed + seed);
+  ) : (
+    verb.in.in.in.set_sample_position(0.25 * time_ms / 1000, seed);
+    verb.in.in.set_sample_position(0.5 * time_ms / 1000, seed + seed);
+    verb.in.set_sample_position(0.75 * time_ms / 1000, seed + seed + seed);
+    verb.set_sample_position(time_ms / 1000, seed + seed + seed + seed);
+  );
+);
+
+function sample_verb(mode)
+(
+  (mode == 0) ? (
+    verb.in.in.in.hsample8();
+    verb.in.in.hsample8();
+    verb.in.hsample8();
+    verb.hsample8();
+  ) : (
+    verb.in.in.in.hsample();
+    verb.in.in.hsample();
+    verb.in.hsample();
+    verb.hsample();
+  );
+);
+
+function alloc_shifter(freemem, pitch_block_size)
+instance(fftmem1, fftmem2, pitch_shift_buffer)
+local()
+global()
+(
+  freemem = (fftmem1 = freemem) + pitch_block_size;
+  freemem = (fftmem2 = freemem) + pitch_block_size;
+  freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+  freemem
+);
+
+function update_shifter()
+global()
+local(shifter_buffer_size, transition_region)
+instance(pitch_shift_buffer, fftmem1, fftmem2)
+(
+  transition_region = 4096; //1024?
+  shifter_buffer_size = 4 * transition_region;
+  this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+);
+
+freemem = 0;
+verb.in.in.in.in.tip = 1;
+freemem = verb.in.in.in.init_decorrelator(freemem, 32768);
+freemem = verb.in.in.init_decorrelator(freemem, 2*32768);
+freemem = verb.in.init_decorrelator(freemem, 4*32768);
+freemem = verb.init_decorrelator(freemem, 8*32768);
+
+pitch_block_size = 4*4096; /* We have 64 blocks of this */
+freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
+freemem = shifter_down.alloc_shifter(freemem, pitch_block_size);
+
+current_time = time_ms;
+update_sample_position(current_time, seed, mode);
+shifter_shimmer.update_shifter();
+shifter_down.update_shifter();
+
+semitones = 12;
+shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+semitones = -12;
+shifter_down.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+@slider
+
+@block
+
+@sample
+cs += 1;
+
+current_time = 0.99905 * current_time + 0.0005 * time_ms;
+
+((current_time != last_time) || (current_seed != seed) || (current_mode != mode)) ? (
+  update_sample_position(current_time, seed, mode);
+  last_time = current_time;
+  current_seed = seed;
+  current_mode = mode;
+);
+
+fb = 0.99;
+
+semitones = 12 + 0.1 * sin(40 * cs / srate);
+shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+in_gain = min(1.0, max(0.99999 * in_gain, 8 * max(spl0, spl1))); // TODO: Make srate dependent
+
+verb.in.in.in.in.s0 = spl0;
+verb.in.in.in.in.s1 = spl1;
+verb.in.in.in.in.s6 = fb0;
+verb.in.in.in.in.s7 = fb1;
+verb.in.in.in.in.s2 = in_gain * shimmer * shifter_shimmer.outL;
+verb.in.in.in.in.s3 = in_gain * shimmer * shifter_shimmer.outR;
+
+//verb.in.in.in.in.s8 = fb * verb.in.in.s10 * verb.in.in.in.scaling_factor * verb.in.in.scaling_factor;
+//verb.in.in.in.in.s9 = fb * verb.in.in.s11 * verb.in.in.in.scaling_factor * verb.in.in.scaling_factor;
+
+overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
+
+sample_verb(mode);
+
+out_left = verb.s0 * overall_scaling_factor;
+out_right = verb.s1 * overall_scaling_factor;
+
+spl0 = out_left;
+spl1 = out_right;
+
+shimmer ? shifter_shimmer.pitchShifterUpdate(spl0, spl1);
+//shimmer ? shifter_shimmer.pitchShifterUpdate(verb.in.in.in.scaling_factor * verb.in.in.in.s5, verb.in.in.in.scaling_factor * verb.in.in.in.s6);
+
+shifter_down ? shifter_down.pitchShifterUpdate(spl0, spl1);
+
+fb0 = fb * spl0;
+fb1 = fb * spl1;
+
+spl0 += shifter_down * shifter_down.outL - 0.03 * shimmer * shifter_shimmer.outL;
+spl1 += shifter_down * shifter_down.outR - 0.03 * shimmer * shifter_shimmer.outR;
+
