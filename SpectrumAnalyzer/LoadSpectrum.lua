@@ -6,7 +6,7 @@
 @links 
   https://github.com/JoepVanlier/JSFX
 @license MIT
-@version 0.83
+@version 0.84
 @about ### Multi-Channel Spectral Analyzer
   This script opens a JSFX multispectrum analyzer on a new FX track.
   It is basically an extensively modified version of the spectral analyzer shipped with 
@@ -81,6 +81,8 @@
   row on the top. Doubleclicking alters the signal window size.
 --]] --[[
  * Changelog:
+ * v0.84 (2023-02-06)
+   + Wipe hash if we deleted the spectral analyzer (thanks Feed The Cat).
  * v0.83 (2020-08-11)
    + Force track volume.
  * v0.82 (2020-07-30)
@@ -199,6 +201,8 @@ if ret then
 end
 
 if not track_spec then
+    -- Reset project hash in case track was deleted
+    SetProjExtState(0, extname, 'hash', '')
     -- Create spectrum track at the end
     reaper.InsertTrackAtIndex(track_cnt, true)
     track_spec = reaper.GetTrack(0, track_cnt)
