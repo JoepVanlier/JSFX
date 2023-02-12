@@ -7,6 +7,8 @@ slider4:shimmer=0<0,1,0.00001>shimmer
 slider5:shifter_down=0<0,1,0.00001>down
 slider6:freq_shift_amount=0<0,1,0.00001>f amount
 slider7:freq_shift=0<10,440,0.00001>f shift
+slider8:grain_mix=0<0, 1, 0.01>Grain mix
+slider9:verb_mix=0<0, 1, 0.01>Verb mix
 
 in_pin:left input
 in_pin:right input
@@ -83,6 +85,8 @@ pitch_block_size = 4*4096; /* We have 64 blocks of this */
 freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
 freemem = shifter_down.alloc_shifter(freemem, pitch_block_size);
 
+freemem = granulator.granulator_set_buffer_limits(freemem, 65536 * 4);
+
 current_time = time_ms;
 update_sample_position(current_time, seed, mode);
 shifter_shimmer.update_shifter();
@@ -99,11 +103,14 @@ shifter_down.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
 @block
 freq_shifter.init_cheapest_freq_shifter(freq_shift);
 
+beat_pos = beat_position;
+dbeat = (tempo / 60) / srate;  // Beats per sample
+samples_per_beat = 1.0 / dbeat;
+
 @sample
 cs += 1;
 
 current_time = 0.99905 * current_time + 0.0005 * time_ms;
-
 ((current_time != last_time) || (current_seed != seed) || (current_mode != mode)) ? (
   (current_mode != mode) ? (
     verb.in.in.in.silence();
@@ -125,23 +132,46 @@ shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
 
 in_gain = min(1.0, max(0.99999 * in_gain, 8 * max(spl0, spl1))); // TODO: Make srate dependent
 
-verb.in.in.in.in.s0 = spl0;
-verb.in.in.in.in.s1 = spl1;
-verb.in.in.in.in.s6 = fb1;
-verb.in.in.in.in.s7 = fb0;
-verb.in.in.in.in.s2 = in_gain * shimmer * shifter_shimmer.outL;
-verb.in.in.in.in.s3 = in_gain * shimmer * shifter_shimmer.outR;
-verb.in.in.in.in.s4 = in_gain * freq_shift_amount * freq_shifter.outL;
-verb.in.in.in.in.s5 = in_gain * freq_shift_amount * freq_shifter.outR;
-overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
+granulator.granulator_in(spl0, spl1);
 
-sample_verb(mode);
+beat_frac = beat_pos - floor(beat_pos);
+fire_grain = beat_frac < last_beat_frac;
+diff = beat_frac - last_beat_frac;
+last_beat_frac = beat_frac;
+beat_pos += dbeat;
 
-out_left = verb.s0 * overall_scaling_factor;
-out_right = verb.s1 * overall_scaling_factor;
+grain_samples = samples_per_beat;
+speed = 1 + floor(rand() * 2);
+pan_spread = 1;
+reverse_probability = 0.5;
+playing = 1;
 
-spl0 = out_left;
-spl1 = out_right;
+grain_mix ? granulator.granulator_update(fire_grain, grain_samples, speed, pan_spread, reverse_probability, playing);
+
+spl0 = spl0 * (1.0 - grain_mix) + grain_mix * granulator.l;
+spl1 = spl1 * (1.0 - grain_mix) + grain_mix * granulator.r;
+
+verb_mix ? (
+  verb.in.in.in.in.s0 = spl0;
+  verb.in.in.in.in.s1 = spl1;
+  verb.in.in.in.in.s6 = fb1;
+  verb.in.in.in.in.s7 = fb0;
+  verb.in.in.in.in.s2 = in_gain * shimmer * shifter_shimmer.outL;
+  verb.in.in.in.in.s3 = in_gain * shimmer * shifter_shimmer.outR;
+  verb.in.in.in.in.s4 = in_gain * freq_shift_amount * freq_shifter.outL;
+  verb.in.in.in.in.s5 = in_gain * freq_shift_amount * freq_shifter.outR;
+  overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
+  
+  sample_verb(mode);
+  out_left = verb.s0 * overall_scaling_factor;
+  out_right = verb.s1 * overall_scaling_factor;
+) : (
+  out_left = 0;
+  out_right = 0;
+);
+
+spl0 = spl0 * (1.0 - verb_mix) + verb_mix * out_left;
+spl1 = spl1 * (1.0 - verb_mix) + verb_mix * out_right;
 
 shimmer ? shifter_shimmer.pitchShifterUpdate(spl0, spl1);
 //shimmer ? shifter_shimmer.pitchShifterUpdate(verb.in.in.in.scaling_factor * verb.in.in.in.s5, verb.in.in.in.scaling_factor * verb.in.in.in.s6);
@@ -268,4 +298,10 @@ mosquito9.draw_mosquito(200, 70, 1.0);
 gfx_set(1, 1, 0.9, 1.0);
 firefly1.draw_mosquito(90, 117, 1.0);
 firefly2.draw_mosquito(90, 117, 1.0);
+
+granulator_error ? (
+  gfx_x = 0;
+  gfx_y = 0;
+  gfx_printf("FATAL: REQUESTED TOO MANY SAMPLES");
+);
 
