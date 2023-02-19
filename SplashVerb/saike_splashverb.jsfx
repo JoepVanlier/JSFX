@@ -1,16 +1,20 @@
 desc:Splash Verb (WIP)
 
-slider1:time_ms=5<5,800,1>time_ms
-slider2:seed=0<0,12311323,1>seed
+slider1:time_ms=150<5,2800,1>time_ms
+slider2:seed=1344123123<0,12311323,1>-seed
 slider3:mode=0<0,1,1>mode
-slider4:shimmer=0<0,1,0.00001>shimmer
-slider5:shifter_down=0<0,1,0.00001>down
-slider6:freq_shift_amount=0<0,1,0.00001>f amount
-slider7:freq_shift=0<10,440,0.00001>f shift
-slider8:grain_mix=0<0, 2, 0.01>Grain mix
-slider9:verb_mix=0<0, 1, 0.01>Verb mix
-slider30:grain_algorithm=0<0,1,1>Grain algorithm
-
+slider4:shimmer=0.4<0,1,0.00001>-shimmer
+slider5:shifter_down=0<0,1,0.00001>-down
+slider6:freq_shift_amount=0<0,1.0,0.00001>-f amount
+slider7:freq_shift=0<60,880,0.00001>-f shift
+slider8:grain_mix=0.2<0, 2, 0.01>-Grain mix
+slider9:verb_mix=0.4<0, 1, 0.01>Verb mix
+slider10:smooth=1<0, 1, 1>-Smooth verb
+slider11:shimmer_mode=0<0,1,1>-Shimmer mode
+slider30:grain_algorithm=0<0,2,1>Grain algorithm
+slider31:grain_par1=0.5<0,1,0.0001>-Grain Length
+slider32:grain_par2=0.5<0,1,0.0001>Grain Frequency
+options:no_meter
 in_pin:left input
 in_pin:right input
 out_pin:left output
@@ -20,22 +24,30 @@ import saike_splash_hadamard_diffusers.jsfx-inc
 import saike_splash_pitchlib.jsfx-inc
 import saike_splash_freq.jsfx-inc
 import saike_splash_grainlib.jsfx-inc
+import saike_splash_lowres_gfx.jsfx-inc
+import saike_splash_octaver.jsfx-inc
 
 options:maxmem=220000000
 
 @init
+haunt.init_xy(7, 60, 880, 0, 6, 0, 1.0, 0);
+shimmer_pad.init_xy(5, 0, 1, 0, 4, 0, 1, 0);
+grain_pad.init_xy(31, 0, 1, 0, 8, 0, 2, 0);
+
+octaver.octaver_init(1.0);
+
 function update_sample_position(time_ms, seed, mode)
 (
   (mode == 0) ? (
-    verb.in.in.in.set_sample_position_8(0.25 * time_ms / 1000, seed);
-    verb.in.in.set_sample_position_8(0.5 * time_ms / 1000, seed + seed);
-    verb.in.set_sample_position_8(0.75 * time_ms / 1000, seed + seed + seed);
-    verb.set_sample_position_8(time_ms / 1000, seed + seed + seed + seed);
+    verb.in.in.in.set_sample_position_8(0.25 * time_ms / 1000, seed, smooth);
+    verb.in.in.set_sample_position_8(0.5 * time_ms / 1000, seed + seed, smooth);
+    verb.in.set_sample_position_8(0.75 * time_ms / 1000, seed + seed + seed, smooth);
+    verb.set_sample_position_8(time_ms / 1000, seed + seed + seed + seed, smooth);
   ) : (
-    verb.in.in.in.set_sample_position(0.25 * time_ms / 1000, seed);
-    verb.in.in.set_sample_position(0.5 * time_ms / 1000, seed + seed);
-    verb.in.set_sample_position(0.75 * time_ms / 1000, seed + seed + seed);
-    verb.set_sample_position(time_ms / 1000, seed + seed + seed + seed);
+    verb.in.in.in.set_sample_position(0.25 * time_ms / 1000, seed, smooth);
+    verb.in.in.set_sample_position(0.5 * time_ms / 1000, seed + seed, smooth);
+    verb.in.set_sample_position(0.75 * time_ms / 1000, seed + seed + seed, smooth);
+    verb.set_sample_position(time_ms / 1000, seed + seed + seed + seed, smooth);
   );
 );
 
@@ -79,16 +91,16 @@ instance(pitch_shift_buffer, fftmem1, fftmem2)
 
 freemem = 0;
 verb.in.in.in.in.tip = 1;
-freemem = verb.in.in.in.init_decorrelator(freemem, 32768);
-freemem = verb.in.in.init_decorrelator(freemem, 2*32768);
-freemem = verb.in.init_decorrelator(freemem, 4*32768);
-freemem = verb.init_decorrelator(freemem, 8*32768);
+freemem = verb.in.in.in.init_decorrelator(freemem, 2*32768);
+freemem = verb.in.in.init_decorrelator(freemem, 4*32768);
+freemem = verb.in.init_decorrelator(freemem, 8*32768);
+freemem = verb.init_decorrelator(freemem, 16*32768);
 
 pitch_block_size = 4*4096; /* We have 64 blocks of this */
 freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
 freemem = shifter_down.alloc_shifter(freemem, pitch_block_size);
 
-freemem = granulator.granulator_set_buffer_limits(freemem, 65536 * 4);
+freemem = granulator.granulator_set_buffer_limits(freemem, 65536 * 8);
 
 current_time = time_ms;
 update_sample_position(current_time, seed, mode);
@@ -114,7 +126,7 @@ samples_per_beat = 1.0 / dbeat;
 cs += 1;
 
 current_time = 0.99905 * current_time + 0.0005 * time_ms;
-((current_time != last_time) || (current_seed != seed) || (current_mode != mode)) ? (
+((current_time != last_time) || (current_seed != seed) || (current_mode != mode) || (smooth != current_smooth)) ? (
   (current_mode != mode) ? (
     verb.in.in.in.silence();
     verb.in.in.silence();
@@ -126,9 +138,10 @@ current_time = 0.99905 * current_time + 0.0005 * time_ms;
   last_time = current_time;
   current_seed = seed;
   current_mode = mode;
+  current_smooth = smooth;
 );
 
-fb = 0.99;
+fb = 0.999;
 
 semitones = 12 + 0.1 * sin(40 * cs / srate);
 shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
@@ -138,38 +151,75 @@ in_gain = min(1.0, max(0.99999 * in_gain, 8 * max(spl0, spl1))); // TODO: Make s
 granulator.granulator_in(spl0, spl1);
 
 (grain_algorithm == 0) ? (
-  beat_frac = beat_pos - floor(beat_pos);
+  start_factor = 1;
+  beat_frac = start_factor * beat_pos - floor(start_factor * beat_pos);
   fire_grain = beat_frac < last_beat_frac;
   diff = beat_frac - last_beat_frac;
   last_beat_frac = beat_frac;
   beat_pos += dbeat;
-  grain_samples = samples_per_beat;
+  
+  grain_count_factor =  pow(2, floor(4 * grain_par1 - 2));
+  grain_samples = samples_per_beat * pow(2, floor(4 * grain_par1 - 2));
   speed = 1 + floor(rand() * 2);
   pan_spread = 1;
   reverse_probability = 0.5;
-) : (
-  fire_grain = rand() < (1 / srate);
-  grain_samples = 10000;
+  grain_offset = 0;
+) : (grain_algorithm == 1) ? (
+  fire_grain = rand() < (1000 * grain_par1 / srate);
+  grain_samples = srate * (0.1 + 0.9 * grain_par2);
   speed = 1 + floor(rand() * 2);
   pan_spread = 1;
   reverse_probability = 1;
+  grain_offset = 0;
+) : (
+  start_factor = 48;
+  beat_frac = start_factor * beat_pos - floor(start_factor * beat_pos);
+  
+  fire_grain = beat_frac < last_beat_frac;
+  diff = beat_frac - last_beat_frac;
+  last_beat_frac = beat_frac;
+  beat_pos += dbeat;
+  
+  grain_count_factor =  pow(2, floor(4 * grain_par1 - 2));
+  grain_samples = samples_per_beat * 0.25; //pow(2, floor(4 * grain_par1 - 2))
+  speed = 1 + floor(rand() * 2);
+  pan_spread = 1;
+  reverse_probability = 0.2;
+  grain_offset = 8 * grain_par1 * rand() * samples_per_beat;
 );
 
 playing = 1;
-grain_mix ? granulator.granulator_update(fire_grain, grain_samples, speed, pan_spread, reverse_probability, playing);
+grain_mix ? granulator.granulator_update(fire_grain, grain_samples, speed, pan_spread, reverse_probability, playing, grain_offset);
 
 grain_mix > 1 ? (
   gmx = grain_mix - 1.0;
-  spl0 = spl0 * (1.0 - gmx) + gmx * granulator.l;
-  spl1 = spl1 * (1.0 - gmx) + gmx * granulator.r;
+  spl0 = spl0 * (1.0 - gmx) + granulator.l;
+  spl1 = spl1 * (1.0 - gmx) + granulator.r;
 ) : (
   spl0 += grain_mix * granulator.l;
   spl1 += grain_mix * granulator.r;
 );
 
+shifter_down && (shimmer_mode < 2) ? shifter_down.pitchShifterUpdate(spl0, spl1);
+
 verb_mix ? (
-  verb.in.in.in.in.s0 = spl0;
-  verb.in.in.in.in.s1 = spl1;
+  (shimmer_mode < 2) ? (
+    shimmer_left = shifter_down.outL;
+    shimmer_right = shifter_down.outR;
+  
+    (shimmer_mode == 1) ? (
+      shimmer_left = abs(shimmer_left);
+      shimmer_right = abs(shimmer_right);
+    );
+  ) : (
+    shimmer_left = octaved;
+    shimmer_right = octaved;
+  );
+
+  octaved = octaver.octaver_eval(spl0 + spl1);
+
+  verb.in.in.in.in.s0 = spl0 + shifter_down * shimmer_left;
+  verb.in.in.in.in.s1 = spl1 + shifter_down * shimmer_right;
   verb.in.in.in.in.s6 = fb1;
   verb.in.in.in.in.s7 = fb0;
   verb.in.in.in.in.s2 = in_gain * shimmer * shifter_shimmer.outL;
@@ -179,6 +229,7 @@ verb_mix ? (
   overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
   
   sample_verb(mode);
+  
   out_left = verb.s0 * overall_scaling_factor;
   out_right = verb.s1 * overall_scaling_factor;
 ) : (
@@ -186,20 +237,19 @@ verb_mix ? (
   out_right = 0;
 );
 
+fb0 = fb * out_left;
+fb1 = fb * out_right;
+
 spl0 = spl0 * (1.0 - verb_mix) + verb_mix * out_left;
 spl1 = spl1 * (1.0 - verb_mix) + verb_mix * out_right;
 
 shimmer ? shifter_shimmer.pitchShifterUpdate(spl0, spl1);
 //shimmer ? shifter_shimmer.pitchShifterUpdate(verb.in.in.in.scaling_factor * verb.in.in.in.s5, verb.in.in.in.scaling_factor * verb.in.in.in.s6);
-shifter_down ? shifter_down.pitchShifterUpdate(spl0, spl1);
 
 freq_shift_amount ? freq_shifter.eval_cheapest_freq_shifter(spl0, spl1);
 
-fb0 = fb * spl0;
-fb1 = fb * spl1;
-
-spl0 += shifter_down * shifter_down.outL - 0.03 * shimmer * shifter_shimmer.outL;
-spl1 += shifter_down * shifter_down.outL - 0.03 * shimmer * shifter_shimmer.outR;
+spl0 += - 0.03 * shimmer * shifter_shimmer.outL;
+spl1 += - 0.03 * shimmer * shifter_shimmer.outR;
 
 @gfx
 !loaded ? (
@@ -209,25 +259,31 @@ spl1 += shifter_down * shifter_down.outL - 0.03 * shimmer * shifter_shimmer.outR
   loaded = gfx_loadimg(8, "./Splash_Dependencies/camp_3.png");
   loaded = gfx_loadimg(9, "./Splash_Dependencies/camp_4.png");
   loaded = gfx_loadimg(10, "./Splash_Dependencies/camp_5.png");
+  loaded = gfx_loadimg(12, "./Splash_Dependencies/font.png");
+  
+  img_h = 147;
+  img_w = 256;
+  
+  gfx_setimgdim(13, img_w, img_h);
 );
 
-blit_scale = floor(max(gfx_h / 147, gfx_w / 256)); //3.2 * (1 + scaling);
+gfx_x = 0;
+gfx_y = 0;
 
-x_offset = (gfx_w - blit_scale * 256) * 0.5;
-y_offset = (gfx_h - blit_scale * 147) * 0.5;
-
-gfx_x = x_offset; gfx_y = y_offset;
 
 /* Background color */
+gfx_dest = 13;
+gfx_clear = 0;
+gfx_set(0, 0, 0, 1);
+gfx_rect(0, 0, img_w, img_h);
+
 gfx_mode = 4;
 gfx_a = 0.7;
-gfx_blit(5, blit_scale, 0);
+gfx_blit(5, 1, 0);
 
-/* bloop */
 gfx_mode = 5;
 gfx_a = 0.76;
-gfx_blit(6, blit_scale, 0);
-
+gfx_blit(6, 1, 0);
 
 function lightning()
 instance(lightState)
@@ -249,20 +305,87 @@ local(lightProb)
 gfx_r = 0; gfx_b = 1; gfx_g = 0;
 
 gfx_a = 0.3;
-gfx_blit(6, blit_scale, 0);
+gfx_blit(6, 1, 0);
 gfx_a = lightning1.lightning();
-gfx_blit(8, blit_scale, 0);
+gfx_blit(8, 1, 0);
 gfx_a = lightning2.lightning();
-gfx_blit(9, blit_scale, 0);
+gfx_blit(9, 1, 0);
 gfx_a = lightning3.lightning();
-gfx_blit(10, blit_scale, 0);
+gfx_blit(10, 1, 0);
 
 light1 = 0.7 * light1 + 0.1 * rand();
 gfx_r = gfx_g = gfx_b = gfx_a = 1 + light1;
-gfx_blit(7, blit_scale, 0);
+gfx_blit(7, 1, 0);
 
-gfx_x = x_offset + 5; gfx_y = y_offset + 5;
-gfx_printf("VERB");
+
+gfx_a = 0.1;
+//parameter_bar(27, 4, 60, 7, 45);
+
+
+
+gfx_a = 0.1;
+
+//pixel_rect(3, 3, 70, 30, 0);
+
+//pixel_rect(3, 3, 70, 30, 0);
+
+
+/*
+  sl1 = s1;
+  sl1_min = s1_min;
+  sl1_max = s1_max;
+  sl1_shape = s1_shape;
+  sl2 = s2;
+  sl2_min = s2_min;
+  sl2_max = s2_max;
+  sl2_shape = s2_shape;
+*/
+
+//txt_blit("Verb", 5, 5);
+
+pad_width = 52;
+pad_height = 25;
+pad_spacing = 35;
+
+function reset_color()
+(
+  gfx_r = gfx_g = gfx_b = 0.2; gfx_a = 0.4;
+  gfx_mode = 1;
+);
+
+reset_color();
+cy = 5;
+txt_blit("Shimmer", 5, cy);
+
+//shimmer_mode
+reset_color();
+choice1.choice_toggle(gfx_x, cy, 4, 0, 11, "Regular shimmers");
+choice2.choice_toggle(gfx_x, cy, 4, 1, 11, "Low shimmer\nis rectified");
+choice3.choice_toggle(gfx_x, cy, 4, 2, 11, "Octaved low shimmer");
+shimmer_pad.xy_pad(1, 3, cy + 5, pad_width, pad_height);
+
+cy += pad_spacing;
+
+reset_color();
+txt_blit("Haunt", 5, cy);
+haunt.xy_pad(2, 3, cy + 5, pad_width, pad_height);
+
+cy += pad_spacing;
+
+reset_color();
+txt_blit("Grain", 5, cy);
+choiceg1.choice_toggle(gfx_x, cy, 4, 0, 30, "Tempo-sync");
+choiceg2.choice_toggle(gfx_x, cy, 4, 1, 30, "Burst");
+choiceg3.choice_toggle(gfx_x, cy, 4, 2, 30, "Rapid");
+grain_pad.xy_pad(3, 3, cy + 5, pad_width, pad_height);
+
+
+/*
+
+txt_blit("Grain", 5, 55);
+
+txt_blit("Texture", 5, 45);
+*/
 
 function draw_eyes(x, y, inc, spacing, alpha)
 local()
@@ -273,8 +396,8 @@ instance(timer)
   (timer > 1.0) ? timer = 0;
   (timer > 0.1) ? (
     gfx_set(0.574, 0.429, 0.503, alpha);
-    gfx_rect(x_offset + x * blit_scale, y_offset + y * blit_scale, blit_scale, blit_scale);
-    gfx_rect(x_offset + (x + spacing) * blit_scale, y_offset + y * blit_scale, blit_scale, blit_scale);
+    gfx_rect(x, y, 1, 1);
+    gfx_rect(x + spacing, y, 1, 1);
   );
 );
 
@@ -294,7 +417,7 @@ instance(xc, yc)
   yc += diff * (rand() - 0.5) + 0.01 * (y - yc);
   x = floor(xc);
   y = floor(yc);
-  gfx_rect(x_offset + x * blit_scale, y_offset + y * blit_scale, blit_scale, blit_scale);
+  gfx_rect(x, y, 1, 1);
 );
 
 gfx_set(0, 0, 0, 1.0);
@@ -315,9 +438,101 @@ gfx_set(1, 1, 0.9, 1.0);
 firefly1.draw_mosquito(90, 117, 1.0);
 firefly2.draw_mosquito(90, 117, 1.0);
 
+function draw_person()
+instance(s, anim)
+global()
+(
+  gfx_set(0.4, 0.3, 0.25, 0.5);
+  gfx_rect(124, 117 - s, 2, 8);
+  gfx_rect(126, 118 - s, 2, 8);
+  gfx_rect(123, 118 - s, 1, 8);
+  gfx_rect(122, 120 - s, 1, 8);
+  gfx_circle(123 + abs(sin(0.1 * time_precise())), 116 - s, 1.5, 1, 0);
+  
+  s = 0;
+  anim += 1;
+  anim > 60 ? (
+    gfx_rect(126, 117 - s, 1, 1);
+  ) : (anim > 110) ? (
+    gfx_rect(122, 119 - s, 1, 1);
+  );
+  anim > 120 ? anim = 0;
+);
+person.draw_person();
+
+function draw_bird(xc, yc)
+instance(s, proba)
+local()
+(
+  gfx_set(0.03, 0.13, 0.15, 1.0);
+  gfx_rect(xc, yc + 2 * proba * abs(sin(time_precise())), 1, 4);
+  gfx_rect(xc + 1, yc + 1, 1, 3);
+  
+  s = 0.2 * 4 + 0.8 * s;
+  gfx_rect(xc + 2, yc + 1, 3 - s, 1);
+  gfx_rect(xc + 2, yc + 2, 2 - s, 1);
+  gfx_rect(xc - 2 + s, yc + 1, 4 - s, 1);
+  gfx_rect(xc - 1 + s, yc + 2, 3 - s, 1);
+  
+  proba = 0.1 * 0.01 + 0.9 * proba;
+  (rand() < proba) ? s = 0;
+  
+  (rand() < 0.001) ? ( proba = 0.9 );
+);
+
+bird.draw_bird(111, 56);
+bird2.draw_bird(176, 71);
+
+
+function mouse_run(x, y, w, h)
+local()
+instance(dx, dy, cx, cy, nx, ny)
+global()
+(
+  (x == 0) ? (
+    cx = x;
+    cy = y;
+  );
+  
+  (rand() < 0.01) ? (
+    nx = x + rand() * w;
+    ny = y + rand() * h;
+  );
+  dx = nx - cx;
+  dy = ny - cy;
+  
+  cx += 0.1 * dx;
+  cy += 0.1 * dy;
+  
+  (abs(dx) + abs(dy) < 0.3) ? (
+    gfx_rect(cx, cy - 1, 1, 1);
+  );
+  
+  gfx_rect(cx, cy, 1, 1);
+  // gfx_rect(x, y, w, h);
+);
+
+mouse1.mouse_run(161, 121, 15, 5);
+mouse2.mouse_run(70, 125, 40, 4);
+
+hinter.draw_hints();
+
+gfx_dest = -1;
+gfx_set(1, 1, 1, 1);
+blit_scale = floor(min(gfx_h / img_h, gfx_w / img_w));
+x_offset = (gfx_w - blit_scale * img_w) * 0.5;
+y_offset = (gfx_h - blit_scale * img_h) * 0.5;
+gfx_x = x_offset; gfx_y = y_offset;
+
+gfx_mode = 4;
+gfx_blit(13, blit_scale, 0);
+
 granulator_error ? (
   gfx_x = 0;
   gfx_y = 0;
   gfx_printf("FATAL: REQUESTED TOO MANY SAMPLES");
 );
 
+last_cap = mouse_cap;
+last_mouse_x = mouse_x;
+last_mouse_y = mouse_y;

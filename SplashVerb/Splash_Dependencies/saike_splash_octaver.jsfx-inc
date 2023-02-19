@@ -1,0 +1,103 @@
+@init
+function f_trafo(freq)
+local()
+global(srate)
+instance()
+(
+  exp( (1-freq) * log(20/22050) ) * $pi * (44100 / srate);
+);
+
+function reset_linearSVF()
+global()
+local()
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  ic1eq = ic2eq = 0;
+);
+  
+function octaver_reset()
+local()
+global()
+instance(flipflopState)
+(
+  flipflopState = 1;
+  this.svf3.reset_linearSVF();
+  this.svf4.reset_linearSVF();
+);
+
+function init_linearSVF(freq, res)
+global()
+local(g)
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  g = tan(.5 * f_trafo(freq));
+  k = 2 - 2*res;
+  
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+);
+
+function eval_linearSVF_HP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;    
+  
+  v0 - k*v1 - v2
+);
+
+function eval_linearSVF_LP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;    
+  
+  v2
+);
+
+function octaver_eval(sample)
+local(out, lpsample)
+global()
+instance(flipflopState, pflipflopState, h1, f_est, sidx, skipFlip)
+(
+  sidx += 1;
+  lpsample = this.svf3.eval_linearSVF_LP( this.svf4.eval_linearSVF_HP( sample ) );
+  (lpsample > 0 && h1 < 0 && sidx > 15) ? (
+    skipFlip ? (
+      skipFlip = 0;
+      sidx = 0;
+    ) : (
+      flipflopState = -flipflopState;
+      f_est = .7 * f_est + .3 * ( 1.0 / sidx );
+      sidx = 0;
+    );
+  );
+  
+  h1 = lpsample;
+  out = sample * pflipflopState;
+  pflipflopState = .98*pflipflopState + .02*flipflopState;
+  
+  out
+);
+
+function octaver_init(filterfreq)
+local()
+global()
+instance(flipflopState)
+(
+  flipflopState = 1;
+  this.svf3.init_linearSVF( .0005, 0 );
+  this.svf4.init_linearSVF( .01, 0 );
+);
+
