@@ -1,19 +1,21 @@
 desc:Splash Verb (WIP)
 
-slider1:time_ms=150<5,2800,1>time_ms
+slider1:time_ms=150<5,2800,1>-time_ms
 slider2:seed=1344123123<0,12311323,1>-seed
-slider3:mode=0<0,1,1>mode
+slider3:mode=0<0,1,1>-mode
 slider4:shimmer=0.4<0,1,0.00001>-shimmer
 slider5:shifter_down=0<0,1,0.00001>-down
 slider6:freq_shift_amount=0<0,1.0,0.00001>-f amount
 slider7:freq_shift=0<60,880,0.00001>-f shift
 slider8:grain_mix=0.2<0, 2, 0.01>-Grain mix
-slider9:verb_mix=0.4<0, 1, 0.01>Verb mix
+slider9:verb_mix=0.4<0, 1, 0.01>-Verb mix
 slider10:smooth=1<0, 1, 1>-Smooth verb
 slider11:shimmer_mode=0<0,1,1>-Shimmer mode
-slider30:grain_algorithm=0<0,2,1>Grain algorithm
+slider20:haunt_algorithm=0<0,1,1>-Haunt algorithm
+slider30:grain_algorithm=0<0,2,1>-Grain algorithm
 slider31:grain_par1=0.5<0,1,0.0001>-Grain Length
-slider32:grain_par2=0.5<0,1,0.0001>Grain Frequency
+slider32:grain_par2=0.5<0,1,0.0001>-Grain Frequency
+slider40:brightness=0.5<0,1,0.00001>-Brightness
 options:no_meter
 in_pin:left input
 in_pin:right input
@@ -33,6 +35,9 @@ options:maxmem=220000000
 haunt.init_xy(7, 60, 880, 0, 6, 0, 1.0, 0);
 shimmer_pad.init_xy(5, 0, 1, 0, 4, 0, 1, 0);
 grain_pad.init_xy(31, 0, 1, 0, 8, 0, 2, 0);
+verb_pad.init_xy(40, 0, 1, 0, 9, 0, 1, 0);
+
+time_slider.init_slider_ui(1, 5, 2800, 0);
 
 octaver.octaver_init(1.0);
 
@@ -101,6 +106,7 @@ freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
 freemem = shifter_down.alloc_shifter(freemem, pitch_block_size);
 
 freemem = granulator.granulator_set_buffer_limits(freemem, 65536 * 8);
+freemem = spinner.init_spinner(freemem);
 
 current_time = time_ms;
 update_sample_position(current_time, seed, mode);
@@ -117,6 +123,7 @@ shifter_down.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
 
 @block
 freq_shifter.init_cheapest_freq_shifter(freq_shift);
+spinner.block_spinner();
 
 beat_pos = beat_position;
 dbeat = (tempo / 60) / srate;  // Beats per sample
@@ -222,10 +229,12 @@ verb_mix ? (
   verb.in.in.in.in.s1 = spl1 + shifter_down * shimmer_right;
   verb.in.in.in.in.s6 = fb1;
   verb.in.in.in.in.s7 = fb0;
-  verb.in.in.in.in.s2 = in_gain * shimmer * shifter_shimmer.outL;
-  verb.in.in.in.in.s3 = in_gain * shimmer * shifter_shimmer.outR;
-  verb.in.in.in.in.s4 = in_gain * freq_shift_amount * freq_shifter.outL;
-  verb.in.in.in.in.s5 = in_gain * freq_shift_amount * freq_shifter.outR;
+  in_shimmer = in_gain * shimmer;
+  verb.in.in.in.in.s2 = in_shimmer * shifter_shimmer.outL;
+  verb.in.in.in.in.s3 = in_shimmer * shifter_shimmer.outR;
+  in_haunt = (haunt_algorithm == 0) ? in_gain * freq_shift_amount : 0;
+  verb.in.in.in.in.s4 = in_haunt * freq_shifter.outL;
+  verb.in.in.in.in.s5 = in_haunt * freq_shifter.outR;
   overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
   
   sample_verb(mode);
@@ -237,6 +246,23 @@ verb_mix ? (
   out_right = 0;
 );
 
+// Doppler thingy
+(haunt_algorithm == 1) ? (
+  spin_level = 0.999 * spin_level + 0.001 * (freq_shift_amount > 0);
+  //spin_level < 0.000000001 ? spinner.theta = 0;
+  (spin_level > 0) ? (
+    spinner.eval_spinner(out_left, out_right, 0.05 * freq_shift, freq_shift_amount);
+    (spin_level < 0.9999) ? (
+      tmp = spin_level;
+      out_left = spinner.outr * spin_level + out_left * sqrt(1.0 - spin_level);
+      out_right = spinner.outl * spin_level + out_right * sqrt(1.0 - spin_level);
+    ) : (
+      out_left = spinner.outr;
+      out_right = spinner.outl;
+    );
+  );
+);
+
 fb0 = fb * out_left;
 fb1 = fb * out_right;
 
@@ -246,12 +272,12 @@ spl1 = spl1 * (1.0 - verb_mix) + verb_mix * out_right;
 shimmer ? shifter_shimmer.pitchShifterUpdate(spl0, spl1);
 //shimmer ? shifter_shimmer.pitchShifterUpdate(verb.in.in.in.scaling_factor * verb.in.in.in.s5, verb.in.in.in.scaling_factor * verb.in.in.in.s6);
 
-freq_shift_amount ? freq_shifter.eval_cheapest_freq_shifter(spl0, spl1);
+(freq_shift_amount && (haunt_algorithm == 0)) ? freq_shifter.eval_cheapest_freq_shifter(spl0, spl1);
 
 spl0 += - 0.03 * shimmer * shifter_shimmer.outL;
 spl1 += - 0.03 * shimmer * shifter_shimmer.outR;
 
-@gfx
+@gfx 768 441
 !loaded ? (
   loaded = gfx_loadimg(5, "./Splash_Dependencies/camp_0.png");
   loaded = gfx_loadimg(6, "./Splash_Dependencies/camp_1.png");
@@ -343,9 +369,9 @@ gfx_a = 0.1;
 
 //txt_blit("Verb", 5, 5);
 
-pad_width = 52;
+pad_width = 53;
 pad_height = 25;
-pad_spacing = 35;
+pad_spacing = 33;
 
 function reset_color()
 (
@@ -353,22 +379,16 @@ function reset_color()
   gfx_mode = 1;
 );
 
-reset_color();
-cy = 5;
-txt_blit("Shimmer", 5, cy);
+cy = 3;
+time_slider.slider_ui(5, 3, cy, pad_width, 8, sprintf(9, "%d", time_ms), "Reverb time in\nmilliseconds");
 
-//shimmer_mode
-reset_color();
-choice1.choice_toggle(gfx_x, cy, 4, 0, 11, "Regular shimmers");
-choice2.choice_toggle(gfx_x, cy, 4, 1, 11, "Low shimmer\nis rectified");
-choice3.choice_toggle(gfx_x, cy, 4, 2, 11, "Octaved low shimmer");
-shimmer_pad.xy_pad(1, 3, cy + 5, pad_width, pad_height);
-
-cy += pad_spacing;
+cy += 11;
 
 reset_color();
-txt_blit("Haunt", 5, cy);
-haunt.xy_pad(2, 3, cy + 5, pad_width, pad_height);
+txt_blit("Verb", 5, cy);
+choicev1.choice_toggle(gfx_x, cy, 4, 0, 3, "Sparse");
+choicev2.choice_toggle(gfx_x, cy, 4, 1, 3, "Dense");
+verb_pad.xy_pad(4, 3, cy + 5, pad_width, pad_height);
 
 cy += pad_spacing;
 
@@ -379,6 +399,26 @@ choiceg2.choice_toggle(gfx_x, cy, 4, 1, 30, "Burst");
 choiceg3.choice_toggle(gfx_x, cy, 4, 2, 30, "Rapid");
 grain_pad.xy_pad(3, 3, cy + 5, pad_width, pad_height);
 
+cy += pad_spacing;
+
+reset_color();
+verb_mix == 0 ? gfx_a = 0.1;
+txt_blit("Shimmer", 5, cy);
+
+//shimmer_mode
+choice1.choice_toggle(gfx_x, cy, 4, 0, 11, "Regular shimmers\nLow (X) High (Y)");
+choice2.choice_toggle(gfx_x, cy, 4, 1, 11, "Low shimmer is\nrectified (X)");
+choice3.choice_toggle(gfx_x, cy, 4, 2, 11, "Octaved low\nshimmer (X)");
+shimmer_pad.xy_pad(1, 3, cy + 5, pad_width, pad_height);
+
+cy += pad_spacing;
+
+reset_color();
+verb_mix == 0 ? gfx_a = 0.1;
+txt_blit("Haunt", 5, cy);
+choiceh1.choice_toggle(gfx_x, cy, 4, 0, 20, "Freq-Shifter");
+choiceh2.choice_toggle(gfx_x, cy, 4, 1, 20, "Spinner");
+haunt.xy_pad(2, 3, cy + 5, pad_width, pad_height);
 
 /*
 

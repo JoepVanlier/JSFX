@@ -74,17 +74,19 @@ global(gfx_x)
 );
 
 function txt_measure(str)
-local(ix, row, c_char, src_x, src_y, xc, yc)
+local(ix, row, c_char, src_x, src_y, xc, yc, tx_max)
 global()
 instance(txt_w, txt_h)
 (
   ix = 0;
   xc = 0;
   yc = 0;
+  tx_max = 0;
   loop(strlen(str),
     c_char = str_getchar(str, ix, 'cu');
     (c_char == 10) ? (
       yc += 5;
+      tx_max = max(xc, tx_max);
       xc = 0;
     ) : (
       row = floor(c_char / 16);
@@ -95,8 +97,140 @@ instance(txt_w, txt_h)
     ix += 1;
   );
   
-  txt_w = xc;
+  txt_w = max(xc, tx_max);
   txt_h = yc + 5;
+);
+
+// last_cap = mouse_cap;
+// last_mouse_x = mouse_x;
+// last_mouse_y = mouse_y;
+
+function set_hint(hint)
+global(gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap)
+local()
+instance(lx, ly, lc, hint_time, current_hint, delta_time)
+(
+  ( (lc != mouse_cap) || ( abs(lx - mouse_x) + abs(ly - mouse_y)) > 0 ) ? (
+    hint_time = 0;
+  ) : (      
+    (hint != 0) ? (
+      current_hint = hint;
+      hint_time = hint_time + delta_time;
+      hint_time = min(1, hint_time)
+    ) : (
+      0
+    )
+  );
+  
+  lx = mouse_x;
+  ly = mouse_y;
+  lc = mouse_cap;
+);
+
+
+function draw_hints()
+global(
+  gfx_x, gfx_y, mouse_x, mouse_y, img_w, img_h,
+  x_offset, y_offset, blit_scale,
+)
+local(w, h)
+instance(hint_time, current_hint, last_global_time, global_time, delta_time, txt_w, txt_h)
+(
+  this.set_hint(0);
+
+  global_time = time_precise();
+  delta_time = global_time - last_global_time;
+  last_global_time = global_time;
+
+  ( hint_time > .99 ) ? (
+    gfx_x = (mouse_x - x_offset + 15) / blit_scale;
+    gfx_y = (mouse_y - y_offset + 15) / blit_scale;
+    
+    this.txt_measure(current_hint);
+    
+    ( gfx_x > 0.5 * img_w ) ? gfx_x = (mouse_x - x_offset + 15) / blit_scale - txt_w - 8;
+    ( gfx_y > 0.5 * img_h ) ? gfx_y = (mouse_y - y_offset) / blit_scale - txt_h;
+
+    gfx_set(0.05, 0.05, 0.1, 1.0);
+    gfx_rect(gfx_x - 1, gfx_y - 1, txt_w + 2, txt_h + 1);
+    gfx_set(0.3, 0.3, 0.3, 0.3);
+    txt_blit(current_hint, gfx_x, gfx_y);
+  );
+);
+
+function init_slider_ui(s, s_min, s_max, s_shape)
+local()
+instance(sl, sl_min, sl_max, sl_shape)
+global()
+(
+  sl = s;
+  sl_min = s_min;
+  sl_max = s_max;
+  sl_shape = s_shape;
+);
+
+function slider_ui(me, x, y, w, h, label, hint)
+local(mouse_nx, mouse_ny, over, dx, dy, ix)
+instance(
+  sl, sl_min, sl_max,
+  smooth_highlight,
+  txt_w, txt_h,
+)
+global(
+  x_offset, y_offset, blit_scale,
+  mouse_x, mouse_y, mouse_cap,
+  cap_mode, last_cap, last_mouse_x
+  x_val, x_norm,
+  hinter.set_hint,
+)
+(
+  mouse_nx = (mouse_x - x_offset) / blit_scale;
+  mouse_ny = (mouse_y - y_offset) / blit_scale;
+  over = (mouse_nx > x) && (mouse_nx < (x + w)) && (mouse_ny > y) && (mouse_ny < (y + h));
+  
+  (over && hint) ? (
+    hinter.set_hint(hint);
+  );
+  
+  smooth_highlight = 0.7 * smooth_highlight + 0.3 * (0.03 + 0.08 * over);
+  
+  gfx_set(1, 1, 1, smooth_highlight);
+  gfx_rect(x, y, w, h);
+  unfilled_rect(x, y, w, h);
+  
+  x_val = slider(sl);
+  x_norm = (x_val - sl_min) / (sl_max - sl_min);
+  
+  (over && (mouse_cap & 1) && (cap_mode == 0) && (last_cap == 0)) ? (
+    cap_mode = me;
+  );
+  
+  ix = x + 2;
+  loop(floor(0.5 * (w - 3)),
+    ix <= floor(x_norm * w) ? (
+      gfx_set(1, 1, 1, smooth_highlight);
+    ) : (
+      gfx_set(0, 0, 0, smooth_highlight);
+    );
+    gfx_line(ix, y + 2, ix, y + h - 3);
+    ix += 2;
+  );
+  
+  (cap_mode == me) ? (
+    (mouse_cap == 0) ? (
+      cap_mode = 0;
+    ) : (
+      dx = (mouse_x - last_mouse_x) / (blit_scale * w);
+      x_norm = max(0, min(1, x_norm + dx));
+      
+      slider(sl) = sl_min + x_norm * (sl_max - sl_min);
+    );
+  );
+  
+  this.txt_measure(label);
+  
+  gfx_set(1, 1, 1, 0.1);
+  txt_blit(label, x + 0.5 * w - 0.5 * txt_w, y + 1 + 0.5 * h - 0.5 * txt_h);
 );
 
 
@@ -155,63 +289,6 @@ function go_to_pixel(x, y)
   gfx_y = y_offset + y * blit_scale;
 );
 
-
-// last_cap = mouse_cap;
-// last_mouse_x = mouse_x;
-// last_mouse_y = mouse_y;
-
-function set_hint(hint)
-global(gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap)
-local()
-instance(lx, ly, lc, hint_time, current_hint, delta_time)
-(
-  ( (lc != mouse_cap) || ( abs(lx - mouse_x) + abs(ly - mouse_y)) > 0 ) ? (
-    hint_time = 0;
-  ) : (      
-    (hint != 0) ? (
-      current_hint = hint;
-      hint_time = hint_time + delta_time;
-      hint_time = min(1, hint_time)
-    ) : (
-      0
-    )
-  );
-  
-  lx = mouse_x;
-  ly = mouse_y;
-  lc = mouse_cap;
-);
-
-
-function draw_hints()
-global(
-  gfx_x, gfx_y, mouse_x, mouse_y, img_w, img_h,
-  x_offset, y_offset, blit_scale,
-)
-local(w, h)
-instance(hint_time, current_hint, last_global_time, global_time, delta_time, txt_w, txt_h)
-(
-  this.set_hint(0);
-
-  global_time = time_precise();
-  delta_time = global_time - last_global_time;
-  last_global_time = global_time;
-
-  ( hint_time > .99 ) ? (
-    gfx_x = (mouse_x - x_offset + 15) / blit_scale;
-    gfx_y = (mouse_y - y_offset + 15) / blit_scale;
-    
-    this.txt_measure(current_hint);
-    
-    ( gfx_x > 0.5 * img_w ) ? gfx_x = mouse_x - txt_w - 8;
-    ( gfx_y > 0.5 * img_h ) ? gfx_y = mouse_y - txt_h - 8;
-
-    gfx_set(0.05, 0.05, 0.1, 1.0);
-    gfx_rect(gfx_x - 1, gfx_y - 1, txt_w + 2, txt_h + 1);
-    gfx_set(0.3, 0.3, 0.3, 0.3);
-    txt_blit(current_hint, gfx_x, gfx_y);
-  );
-);
 
 function choice_toggle(x, y, w, select, slider_idx, hint)
 instance(intensity)
