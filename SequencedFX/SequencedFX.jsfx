@@ -1,8 +1,8 @@
 desc:Saike SEQS (Sequenced FX) (beta)
 tags: time-based effect
-version: 0.117
+version: 0.118
 author: Joep Vanlier
-changelog: Repair copy/paste behaviour.
+changelog: Add modulatable control for sample based offset.
 license: MIT
 provides:
   seqs_dependencies/*
@@ -73,6 +73,7 @@ slider33:cutoff_sustain=0<0,1,0.0001>-Envelope Sustain
 slider34:pitch_shifter_pitch=0<-24,24,.0001>-Pitch Shift
 slider35:freq_shifter_shift=0.5<0,1,0.000001>-Frequency shift
 slider36:freq_shifter_enabled=0<0,1,1>-Frequency Shifter Enabled
+slider37:offset=0<0,1,0.000011>-Sample playback offset
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:midi_note_pattern_select=120<0,127,1>-First Pattern
 
@@ -288,10 +289,12 @@ global()
 
 function start_playback(buffer_loc)
 instance(mem, read_ptr, x_fade_position, playing)
-global(crossfade_samples)
+global(crossfade_samples, current_sample_offset)
 (
   mem = buffer_loc;
   read_ptr = mem + 1;
+  read_ptr += 2 * floor(current_sample_offset * max(0, (mem[] - read_ptr - 2 * crossfade_samples)) * 0.5);
+  
   x_fade_position = crossfade_samples;
   playing = 1;
 );
@@ -592,6 +595,8 @@ function update_current_levels()
   current_freq_shifter_dry = freqShifterDry.getCurrentValue();
   current_freq_shifter_wet = freqShifterWet.getCurrentValue();
   
+  current_sample_offset = offsetKnob.getCurrentValue();
+  
   current_master_gain = finalOutputGain.getCurrentValue();
   target_master_db = 10^(current_master_gain/20);
 );
@@ -692,6 +697,8 @@ function init_controls()
   freqShifterWet.init_knob(64, -64, 0, 0);
   
   finalOutputGain.init_knob(64, -32, 0, 0);
+  
+  offsetKnob.init_knob(1, 0, 37, 0);
   
   update_current_levels();
   current_master_db = target_master_db;
@@ -1198,6 +1205,7 @@ init_playhead();
   cutoffSustainKnob.knob_read_value();
   shifterPitchKnob.knob_read_value();
   freqShifterPitchKnob.knob_read_value();
+  offsetKnob.knob_read_value();
 
   current_drive = driveKnob.getCurrentValue();
   current_cutoff_start = cutoffKnob.getCurrentValue();
@@ -1209,6 +1217,7 @@ init_playhead();
   current_cutoff_sustain = cutoffSustainKnob.getCurrentValue();
   current_pitch_shifter_pitch = shifterPitchKnob.getCurrentValue();
   current_freq_shifter_pitch = freqShifterPitchKnob.getCurrentValue();
+  current_sample_offset = offsetKnob.getCurrentValue();
 
 @block
 sampling_ratio = legacy_mode ? 1 : 44100 / srate;
@@ -1607,6 +1616,8 @@ file_var(0, hide_pdc);
 ) : (
   file_var(0, legacy_mode);
 );
+
+offsetKnob.serialize_knob();
 
 update_current_levels();
 current_master_db = target_master_db;
@@ -3706,7 +3717,7 @@ draw_logo(12 * (1+scaling), 10 * (1+scaling), 6 * (1+scaling), 6 * (1+scaling));
 gfx_set(1, 1, 1, .1);
 gfx_x = 150 * (1+scaling);
 gfx_y = 30 * (1+scaling);
-gfx_printf("v0.117");
+gfx_printf("v0.118");
 
 scope_w = ceil((block_width + block_spacing) * 33);
 scope_h = 35 * (1 + scaling);
@@ -4344,14 +4355,19 @@ local(length_in_samples, len, ptr, hh, xp, ym, step, minacc, maxacc, ww, hh)
     sample_idx += 1;
   );
 
-  storeSamplesToggle.label = " Don't save";
-  storeSamplesToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.8 * knobSize, 0.15*knobSize, 0.15*knobSize, do_not_store_samples, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Don't store samples with preset.");
-  do_not_store_samples = storeSamplesToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-  
-  stopRecToggle.label = " Auto stop";
-  stopRecToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.4 * knobSize, 0.15*knobSize, 0.15*knobSize, stop_rec, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Disable recording when reaching end of bar for the second time.\nCan be useful when recording from a looped area.");
-  stop_rec = stopRecToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
-  
+  (selected_details == 24) ? (
+    storeSamplesToggle.label = " Don't save";
+    storeSamplesToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.8 * knobSize, 0.15*knobSize, 0.15*knobSize, do_not_store_samples, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Don't store samples with preset.");
+    do_not_store_samples = storeSamplesToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+    
+    stopRecToggle.label = " Auto stop";
+    stopRecToggle.drawToggle(cX + 0.2 * knobSize, cY - 0.4 * knobSize, 0.15*knobSize, 0.15*knobSize, stop_rec, row_color_r, row_color_g, row_color_b, widget_a, row_color_r, row_color_g, row_color_b, toggle_a, "Disable recording when reaching end of bar for the second time.\nCan be useful when recording from a looped area.");
+    stop_rec = stopRecToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  ) : (
+  cX += 1.25 * knobSize;
+  offsetKnob.knob_set_display(NORMALIZED_SLIDER, 1);
+  offsetKnob.drawAndProcess(cX, cY, knobSize, "Offset", "Sample Offset", current_sample_offset, 1, 1, 1);
+  );
 ) : (selected_details == 1) ? (
   nextPanel = drawPanel(s_MASTER, cX, cY - 1.5 * knobSize, 4.5*knobSpacing, panelHeight, 1);
   
@@ -4849,7 +4865,7 @@ beyond 22050 Hz."
       - 0.25 * 22050 * exp((2 * current_freq_shifter_pitch) * log(1 / srate));
     );
   freqShifterPitchKnob.knob_set_display(sprintf(15, "%d Hz", print_shift), freq_shifter_enabled);
-  freqShifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Shift", "Frequency shift", current_freq_shifter_pitch, 1, 1, 1);
+  freqShifterPitchKnob.drawAndProcess(cX, cY, knobSize, "Shift", "Frequency Shift", current_freq_shifter_pitch, 1, 1, 1);
   
   gfx_set(knob_font_color_r, knob_font_color_g, knob_font_color_b, knob_font_color_a * .5 + .5 * freq_shifter_enabled);
   
