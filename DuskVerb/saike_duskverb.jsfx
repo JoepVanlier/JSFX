@@ -1,0 +1,740 @@
+desc:Dusk Verb (saike) (Public alpha)
+tags: effect, reverb, atmosphere, granular, long
+version: 0.01
+author: Joep Vanlier
+changelog: Alpha release.
+license: MIT
+provides:
+  DuskVerb_Dependencies/* 
+  saike_duskverb.jsfx.rpl
+about:
+  # A multi-effect plugin intended to enhance atmospheric arpeggios
+  [Screenshot](https://user-images.githubusercontent.com/19836026/221384927-db1d9f3e-df04-4676-a4d4-aa508ad1ade6.gif)
+  ### Features:
+  - 3 Reverberation algorithms.
+  - Granular resampler.
+  - Frequency shifter / pitch shifter.
+  - Several audio shimmer modes.
+  - X/Y controls for automation.
+  - Classic adventure game look.
+
+slider1:time_ms=900<5,2800,1>-Verb Time [ms]
+slider2:seed=9860959.345567<0,12311323,1>-Random Seed
+slider3:mode=0<0,2,1>-Reverb Mode
+slider4:shimmer=0.4<0,1,0.00001>-Upward Shimmer (Shimmer Y)
+slider5:shifter_down=0<0,1,0.00001>-Downward Shimmer (Shimmer X)
+slider6:freq_shift_amount=0<0,1.0,0.00001>-Frequency Amount (Haunt Y)
+slider7:freq_shift=60<60,880,0.00001>-Frequency Shift (Haunt X)
+slider8:grain_mix=0.2<0, 2, 0.01>-Grain Mix (Grain Y)
+slider9:verb_mix=0.4<0, 1, 0.01>-Verb Mix (Verb Y)
+slider10:smooth=1<0, 1, 1>-Smooth Verb
+slider11:shimmer_mode=0<0,1,1>-Shimmer Mode
+slider20:haunt_algorithm=0<0,1,1>-Haunt Algorithm
+slider30:grain_algorithm=0<0,3,1>-Grain Algorithm
+slider31:grain_par1=0.5<0,1,0.0001>-Grain Length (Grain X)
+slider32:grain_par2=0.5<0,1,0.0001>-Grain Frequency
+slider40:brightness=0.5<0,1,0.00001>-Brightness (Verb Y)
+slider41:side_cut_freq=120<20,22050,0.001:log>-Side low cut frequency
+slider42:low_cut_freq=20<20,22050,0.001:log>-Low cut frequency frequency
+slider43:high_cut_freq=22050<20,22050,0.001:log>-High cut frequency frequency
+
+options:no_meter
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_dusk_hadamard_diffusers.jsfx-inc
+import saike_dusk_pitchlib.jsfx-inc
+import saike_dusk_freq.jsfx-inc
+import saike_dusk_grainlib.jsfx-inc
+import saike_dusk_lowres_gfx.jsfx-inc
+import saike_dusk_octaver.jsfx-inc
+
+options:maxmem=220000000
+
+@init
+haunt.init_xy(7, 60, 880, 0, 6, 0, 1.0, 0);
+shimmer_pad.init_xy(5, 0, 1, 0, 4, 0, 1, 0);
+grain_pad.init_xy(31, 0, 1, 0, 8, 0, 2, 0);
+verb_pad.init_xy(40, 0, 1, 0, 9, 0, 1, 0);
+
+time_slider.init_slider_ui(1, 5, 2800, 0);
+
+octaver.octaver_init(1.0);
+
+function update_sample_position(time_ms, seed, mode)
+(
+  smooth = 0;
+  (mode == 0) ? (
+    verb.in.in.in.set_sample_position_8(0.25 * time_ms / 1000, seed, smooth);
+    verb.in.in.set_sample_position_8(0.5 * time_ms / 1000, seed + seed, smooth);
+    verb.in.set_sample_position_8(0.75 * time_ms / 1000, seed + seed + seed, smooth);
+    verb.set_sample_position_8(time_ms / 1000, seed + seed + seed + seed, smooth);
+  ) : (mode == 1) ? (
+    verb.in.in.in.set_sample_position(0.25 * time_ms / 1000, seed, smooth);
+    verb.in.in.set_sample_position(0.5 * time_ms / 1000, seed + seed, smooth);
+    verb.in.set_sample_position(0.75 * time_ms / 1000, seed + seed + seed, smooth);
+    verb.set_sample_position(time_ms / 1000, seed + seed + seed + seed, smooth);
+  ) : (mode == 2) ? (
+    verb.in.in.in.set_sample_position_8_exp(time_ms / 1000, seed, smooth);
+    verb.in.in.set_sample_position_8_exp(0.125 * time_ms / 1000, seed + seed, smooth);
+    verb.in.set_sample_position_8_exp(0.1, seed + seed + seed, smooth);
+    verb.set_sample_position_8_exp(0.05, seed + seed + seed + seed, smooth);
+  );
+);
+
+function sample_verb(mode)
+(
+  (mode == 0) ? (
+    verb.in.in.in.hsample8();
+    verb.in.in.hsample8();
+    verb.in.hsample8();
+    verb.hsample8();
+  ) : (mode == 1) ? (
+    verb.in.in.in.hsample();
+    verb.in.in.hsample();
+    verb.in.hsample();
+    verb.hsample();
+  ) : (mode == 2) ? (
+    verb.in.in.in.hsample8();
+    verb.in.in.hsample8();
+    verb.in.hsample8();
+    verb.hsample8();
+  );
+);
+
+function alloc_shifter(freemem, pitch_block_size)
+instance(fftmem1, fftmem2, pitch_shift_buffer)
+local()
+global()
+(
+  freemem = (fftmem1 = freemem) + pitch_block_size;
+  freemem = (fftmem2 = freemem) + pitch_block_size;
+  freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+  freemem
+);
+
+function update_shifter()
+global()
+local(shifter_buffer_size, transition_region)
+instance(pitch_shift_buffer, fftmem1, fftmem2)
+(
+  transition_region = 4096; //1024?
+  shifter_buffer_size = 4 * transition_region;
+  this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+);
+
+//function 
+
+freemem = 0;
+verb.in.in.in.in.tip = 1;
+freemem = verb.in.in.in.init_decorrelator(freemem, 2*32768);
+freemem = verb.in.in.init_decorrelator(freemem, 4*32768);
+freemem = verb.in.init_decorrelator(freemem, 8*32768);
+freemem = verb.init_decorrelator(freemem, 16*32768);
+
+pitch_block_size = 4*4096; /* We have 64 blocks of this */
+freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
+freemem = shifter_down.alloc_shifter(freemem, pitch_block_size);
+
+freemem = granulator.granulator_set_buffer_limits(freemem, 65536 * 8);
+freemem = spinner.init_spinner(freemem);
+
+current_time = time_ms;
+shifter_shimmer.update_shifter();
+shifter_down.update_shifter();
+
+semitones = 12;
+shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+semitones = -12;
+shifter_down.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+side_freq = side_cut_freq;
+lp_freq = high_cut_freq;
+hp_freq = low_cut_freq;
+current_verb_mix = verb_mix;
+current_grain_mix = grain_mix;
+current_shimmer = shimmer;
+current_shifter_down = shifter_down;
+
+function to_hf_boost(brightness)
+(
+  12 * brightness - 3
+);
+
+hf_boost = to_hf_boost(brightness);
+
+function reset_all()
+(
+  shifter_shimmer.pitchlibClearBuffer();
+  shifter_down.pitchlibClearBuffer();
+  
+  granulator.reset_granulator();
+  spinner.reset_spinner();
+  
+  verb.in.in.in.in.silence();
+  verb.in.in.in.silence();
+  verb.in.in.silence();
+  verb.in.silence();
+  verb.silence();
+  
+  octaver.octaver_reset();
+  freq_shifter.reset_freq_shifter();
+  
+  fb0 = 0;
+  fb1 = 0;
+);
+
+reset_all();
+
+@slider
+
+@block
+magic_factor = 2000 * (srate/48000);
+
+/* Time accuracy is not that important for these. Using a very basic lerp to save CPU. */
+invblock = 1.0 / samplesblock;
+d_side = (side_cut_freq - side_freq) * invblock;
+d_lp = (high_cut_freq - lp_freq) * invblock;
+d_hp = (low_cut_freq - hp_freq) * invblock;
+d_hf_boost = (to_hf_boost(brightness) - hf_boost) * invblock;
+d_verb_mix = (verb_mix - current_verb_mix) * invblock;
+d_grain_mix = (grain_mix - current_grain_mix) * invblock;
+d_shimmer = (shimmer - current_shimmer) * invblock;
+d_shifter_down = (shifter_down - current_shifter_down) * invblock;
+
+hp_automation = abs(d_hp) > 0.01;
+lp_automation = abs(d_lp) > 0.01;
+side_automation = abs(d_side) > 0.01;
+hf_automation = abs(d_hf_boost) > 0.01;
+
+lp.init_linearSVF_absolute(lp_freq, 0);
+hp.init_linearSVF_absolute(hp_freq, 0);
+side.init_linearSVF_absolute(side_freq, 0);
+brightness_boost.init_linearSVF_shelf_absolute(970, 1.41, hf_boost);
+
+freq_shifter.init_cheapest_freq_shifter(freq_shift);
+spinner.block_spinner();
+
+beat_pos = beat_position;
+dbeat = (tempo / 60) / srate;  // Beats per sample
+samples_per_beat = 1.0 / dbeat;
+
+@sample
+current_verb_mix += d_verb_mix;
+current_grain_mix += d_grain_mix;
+
+current_shimmer += d_shimmer;
+current_shifter_down += d_shifter_down;
+
+lp_automation ? ( 
+  lp.init_linearSVF_absolute(lp_freq, 0);
+  lp_freq += d_lp;
+);
+
+hp_automation ? (
+  hp.init_linearSVF_absolute(hp_freq, 0);
+  hp_freq += d_hp;
+);
+
+side_automation ? (
+  side.init_linearSVF_absolute(side_freq, 0);
+  side_freq += d_side;
+);
+
+hf_automation ? (
+  brightness.init_linearSVF_shelf_absolute(970, 1.41, hf_boost);
+  hf_boost += d_hf_boost;
+);
+
+cs += 1;
+
+((current_mode != mode) || (current_seed != seed)) ? (
+  fade_vol *= 0.9995;
+  abs(fade_vol) < 0.01 ? (
+    reset_all();
+    current_time = time_ms;
+    current_mode = mode;
+    current_seed = seed;
+    current_smooth = smooth;
+    update_sample_position(current_time, current_seed, current_mode);
+  );
+  
+  spl0 *= fade_vol;
+  spl1 *= fade_vol;
+) : (
+  fade_vol = 0.9995 * fade_vol + 0.0005;
+);
+
+
+current_time = 0.9995 * current_time + 0.0005 * time_ms;
+((current_time != last_time) || (current_seed != seed) || (current_mode != mode) || (smooth != current_smooth)) ? (
+  current_seed = seed;
+  current_smooth = smooth;
+  update_sample_position(current_time, current_seed, current_mode);
+  last_time = current_time;
+);
+
+fb = 0.999;
+
+semitones = 12 + 0.1 * sin(40 * cs / srate);
+shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+in_gain = min(1.0, max(0.99999 * in_gain, 8 * max(spl0, spl1))); // TODO: Make srate dependent
+//in_gain = 1;
+
+granulator.granulator_in(spl0, spl1);
+
+(grain_algorithm == 0) ? (
+  start_factor = 1;
+  beat_frac = start_factor * beat_pos - floor(start_factor * beat_pos);
+  fire_grain = beat_frac < last_beat_frac;
+  diff = beat_frac - last_beat_frac;
+  last_beat_frac = beat_frac;
+  beat_pos += dbeat;
+  
+  grain_count_factor =  pow(2, floor(4 * grain_par1 - 2));
+  grain_samples = samples_per_beat * pow(2, floor(4 * grain_par1 - 2));
+  speed = 1 + floor(rand() * 2);
+  pan_spread = 1;
+  reverse_probability = 0.5;
+  grain_offset = 0;
+) : (grain_algorithm == 1) ? (
+  fire_grain = rand() < (1000 * grain_par1 / srate);
+  grain_samples = srate * (0.1 + 0.9 * grain_par2);
+  speed = 1 + floor(rand() * 2);
+  pan_spread = 1;
+  reverse_probability = 1;
+  grain_offset = 0;
+) : (grain_algorithm == 2) ? (
+  start_factor = 48;
+  beat_frac = start_factor * beat_pos - floor(start_factor * beat_pos);
+  
+  fire_grain = beat_frac < last_beat_frac;
+  diff = beat_frac - last_beat_frac;
+  last_beat_frac = beat_frac;
+  beat_pos += dbeat;
+  
+  grain_count_factor =  pow(2, floor(4 * grain_par1 - 2));
+  grain_samples = samples_per_beat * 0.25;
+  speed = 1 + floor(rand() * 2);
+  pan_spread = 1;
+  reverse_probability = 0.2;
+  grain_offset = 8 * grain_par1 * rand() * samples_per_beat;
+) : (grain_algorithm == 3) ? (
+  start_factor = 2;
+  beat_frac = start_factor * beat_pos - floor(start_factor * beat_pos);
+  fire_grain = beat_frac < last_beat_frac;
+  diff = beat_frac - last_beat_frac;
+  last_beat_frac = beat_frac;
+  beat_pos += dbeat;
+  
+  grain_count_factor =  pow(2, floor(4 * grain_par1 - 2));
+  grain_samples = samples_per_beat * pow(2, floor(4 * grain_par1 - 2));
+  speed = 2;
+  pan_spread = 1;
+  reverse_probability = 0;
+  grain_offset = rand() * magic_factor;
+);
+
+playing = 1;
+current_grain_mix ? granulator.granulator_update(fire_grain, grain_samples, speed, pan_spread, reverse_probability, playing, grain_offset);
+
+current_grain_mix > 1 ? (
+  gmx = current_grain_mix - 1.0;
+  spl0 = spl0 * (1.0 - gmx) + granulator.l;
+  spl1 = spl1 * (1.0 - gmx) + granulator.r;
+) : (
+  spl0 += current_grain_mix * granulator.l;
+  spl1 += current_grain_mix * granulator.r;
+);
+
+current_shifter_down && (shimmer_mode < 2) ? shifter_down.pitchShifterUpdate(spl0, spl1);
+
+current_verb_mix ? (
+  (shimmer_mode < 2) ? (
+    shimmer_left = shifter_down.outL;
+    shimmer_right = shifter_down.outR;
+  
+    (shimmer_mode == 1) ? (
+      shimmer_left = abs(shimmer_left);
+      shimmer_right = abs(shimmer_right);
+    );
+  ) : (
+    shimmer_left = octaved;
+    shimmer_right = octaved;
+  );
+
+  octaved = octaver.octaver_eval(spl0 + spl1);
+
+  verb.in.in.in.in.s0 = spl0 + current_shifter_down * shimmer_left;
+  verb.in.in.in.in.s1 = spl1 + current_shifter_down * shimmer_right;
+  verb.in.in.in.in.s6 = fb1;
+  verb.in.in.in.in.s7 = fb0;
+  in_shimmer = in_gain * current_shimmer;
+  verb.in.in.in.in.s2 = in_shimmer * shifter_shimmer.outL;
+  verb.in.in.in.in.s3 = in_shimmer * shifter_shimmer.outR;
+  in_haunt = (haunt_algorithm == 0) ? in_gain * freq_shift_amount : 0;
+  verb.in.in.in.in.s4 = in_haunt * freq_shifter.outL;
+  verb.in.in.in.in.s5 = in_haunt * freq_shifter.outR;
+  overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
+  
+  sample_verb(current_mode);
+  
+  out_left = verb.s0 * overall_scaling_factor;
+  out_right = verb.s1 * overall_scaling_factor;
+) : (
+  out_left = 0;
+  out_right = 0;
+);
+
+// Doppler thingy
+(haunt_algorithm == 1) ? (
+  spin_level = 0.999 * spin_level + 0.001 * (freq_shift_amount > 0);
+  //spin_level < 0.000000001 ? spinner.theta = 0;
+  (spin_level > 0) ? (
+    spinner.eval_spinner(out_left, out_right, 0.05 * freq_shift, freq_shift_amount);
+    (spin_level < 0.9999) ? (
+      tmp = spin_level;
+      out_left = spinner.outr * spin_level + out_left * sqrt(1.0 - spin_level);
+      out_right = spinner.outl * spin_level + out_right * sqrt(1.0 - spin_level);
+    ) : (
+      out_left = spinner.outr;
+      out_right = spinner.outl;
+    );
+  );
+);
+
+fb0 = fb * out_left;
+fb1 = fb * out_right;
+
+out_left = hp.eval_linearSVF_HP(out_left);
+out_right = hp.eval_linearSVF_HP2(out_right);
+
+mid = out_left + out_right;
+side = out_left - out_right;
+
+side = side.eval_linearSVF_HP(side);
+
+out_left = 0.5 * (mid + side);
+out_right = 0.5 * (mid - side);
+
+out_left = lp.eval_linearSVF_LP(out_left);
+out_right = lp.eval_linearSVF_LP2(out_right);
+
+spl0 = spl0 * (1.0 - current_verb_mix) + current_verb_mix * out_left;
+spl1 = spl1 * (1.0 - current_verb_mix) + current_verb_mix * out_right;
+
+current_shimmer ? shifter_shimmer.pitchShifterUpdate(spl0, spl1);
+//shimmer ? shifter_shimmer.pitchShifterUpdate(verb.in.in.in.scaling_factor * verb.in.in.in.s5, verb.in.in.in.scaling_factor * verb.in.in.in.s6);
+
+(freq_shift_amount && (haunt_algorithm == 0)) ? freq_shifter.eval_cheapest_freq_shifter(spl0, spl1);
+
+spl0 += - 0.03 * current_shimmer * shifter_shimmer.outL;
+spl1 += - 0.03 * current_shimmer * shifter_shimmer.outR;
+
+spl0 = brightness_boost.eval_linearSVF_shelf(spl0) * fade_vol;
+spl1 = brightness_boost.eval_linearSVF_shelf2(spl1) * fade_vol;
+
+@gfx 768 441
+!loaded ? (
+  loaded = gfx_loadimg(5, "./DuskVerb_Dependencies/camp_0.png");
+  loaded = gfx_loadimg(6, "./DuskVerb_Dependencies/camp_1.png");
+  loaded = gfx_loadimg(7, "./DuskVerb_Dependencies/camp_2.png");
+  loaded = gfx_loadimg(8, "./DuskVerb_Dependencies/camp_3.png");
+  loaded = gfx_loadimg(9, "./DuskVerb_Dependencies/camp_4.png");
+  loaded = gfx_loadimg(10, "./DuskVerb_Dependencies/camp_5.png");
+  loaded = gfx_loadimg(12, "./DuskVerb_Dependencies/font.png");
+  
+  img_h = 147;
+  img_w = 256;
+  
+  gfx_setimgdim(13, img_w, img_h);
+);
+
+gfx_x = 0;
+gfx_y = 0;
+
+
+/* Background color */
+gfx_dest = 13;
+gfx_clear = 0;
+gfx_set(0, 0, 0, 1);
+gfx_rect(0, 0, img_w, img_h);
+
+gfx_mode = 4;
+gfx_a = 0.7;
+gfx_blit(5, 1, 0);
+
+gfx_mode = 5;
+gfx_a = 0.76;
+gfx_blit(6, 1, 0);
+
+function lightning()
+instance(lightState)
+global()
+local(lightProb)
+(
+  rand() > lightProb ? (
+    lightState = 1-lightState;
+  );
+  lightState ? (
+    lightProb = lightProb + .1;
+    lightProb > .99 ? lightProb = .99;
+  ) : (
+    lightProb = .5;
+  );
+  (1.0 - lightState) * rand() * rand();
+);
+
+gfx_r = 0; gfx_b = 1; gfx_g = 0;
+
+gfx_a = 0.3;
+gfx_blit(6, 1, 0);
+gfx_a = lightning1.lightning();
+gfx_blit(8, 1, 0);
+gfx_a = lightning2.lightning();
+gfx_blit(9, 1, 0);
+gfx_a = lightning3.lightning();
+gfx_blit(10, 1, 0);
+
+light1 = 0.7 * light1 + 0.1 * rand();
+gfx_r = gfx_g = gfx_b = gfx_a = 1 + light1;
+gfx_blit(7, 1, 0);
+
+
+gfx_a = 0.1;
+//parameter_bar(27, 4, 60, 7, 45);
+
+
+
+gfx_a = 0.1;
+pad_width = 53;
+pad_height = 24;
+pad_spacing = 31;
+
+function reset_color()
+(
+  gfx_r = gfx_g = gfx_b = 0.2; gfx_a = 0.4;
+  gfx_mode = 1;
+);
+
+//side_cut
+//low_cut_freq
+//high_cut_freq
+
+cy = 3;
+//time_slider.slider_ui(5, 3, cy, pad_width, 8, sprintf(9, "%d", time_ms), "Reverb time in\nmilliseconds");
+
+filters.multi_slider_ui(8, 3, cy, pad_width, 8, 20, 22050, 1);
+filters.multi_slider_notch_ui(9, 41, "Side cut frequency", 0.5, 0.6, 1.0);
+filters.multi_slider_notch_ui(10, 42, "Low cut frequency", 1.0, 1.0, 1.0);
+filters.multi_slider_notch_ui(11, 43, "High cut frequency", 1.0, 1.0, 1.0);
+
+cy += 9;
+time_slider.slider_ui(5, 3, cy, pad_width, 8, sprintf(9, "%d", time_ms), "Reverb time in\nmilliseconds");
+
+cy += 10;
+
+reset_color();
+txt_blit("Verb", 5, cy);
+choicev1.choice_toggle(gfx_x, cy, 4, 0, 3, "Sparse");
+choicev2.choice_toggle(gfx_x, cy, 4, 1, 3, "Dense");
+choicev3.choice_toggle(gfx_x, cy, 4, 2, 3, "Delay-like");
+verb_pad.xy_pad(4, 3, cy + 5, pad_width, pad_height);
+
+cy += pad_spacing;
+
+reset_color();
+txt_blit("Grain", 5, cy);
+choiceg1.choice_toggle(gfx_x, cy, 4, 0, 30, "Tempo-sync");
+choiceg2.choice_toggle(gfx_x, cy, 4, 1, 30, "Burst");
+choiceg3.choice_toggle(gfx_x, cy, 4, 2, 30, "Rapid");
+choiceg4.choice_toggle(gfx_x, cy, 4, 3, 30, "Beat synced\ndoubler");
+grain_pad.xy_pad(3, 3, cy + 5, pad_width, pad_height);
+
+cy += pad_spacing;
+
+reset_color();
+verb_mix == 0 ? gfx_a = 0.1;
+txt_blit("Shimmer", 5, cy);
+
+//shimmer_mode
+choice1.choice_toggle(gfx_x, cy, 4, 0, 11, "Regular shimmers\nLow (X) High (Y)");
+choice2.choice_toggle(gfx_x, cy, 4, 1, 11, "Low shimmer is\nrectified (X)");
+choice3.choice_toggle(gfx_x, cy, 4, 2, 11, "Octaved low\nshimmer (X)");
+shimmer_pad.xy_pad(1, 3, cy + 5, pad_width, pad_height);
+
+cy += pad_spacing;
+
+reset_color();
+verb_mix == 0 ? gfx_a = 0.1;
+txt_blit("Haunt", 5, cy);
+choiceh1.choice_toggle(gfx_x, cy, 4, 0, 20, "Freq-Shifter");
+choiceh2.choice_toggle(gfx_x, cy, 4, 1, 20, "Spinner");
+haunt.xy_pad(2, 3, cy + 5, pad_width, pad_height);
+
+/*
+
+txt_blit("Grain", 5, 55);
+
+txt_blit("Texture", 5, 45);
+*/
+
+function draw_eyes(x, y, inc, spacing, alpha)
+local()
+global(x_offset, y_offset, blit_scale)
+instance(timer)
+(
+  timer += inc;
+  (timer > 1.0) ? timer = 0;
+  (timer > 0.1) ? (
+    gfx_set(0.574, 0.429, 0.503, alpha);
+    gfx_rect(x, y, 1, 1);
+    gfx_rect(x + spacing, y, 1, 1);
+  );
+);
+
+eyes1.draw_eyes(60, 115, 0.003, 4, 0.8);
+eyes2.draw_eyes(95, 95, 0.0024, 3, 0.8);
+eyes3.draw_eyes(193, 109, 0.0013, 5, 0.8);
+eyes3.draw_eyes(192, 109, 0.0013, 5, 1.0);
+
+function draw_mosquito(x, y, diff)
+local()
+global(x_offset, y_offset, blit_scale)
+instance(xc, yc)
+(
+  xc == 0 ? xc = x;
+  yc == 0 ? yc = y;
+  xc += diff * (rand() - 0.5) + 0.01 * (x - xc);
+  yc += diff * (rand() - 0.5) + 0.01 * (y - yc);
+  x = floor(xc);
+  y = floor(yc);
+  gfx_rect(x, y, 1, 1);
+);
+
+gfx_set(0, 0, 0, 1.0);
+mosquito1.draw_mosquito(140, 110, 1.0);
+mosquito2.draw_mosquito(140, 110, 1.0);
+mosquito3.draw_mosquito(140, 110, 1.0);
+
+mosquito4.draw_mosquito(120, 40, 1.0);
+mosquito5.draw_mosquito(110, 70, 1.0);
+mosquito6.draw_mosquito(120, 90, 1.0);
+
+mosquito7.draw_mosquito(140, 70, 1.0);
+mosquito8.draw_mosquito(140, 70, 1.0);
+
+mosquito9.draw_mosquito(200, 70, 1.0);
+
+gfx_set(1, 1, 0.9, 1.0);
+firefly1.draw_mosquito(90, 117, 1.0);
+firefly2.draw_mosquito(90, 117, 1.0);
+
+function draw_person()
+instance(s, anim)
+global()
+(
+  gfx_set(0.4, 0.3, 0.25, 0.5);
+  gfx_rect(124, 117 - s, 2, 8);
+  gfx_rect(126, 118 - s, 2, 8);
+  gfx_rect(123, 118 - s, 1, 8);
+  gfx_rect(122, 120 - s, 1, 8);
+  gfx_circle(123 + abs(sin(0.1 * time_precise())), 116 - s, 1.5, 1, 0);
+  
+  s = 0;
+  anim += 1;
+  anim > 60 ? (
+    gfx_rect(126, 117 - s, 1, 1);
+  ) : (anim > 110) ? (
+    gfx_rect(122, 119 - s, 1, 1);
+  );
+  anim > 120 ? anim = 0;
+);
+person.draw_person();
+
+function draw_bird(xc, yc)
+instance(s, proba)
+local()
+(
+  gfx_set(0.03, 0.13, 0.15, 1.0);
+  gfx_rect(xc, yc + 2 * proba * abs(sin(time_precise())), 1, 4);
+  gfx_rect(xc + 1, yc + 1, 1, 3);
+  
+  s = 0.2 * 4 + 0.8 * s;
+  gfx_rect(xc + 2, yc + 1, 3 - s, 1);
+  gfx_rect(xc + 2, yc + 2, 2 - s, 1);
+  gfx_rect(xc - 2 + s, yc + 1, 4 - s, 1);
+  gfx_rect(xc - 1 + s, yc + 2, 3 - s, 1);
+  
+  proba = 0.1 * 0.01 + 0.9 * proba;
+  (rand() < proba) ? s = 0;
+  
+  (rand() < 0.001) ? ( proba = 0.9 );
+);
+
+bird.draw_bird(111, 56);
+bird2.draw_bird(176, 71);
+
+function mouse_run(x, y, w, h)
+local()
+instance(dx, dy, cx, cy, nx, ny)
+global()
+(
+  (x == 0) ? (
+    cx = x;
+    cy = y;
+  );
+  
+  (rand() < 0.01) ? (
+    nx = x + rand() * w;
+    ny = y + rand() * h;
+  );
+  dx = nx - cx;
+  dy = ny - cy;
+  
+  cx += 0.1 * dx;
+  cy += 0.1 * dy;
+  
+  (abs(dx) + abs(dy) < 0.3) ? (
+    gfx_rect(cx, cy - 1, 1, 1);
+  );
+  
+  gfx_rect(cx, cy, 1, 1);
+  // gfx_rect(x, y, w, h);
+);
+
+mouse1.mouse_run(161, 121, 15, 5);
+mouse2.mouse_run(70, 125, 40, 4);
+mouse3.mouse_run(70, 125, 40, 4);
+mouse4.mouse_run(70, 125, 40, 4);
+
+gfx_set(1, 1, 1, 0.3);
+txt_blit("DUSK VERB", img_w - 47, 3);
+
+txt_blit("ALPHA VERSION", img_w - 66, img_h - 6);
+
+hinter.draw_hints();
+
+gfx_dest = -1;
+gfx_set(1, 1, 1, 1);
+blit_scale = floor(min(gfx_h / img_h, gfx_w / img_w));
+x_offset = (gfx_w - blit_scale * img_w) * 0.5;
+y_offset = (gfx_h - blit_scale * img_h) * 0.5;
+gfx_x = x_offset; gfx_y = y_offset;
+
+gfx_mode = 4;
+gfx_blit(13, blit_scale, 0);
+
+granulator_error ? (
+  gfx_x = 0;
+  gfx_y = 0;
+  gfx_printf("FATAL: REQUESTED TOO MANY SAMPLES");
+);
+
+last_cap = mouse_cap;
+last_mouse_x = mouse_x;
+last_mouse_y = mouse_y;

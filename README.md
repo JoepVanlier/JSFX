@@ -108,6 +108,20 @@ Samples:
 
 [Simple sounds with MIDI input](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/stft_test2.mp3?raw=true)
 
+## Dusk Verb
+
+A multi-effect plugin intended to enhance atmospheric arpeggios
+
+![duskverb](https://user-images.githubusercontent.com/19836026/221384927-db1d9f3e-df04-4676-a4d4-aa508ad1ade6.gif)
+
+Features:
+- 3 Reverberation algorithms.
+- Granular resampler.
+- Frequency shifter / pitch shifter.
+- Several audio shimmer modes.
+- X/Y controls for automation.
+- Classic adventure game look.
+
 ## Bric-a-brac - Texture machine
 
 Bric-a-brac is intended to add textures to existing sounds. It can for example be used to brighten up beats by loading a noise sample in a sample slot. Or add some organic textures by adding a creaking sound that plays before the attack of a synth.

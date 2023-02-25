@@ -1,0 +1,349 @@
+WSOLA Pitch shifting library
+version: 0.01
+author: Joep Vanlier
+license: MIT
+(C) Joep Vanlier 2020
+
+Usage:
+
+Initialize a pitch shifter with in @init:
+  shifter.pitchShifter(use_acf, transition_region, bufferSize, fft_buffer1, fft_buffer2, transition_region, 1);
+  
+Parameters:
+  use_acf:            Use autocorrelation function to determine the optimal lag for the new window. This greatly reduces
+                      ring modulation artefacts.
+  transition region:  Number of samples transition region, has to be multiple of 64
+  bufferSize:         Has to be more than twice the transition region, more sounds better but leads to longer latencies
+                      Note: do not overwrite this memory as it is used for storing samples
+  fft_buffer1:        Fft buffers used for phase alignment (only needed when use_acf = 1).
+  fft_buffer2:        Note: Requires memory the size of the transition region transiently. Can be overwritten after each cycle.
+                      Note: May not cross 65536 memory boundary (see JSFX docs).
+
+Set pitch shifter speed with:
+  shifter.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+  0 is no pitch change. 1 is 2x pitch up. etc
+
+In @sample call:
+  shifter.pitchShifterUpdate(spl0, spl1);
+
+@init
+function pitchlibInitBuffer(scopebuffer_in, scopebuffermax_in)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer, len)
+  (
+    scopebuffer     = scopebuffer_in;
+    scopebuffermax  = scopebuffermax_in;
+    len             = scopebuffermax_in - scopebuffer_in;
+    
+    scopeptr < scopebuffer ? (
+      scopeptr = scopebuffer
+    ) : ( scopeptr >= scopebuffermax ) ? scopebuffer
+  );
+
+function pitchlibClearBuffer()
+  local()
+  global()
+  instance(scopebuffer, len, outL, outR, readHead1, readHead2, speed, fadeCount, y0, y1, y2, w)
+(
+  memset(scopebuffer, 0, len);
+  
+  outL = 0;
+  outR = 0;
+  
+  readHead1 = len * 0.5;
+  readHead2 = -1;
+  speed = 1;
+  fadeCount = 1;
+  y0 = y1 = y2 = w = 0;
+);
+
+function pitchlibReadBufferAt(dtime)
+  local(t, t2, offset, hd,
+        tm1, tm2, tm3, tm4, tm1tm2, tm3tm4,
+        a0, a1, a2, a3, a4,
+        d0l, d1l, d2l, d3l, d4l,
+        d0r, d1r, d2r, d3r, d4r)
+  global()
+  instance(scopeptr, readptr, scopebuffermax, scopebuffer, frac, outL, outR, len)
+  (
+    readptr   = scopeptr;
+    hd        = .5 * dtime;
+    offset    = dtime - floor(dtime) + floor(hd)*2;
+    frac      = hd - floor(hd) + 2;
+    readptr  -= floor(offset) + 2;
+    readptr < scopebuffer ? readptr += len;
+ 
+    /* Lagrangian interpolation */
+    t = frac;
+    tm1 = t-1.0;
+    tm2 = t-2.0;
+    tm3 = t-3.0;
+    tm4 = t-4.0;
+    
+    tm1tm2 = tm1*tm2;
+    tm3tm4 = tm3*tm4;
+    a0 = tm1tm2 * tm3tm4 * 0.04166666666666666666666666666667; // 1/24
+    a1 = - t * tm2 * tm3tm4 * 0.16666666666666666666666666666667; //1/6
+    a2 = t * tm1 * tm3tm4 * 0.25;
+    tm1tm2 = t*tm1tm2;
+    a3 = - tm1tm2 * tm4 * 0.16666666666666666666666666666667;
+    a4 = tm1tm2 * tm3 * 0.04166666666666666666666666666667; // 1/24
+  
+    readptr >= scopebuffermax ? readptr -= len;
+  
+    d4l = readptr[];
+    d4r = readptr[1];
+    
+    readptr += 2;
+    readptr >= scopebuffermax ? readptr -= len;
+    
+    d3l = readptr[];
+    d3r = readptr[1];
+    
+    readptr += 2;
+    readptr >= scopebuffermax ? readptr -= len;
+    
+    d2l = readptr[];
+    d2r = readptr[1];
+    
+    readptr += 2;
+    readptr >= scopebuffermax ? readptr -= len;
+    
+    d1l = readptr[];
+    d1r = readptr[1];
+    
+    readptr += 2;
+    readptr >= scopebuffermax ? readptr -= len;
+        
+    d0l = readptr[];
+    d0r = readptr[1];
+    
+    outL = a0 * d0l + a1 * d1l + a2 * d2l + a3 * d3l + a4 * d4l;
+    outR = a0 * d0r + a1 * d1r + a2 * d2r + a3 * d3r + a4 * d4r;
+  );
+  
+// Copy some data relative to the current write position of the buffer
+function pitchlibCopyFromBuffer(target_mem, start_offset, copy_length)
+  local(first_chunk, cpos)
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer, len)
+  (
+    cpos = scopeptr - start_offset;
+    cpos < scopebuffer ? cpos += len;
+    
+    first_chunk = min(scopebuffermax - cpos, copy_length);
+    memcpy(target_mem, cpos, first_chunk);
+    copy_length -= first_chunk;
+ 
+    copy_length > 0 ? memcpy(target_mem + first_chunk, scopebuffer, copy_length);
+  );
+  
+function pitchlibUpdateBuffer2(ll, rr)
+  local()
+  global()
+  instance(scopeptr, scopebuffermax, scopebuffer, len)
+  (
+    scopeptr[] = ll;
+    scopeptr[1] = rr;
+    scopeptr += 2;
+    scopeptr >= scopebuffermax ? scopeptr -= len;
+  );
+
+function pitchShifter(use_acf, location, bufferSize, _fft_mem1, _fft_mem2, _crossFadeSamples, _readHeadSpeed)
+  local()
+  global()
+  instance(buffer, readHead1, readHead2, speed, crossFadeSamples, fft_mem1, fft_mem2, readHeadSpeed, fadeCount, acf)
+  (
+    buffer.pitchlibInitBuffer(location, location + bufferSize);
+    
+    acf = use_acf;
+    readHeadSpeed = _readHeadSpeed;
+    crossFadeSamples = _crossFadeSamples;
+    fft_mem1 = _fft_mem1;
+    fft_mem2 = _fft_mem2;
+  
+    readHead1 = bufferSize*.5;
+    readHead2 = -1;
+    speed = 1;
+    fadeCount = 1;
+  );
+  
+/* Cosine fall. N is number of samples fall time. */
+function pitchlibPrepFall(N)
+  local(w, ip)
+  instance(y0, y1, y2, b1, fadeCount, Nc)
+  global()  
+  (
+    Nc = N;
+    w = $pi/(N-1);
+    ip = .5*$pi;
+    
+    fadeCount = N;
+    b1 = 2.0 * cos(w);
+    y1 = sin( ip - w );
+    y2 = sin( ip - 2.0*w );
+  );
+  
+function pitchlibUpdateFall(N)
+  local(w, ip)
+  instance(y0, y1, y2, b1, fadeCount, Nc)
+  global()
+  (
+    fadeCount > 0 ? (
+      w = $pi/(N-1);
+      b1 = 2.0 * cos(w);
+      fadeCount *= N/Nc;
+      Nc = N;
+    );
+  );
+
+// This function expects a stereo buffer, calculates the ACF and finds its maximum.
+// Binary search was slower than straightforward loop.
+function pitchlibDetermineMaxACF(B1, B2, buffer_size)
+local(idx, cmax, cmax_position, current, correction,
+      yc, yl, yr)
+global()
+instance()
+(
+  fft_real(B1, buffer_size);
+  fft_real(B2, buffer_size);
+  idx = 1;
+  loop(buffer_size*.5,
+    B2[idx] = -B2[idx];
+    idx += 2;
+  );
+  
+  convolve_c(B1, B2, buffer_size);
+  ifft_real(B1, buffer_size);
+        
+  // Find the maximum of the ACF
+  cmax = -10000000;
+  idx = 0;
+  loop(.25*buffer_size-8,
+    current = B1[idx] + B1[idx+1];
+    current > cmax ? (
+      cmax_position = idx;
+      cmax = current * 1.05; // Bias for early samples (prefer to not have the windowlength fluctuate if 'fit' is equally good
+    );
+    idx += 2;
+  );
+  
+  // Improve resolution and reduce jitter by a quadratic fit of the peak
+  yc = B1[cmax_position] + B1[cmax_position+1];
+  yl = B1[cmax_position-2] + B1[cmax_position-1];
+  yr = B1[cmax_position+2] + B1[cmax_position+3];
+  correction = (-2*cmax_position*yc + cmax_position*yl + cmax_position*yr + yl - yr)/(-2*yc + yl + yr) - cmax_position;
+  abs(correction) < 4 ? cmax_position += correction;
+  cmax_position = max(cmax_position, 0);
+  
+  cmax_position
+);
+
+function setPitchShifterSpeed(newHeadSpeed)
+  local()
+  global()
+  instance(readHeadSpeed, crossFadeSamples, lastSpeed)
+  (
+    readHeadSpeed = newHeadSpeed;
+    abs(readHeadSpeed - lastSpeed) > .0001 ? this.pitchlibUpdateFall(crossFadeSamples / max(1.1,abs(readHeadSpeed)) - 16);
+    
+    lastSpeed = readHeadSpeed;
+  );
+  
+function pitchShifterWindow(fft_mem1, fft_mem2)
+  local(ptr1, ptr2)
+  global()
+  instance(y0, b1, y1, y2, w, readHead1, crossFadeSamples)
+  (
+    // Disabled for now, but one could use windowing as sort of an importance sampling-like measure
+    // to align especially the most audible regions.
+        
+    this.pitchlibPrepFall(floor(readHead1));
+    ptr1 = fft_mem1;
+    ptr2 = fft_mem2;
+    loop(crossFadeSamples,
+       // Fast way to evaluate a cosine window
+       y0 = b1 * y1 - y2;
+       y2 = y1;
+       y1 = y0;
+       w = .5*(y0+1); // weight of the current sample
+       ptr1[] *= w;
+       ptr2[] *= 1-w;
+          
+       ptr1 += 2;
+       ptr2 += 2;
+    );
+  );
+
+function pitchShifterUpdate(l, r)
+  local(L1, R1, L2, R2, ptr1, ptr2, src, target, crit, cmax_position)
+  global()
+  instance(fft_mem1, fft_mem2, crossFadeSamples, readHeadSpeed, fadeCount,
+           buffer, readHead1, readHead2, outL, outR, crossFadeSamples, readHeadSpeed,
+           y0, y1, y2, b1, w, fade, acf)
+  (
+    readHead1 -= readHeadSpeed;
+    fadeCount <= 0 ? (
+      fade = 0;    
+      fadeCount = 1;
+      readHead1 = readHead2;
+    );
+  
+    buffer.pitchlibUpdateBuffer2(l, r);
+    buffer.pitchlibReadBufferAt(readHead1);
+    L1 = buffer.outL;
+    R1 = buffer.outR;
+    
+    fade ? (  
+      buffer.pitchlibReadBufferAt(readHead2);
+      readHead2 -= readHeadSpeed;
+      
+      L2 = buffer.outL;
+      R2 = buffer.outR;
+      
+      // Fast way to evaluate a cosine window
+      y0 = b1 * y1 - y2;
+      y2 = y1;
+      y1 = y0;
+      w = .5*(y0+1); // weight of the current sample
+      w = min(max(w, 0), 1);
+      fadeCount -= 1;
+      
+      outL = L1 * w + L2 * (1.0-w);
+      outR = R1 * w + R2 * (1.0-w);
+    ) : (
+      readHeadSpeed <= 0 ? (
+        // Pitching down, we have to be careful of the recording pointer catching up with us
+        src = buffer.len - crossFadeSamples; // Where are we coming from?
+        crit = readHead1 > src;
+        target = crossFadeSamples + crossFadeSamples; // Where are we moving the buffer post fade
+      ) : (
+        // Pitching up, we have to be careful running into the recording pointer
+        src = crossFadeSamples;
+        crit = readHead1 <= src;
+        target = buffer.len - crossFadeSamples;
+      );
+    
+      crit ? (
+        // We're over the crossFadeSample boundary. Time to quickly initialize the crossfade.
+        // We determine the phase shift between the cross fade sections using an autocorrelation between
+        // them. We then jump into the buffer with an offset that corresponds to the peak in the autocorrelation
+        // function.
+        cmax_position = acf ? (
+          buffer.pitchlibCopyFromBuffer(fft_mem1, src, crossFadeSamples);
+          buffer.pitchlibCopyFromBuffer(fft_mem2, target, crossFadeSamples);
+        
+          pitchlibDetermineMaxACF(fft_mem2, fft_mem1, crossFadeSamples)
+        ) : 0;
+        
+        this.pitchlibPrepFall(floor(crossFadeSamples/max(1.1,abs(readHeadSpeed))));
+        readHead2 = target - cmax_position;
+        fade = 1;
+      );
+    
+      outL = L1;
+      outR = R1;
+    );
+  );
+  
