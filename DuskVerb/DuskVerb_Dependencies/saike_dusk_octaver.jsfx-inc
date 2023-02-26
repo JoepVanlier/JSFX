@@ -79,6 +79,19 @@ instance(ic1eq, ic2eq, k, a1, a2, a3)
   v2
 );
 
+function eval_linearSVF_BP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3, gnorm)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;
+  v1 * gnorm
+);
+
 function eval_linearSVF_HP2(v0)
 global()
 local(v1, v2, v3)
@@ -306,3 +319,52 @@ instance(buffer_left, buffer_right, smul, twopisrate, theta, outl, outr, c_radiu
   outr = buffer_right.hermite_buffer_mono(right_distance + 1);
 );
 
+function calc_rate(n_samples)
+local(log_level)
+global()
+(
+  // Calculates the rate constant required to get to specific level
+  // Note that this constant _has already been multiplied by dt_.
+  // Usage: calc_rate(n_samples) = calc_rate(t_decay * srate)
+  log_level = -2.302585092994045; // log(level); in this case 0.1
+  1.0 - exp(log_level / n_samples)
+);
+
+function update_blips()
+instance(attack_samples, attack_rate, decay_rate, rtime)
+global(srate, grain_par1)
+(
+  //rtime = 10 * (0.2 - 0.199 * drops) * (1 + rand());
+  rtime = 0.1 * rand() * (3.0 - 2.0 * grain_par1);
+  
+  attack_samples = 0.1 * rtime * srate;
+  attack_rate = calc_rate(attack_samples);
+  decay_rate = calc_rate(0.9 * rtime * srate);
+);
+
+function blips(x, res)
+instance(attack_samples, attack_rate, decay_rate, vol, proba, ic1eq, ic2eq)
+local(out, fnext)
+global()
+(
+  out = 0;
+  proba = 1;
+  
+  // Wait for next blip!
+  (attack_samples > 0) ? (
+    vol += attack_rate * (1.0 - vol);
+    attack_samples -= 1;
+  ) : (vol < .001) ? (
+    (rand() < proba) ? (
+      this.update_blips();
+      fnext = rand();
+      fnext = 440*2^(60*fnext/12);
+      this.init_linearSVF_absolute(fnext, res);
+      this.gnorm = 5 * sqrt(1 - res * res);
+    );
+  ) : (
+    vol -= decay_rate * vol;
+  );
+  
+  vol * this.eval_linearSVF_BP(x)
+);
