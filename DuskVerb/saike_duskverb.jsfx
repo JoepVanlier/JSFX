@@ -1,8 +1,8 @@
 desc:Dusk Verb (saike) (Public alpha)
 tags: effect, reverb, atmosphere, granular, long
-version: 0.02
+version: 0.03
 author: Joep Vanlier
-changelog: Bump version after adding watery grain option.
+changelog: Added damping factor. Improve picking for multi-notch cutoff widget.
 license: MIT
 provides:
   DuskVerb_Dependencies/* 
@@ -27,7 +27,7 @@ slider6:freq_shift_amount=0<0,1.0,0.00001>-Frequency Amount (Haunt Y)
 slider7:freq_shift=60<60,880,0.00001>-Frequency Shift (Haunt X)
 slider8:grain_mix=0.2<0, 2, 0.01>-Grain Mix (Grain Y)
 slider9:verb_mix=0.4<0, 1, 0.01>-Verb Mix (Verb Y)
-slider10:smooth=1<0, 1, 1>-Smooth Verb
+slider10:placeholder=1<0, 1, 1>-placeholder
 slider11:shimmer_mode=0<0,1,1>-Shimmer Mode
 slider20:haunt_algorithm=0<0,1,1>-Haunt Algorithm
 slider30:grain_algorithm=0<0,3,1>-Grain Algorithm
@@ -35,8 +35,9 @@ slider31:grain_par1=0.5<0,1,0.0001>-Grain Length (Grain X)
 slider32:grain_par2=0.5<0,1,0.0001>-Grain Frequency
 slider40:brightness=0.5<0,1,0.00001>-Brightness (Verb Y)
 slider41:side_cut_freq=120<20,22050,0.001:log>-Side low cut frequency
-slider42:low_cut_freq=20<20,22050,0.001:log>-Low cut frequency frequency
-slider43:high_cut_freq=22050<20,22050,0.001:log>-High cut frequency frequency
+slider42:low_cut_freq=20<20,22050,0.001:log>-Low cut frequency
+slider43:high_cut_freq=22050<20,22050,0.001:log>-High cut frequency
+slider44:damping_freq=22050<20,22050,0.001:log>-Damping frequency
 
 options:no_meter
 in_pin:left input
@@ -54,6 +55,9 @@ import saike_dusk_octaver.jsfx-inc
 options:maxmem=220000000
 
 @init
+CURRENT_VERSION = 1;
+version = CURRENT_VERSION;
+
 haunt.init_xy(7, 60, 880, 0, 6, 0, 1.0, 0);
 shimmer_pad.init_xy(5, 0, 1, 0, 4, 0, 1, 0);
 grain_pad.init_xy(31, 0, 1, 0, 8, 0, 2, 0);
@@ -125,8 +129,6 @@ instance(pitch_shift_buffer, fftmem1, fftmem2)
   this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
 );
 
-//function 
-
 freemem = 0;
 verb.in.in.in.in.tip = 1;
 freemem = verb.in.in.in.init_decorrelator(freemem, 2*32768);
@@ -158,6 +160,19 @@ current_verb_mix = verb_mix;
 current_grain_mix = grain_mix;
 current_shimmer = shimmer;
 current_shifter_down = shifter_down;
+
+function calc_rc_coeff(frequency)
+global(srate)
+local(y)
+(
+  frequency < 22040 ? (
+    y = 1.0 - cos(2 * $pi * frequency / srate);
+    1 - (- y + sqrt(y * y + 2 * y));
+  ) : 0;
+);
+
+damping_freq == 0 ? damping_freq = 22050;
+damping_factor = calc_rc_coeff(damping_freq);
 
 function to_hf_boost(brightness)
 (
@@ -191,6 +206,12 @@ reset_all();
 
 @slider
 
+@serialize
+file_var(0, version);
+
+version = CURRENT_VERSION;
+damping_freq == 0 ? damping_freq = 22050;
+
 @block
 magic_factor = 2000 * (srate/48000);
 
@@ -204,6 +225,7 @@ d_verb_mix = (verb_mix - current_verb_mix) * invblock;
 d_grain_mix = (grain_mix - current_grain_mix) * invblock;
 d_shimmer = (shimmer - current_shimmer) * invblock;
 d_shifter_down = (shifter_down - current_shifter_down) * invblock;
+d_damping_factor = (calc_rc_coeff(damping_freq) - damping_factor) * invblock;
 
 hp_automation = abs(d_hp) > 0.01;
 lp_automation = abs(d_lp) > 0.01;
@@ -223,6 +245,7 @@ dbeat = (tempo / 60) / srate;  // Beats per sample
 samples_per_beat = 1.0 / dbeat;
 
 @sample
+damping_factor += d_damping_factor;
 current_verb_mix += d_verb_mix;
 current_grain_mix += d_grain_mix;
 
@@ -405,7 +428,6 @@ current_verb_mix ? (
 // Doppler thingy
 (haunt_algorithm == 1) ? (
   spin_level = 0.999 * spin_level + 0.001 * (freq_shift_amount > 0);
-  //spin_level < 0.000000001 ? spinner.theta = 0;
   (spin_level > 0) ? (
     spinner.eval_spinner(out_left, out_right, 0.05 * freq_shift, freq_shift_amount);
     (spin_level < 0.9999) ? (
@@ -440,7 +462,6 @@ spl0 = spl0 * (1.0 - current_verb_mix) + current_verb_mix * out_left;
 spl1 = spl1 * (1.0 - current_verb_mix) + current_verb_mix * out_right;
 
 current_shimmer ? shifter_shimmer.pitchShifterUpdate(spl0, spl1);
-//shimmer ? shifter_shimmer.pitchShifterUpdate(verb.in.in.in.scaling_factor * verb.in.in.in.s5, verb.in.in.in.scaling_factor * verb.in.in.in.s6);
 
 (freq_shift_amount && (haunt_algorithm == 0)) ? freq_shifter.eval_cheapest_freq_shifter(spl0, spl1);
 
@@ -468,7 +489,6 @@ spl1 = brightness_boost.eval_linearSVF_shelf2(spl1) * fade_vol;
 
 gfx_x = 0;
 gfx_y = 0;
-
 
 /* Background color */
 gfx_dest = 13;
@@ -516,12 +536,6 @@ light1 = 0.7 * light1 + 0.1 * rand();
 gfx_r = gfx_g = gfx_b = gfx_a = 1 + light1;
 gfx_blit(7, 1, 0);
 
-
-gfx_a = 0.1;
-//parameter_bar(27, 4, 60, 7, 45);
-
-
-
 gfx_a = 0.1;
 pad_width = 53;
 pad_height = 24;
@@ -533,17 +547,16 @@ function reset_color()
   gfx_mode = 1;
 );
 
-//side_cut
-//low_cut_freq
-//high_cut_freq
-
 cy = 3;
-//time_slider.slider_ui(5, 3, cy, pad_width, 8, sprintf(9, "%d", time_ms), "Reverb time in\nmilliseconds");
-
 filters.multi_slider_ui(8, 3, cy, pad_width, 8, 20, 22050, 1);
+filters.multi_slider_notch_nearest(9, 41);
+filters.multi_slider_notch_nearest(10, 42);
+filters.multi_slider_notch_nearest(11, 43);
+filters.multi_slider_notch_nearest(12, 44);
 filters.multi_slider_notch_ui(9, 41, "Side cut frequency", 0.5, 0.6, 1.0);
 filters.multi_slider_notch_ui(10, 42, "Low cut frequency", 1.0, 1.0, 1.0);
 filters.multi_slider_notch_ui(11, 43, "High cut frequency", 1.0, 1.0, 1.0);
+filters.multi_slider_notch_ui(12, 44, "Damping factor", 0.5, 0.6, 1.0);
 
 cy += 9;
 time_slider.slider_ui(5, 3, cy, pad_width, 8, sprintf(9, "%d", time_ms), "Reverb time in\nmilliseconds");
