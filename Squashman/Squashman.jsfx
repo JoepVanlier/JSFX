@@ -1,8 +1,8 @@
 desc:Squashman (beta)
 tags: multiband saturation plugin
-version: 0.80
+version: 0.81
 author: Joep Vanlier
-changelog: Add secondary display mode for the bands (to see how a sine wave would be affected by the shaper). Left click on display area toggles.
+changelog: Bugfix bad connection. Fixed panning behaviour. In the old panning system, squashman would pan the signal left or right before the waveshaper. Then instead of mixing back in the unprocessed signal after the waveshaper, the legacy mode would simply end up with just a panned signal. This is fixed now. The legacy mode is still available as an option to not break existing presets (Note the toggle near the over button). Any preset that has panning will enable this legacy mode by default to not break existing presets.
 provides: Squashman_Dependencies/*
 about:
   # Squashman
@@ -2600,9 +2600,9 @@ function initSpectrum(memoryOffset, fftSize, srate)
   
   /* TO DO: Merge crossovers with control */
   function processBand(drive, pan, play, mode, modifier, fbl, fbr)
-  global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005)
+  global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005, legacy_pan)
   instance(l, r, inL, inR, in, pre, post, t, panl, panr, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin)
-  local(inv_ceiling, factor, depth, idepth, 
+  local(inv_ceiling, factor, depth, idepth, pre_l, pre_r,
         tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
   (
     play ? (
@@ -2631,8 +2631,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
         lpan = pan;
       );
       
-      l = l * preampl * panl;
-      r = r * preampr * panr;
+      pre_l = l;
+      pre_r = r;
+      
+      l *= panl * preampl;
+      r *= panr * preampr;
       
       l += fbl;
       r += fbr;
@@ -2818,7 +2821,7 @@ function initSpectrum(memoryOffset, fftSize, srate)
         /* Bad connection */
         tl = tanh(1.5*l);
         tr = tanh(1.5*r);
-        l = (abs(l*20^(1-modifier))>.5) * tl*tl*tr;
+        l = (abs(l*20^(1-modifier))>.5) * tl*tl*tl;
         r = (abs(r*20^(1-modifier))>.5) * tr*tr*tr;
       ) : ( mode == 18 ) ? (
         /* Hill */
@@ -3087,6 +3090,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
       ) : (
         l = 0;
         r = 0;
+      );
+      
+      !legacy_pan ? (
+        l = l * panl + (1 - panl) * pre_l;
+        r = r * panr + (1 - panr) * pre_r;
       );
       
       side ? (
@@ -3472,6 +3480,13 @@ file_var(0,fb3Toggle);
 file_var(0,fb4Toggle);
 file_var(0,fb5Toggle);
 
+!writing ? (
+  memset(shapeMod1Value, 0, 16);
+  memset(shapeMod1Type, 0, 16);
+  memset(shapeMod2Value, 0, 16);
+  memset(shapeMod2Type, 0, 16);
+);
+
 file_mem(0,shapeMod1Value,16);
 file_mem(0,shapeMod1Type,16);
 file_mem(0,shapeMod2Value,16);
@@ -3488,6 +3503,13 @@ file_mem(0,LFO_tsync,8);
 file_mem(0,LFO_retrig,8);
 
 file_mem(0,block_list,256);
+
+!writing ? (
+  memset(shapeDrive1Value, 0, 16);
+  memset(shapeDrive1Type, 0, 16);
+  memset(shapeDrive2Value, 0, 16);
+  memset(shapeDrive2Type, 0, 16);
+);
 
 file_mem(0,shapeDrive1Value, 16);
 file_mem(0,shapeDrive1Type, 16);
@@ -3507,6 +3529,13 @@ envWindow2.serializeEnvelope();
 envWindow1.initEnvelope(envX, envY, envW, envH*.45, 6, "MODULATOR 5", env_bg_r, env_bg_g, env_bg_b, env_bg_a );    
 envWindow2.initEnvelope(envX, envY+.555*envH, envW, envH*.45, 6, "MODULATOR 6", env_bg_r, env_bg_g, env_bg_b, env_bg_a );
 
+!writing ? (
+  memset(lfoFModType, 0, 16);
+  memset(lfoFModValue, 0, 16);
+  memset(lfoAModType, 0, 16);
+  memset(lfoAModValue, 0, 16);
+);
+
 file_mem(0,lfoFModType,16);
 file_mem(0,lfoFModValue,16);
 file_mem(0,lfoAModType,16);
@@ -3522,6 +3551,18 @@ file_var(0, f2Threshold);
 file_var(0, f1Thresholded);
 file_var(0, f2Thresholded);
 
+!writing ? (
+  memset(drywetMod1Value, 0, 16);
+  memset(drywetMod1Type, 0, 16);
+  memset(gainMod1Value, 0, 16);
+  memset(gainMod1Type, 0, 16);
+  memset(delayMod1Value, 0, 16);
+  memset(delayMod1Type, 0, 16);
+  memset(fbMod1Value, 0, 16);
+  memset(fbMod1Type, 0, 16);
+  envInputGain = 0;
+);
+
 file_mem(0,drywetMod1Value,16);
 file_mem(0,drywetMod1Type,16);
 file_mem(0,gainMod1Value,16);
@@ -3533,13 +3574,30 @@ file_mem(0,fbMod1Type,16);
 
 file_var(0,envInputGain);
 
-file_mem(0,drivePanning,16);
+!writing ? (
+  memset(drivePanning, 0, 16);
+  side = 0;
+);
+file_mem(0, drivePanning,16);
+
+// Was this preset using the incorrect panning system?
+!writing ? (
+  legacy_pan = 0;
+  ix = 0;
+  loop(8,
+    (abs(drivePanning[ix])) > 0 ? legacy_pan = 1;
+    ix += 1;
+  );
+);
+
 file_var(0,side);
 
 // Force initialization if not writing
 !writing ? ( agc_gain_reduction = 0; );
 file_var(0, agc_gain_reduction);
 file_var(0, drawMode);
+
+file_var(0, legacy_pan);
 
 f1Attack = max(attackMin,min(attackMax,f1Attack));
 f1Decay = max(releaseMin,min(releaseMax,f1Decay));
@@ -5258,6 +5316,9 @@ fbMod1Value4       = fbMod1Value[4];
   osString = 100;
   oversamplingKnob.label = sprintf( osString, "%d", overSampling );
 
+  legacy_pan.drawToggle(masterLoc + 3.5*miniknobWidth + miniknobPadX, groupTop + buttonPad + 4 * miniKnobWidth + 1 * miniKnobPadY, buttonSize, buttonSize, legacy_pan, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Use legacy panning\n\nLegacy panning would pan the signal left or right\nbefore the waveshaper.\n\nInstead of mixing in the unprocessed signal after\nthe waveshaper, the legacy mode would\nsimply end up with just a panned signal.");
+  legacy_pan = legacy_pan.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
   /* Band indicator */
   sprintf(16,"Band %d", selectedBand+1);
   vLabel.drawVertLabel(5, bottomRow, 16, gfx_h-bottomRow, BAND_FONT, 3);
@@ -5279,7 +5340,7 @@ fbMod1Value4       = fbMod1Value[4];
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 8 0 [Beta]");
+  gfx_printf("S Q U A S H M A N  v  0 . 8 1 [Beta]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
@@ -5304,3 +5365,4 @@ fbMod1Value4       = fbMod1Value[4];
   lastCap = mouse_cap;
   filterBank.resetMeters();
   hinter.drawHint_draw();
+
