@@ -1,0 +1,328 @@
+@init
+function f_trafo(freq)
+local()
+global(srate)
+instance()
+(
+  exp( (1-freq) * log(20/22050) ) * $pi * (44100 / srate);
+);
+
+function reset_linearSVF()
+global()
+local()
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  ic1eq = ic2eq = 0;
+);
+
+function init_linearSVF(freq, res)
+global()
+local(g)
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  g = tan(.5 * f_trafo(freq));
+  k = 2 - 2*res;
+  
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+);
+
+function init_linearSVF_absolute(f0, res)
+global(srate)
+local(g)
+instance(f0, ic1eq, ic2eq, k, a1, a2, a3)
+(
+  g = tan($pi * f0 / srate);
+  k = 2 - 2*res;
+      
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+);
+
+function eval_linearSVF_HP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;    
+  
+  v0 - k*v1 - v2
+);
+
+function eval_linearSVF_LP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;    
+  
+  v2
+);
+
+function eval_linearSVF_BP(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, k, a1, a2, a3, gnorm)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;
+  v1 * gnorm
+);
+
+function eval_linearSVF_HP2(v0)
+global()
+local(v1, v2, v3)
+instance(ic3eq, ic4eq, k, a1, a2, a3)
+(
+  v3 = v0 - ic4eq;
+  v1 = a1 * ic3eq + a2 * v3;
+  v2 = ic4eq + a2 * ic3eq + a3*v3;
+  ic3eq = 2*v1 - ic3eq;
+  ic4eq = 2*v2 - ic4eq;    
+  
+  v0 - k*v1 - v2
+);
+
+function eval_linearSVF_LP2(v0)
+global()
+local(v1, v2, v3)
+instance(ic3eq, ic4eq, k, a1, a2, a3)
+(
+  v3 = v0 - ic4eq;
+  v1 = a1 * ic3eq + a2 * v3;
+  v2 = ic4eq + a2 * ic3eq + a3*v3;
+  ic3eq = 2*v1 - ic3eq;
+  ic4eq = 2*v2 - ic4eq;    
+  
+  v2
+);
+
+function init_linearSVF_shelf_absolute(f0, inv_q, gain)
+global(srate)
+local(g, k, A)
+instance(a1, a2, a3, m0, m1, m2)
+(
+  A = pow(10, gain / 40);
+  g = tan($pi * f0 / srate) * sqrt(A);
+  k = inv_q;
+      
+  a1 = 1.0 / (1.0 + g*(g + k));
+  a2 = g*a1;
+  a3 = g*a2;
+  m0 = A * A;
+  m1 = k * (1 - A) * A;
+  m2 = 1 - A * A;
+);
+
+function eval_linearSVF_shelf(v0)
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2)
+global()
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3 * v3;
+  ic1eq = 2 * v1 - ic1eq;
+  ic2eq = 2 * v2 - ic2eq;
+  
+  m0 * v0 + m1 * v1 + m2 * v2
+);
+
+function eval_linearSVF_shelf2(v0)
+local(v1, v2, v3)
+instance(ic3eq, ic4eq, a1, a2, a3, m0, m1, m2)
+global()
+(
+  v3 = v0 - ic4eq;
+  v1 = a1 * ic3eq + a2 * v3;
+  v2 = ic4eq + a2 * ic3eq + a3 * v3;
+  ic3eq = 2 * v1 - ic3eq;
+  ic4eq = 2 * v2 - ic4eq;
+  
+  m0 * v0 + m1 * v1 + m2 * v2
+);
+
+function lerp_buffer_mono(freemem, size)
+local()
+instance(buffer, buffer_end, write_ptr)
+global()
+(
+  buffer = freemem;
+  (write_ptr < buffer) ? write_ptr = buffer;
+  buffer_end = buffer + size
+);
+
+function reset_buffer_mono()
+instance(buffer, buffer_end)
+global()
+local()
+(
+  memset(buffer, 0, buffer_end - buffer);
+);
+
+function hermite_buffer_mono(offset)
+local(c0, c1, c2, c3)
+instance(buffer, buffer_end, write_ptr)
+(
+  read_ptr = write_ptr - offset;
+  read_ptr < buffer ? read_ptr += buffer_end - buffer;
+  frac = read_ptr - floor(read_ptr);
+  read_ptr = floor(read_ptr);
+  
+  // If the read buffer is at the start of the buffer, take the last sample instead.
+  xm1 = (read_ptr == buffer) ? buffer_end[-1] : read_ptr[-1];
+  
+  // This one should always be safe since we wrapped.
+  x0 = read_ptr[];
+  
+  ((read_ptr + 2) < buffer_end) ? (
+    // Fast path (we're always safe).
+    x1 = read_ptr[1];
+    x2 = read_ptr[2];
+  ) : (
+    // Slow path
+    read_ptr += 1; (read_ptr == buffer_end) ? read_ptr = buffer;
+    x1 = read_ptr[];
+    read_ptr += 1; (read_ptr == buffer_end) ? read_ptr = buffer;
+    x2 = read_ptr[];
+  );
+
+  c0 = x0;
+  c1 = 0.5 * (x1 - xm1);
+  c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
+  c3 = 1.5 * (x0 - x1) + 0.5 * (x2 - xm1);
+  ((c3 * frac + c2) * frac + c1) * frac + c0
+);
+
+function add_sample_mono(sample)
+local()
+global()
+instance(buffer, write_ptr, buffer_end)
+(
+  write_ptr[] = sample;
+  write_ptr += 1;
+  (write_ptr == buffer_end) ? write_ptr = buffer;
+);
+
+function block_spinner()
+local()
+global(srate)
+instance(twopisrate, smul)
+(
+  // v_sound = 343 meter / second
+  // mul = 1 / 343 second / meter
+  // smul = srate / 343 samples / second
+  smul = srate / 343.0;
+  twopisrate = 1.0 / srate;
+);
+
+function init_spinner(freemem)
+instance(buffer_left, buffer_right)
+global()
+(
+  freemem = buffer_left.lerp_buffer_mono(freemem, 8192);
+  freemem = buffer_right.lerp_buffer_mono(freemem, 8192);
+  this.block_spinner();
+  
+  freemem
+);
+
+function reset_spinner()
+instance(buffer_left, buffer_right)
+global()
+local()
+(
+  buffer_left.reset_buffer_mono();
+  buffer_right.reset_buffer_mono();
+);
+
+function eval_spinner(spl0, spl1, spin_frequency, radius)
+local(left_distance, right_distance, dxl, dxr, dyl, dyr, x, y)
+instance(buffer_left, buffer_right, smul, twopisrate, theta, outl, outr, c_radius)
+global()
+(
+  buffer_left.add_sample_mono(spl0);
+  buffer_right.add_sample_mono(spl1);
+  
+  (c_radius == 0) ? c_radius = radius;
+  c_radius = 0.999 * c_radius + 0.001 * radius;
+
+  theta += spin_frequency * twopisrate;
+  
+  x = c_radius * sin(theta);
+  y = c_radius * cos(theta);
+  
+  dxl = x + 0.2;
+  dxr = x - 0.2;
+  dyl = y - 0.1;
+  dyr = y - 0.1;
+  
+  left_distance = smul * sqrt(dxl * dxl + dyl * dyl);
+  right_distance = smul * sqrt(dxr * dxr + dyr * dyr);
+  
+  outl = buffer_left.hermite_buffer_mono(left_distance + 1);
+  outr = buffer_right.hermite_buffer_mono(right_distance + 1);
+);
+
+function calc_rate(n_samples)
+local(log_level)
+global()
+(
+  // Calculates the rate constant required to get to specific level
+  // Note that this constant _has already been multiplied by dt_.
+  // Usage: calc_rate(n_samples) = calc_rate(t_decay * srate)
+  log_level = -2.302585092994045; // log(level); in this case 0.1
+  1.0 - exp(log_level / n_samples)
+);
+
+function update_blips()
+instance(attack_samples, attack_rate, decay_rate, rtime)
+global(srate, grain_par1)
+(
+  //rtime = 10 * (0.2 - 0.199 * drops) * (1 + rand());
+  rtime = 0.1 * rand() * (3.0 - 2.0 * grain_par1);
+  
+  attack_samples = 0.1 * rtime * srate;
+  attack_rate = calc_rate(attack_samples);
+  decay_rate = calc_rate(0.9 * rtime * srate);
+);
+
+function blips(x, res)
+instance(attack_samples, attack_rate, decay_rate, vol, proba, ic1eq, ic2eq)
+local(out, fnext)
+global()
+(
+  out = 0;
+  proba = 1;
+  
+  // Wait for next blip!
+  (attack_samples > 0) ? (
+    vol += attack_rate * (1.0 - vol);
+    attack_samples -= 1;
+  ) : (vol < .001) ? (
+    (rand() < proba) ? (
+      this.update_blips();
+      fnext = rand();
+      fnext = 440*2^(60*fnext/12);
+      this.init_linearSVF_absolute(fnext, res);
+      this.gnorm = 5 * sqrt(1 - res * res);
+    );
+  ) : (
+    vol -= decay_rate * vol;
+  );
+  
+  vol * this.eval_linearSVF_BP(x)
+);
