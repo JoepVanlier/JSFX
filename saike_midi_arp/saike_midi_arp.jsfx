@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.28
+version: 0.29
 author: Joep Vanlier
-changelog: Make sure modulators are set to defaults when they're not specified in the file.
+changelog: Improve dragging behaviour by interpolating it.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -673,8 +673,8 @@ global(label_width, block_width, block_spacing, selected_details,
        randomize_toggle.value
        resize_drag.handle_drag_y_resize,
        micro_view)
-local(txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max)
-instance(start_idx, y_loc, h, subdiv, snap, randomize)
+local(txt_w, txt_h, ptr, idx_unclamped, idx, target, y_over, last, current, active_r, active_g, active_b, offset, drag_min, drag_max, d_mouse, n_steps)
+instance(start_idx, y_loc, h, subdiv, snap, randomize, idx_last, mouse_last)
 (
   h == 0 ? h = height;
   subdiv == 0 ? subdiv = 12;
@@ -748,7 +748,8 @@ instance(start_idx, y_loc, h, subdiv, snap, randomize)
   );
   
   x -= n_segments * (block_width + block_spacing);
-  idx = min(floor((mouse_x - x) / (block_width + block_spacing)), n_segments);
+  idx_unclamped = floor((mouse_x - x) / (block_width + block_spacing));
+  idx = max(min(idx_unclamped, n_segments - 1), 0);
   
   gfx_y = y;
   loop(subdiv,
@@ -760,11 +761,23 @@ instance(start_idx, y_loc, h, subdiv, snap, randomize)
   shift_drag(y_over, me, mem, idx);
   
   // Process events
-  (y_over || captured_by == me) && (drag_mode == DRAG_BLOCK || drag_mode == 0) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
+  ((y_over && (idx_unclamped == idx)) || (captured_by == me)) && (drag_mode == DRAG_BLOCK || drag_mode == 0) && (idx >= 0) && (idx < n_segments) && !dragging && (captured_by == 0 || captured_by == me) ? (
     mouse_cap == 1 ? (
-      mem[idx] = snap ? ceil(subdiv * (1.0 - clamp((mouse_y - y) / h, 0, 1))) / subdiv : mem[idx] = 1.0 - clamp((mouse_y - y) / h, 0, 1);
+      (drag_mode == 0) ? (
+        // We werent't dragging yet
+        idx_last = idx; mouse_last = mouse_y;
+      );
+      
+      n_steps = idx - idx_last;
+      d_mouse = (mouse_y - mouse_last) / abs(n_steps);
+      loop(abs(n_steps) + 1,
+        mem[idx_last] = snap ? ceil(subdiv * (1.0 - clamp((mouse_last - y) / h, 0, 1))) / subdiv : mem[idx_last] = 1.0 - clamp((mouse_last - y) / h, 0, 1);
+        idx_last += sign(n_steps);
+        mouse_last += d_mouse;
+      );
       captured_by = me;
       drag_mode = DRAG_BLOCK;
+      idx_last = idx; mouse_last = mouse_y;
     ) : (
       (captured_by == me) && (drag_mode == DRAG_BLOCK) ? release_drag();
     );
