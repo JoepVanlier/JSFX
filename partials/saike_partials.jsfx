@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.43
+version: 0.45
 author: Joep Vanlier
-changelog: Add spin functionality.
+changelog: Add round robin custom impulse mode. Add sample editor. Rework UI to accomodate new features (WIP).
 license: MIT
 provides:
   partials_dependencies/*
@@ -40,12 +40,10 @@ slider24:fft_choice=1<0,4,1>-fft size
 slider25:spinner_frequency=1<0,20,0.01>Spin freq
 slider26:spinner_depth=0<0,4,0.01>Spin depth
 
-
-
 slider52:glide_speed=0<0,1,1>-Glide [10-1000ms]
 slider53:legacy_gain=0<0,1,1>-Legacy mode
 slider54:brightness_vel=0<0,1,0.0001>-Brightness vel
-slider55:play_mode=3<0,4.99,1>-Impulse mode
+slider55:play_mode=3<0,5.99,1>-Impulse mode
 slider56:attack_slider=0<0,2,0.0001>-Attack
 slider57:decay_slider=1<0,3,0.0001>-Decay
 slider58:release_slider=1.5<0,3,0.0001>-Release
@@ -63,6 +61,7 @@ out_pin:right output
 -- You can define a custom model in this file:
 import saike_modal_custom.jsfx-inc
 
+import saike_partials_playback.jsfx-inc
 import saike_modal.jsfx-inc
 import saike_modal_kp_midi.jsfx-inc
 import saike_modal_stft.jsfx-inc
@@ -70,6 +69,9 @@ import saike_modal_gfx.jsfx-inc
 import saike_partial_array.jsfx-inc
 import saike_vowel_data.jsfx-inc
 import saike_modal_buffer.jsfx-inc
+
+import saike_partials_sample_editor.jsfx-inc
+
 import saike_modal_impulses.jsfx-inc
 
 import saike_partials_fx.jsfx-inc
@@ -78,11 +80,11 @@ import saike_partials_fx.jsfx-inc
 MAX_CUSTOM_PARTIALS = 1024;
 
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
-version = 4;
+version = 5;
 
 string1.used_partials = string2.used_partials = string3.used_partials = string4.used_partials = string5.used_partials = 0;
 
-playmode_knob.init_knob(0, 4.99, 0.1, 55, 0);
+playmode_knob.init_knob(0, 5.99, 0.1, 55, 0);
 brightness_knob.init_knob(1, 0, 0.1, 2, 54);
 position_knob.init_knob(0, 1, 0.1, 3, 14);
 damp_knob.init_knob(-2, 2, 0.1, 4, 15);
@@ -121,6 +123,7 @@ global(
   gfx_stft_mem.init_stft,
   stft_mem.init_stft,
   stft_mem.fft_mem, string1.string_mem, string2.string_mem, string3.string_mem, string4.string_mem, string5.string_mem,
+  string1.impulse.chan_default, string2.impulse.chan_default, string3.impulse.chan_default, string4.impulse.chan_default, string5.impulse.chan_default,
   stft_mem.fft_size, stft_mem.fft_interval, stft_mem.in_fft_mem, stft_mem.out_fft_mem,
   gfx_stft_mem.fft_mem, gfx_string.string_mem, gfx_stft_mem.in_fft_mem, gfx_stft_mem.out_fft_mem,
   gfx_stft_mem.fft_size, gfx_stft_mem.fft_interval,
@@ -136,6 +139,12 @@ global(
   fft_choice,
   spinner.init_spinner,
   spinner.reset_spinner,
+  samplelocs,
+  sample_loc,
+  scratchloc, copyloc,
+  idx,
+  N_SAMPLES, SAMPLE_SIZE,
+  SAMPLE_FONT, TINY_FONT, BIG_FONT,
 )
 (
   freemem = 0;
@@ -145,6 +154,13 @@ global(
   freemem = string3.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
   freemem = string4.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
   freemem = string5.string_mem(freemem, stft_mem.in_fft_mem, stft_mem.out_fft_mem);
+  
+  string1.impulse.chan_default(1);
+  string2.impulse.chan_default(2);
+  string3.impulse.chan_default(3);
+  string4.impulse.chan_default(4);
+  string5.impulse.chan_default(5);
+  
   stft_init();
   
   freemem = gfx_stft_mem.fft_mem(freemem, 512);
@@ -195,6 +211,31 @@ global(
   file_var(logo_handle, count);
   file_mem(logo_handle, rle_mem, count);
   file_close(logo_handle);
+  
+  freemem += 2048;
+  
+  // Input pulse data
+  sample_loc = freemem;
+  
+  init_sample_data_defaults();
+  N_SAMPLES = 4;
+  
+  // Sample locations are recorded as [64 byte header (first is length), sampledata]
+  freemem = (samplelocs = freemem) + 128;
+  idx = 0;
+  loop(N_SAMPLES,
+    freemem = (samplelocs[idx] = freemem) + SAMPLE_SIZE;
+    idx += 1;
+  );
+    
+  freemem = (scratchloc = freemem) + SAMPLE_SIZE;
+  freemem = (copyloc = freemem) + SAMPLE_SIZE;
+  
+  SAMPLE_FONT = 5;
+  TINY_FONT = 6;
+  gfx_setfont(TINY_FONT, "Arial", 12);
+  BIG_FONT = 7;
+  gfx_setfont(BIG_FONT, "Arial", 18);
 );
 
 function tanh(x)
@@ -531,7 +572,7 @@ stft ? (
     f_h += string4.impulse.eval_impulse(string4.freq) * 4;
     f_h += string5.impulse.eval_impulse(string5.freq) * 4;
   );
-
+  
   stft_mem.read_stft(f_h);
 );
 
@@ -631,6 +672,8 @@ spinner.eval_spinner(spl0, spl1, spinner_frequency, spinner_depth);
 spl0 = spinner.outl;
 spl1 = spinner.outr;
 
+last_spl0 = spl0;
+last_spl1 = spl1;
 
 @serialize
 file_var(0, version);
@@ -648,7 +691,20 @@ file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
 (version < 3) ? ( test_mode = 0; ) : ( file_var(0, test_mode); );
 (version < 3) ? ( pass_through = 1; ) : ( file_var(0, pass_through); );
 (version < 4) ? ( spinner_frequency = 0; spinner_depth = 0; );
-version = 4;
+
+(version >= 4) ? (
+  serialize_all_samples(file_avail(0) < 0);
+) : (
+  idx = 0;
+  loop(N_SAMPLES,
+    clear_sample(idx);
+    idx += 1;
+  );
+);
+
+version = 5;
+last_selected_sample = -1;
+reset_zoom = 1;
 
 @gfx 1080 280
 _gfx_w = gfx_w;
@@ -999,6 +1055,27 @@ instance(_x, _y, _r, relative_position)
       );
       ang2 += 1;
     );
+  ) : ( id == 13 ) ? (
+    // Custom impulse
+    len = ceil(0.6 * _r);
+    yy = ceil(0.2 * _r);
+    ds = 1 / len;
+    sy = 1;
+    loop(2,
+      xx = - len;
+      s = -0.2;
+      gfx_x = _x + xx - 5;
+      gfx_y = _y;
+      gfx_a = 0.8;
+      loop(2 * len,
+        _r = sin(12.1 * s) + sin(9.22 * s + 3) + cos(12.22 * s + 1) - 0.1;
+        _r *= cos(s) * cos(s);
+        gfx_line(_x + xx - sy, _y - sy - yy * _r, _x + xx - sy, _y - sy + yy * _r);
+        s += ds;
+        xx += 1;
+      );
+      sy -= 1;
+    );
   ) : ( id == 20 ) ? (
     xx = _x - 0.5 * _r;
     yy = _y + 0.3 * _r;
@@ -1193,13 +1270,6 @@ instance(_x, _y, _w, _h, active, _me)
   );
 );
 
-((model == 11) || (model == 12)) ? (
-  right = custom_partials.draw_custom_partial_ui(0.02 * _gfx_w, cy + 1.5 * radius, 0.96 * _gfx_w, 0.935 * _gfx_h - (cy + 1.5 * radius) - 5, custom_partial_mem, MAX_CUSTOM_PARTIALS, partials_used, model==11);
-) : (
-  gfx_string.draw_stft(0.02 * _gfx_w, 0.02 * _gfx_h, _gfx_w * 0.93, _gfx_h * 0.9);
-  right = 0.95 * _gfx_w;
-);
-
 function label_toggle(x, y, str, hint)
 local(ww, hh, over)
 global(mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y, last_cap, hinter.sethint)
@@ -1333,12 +1403,18 @@ Constant noise with MIDI notes
   Plays noise through the resonator on MIDI notes.
   As a result, this plays a continuous note until 
   released.
+Sample based impulse
+  Allows dragging samples for use as impulse 
+  response that drives the resonator. Each time a 
+  MIDI note comes in one sample is played. If 
+  multiple samples are added, they are used in a 
+  round robin fashion.
 ", 1, 1);
 playmode_knob.gfx_draw_icon(8 + floor(play_mode), 1);
 
 playmode_knob.over ? (
   ((mouse_cap & 2) == 2) && (last_cap == 0) ? (
-    menu_selection = gfx_showmenu("Audio input fixed notes|Audio input with MIDI notes|Spike impulse with MIDI notes|Noise impulse with MIDI notes|Continuous notes MIDI");
+    menu_selection = gfx_showmenu("Audio input fixed notes|Audio input with MIDI notes|Spike impulse with MIDI notes|Noise impulse with MIDI notes|Continuous notes MIDI|Sample based impulse");
     menu_selection > 0 ? (
       play_mode = menu_selection - 1;
       menu_selection = 0;
@@ -1474,7 +1550,7 @@ loop(64100,
 );
 */
 
-function draw_envelope(x, y, w, h)
+function draw_envelope(x, y, w, h, active)
 instance(t_max, last_x, last_y, last_cap)
 local(plot_srate, attack_samples, decay_samples,
       k_attack, k_decay, k_release,
@@ -1572,10 +1648,12 @@ global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a,
     
     state += min(1, rate * (current_target - state));
   
-    colormodel(0.94); gfx_a = 0.2 + 0.2 * highlight * abs(sin(2 * time_precise()));
+    colormodel(0.94); gfx_a = 0.2 + 0.2 * active * highlight * abs(sin(2 * time_precise()));
+    !active ? grayscale();
     gfx_line(x_cur + 1, y + h - 3, x_new + 1, y_new);
 
     colormodel(1);
+    !active ? grayscale();
     highlight ? (
       gfx_a = 0.8 * abs(sin(time_precise()));
       gfx_line(x_cur + 1, y_cur - 1, x_new + 1, y_new - 1);
@@ -1590,12 +1668,10 @@ global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a,
     y_cur = y_new;
   );
   
-  ((captured > 99) && (captured < 103)) ? (
+  active && ((captured > 99) && (captured < 103)) ? (
     (mouse_cap == 0) ? (
       captured = 0;
     ) : (
-      
-    
       modifier = 0.01;
       (mouse_cap & 4 > 0) ? modifier *= 0.5;
       (mouse_cap & 8 > 0) ? modifier *= 0.25;
@@ -1626,10 +1702,11 @@ global(mlog0p05, attack_s, decay_s, release_s, sustain_level, gfx_a,
   );
   
   colormodel(0);
+  !active ? grayscale();
   
-  last_cap = mouse_cap;
   last_x = mouse_x;
   last_y = mouse_y;
+  last_cap = mouse_cap;
   
   gfx_a = 0.7;
   gfx_rect(x, y, w, h, 0);
@@ -1647,23 +1724,6 @@ global(gfx_a, mouse_x, mouse_y, mouse_cap, last_cap, hinter.sethint)
   gfx_rect(x, y, w, h);
   
   over && (mouse_cap == 1) && (last_cap == 0);
-);
-
-midi_input ? (
-  use_envelopes ? (
-    env.draw_envelope(floor(choice_x), floor(3 * radius + 8), floor((radius + 4) * 6 - 4), floor(2 * radius));
-  );
-  
-  colormodel(use_envelopes);
-  draw_collapse_rect(
-    floor(choice_x), floor(3 * radius + 0.5 * button_size) + use_envelopes * floor(2 * radius) + use_envelopes * 1.5 * button_size, 
-    floor((radius + 4) * 6 - 4), button_size,
-    use_envelopes ? 
-      "Disable envelope."
-    : "Apply an envelope to the input and output of each string."
-  ) ? (use_envelopes = 1 - use_envelopes);
-  
-  use_envelopes
 );
 
 gfx_x = 0;
@@ -1715,6 +1775,90 @@ logo.draw_logo(logomem, rle_mem, 0.45, 6, 6);
   settings_changed = 1;
 );
 
+
+current_char = gfx_getchar();
+handle_gmem_imports();
+handle_dropped_files();
+
+/* Advanced Options */
+
+radius = floor(radius);
+xs = floor(0.75 * radius);
+ys = floor(3.6 * radius);
+element_height = radius;
+
+midi_input ? (
+  
+  /*colormodel(use_envelopes);
+  draw_collapse_rect(
+    floor(choice_x), floor(3 * radius + 0.5 * button_size) + use_envelopes * floor(2 * radius) + use_envelopes * 1.5 * button_size, 
+    floor((radius + 4) * 6 - 4), button_size,
+    use_envelopes ? 
+      "Disable envelope."
+    : "Apply an envelope to the input and output of each string."
+  ) ? (use_envelopes = 1 - use_envelopes);*/
+  
+  use_envelopes
+);
+
+advanced_controls = 1;
+advanced_controls ? (
+  env_width = floor((radius + 4) * 6 - 4);
+  env.draw_envelope(floor(choice_x), ys, env_width, floor(2 * radius), use_envelopes);
+
+  use_envelopes = envelopeToggle.processMouseToggle(choice_x + env_width - 0.25 * radius - button_size, ys + 0.25 * radius, button_size, button_size, use_envelopes, "Apply output envelope.", mouse_x, mouse_y, mouse_cap);
+
+  sample_ws = floor(radius);
+  sample_hs = floor(radius);
+  xs += 0.25 * radius;
+  
+  waves_enabled = play_mode > 5;
+  
+  draw_wavebox(xs, ys, sample_ws, sample_hs, 0, samplelocs[0], waves_enabled);
+  process_pad(xs, ys, sample_ws, sample_hs, 0, samplelocs[0]);
+  
+  draw_wavebox(xs, ys + radius, sample_ws, sample_hs, 2, samplelocs[2], waves_enabled);
+  process_pad(xs, ys + radius, sample_ws, sample_hs, 2, samplelocs[2]);
+  
+  xs += radius;
+  draw_wavebox(xs, ys, sample_ws, sample_hs, 1, samplelocs[1], waves_enabled);
+  process_pad(xs, ys, sample_ws, sample_hs, 1, samplelocs[1]);
+  
+  draw_wavebox(xs, ys + radius, sample_ws, sample_hs, 3, samplelocs[3], waves_enabled);
+  process_pad(xs, ys + radius, sample_ws, sample_hs, 3, samplelocs[3]);
+    
+  xs += floor(radius * 1.5);
+  
+  /* Big waveform area */
+  close_up.draw_sample_big(xs, ys, 5.0 * radius, 2 * radius, waves_enabled);
+  
+  cy = ys + radius;
+);
+
+updated_loop ? (
+  /*preview_channel.channel_update_loop();
+  chan1.channel_update_loop();
+  chan2.channel_update_loop();
+  chan3.channel_update_loop();
+  chan4.channel_update_loop();
+
+  (!settings1.retrigger && !chan1.playing) ? chan1.start_sample(0, pitch1);
+  (!settings2.retrigger && !chan1.playing) ? chan2.start_sample(1, pitch2);
+  (!settings3.retrigger && !chan1.playing) ? chan3.start_sample(2, pitch3);
+  (!settings4.retrigger && !chan1.playing) ? chan4.start_sample(3, pitch4);*/
+  updated_loop = 0;
+);
+
+
+((model == 11) || (model == 12)) ? (
+  right = custom_partials.draw_custom_partial_ui(0.02 * _gfx_w, cy + 1.5 * radius, 0.96 * _gfx_w, 0.935 * _gfx_h - (cy + 1.5 * radius) - 5, custom_partial_mem, MAX_CUSTOM_PARTIALS, partials_used, model==11);
+) : (
+  gfx_string.draw_stft(0.02 * _gfx_w, 0.02 * _gfx_h, _gfx_w * 0.93, _gfx_h * 0.9);
+  right = 0.95 * _gfx_w;
+);
+
+sample_data_gfx_finalize();
+
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
@@ -1737,6 +1881,7 @@ ctime = newtime;
 
 lx = mouse_x;
 ly = mouse_y;
+handle_mouse_sample_handler();
 last_cap = mouse_cap;
 mouse_cap == 0 ? captured = 0;
 
@@ -1777,4 +1922,6 @@ loop(30,
   fff += 1;
 );
 */
+
+loaded_sample = 0;
 
