@@ -140,6 +140,27 @@ instance(dc_fix)
   this.os._basic_os_elliptical(this.eval_glottis_model(t)) - dc_fix
 );
 
+function sample_exists(idx)
+global(samplelocs)
+local()
+global()
+(
+  samplelocs[idx][0] > 0
+);
+
+function find_next_sample_to_play()
+global(next_sample_to_play, N_SAMPLES)
+local(idx)
+(
+  idx = 0;
+  while(
+    next_sample_to_play += 1;
+    (next_sample_to_play >= N_SAMPLES) ? next_sample_to_play = 0;
+    idx += 1;
+    ((!sample_exists(next_sample_to_play)) || (idx > N_SAMPLES))  // Quit when we found one or 
+  );
+);
+
 function update_impulse_note(state, inverse_brightness)
 instance(
   impulse_type, clipped_inverse,
@@ -149,6 +170,7 @@ local()
 global(
   play_mode
   impulse_init_1, impulse_init_2, impulse_window_coeff, impulse_halflength, impulse_length,
+  next_sample_to_play,
 )
 (
   clipped_inverse = max(min(1, inverse_brightness), 0);
@@ -170,7 +192,15 @@ global(
       y2 = impulse_init_2;
       len = impulse_length;
       this._impulse_svf(1.0 - clipped_inverse, 0);
-    )/* : ( impulse_type == 4 ) ? (
+    ) : ( impulse_type == 4 ) ? (
+      find_next_sample_to_play();
+      len = impulse_length;
+      this._impulse_svf(1.0 - clipped_inverse, 0);
+      this.start_sample(next_sample_to_play);
+    );
+    
+    
+    /* : ( impulse_type == 4 ) ? (
       // LF-model
       osc_time > 1.0 ? osc_time = 0.0;
       y1 = impulse_init_1;
@@ -189,6 +219,7 @@ global(impulse_window_coeff, impulse_halflength, srate)
 instance(
   impulse_type,
   t, y1, y2,
+  yr,
   b0, b1, b2, white, pink, glot,
   len, scale,
   released, dt
@@ -232,7 +263,11 @@ instance(
       b2 = 0.57000 * b2 + white * 1.0526913;
       pink = b0 + b1 + b2 + white * 0.1848;
       this._impulse_svf_lp(1000 * y0 * pink);
-    )/* : (impulse_type == 4) ? (
+    ) : (impulse_type == 4) ? (
+      this._impulse_svf_lp(this.play_channel_mono());
+    );
+    
+    /* : (impulse_type == 4) ? (
       // Glottis
       y0 = impulse_window_coeff * y1 - y2;
       y2 = y1;
@@ -247,18 +282,37 @@ instance(
   ) : (
     // Release phase
     (impulse_type == 3) ? (
-      (t == len) ? y1 = 1.0;
-      white = rand() - 0.5;
-      b0 = 0.99765 * b0 + white * 0.0990460;
-      b1 = 0.96300 * b1 + white * 0.2965164;
-      b2 = 0.57000 * b2 + white * 1.0526913;
-      pink = b0 + b1 + b2 + white * 0.1848;
-      released ? (
-        y1 *= 0.999;
+      (t <= len) ? (
+        yr = 1.0;
       );
       
-      this._impulse_svf_lp(1000 * y0 * pink);
-    )/* : (impulse_type == 4) ? (
+      (yr > 0.00001) ? (
+        released ? (
+          yr *= 0.9995;
+        );
+        
+        white = rand() - 0.5;
+        b0 = 0.99765 * b0 + white * 0.0990460;
+        b1 = 0.96300 * b1 + white * 0.2965164;
+        b2 = 0.57000 * b2 + white * 1.0526913;
+        pink = b0 + b1 + b2 + white * 0.1848;
+      
+        this._impulse_svf_lp(1000 * yr * pink);
+      );
+    ) : (impulse_type == 4) ? (
+      (t <= len) ? yr = 1.0;
+      released ? (
+        yr *= 0.9995;
+      );
+      (yr < 0.00001) ? (
+        this.stop_sample();
+      ) : (
+        this._impulse_svf_lp(this.play_channel_mono() * yr);
+      );
+    );
+    
+    
+    /* : (impulse_type == 4) ? (
       (t == len) ? y1 = 1.0;
       dt = freq / srate;
       glot = this.glottis.eval_glottis_4x(osc_time, dt);
@@ -276,10 +330,10 @@ instance(
 function impulse_alive(fft_size)
 local()
 global()
-instance(t, len, y1, released, impulse_type)
+instance(t, len, yr, released, impulse_type)
 (
   ((impulse_type == 3) || (impulse_type == 4)) ? (
-    (y1 > 0.00001) || released
+    ((yr > 0.00001) && released) || (!released)
   ) : (
     t < (len + fft_size)
   );
