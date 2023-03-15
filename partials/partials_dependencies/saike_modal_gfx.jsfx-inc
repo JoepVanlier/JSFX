@@ -504,3 +504,189 @@ instance(start_note, start_octave, note_width, _x, _y, _w, _h, over)
   floor(octave * 12 + note_x);
 );
 
+
+function init_envelope(_attack_slider_idx, _decay_slider_idx, _sustain_level_idx, _release_slider_idx)
+local()
+instance(attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx)
+global()
+(
+  attack_slider_idx = _attack_slider_idx;
+  decay_slider_idx = _decay_slider_idx;
+  sustain_level_idx = _sustain_level_idx;
+  release_slider_idx = _release_slider_idx;
+);
+
+function block_envelope()
+local()
+global()
+instance(
+  attack_s, decay_s, sustain_level, release_s,
+  attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx
+)
+(
+  attack_s = exp(-5.809142990314027 + 2.302585092994046 * slider(attack_slider_idx)); // 3 - 300 ms <=> 0 - 2
+  decay_s = exp(-5.809142990314027 + 2.302585092994046 * slider(decay_slider_idx)); // 3 - 3000 ms <=> 0 - 3
+  release_s = exp(-5.809142990314027 + 2.302585092994046 * slider(release_slider_idx)); // 3 - 3000 ms <=> 0 - 3
+  sustain_level = slider(sustain_level_idx);
+);
+
+function draw_envelope(x, y, w, h, active)
+instance(
+  t_max, last_x, last_y, last_cap, attack_s, decay_s, release_s, sustain_level,
+  attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx,
+)
+local(plot_srate, attack_samples, decay_samples,
+      k_attack, k_decay, k_release,
+      x_cur, y_cur, x_new, y_new, state, rate, current_target, target,
+      time_per_pixel, attack_pos, decay_pos, modifier, dx,
+      over, highlight)
+global(mlog0p05, gfx_a,
+       mouse_x, mouse_y, mouse_wheel, mouse_cap, captured,
+       hinter.sethint, hinter.hint_time)
+(
+  gfx_set(0, 0, 0, 0.2);
+  gfx_rect(x, y, w, h, 1);
+  
+  plot_srate = (w - 4) / t_max;
+  
+  attack_samples = attack_s * plot_srate;
+  decay_samples = 2 * decay_s * plot_srate;
+  k_attack = mlog0p05 / attack_samples;
+  k_decay = mlog0p05 / (decay_s * plot_srate);
+  k_release = mlog0p05 / (release_s * plot_srate);
+  
+  (t_max == 0) ? t_max = 0.1;
+  over = (mouse_x > x) && (mouse_y > y) && (mouse_y < (y + h));
+  (over) ? (
+    (abs(mouse_wheel) > 0) ? (
+      modifier = 0.00025 * t_max;
+      (mouse_cap & 4 > 0) ? modifier *= 0.5;
+      (mouse_cap & 8 > 0) ? modifier *= 0.25;
+      t_max = max(0.0001, min(t_max - modifier * mouse_wheel, attack_s + 2 * decay_s + release_s));
+      mouse_wheel = 0;
+    );
+  
+    time_per_pixel = t_max / w;
+    attack_pos = attack_s / time_per_pixel;
+    decay_pos = 2 * decay_s / time_per_pixel;
+    
+    (last_cap == 0) ? (
+      (mouse_x < (x + attack_pos)) ? (
+        over = 2;
+      ) : (mouse_x < (x + attack_pos + decay_pos)) ? (
+        over = 3;
+      ) : (
+        over = 4;
+      );
+    ) : (
+      (captured == 100) ? ( over = 2; )
+      : (captured == 101) ? ( over = 3; )
+      : (captured == 102) ? ( over = 4; )
+    );
+  
+    (last_cap == 0) && (mouse_cap == 1) ? (
+      // Fetch click ranges for the various parts of the envelope
+      time_per_pixel = t_max / w;
+      attack_pos = attack_s / time_per_pixel;
+      decay_pos = 2 * decay_s / time_per_pixel;
+    
+      (over == 2) ? (
+        captured = 100;
+      ) : (over == 3) ? (
+        captured = 101;
+      ) : (over == 4) ? (
+        captured = 102;
+      );
+    );
+  );
+  
+  x_cur = x + 2;
+  y_cur = y + h - 4;
+  state = 0;
+  loop(w - 4,
+    x_new = x_cur + 1;
+    y_new = y + 1 + (h - 4) * (1 - state);
+    
+    (attack_samples > 0) ? (
+      rate = k_attack;
+      current_target = 1;
+      highlight = (over == 2);
+      attack_samples -= 1;
+      (attack_samples == 0) ? state = 1;
+    ) : (
+      // Release and decay
+      (decay_samples > 0) ? (
+        rate = k_decay;
+        current_target = sustain_level;
+        highlight = (over == 3);
+        decay_samples -= 1;
+        (decay_samples == 0) ? state = sustain_level;
+      ) : (
+        rate = k_release;
+        current_target = 0;
+        highlight = (over == 4);
+      );
+    );
+    
+    state += min(1, rate * (current_target - state));
+  
+    colormodel(0.94); gfx_a = 0.2 + 0.2 * active * highlight * abs(sin(2 * time_precise()));
+    !active ? grayscale();
+    gfx_line(x_cur + 1, y + h - 3, x_new + 1, y_new);
+
+    colormodel(1);
+    !active ? grayscale();
+    highlight ? (
+      gfx_a = 0.8 * abs(sin(time_precise()));
+      gfx_line(x_cur + 1, y_cur - 1, x_new + 1, y_new - 1);
+      gfx_line(x_cur + 1, y_cur + 1, x_new + 1, y_new + 1);
+    );
+    gfx_a = 1;
+    gfx_line(x_cur + 1, y_cur, x_new + 1, y_new);
+    gfx_line(x_cur, y_cur + 1, x_new, y_new + 1);
+    gfx_line(x_cur, y_cur, x_new, y_new);
+    
+    x_cur = x_new;
+    y_cur = y_new;
+  );
+  
+  active && ((captured > 99) && (captured < 103)) ? (
+    (mouse_cap == 0) ? (
+      captured = 0;
+    ) : (
+      modifier = 0.01;
+      (mouse_cap & 4 > 0) ? modifier *= 0.5;
+      (mouse_cap & 8 > 0) ? modifier *= 0.25;
+      
+      dx = modifier * (mouse_x - last_x);
+      (captured == 100) ? (
+        // Attack
+        slider_automate(slider(attack_slider_idx) = min(2, max(0, slider(attack_slider_idx) + dx)));
+        hinter.sethint(sprintf(90, "Attack:\n%.2f ms", attack_s * 1000));
+        hinter.hint_time = 1000;
+      ) : (captured == 101) ? (
+        // Decay
+        slider_automate(slider(decay_slider_idx) = min(3, max(0, slider(decay_slider_idx) + dx)));
+        slider_automate(slider(sustain_level_idx) = min(1, max(0, slider(sustain_level_idx) - modifier * (mouse_y - last_y))));
+        hinter.sethint(sprintf(90, "Decay:\n%.2f ms\nSustain: %d \n", decay_s * 1000, 100 * sustain_level));
+        hinter.hint_time = 1000;
+      ) : (captured == 102) ? (
+        // Release
+        slider_automate(slider(release_slider_idx) = min(3, max(0, slider(release_slider_idx) + dx)));
+        hinter.sethint(sprintf(90, "Release:\n%.2f ms", release_s * 1000));
+        hinter.hint_time = 1000;
+      )
+    );
+  );
+  
+  colormodel(0);
+  !active ? grayscale();
+  
+  last_x = mouse_x;
+  last_y = mouse_y;
+  last_cap = mouse_cap;
+  
+  gfx_a = 0.7;
+  gfx_rect(x, y, w, h, 0);
+  gfx_rect(x + 1, y + 1, w - 2, h - 2, 0);
+);
