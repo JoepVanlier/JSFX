@@ -1,8 +1,8 @@
 desc:Saike 4-pole phase matcher for IIR BandSplitter
 tags: phasematcher for bandsplitter
-version: 0.07
+version: 0.08
 author: Joep Vanlier
-changelog: Expose absolute cuts in the UI.
+changelog: Support reading parameter positions from bandsplitter plugin.
 provides:
 license: MIT
 
@@ -18,6 +18,8 @@ out_pin:left output 4
 out_pin:right output 4
 out_pin:left output 5
 out_pin:right output 5
+
+options:gmem=SaikeBandSplitter
 
 slider1:Cuts=4<0,4,1>-Cuts
 slider2:Freq1=0.2<0,1,.0001>-Frequency 1
@@ -1387,9 +1389,26 @@ file_var(0, solo3);
 file_var(0, solo4);
 file_var(0, solo5);
 
+file_var(0, gmem_group);
+
 @slider
 
 @block
+// Listening?
+(gmem_group > 0) ? (
+  gm_ptr = 8 * (gmem_group - 1);
+  (gmem[gm_ptr] != last_read_gmem) ? (
+    Cuts = gmem[gm_ptr + 1];
+    Freq1 = gmem[gm_ptr + 2];
+    Freq2 = gmem[gm_ptr + 3];
+    Freq3 = gmem[gm_ptr + 4];
+    Freq4 = gmem[gm_ptr + 5];
+    abs_placement = gmem[gm_ptr + 6];
+
+    last_read_gmem = gmem[gm_ptr];
+  );
+);
+
 absolute_frequencies ? (
   freq_max = 24000;
   norm_freq_min = 20.0 / freq_max;
@@ -1862,25 +1881,23 @@ function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
   );
 
   function processMouseToggle(mx, my, mousecap)
-    instance(x, y, w, h, on, lastleft, str)
-    local(left, slack, over)
-    global(hinter.updateHintTime, comboboxOpen)
+    instance(x, y, w, h, on, lastleft, str, over)
+    local(left, slack)
+    global(hinter.updateHintTime)
     (
-      !comboboxOpen ? (
-        slack = 5;
-        left = mousecap & 1;
-        
-        over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
-        
-        over ? (
-          ( (left == 1) && (lastleft == 0) ) ?  (
-            on = 1 - on;
-          );
-          hinter.updateHintTime(str);
+      slack = 5;
+      left = mousecap & 1;
+      
+      over = ( (mx >= (x-slack)) && ( mx <= (x+w+slack) ) && ( my >= (y-slack) ) && ( my <= (y+h+slack) ) );
+      
+      over ? (
+        ( (left == 1) && (lastleft == 0) ) ?  (
+          on = 1 - on;
         );
-        
-        lastleft = left;
+        hinter.updateHintTime(str);
       );
+      
+      lastleft = left;
       
       on
     );
@@ -1896,6 +1913,33 @@ function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
   absChoice.drawToggle(20, 40, 10, 10, abs_placement, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Absolute positioning.\n\nIn this mode the slider mapping is absolute.");
   abs_placement = absChoice.processMouseToggle(mouse_x, mouse_y, mouse_cap);
 
+  function setup_menu_string(str_var, value, start)
+  local(s, i)
+  global()
+  (
+    s = sprintf(str_var, "");
+    i = start;
+    loop(17 - start ,
+      i == 0 ? (
+        s = sprintf(str_var, "%s|%s%sUnlinked", s, (i == 16) ? "<" : "", (i == value) ? "!" : "");
+      ) : (
+        s = sprintf(str_var, "%s|%s%sRead from group %d", s, (i == 16) ? "<" : "", (i == value) ? "!" : "", i);
+      );
+      
+      i += 1;
+    );
+    
+    s
+  );
+
+  link.label = gmem_group > 0 ? sprintf(7, "Read from group %d", gmem_group) : "Link";
+  link.drawToggle(20, 60, 10, 10, gmem_group > 0, 1, 0.2, 0.2, 0.8, 1.0, 0.2, 0.2, 0.8, "Link to bandsplitter.\n\nClick this to link this phase matcher to a bandsplitter.");
+  link.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+  (link.over && (mouse_cap == 1) && (last_cap == 0)) ? (
+    menu_selection = gfx_showmenu(sprintf(8, "%s", setup_menu_string(8, gmem_group, 0)));
+    gmem_group = menu_selection - 1;
+  );
+
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(1,0,0,1);
@@ -1907,4 +1951,4 @@ function drawToggle(_x, _y, _w, _h, _on, wr, wg, wb, wa, r, g, b, a, _str)
   gfx_mode = 4;
   
   hinter.drawHint_draw();
-
+  last_cap = mouse_cap;
