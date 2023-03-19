@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.46
+version: 0.47
 author: Joep Vanlier
-changelog: Fix critical bug in STFT. Because of the change was applied immediately, rather than queued on the start of a sample (or block), an STFT could be torn down the middle meaning that the counters of the incoming and outgoing buffer would be out of sync, resulting in the output buffer being cleared before it made it to the listener.
+changelog: Add filter envelopes. Add ability to enable/disable filter.
 license: MIT
 provides:
   partials_dependencies/*
@@ -40,14 +40,16 @@ slider24:fft_choice=1<0,4,1>-fft size
 slider25:spinner_frequency=1<0,20,0.01>-Spin freq
 slider26:spinner_depth=0<0,4,0.01>-Spin depth
 
-slider30:filter_cutoff=1<0,1,0.0001>Filter Cutoff
-slider31:filter_reso=0<0,1,0.0001>Filter Resonance
-slider32:filter_envelope=0<0,1,0.0001>-Filter Envelope
-slider33:filter_attack=0<0,2,0.0001>-Attack
-slider34:filter_decay=1<0,3,0.0001>-Decay
-slider35:filter_releaser=1.5<0,3,0.0001>-Release
-slider36:filter_sustain=0.3<0,1,0.0001>-Sustain
-
+slider30:filter_cutoff=1<0,1,0.00001>-Filter Cutoff
+slider31:filter_cutoff_vel=1<0,1,0.00001>-Filter Cutoff Velocity Sensitivity
+slider32:filter_reso=0<0,1,0.0001>-Placeholder
+slider33:filter_reso_vel=0<-1,1,0.0001>-Placeholder
+slider34:filter_envelope=0<-1,1,0.0001>-Filter Envelope
+slider35:filter_envelope_vel=1<-2,2,0.00001>-Filter Envelope Velocity Sensitivity
+slider36:filter_attack=0<0,2,0.0001>-Filter Attack
+slider37:filter_decay=1<0,3,0.0001>-Filter Decay
+slider38:filter_releaser=1.5<0,3,0.0001>-Filter Release
+slider39:filter_sustain=0.3<0,1,0.0001>-Filter Sustain
 
 slider52:glide_speed=0<0,1,1>-Glide [10-1000ms]
 slider53:legacy_gain=0<0,1,1>-Legacy mode
@@ -86,8 +88,11 @@ import saike_modal_impulses.jsfx-inc
 import saike_partials_fx.jsfx-inc
 
 @init
+DRAG_ENV = 100;
+DRAG_ARRAY = 200;
 MAX_CUSTOM_PARTIALS = 1024;
-env.init_envelope(56, 57, 59, 58);
+env.init_envelope(0, 56, 57, 59, 58);
+env2.init_envelope(1, 36, 37, 39, 38);
 
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
 version = 5;
@@ -109,6 +114,9 @@ glide_knob.init_knob(0, 1, 0, 52, 0);
 
 spin_freq_knob.init_knob(0, 20, 1, 25, 0);
 spin_depth_knob.init_knob(0, 4, 0, 26, 0);
+
+filter_cutoff_knob.init_knob(0, 1, 1, 30, 31);
+filter_envelope_knob.init_knob(-1, 1, 0.5, 34, 35);
 
 function stft_init()
 local()
@@ -302,8 +310,6 @@ instance(base_damp, f_damp, inharm, rel_position, freq, target_freq)
   
   inharm = inharm * 0.8 + 0.2 * 10^(min(max(-4, inharmonic + inharmonic_vel * vel), 0));
   
-  
-
   ((!glide) || (freq == 0)) ? (
     freq = f_0;
     target_freq = f_0;
@@ -321,7 +327,7 @@ instance()
     // Impulses are added at the global level below, since the STFT
     // variant only uses one STFT for the entire input.
     input_active = (play_mode >= 1) ? this.impulse.impulse_alive(stft_mem.fft_size) : 1;
-
+    
     this.eval_string_stft(env * input_active, env, on);
   ) : (
     /* Add string specific impulse if relevant */
@@ -332,20 +338,22 @@ instance()
   );
 );
 
-function update_env_note(vel, state, attack_s, decay_s, sustain_level, release_s)
+function update_env_note(vel, _state, attack_s, decay_s, sustain_level, release_s)
 instance(
   last_vel, target, sustain, rate,
-  k_attack, k_decay, attack_samples
+  k_attack, k_decay, attack_samples,
+  state,
 )
 local()
 global(srate, mlog0p05)
 (
-  target = 2 * vel;
+  target = vel;
   sustain = sustain_level * target;
   
-  state ? (
+  _state ? (
     // Change!
     vel ? (
+      state = 0;
       attack_samples = attack_s * srate;
       k_attack = mlog0p05 / attack_samples;
       k_decay = mlog0p05 / (decay_s * srate);
@@ -381,8 +389,12 @@ global()
 function update_notes()
 instance(notes_on, active_note_mem, active_note_vel, active_note_state, note_history,
          note_on0, note_on1, note_on2, note_on3, note_on4, last_count)
-global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift, midi.pitchbend,
-       use_envelopes, envelope1.update_env_note, envelope2.update_env_note, envelope3.update_env_note, envelope4.update_env_note, envelope5.update_env_note,
+global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, string5.set_pars, pitch_shift,
+       midi.pitchbend, midi.last_vel,
+       use_envelopes,
+       envelope1.update_env_note, envelope2.update_env_note, envelope3.update_env_note, envelope4.update_env_note, envelope5.update_env_note,
+       use_filt_envelopes,
+       filt_envelope1.update_env_note, filt_envelope2.update_env_note, filt_envelope3.update_env_note, filt_envelope4.update_env_note, filt_envelope5.update_env_note,
        string1.impulse.update_impulse_note,
        string2.impulse.update_impulse_note,
        string3.impulse.update_impulse_note,
@@ -393,39 +405,63 @@ global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, s
        string3.used_partials,
        string4.used_partials,
        string5.used_partials,
+       string1.ref_cutoff,
+       string2.ref_cutoff,
+       string3.ref_cutoff,
+       string4.ref_cutoff,
+       string5.ref_cutoff,
        play_mode, midi_recv,
        inverse_brightness, brightness_vel,
        partials_used,
        glide,
-       env.attack_s, env.decay_s, env.sustain_level, env.release_s)
-local(ref_pitch, scaling
+       env.attack_s, env.decay_s, env.sustain_level, env.release_s
+       env2.attack_s, env2.decay_s, env2.sustain_level, env2.release_s,
+       single_filter_ref_cutoff,
+       enable_filter,
+       filter_cutoff, filter_cutoff_vel, filter_envelope, filter_envelope_vel,
+       latest_note,
+       )
+local(ref_pitch, scaling, max_vel,
       note_vel0, note_vel1, note_vel2, note_vel3, note_vel4,
       note_state0, note_state1, note_state2, note_state3, note_state4,
-      latest_note
+      remainder,
       )
 (
   scaling = 440;
   ref_pitch = 2 * midi.pitchbend + pitch_shift - 69;
   
   midi_recv = max(midi_recv, ((note_state0 > 0) + (note_state1 > 0) + (note_state2 > 0) + (note_state3 > 0) + (note_state4 > 0)) > 0);
-
+  latest_note = note_history[notes_on - 1];
   glide ? (
     note_on2 = note_on3 = note_on4 = 0;
     (notes_on > 0) ? (
-      latest_note = note_history[notes_on - 1];
       note_on0 = active_note_mem[latest_note];
       note_vel0 = active_note_vel[latest_note];
       note_state0 = active_note_state[latest_note];
     ) : (
       note_state0 = -1;
     );
-    (notes_on > 0) ? string1.set_pars(scaling * 2 ^ ((note_on0 + ref_pitch) / 12), note_vel0, last_count > 0);
+    (notes_on > 0) ? (
+      string1.set_pars(scaling * 2 ^ ((note_on0 + ref_pitch) / 12), note_vel0, last_count > 0)+
+      string1.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel0;
+    );
+    
+    // This is the cutoff when only a single global filter is used.
+    // Happens when in STFT mode, or no velocity or envelopes are set in TD mode.
+    // In all other cases, each string gets their own filter.
+    single_filter_ref_cutoff = min(max(0.0, filter_cutoff + filter_cutoff_vel * midi.last_vel), 1.0);
   ) : (
     note_vel0 = active_note_vel[0];
     note_vel1 = active_note_vel[1];
     note_vel2 = active_note_vel[2];
     note_vel3 = active_note_vel[3];
     note_vel4 = active_note_vel[4];
+    
+    // This is the cutoff when only a single global filter is used.
+    // Happens when in STFT mode, or no velocity or envelopes are set in TD mode.
+    // In all other cases, each string gets their own filter.
+    max_vel = max(max(max(max(note_vel0, note_vel1), note_vel2), note_vel3), note_vel4);
+    single_filter_ref_cutoff = min(max(0.0, filter_cutoff + filter_cutoff_vel * max_vel), 1.0);
     
     note_on0 = active_note_mem[0];
     note_on1 = active_note_mem[1];
@@ -440,11 +476,11 @@ local(ref_pitch, scaling
     note_state4 = active_note_state[4];
     
     // Update note parameters
-    note_on0 ? string1.set_pars(scaling * 2 ^ ((note_on0 + ref_pitch) / 12), note_vel0, 0);
-    note_on1 ? string2.set_pars(scaling * 2 ^ ((note_on1 + ref_pitch) / 12), note_vel1, 0);
-    note_on2 ? string3.set_pars(scaling * 2 ^ ((note_on2 + ref_pitch) / 12), note_vel2, 0);
-    note_on3 ? string4.set_pars(scaling * 2 ^ ((note_on3 + ref_pitch) / 12), note_vel3, 0);
-    note_on4 ? string5.set_pars(scaling * 2 ^ ((note_on4 + ref_pitch) / 12), note_vel4, 0);
+    note_on0 ? ( string1.set_pars(scaling * 2 ^ ((note_on0 + ref_pitch) / 12), note_vel0, 0); string1.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel0; );
+    note_on1 ? ( string2.set_pars(scaling * 2 ^ ((note_on1 + ref_pitch) / 12), note_vel1, 0); string2.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel1; );
+    note_on2 ? ( string3.set_pars(scaling * 2 ^ ((note_on2 + ref_pitch) / 12), note_vel2, 0); string3.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel2; );
+    note_on3 ? ( string4.set_pars(scaling * 2 ^ ((note_on3 + ref_pitch) / 12), note_vel3, 0); string4.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel3; );
+    note_on4 ? ( string5.set_pars(scaling * 2 ^ ((note_on4 + ref_pitch) / 12), note_vel4, 0); string5.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel4; );
   );
   
   use_envelopes ? (
@@ -453,6 +489,23 @@ local(ref_pitch, scaling
     envelope3.update_env_note(note_vel2, note_state2, env.attack_s, env.decay_s, env.sustain_level, env.release_s);
     envelope4.update_env_note(note_vel3, note_state3, env.attack_s, env.decay_s, env.sustain_level, env.release_s);
     envelope5.update_env_note(note_vel4, note_state4, env.attack_s, env.decay_s, env.sustain_level, env.release_s);
+  );
+  
+  (use_filt_envelopes && enable_filter) ? (
+    // How much range remains for the envelope?
+    ((filter_envelope + filter_envelope_vel) > 0) ? (
+      // Envelope going up
+      remainder = 1.0 - filter_cutoff;
+    ) : (
+      // Envelope going down
+      remainder = filter_cutoff;
+    );
+    
+    filt_envelope1.update_env_note(remainder * min(1.0, max(-1.0, (filter_envelope + filter_envelope_vel * note_vel0))), note_state0, env2.attack_s, env2.decay_s, env2.sustain_level, env2.release_s);
+    filt_envelope2.update_env_note(remainder * min(1.0, max(-1.0, (filter_envelope + filter_envelope_vel * note_vel1))), note_state1, env2.attack_s, env2.decay_s, env2.sustain_level, env2.release_s);
+    filt_envelope3.update_env_note(remainder * min(1.0, max(-1.0, (filter_envelope + filter_envelope_vel * note_vel2))), note_state2, env2.attack_s, env2.decay_s, env2.sustain_level, env2.release_s);
+    filt_envelope4.update_env_note(remainder * min(1.0, max(-1.0, (filter_envelope + filter_envelope_vel * note_vel3))), note_state3, env2.attack_s, env2.decay_s, env2.sustain_level, env2.release_s);
+    filt_envelope5.update_env_note(remainder * min(1.0, max(-1.0, (filter_envelope + filter_envelope_vel * note_vel4))), note_state4, env2.attack_s, env2.decay_s, env2.sustain_level, env2.release_s);
   );
   
   (play_mode >= 1) ? (
@@ -488,6 +541,8 @@ settings_changed = 1;
 stft_init();
 
 @block
+_SVF_SAMPLING_FACTOR = 0.5 * $pi * (44100 / srate);
+
 /* Don't switch immediately, because you might run a partial STFT */
 (stft_selection != stft) ? (
   stft = stft_selection;
@@ -515,8 +570,18 @@ midi_input = (play_mode >= 1);
 
 mlog0p05 = 2.995732273553991; // Corresponds to time to get to 95%
 env.block_envelope();
+env2.block_envelope();
 
 midi.midi_block(pass_through);
+
+// We use the single lowpass filter in stft mode
+// or when use_filt_envelopes is off and the notes
+// have no velocity sensitivity on the filters.
+single_filter = enable_filter && (stft || (!use_filt_envelopes && (filter_cutoff_vel == 0)));
+
+// We use the multi filter when stft is off and 
+// filt_envelopes is on
+multi_filter = enable_filter && (!stft && (use_filt_envelopes || (filter_cutoff_vel != 0)));
 
 @sample
 cSample += 1;
@@ -593,43 +658,112 @@ stft ? (
     f_h += string4.impulse.eval_impulse(string4.freq) * 4;
     f_h += string5.impulse.eval_impulse(string5.freq) * 4;
   );
-  
   stft_mem.read_stft(f_h);
 );
 
-(midi_input && use_envelopes) ? (
-  string1.eval_string(f_h, envelope1.env_sample(), midi.note_on0);
-  string2.eval_string(f_h, envelope2.env_sample(), midi.note_on1);
-  string3.eval_string(f_h, envelope3.env_sample(), midi.note_on2);
-  string4.eval_string(f_h, envelope4.env_sample(), midi.note_on3);
-  string5.eval_string(f_h, envelope5.env_sample(), midi.note_on4);
+// Process the envelopes (if any).
+single_filter_cutoff = single_filter_ref_cutoff;
+midi_input ? (
+  use_envelopes ? (
+    _e1 = envelope1.env_sample();
+    _e2 = envelope2.env_sample();
+    _e3 = envelope3.env_sample();
+    _e4 = envelope4.env_sample();
+    _e5 = envelope5.env_sample();
+  ) : (
+    _e1 = _e2 = _e3 = _e4 = _e5 = 1;
+  );
+  (use_filt_envelopes && enable_filter) ? (
+    _fe1 = filt_envelope1.env_sample();
+    _fe2 = filt_envelope2.env_sample();
+    _fe3 = filt_envelope3.env_sample();
+    _fe4 = filt_envelope4.env_sample();
+    _fe5 = filt_envelope5.env_sample();
+
+    single_filter ? (
+      single_filter_cutoff += 
+        (latest_note == 0) ? _fe1 : 
+        (latest_note == 1) ? _fe2 : 
+        (latest_note == 2) ? _fe3 : 
+        (latest_note == 3) ? _fe4 : 
+        (latest_note == 4) ? _fe5;
+      single_filter_cutoff = max(0.0, min(1.0, single_filter_cutoff));
+    );
+  ) : (
+    _fe1 = _fe2 = _fe3 = _fe4 = _fe5 = 0;
+  );
 ) : (
-  string1.eval_string(f_h, 1, midi.note_on0);
-  string2.eval_string(f_h, 1, midi.note_on1);
-  string3.eval_string(f_h, 1, midi.note_on2);
-  string4.eval_string(f_h, 1, midi.note_on3);
-  string5.eval_string(f_h, 1, midi.note_on4);
+  _e1 = _e2 = _e3 = _e4 = _e5 = 1;
+  _fe1 = _fe2 = _fe3 = _fe4 = _fe5 = 1;
 );
 
+single_filter ? (
+  (single_svf.last_freq != single_filter_cutoff) ? (
+    single_svf.init_linearSVF(single_filter_cutoff, 0);
+  );
+);
+
+// Process string internals
+string1.eval_string(f_h, _e1, midi.note_on0);
+string2.eval_string(f_h, _e2, midi.note_on1);
+string3.eval_string(f_h, _e3, midi.note_on2);
+string4.eval_string(f_h, _e4, midi.note_on3);
+string5.eval_string(f_h, _e5, midi.note_on4);
+
+// Write to output
 stft ? (
   stft_mem.write_stft();
   f_b = stft_mem.f_b;
   f_hn = stft_mem.f_hn;
 ) : (
   (midi_input && use_envelopes) ? (
-    f_b += string1.f_b * envelope1.state; f_hn += string1.f_hn;
-    f_b += string2.f_b * envelope2.state; f_hn += string2.f_hn;
-    f_b += string3.f_b * envelope3.state; f_hn += string3.f_hn;
-    f_b += string4.f_b * envelope4.state; f_hn += string4.f_hn;
-    f_b += string5.f_b * envelope5.state; f_hn += string5.f_hn;
-  ) : (
-    f_b += string1.f_b; f_hn += string1.f_hn;
-    f_b += string2.f_b; f_hn += string2.f_hn;
-    f_b += string3.f_b; f_hn += string3.f_hn;
-    f_b += string4.f_b; f_hn += string4.f_hn;
-    f_b += string5.f_b; f_hn += string5.f_hn;
+    /* Apply amplitude envelope */
+    string1.f_b *= _e1;
+    string2.f_b *= _e2;
+    string3.f_b *= _e3;
+    string4.f_b *= _e4;
+    string5.f_b *= _e5;
   );
+  
+  /* Apply multi filter; only happens in td with envelopes on */
+  multi_filter ? (
+    _fe1 = min(1.0, max(0.0, string1.ref_cutoff + _fe1));
+    (svf1.last_freq != _fe1) ? ( svf1.init_linearSVF(_fe1, 0); );
+    _fe2 = min(1.0, max(0.0, string2.ref_cutoff + _fe2));
+    (svf2.last_freq != _fe2) ? ( svf2.init_linearSVF(_fe2, 0); );
+    _fe3 = min(1.0, max(0.0, string3.ref_cutoff + _fe3));
+    (svf3.last_freq != _fe3) ? ( svf3.init_linearSVF(_fe3, 0); );
+    _fe4 = min(1.0, max(0.0, string4.ref_cutoff + _fe4));
+    (svf4.last_freq != _fe4) ? ( svf4.init_linearSVF(_fe4, 0); );
+    _fe5 = min(1.0, max(0.0, string5.ref_cutoff + _fe5));
+    (svf5.last_freq != _fe5) ? ( svf5.init_linearSVF(_fe5, 0); );
+    
+    string1.f_b = svf1.eval_linearSVF_LP(string1.f_b);
+    string2.f_b = svf2.eval_linearSVF_LP(string2.f_b);
+    string3.f_b = svf3.eval_linearSVF_LP(string3.f_b);
+    string4.f_b = svf4.eval_linearSVF_LP(string4.f_b);
+    string5.f_b = svf5.eval_linearSVF_LP(string5.f_b);
+  );
+  
+  /* Sum to output */
+  f_b += string1.f_b;
+  f_b += string2.f_b;
+  f_b += string3.f_b;
+  f_b += string4.f_b;
+  f_b += string5.f_b;
+  
+  f_hn += string1.f_hn;
+  f_hn += string2.f_hn;
+  f_hn += string3.f_hn;
+  f_hn += string4.f_hn;
+  f_hn += string5.f_hn;
 );
+
+// Single filter case (stft or td without envelopes)
+single_filter ? (
+  f_b = single_svf.eval_linearSVF_LP(f_b);
+);
+
 
 hammer = 0;
 
@@ -721,6 +855,11 @@ file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
     clear_sample(idx);
     idx += 1;
   );
+);
+
+(version < 5) ? ( use_filt_envelopes = 0; enable_filter = 0; ) : (
+  file_var(0, use_filt_envelopes);
+  file_var(0, enable_filter)
 );
 
 version = 5;
@@ -1175,6 +1314,46 @@ instance(_x, _y, _r, relative_position)
     gfx_line(_x, _y, _x + rr * cos(ang1), _y - rr * sin(ang1));
     gfx_line(_x + 1, _y + 1, _x + rr * cos(ang1), _y - rr * sin(ang1));
     gfx_line(_x + 1, _y - 1, _x + rr * cos(ang1), _y - rr * sin(ang1));
+  ) : ( id == 23 ) ? (
+    // Filter Cutoff
+    gfx_a = 0.2 + 0.8 * enabled;
+    len = ceil(0.6 * _r);
+    yy = ceil(0.3 * _r);
+    sy = 1;
+    rr = 2 * relative_position * len;
+    _r = 1 / len;
+    loop(2,
+      xx = _x - len;
+      s = 1; cy = 1;
+      gfx_x = xx;
+      gfx_y = _y + yy - 2 * yy - sy;
+      loop(2 * len,
+        gfx_lineto(xx, _y + yy - 2 * yy * cy - sy);
+        (s > rr) ? cy -= min(2, 0.15 * (s - rr)) * _r;
+        cy = max(-0.1, cy);
+        xx += 1;
+        s += 1;
+      );
+      sy -= 1;
+    );
+  ) : ( id == 24 ) ? (
+    gfx_a = 0.2 + 0.8 * enabled;
+    rr = 0.6 * _r;
+    di = 10 / _r / (0.4);
+    sy = 0;
+    loop(2,
+      i = 0;
+      s = _x - rr;
+      x2 = 2 * rr * (relative_position - 0.5);
+      gfx_x = s;
+      gfx_y = _y + 0.5 * rr * 2 * (relative_position - 0.5) + sy;
+      loop(2 * rr,
+        gfx_lineto(s, _y + sy + 0.5 * x2 - i * x2 * exp(- 0.35 * i), 1);
+        s += 1;
+        i += di;
+      );
+      sy += 1;
+    );
   );
 );
 
@@ -1380,7 +1559,6 @@ midi.note_on3 ? keyboard.highlight_note(midi.active_note_mem[3]);
 midi.note_on4 ? keyboard.highlight_note(midi.active_note_mem[4]);
 
 note_over = keyboard.note_clicked();
-
 
 function handle_non_midi_click(note_over)
 instance(over)
@@ -1605,7 +1783,8 @@ choice_button11.draw_choice(11, cx - radius, cy - 1.1 * radius, radius, radius, 
 choice_button11.draw_model_icon();
 choice_button12.draw_choice(12, cx - radius, cy, radius, radius, 1, "Custom\n\nCustom model that provides only a single\nspectrum.\n\nThe macro controls then retain the same\nfunction as they did for the built-in spectra.");
 choice_button12.draw_model_icon();
-cx += radius + 4;
+
+final_gfx_x = cx;
 
 bins = 100;
 
@@ -1709,13 +1888,19 @@ midi_input ? (
   use_envelopes
 );
 
+(model != 11) && (model != 12) ? (
+  gfx_string.draw_stft(0.02 * _gfx_w, 0.02 * _gfx_h, _gfx_w * 0.93, _gfx_h * 0.9);
+  right = 0.95 * _gfx_w;
+);
+
 advanced_controls = 1;
 advanced_controls ? (
-  env_width = floor((radius + 4) * 6 - 4);
-  env.draw_envelope(floor(choice_x), ys, env_width, floor(2 * radius), use_envelopes);
-
-  use_envelopes = envelopeToggle.processMouseToggle(choice_x + env_width - 0.25 * radius - button_size, ys + 0.25 * radius, button_size, button_size, use_envelopes, "Apply output envelope.", mouse_x, mouse_y, mouse_cap);
-
+  loop(2,
+    gfx_x = 0;
+    gfx_y = ys;
+    gfx_blurto(gfx_w, ys + radius * 2.1);
+  );
+  
   sample_ws = floor(radius);
   sample_hs = floor(radius);
   xs = floor(radius);
@@ -1758,6 +1943,24 @@ advanced_controls ? (
   Controls how fast the source should spin.", 1, 1);
   spin_freq_knob.gfx_draw_icon(22, 1);
   cx += 2 * radius + knob_spacing;
+  
+  filter_cutoff_knob.draw_knob(cx, cy, radius, "", "Filter cutoff.", 1, enable_filter);
+  filter_cutoff_knob.gfx_draw_icon(23, enable_filter);
+  enable_filter = filterToggle.processMouseToggle(cx - 1.1 * radius, cy - 1.1 * radius, button_size, button_size, enable_filter, "Enable filter.", mouse_x, mouse_y, mouse_cap);  
+  
+  cx += 2 * radius + knob_spacing;
+  
+  filter_envelope_knob.draw_knob(cx, cy, radius, "", "Filter Envelope.", 1, use_filt_envelopes && enable_filter);
+  filter_envelope_knob.gfx_draw_icon(24, use_filt_envelopes);
+  cx += radius + knob_spacing;
+  
+  env_width = (final_gfx_x - cx - knob_spacing) * 0.5;
+  env2.draw_envelope(cx, ys, env_width, floor(2 * radius), use_filt_envelopes && enable_filter);
+  use_filt_envelopes = filterEnvelopeToggle.processMouseToggle(cx + env_width - button_size * 3, ys + 0.25 * radius, button_size, button_size, use_filt_envelopes, "Apply filter envelope.\n\nNote that in FD mode, only a single envelope\nis used for all strings while in time domain mode\neach string gets its own.", mouse_x, mouse_y, mouse_cap);  
+  
+  cx += env_width + knob_spacing;
+  env.draw_envelope(cx, ys, env_width, floor(2 * radius), use_envelopes);
+  use_envelopes = envelopeToggle.processMouseToggle(cx + env_width - button_size * 3, ys + 0.25 * radius, button_size, button_size, use_envelopes, "Apply output envelope.", mouse_x, mouse_y, mouse_cap);
 );
 
 updated_loop ? (
@@ -1777,9 +1980,6 @@ updated_loop ? (
 
 ((model == 11) || (model == 12)) ? (
   right = custom_partials.draw_custom_partial_ui(0.02 * _gfx_w, cy + 1.5 * radius, 0.96 * _gfx_w, 0.935 * _gfx_h - (cy + 1.5 * radius) - 5, custom_partial_mem, MAX_CUSTOM_PARTIALS, partials_used, model==11);
-) : (
-  gfx_string.draw_stft(0.02 * _gfx_w, 0.02 * _gfx_h, _gfx_w * 0.93, _gfx_h * 0.9);
-  right = 0.95 * _gfx_w;
 );
 
 sample_data_gfx_finalize();
