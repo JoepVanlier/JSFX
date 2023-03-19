@@ -155,7 +155,7 @@ instance(slider_idx, last_click, default, start, stop, over)
 function draw_knob(x, y, r, label, hint, fancy, enabled)
 instance(start, stop, default, slider_idx, vel_slider_idx, lx, ly, last_click, relative_position, _x, _y, _r, over)
 local(range, dx, dy, rr, ang, irange, speed, new_value, cc, velocity_part, velocity_mode, minimum, maximum)
-global(gfx_x, gfx_y, captured, last_cap, gfx_a, mouse_cap, mouse_x, mouse_y, mouse_wheel, last_mouse_y, dbl_click_speed, hinter.sethint, settings_changed, change_vel_mod)
+global(gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, captured, last_cap, gfx_a, mouse_cap, mouse_x, mouse_y, mouse_wheel, last_mouse_y, dbl_click_speed, hinter.sethint, settings_changed, change_vel_mod)
 (
   dx = mouse_x - x;
   dy = mouse_y - y;
@@ -183,6 +183,7 @@ global(gfx_x, gfx_y, captured, last_cap, gfx_a, mouse_cap, mouse_x, mouse_y, mou
   maximum = max(start, stop);
   irange = 1.0 / range;
   relative_position = (slider(slider_idx) - start) * irange;
+  
   velocity_part = 1.5 * min(max(-relative_position, slider(vel_slider_idx) * irange), 1 - relative_position);
   ang = 1.25 + 1.5 * relative_position;
   
@@ -198,6 +199,7 @@ global(gfx_x, gfx_y, captured, last_cap, gfx_a, mouse_cap, mouse_x, mouse_y, mou
     (velocity_part != 0) ? (
       cc = 6;
       colormodel(0.03); gfx_a = 0.85;
+      !enabled ? ( disabled_color(); gfx_r *= 0.5; gfx_g *= 0.5; gfx_b *= 0.5; );
       loop(18,
         gfx_arc(x, y, ceil(r * (1.05 + 0.02 * cc)), ang * $pi, (ang + velocity_part) * $pi, 1);
         cc *= 0.95;
@@ -505,11 +507,12 @@ instance(start_note, start_octave, note_width, _x, _y, _w, _h, over)
 );
 
 
-function init_envelope(_attack_slider_idx, _decay_slider_idx, _sustain_level_idx, _release_slider_idx)
+function init_envelope(_env_idx, _attack_slider_idx, _decay_slider_idx, _sustain_level_idx, _release_slider_idx)
 local()
-instance(attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx)
+instance(env_idx, attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx)
 global()
 (
+  env_idx = _env_idx;
   attack_slider_idx = _attack_slider_idx;
   decay_slider_idx = _decay_slider_idx;
   sustain_level_idx = _sustain_level_idx;
@@ -530,20 +533,28 @@ instance(
   sustain_level = slider(sustain_level_idx);
 );
 
-function draw_envelope(x, y, w, h, active)
+function draw_envelope_old_linear_time_mode(x, y, w, h, active)
 instance(
   t_max, last_x, last_y, last_cap, attack_s, decay_s, release_s, sustain_level,
-  attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx,
+  env_idx, attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx,
 )
 local(plot_srate, attack_samples, decay_samples,
       k_attack, k_decay, k_release,
       x_cur, y_cur, x_new, y_new, state, rate, current_target, target,
       time_per_pixel, attack_pos, decay_pos, modifier, dx,
-      over, highlight)
+      over, highlight,
+      capture_start,
+      drag_atk, drag_decay, drag_release)
 global(mlog0p05, gfx_a,
        mouse_x, mouse_y, mouse_wheel, mouse_cap, captured,
-       hinter.sethint, hinter.hint_time)
+       hinter.sethint, hinter.hint_time,
+       DRAG_ENV)
 (
+  t_max = attack_s + 2 * decay_s + release_s;
+  drag_atk = DRAG_ENV + 5 * env_idx;
+  drag_decay = drag_atk + 1;
+  drag_release = drag_atk + 2;
+  
   gfx_set(0, 0, 0, 0.2);
   gfx_rect(x, y, w, h, 1);
   
@@ -556,7 +567,7 @@ global(mlog0p05, gfx_a,
   k_release = mlog0p05 / (release_s * plot_srate);
   
   (t_max == 0) ? t_max = 0.1;
-  over = (mouse_x > x) && (mouse_y > y) && (mouse_y < (y + h));
+  over = (mouse_x > x) && (mouse_y > y) && (mouse_x < (x + w)) && (mouse_y < (y + h));
   (over) ? (
     (abs(mouse_wheel) > 0) ? (
       modifier = 0.00025 * t_max;
@@ -575,13 +586,13 @@ global(mlog0p05, gfx_a,
         over = 2;
       ) : (mouse_x < (x + attack_pos + decay_pos)) ? (
         over = 3;
-      ) : (
+      ) : (mouse_x < (x + w)) ? (
         over = 4;
       );
     ) : (
-      (captured == 100) ? ( over = 2; )
-      : (captured == 101) ? ( over = 3; )
-      : (captured == 102) ? ( over = 4; )
+      (captured == drag_atk) ? ( over = 2; )
+      : (captured == drag_decay) ? ( over = 3; )
+      : (captured == drag_release) ? ( over = 4; )
     );
   
     (last_cap == 0) && (mouse_cap == 1) ? (
@@ -591,11 +602,11 @@ global(mlog0p05, gfx_a,
       decay_pos = 2 * decay_s / time_per_pixel;
     
       (over == 2) ? (
-        captured = 100;
+        captured = drag_atk;
       ) : (over == 3) ? (
-        captured = 101;
+        captured = drag_decay;
       ) : (over == 4) ? (
-        captured = 102;
+        captured = drag_release;
       );
     );
   );
@@ -650,7 +661,7 @@ global(mlog0p05, gfx_a,
     y_cur = y_new;
   );
   
-  active && ((captured > 99) && (captured < 103)) ? (
+  active && ((captured >= drag_atk) && (captured <= drag_release)) ? (
     (mouse_cap == 0) ? (
       captured = 0;
     ) : (
@@ -659,20 +670,220 @@ global(mlog0p05, gfx_a,
       (mouse_cap & 8 > 0) ? modifier *= 0.25;
       
       dx = modifier * (mouse_x - last_x);
-      (captured == 100) ? (
+      (captured == drag_atk) ? (
         // Attack
         slider_automate(slider(attack_slider_idx) = min(2, max(0, slider(attack_slider_idx) + dx)));
         hinter.sethint(sprintf(90, "Attack:\n%.2f ms", attack_s * 1000));
         hinter.hint_time = 1000;
-      ) : (captured == 101) ? (
+      ) : (captured == drag_decay) ? (
         // Decay
         slider_automate(slider(decay_slider_idx) = min(3, max(0, slider(decay_slider_idx) + dx)));
         slider_automate(slider(sustain_level_idx) = min(1, max(0, slider(sustain_level_idx) - modifier * (mouse_y - last_y))));
         hinter.sethint(sprintf(90, "Decay:\n%.2f ms\nSustain: %d \n", decay_s * 1000, 100 * sustain_level));
         hinter.hint_time = 1000;
-      ) : (captured == 102) ? (
+      ) : (captured == drag_release) ? (
         // Release
         slider_automate(slider(release_slider_idx) = min(3, max(0, slider(release_slider_idx) + dx)));
+        hinter.sethint(sprintf(90, "Release:\n%.2f ms", release_s * 1000));
+        hinter.hint_time = 1000;
+      )
+    );
+  );
+  
+  colormodel(0);
+  !active ? grayscale();
+  
+  last_x = mouse_x;
+  last_y = mouse_y;
+  last_cap = mouse_cap;
+  
+  gfx_a = 0.7;
+  gfx_rect(x, y, w, h, 0);
+  gfx_rect(x + 1, y + 1, w - 2, h - 2, 0);
+);
+
+/* Updated log-time version */
+function draw_envelope(x, y, w, h, active)
+instance(
+  last_x, last_y, last_cap, attack_s, decay_s, release_s, sustain_level,
+  env_idx,
+  attack_slider_idx, decay_slider_idx, sustain_level_idx, release_slider_idx,
+  attack_pos, decay_pos, release_pos, hold_pos,
+  o2, o3, o4, o5,
+)
+local(
+  atk_min, atk_max, dec_min, dec_max, rel_min, rel_max,
+  modifier, dx,
+  over, highlight,
+  drag_atk, drag_decay, drag_release, drag_sustain
+  t_max, t_min,
+  x1, x2, x3, x4, x5,
+  y1, y2, y3, y4, y5,
+)
+global(
+  mlog0p05, gfx_a,
+  mouse_x, mouse_y, mouse_wheel, mouse_cap, captured,
+  hinter.sethint, hinter.hint_time,
+  DRAG_ENV
+)
+(
+  t_max = log(6.3);
+  t_min = log(0.0015);
+  w = floor(w);
+  h = floor(h);
+  
+  drag_atk = DRAG_ENV + 5 * env_idx;
+  drag_decay = drag_atk + 1;
+  drag_sustain = drag_atk + 2;
+  drag_release = drag_atk + 3;
+  
+  gfx_set(0.0, 0.0, 0.0, 0.75 - 0.2 * (1 - active));
+  gfx_rect(x, y, w, h);
+  
+  colormodel(0); gfx_a = 0.1;
+  !active ? grayscale();
+  gfx_rect(x, y, w, h);
+  
+  //attack_pos = floor(w * (log(attack_s) - t_min) / (t_max - t_min));
+  //decay_pos = floor(w * (log(attack_s + decay_s) - t_min) / (t_max - t_min));
+  //release_pos = floor(w * (log(attack_s + decay_s + release_s) - t_min) / (t_max - t_min));
+  
+  atk_min = 0;
+  atk_max = 2;
+  dec_min = 0;
+  dec_max = 3;
+  rel_min = 0;
+  rel_max = 3;
+  
+  /*attack_pos = floor(0.25 * w * (0.25 + 0.75 * (slider(attack_slider_idx) - atk_min) / (atk_max - atk_min)));
+  decay_pos = attack_pos + floor(0.5 * 0.65 * w * (0.25 + 0.75 * (slider(decay_slider_idx) - dec_min) / (dec_max - dec_min)));
+  release_pos = decay_pos + floor(0.5 * 0.65 * w * (0.25 + 0.75 * (slider(release_slider_idx) - rel_min) / (rel_max - rel_min)));
+  hold_pos = decay_pos + floor(w - release_pos);
+  release_pos = w - 2;*/
+  
+  attack_pos = floor(0.25 * w * (0.25 + 0.75 * (slider(attack_slider_idx) - atk_min) / (atk_max - atk_min)));
+  decay_pos = attack_pos + floor(0.5 * 0.65 * w * (0.25 + 0.75 * (slider(decay_slider_idx) - dec_min) / (dec_max - dec_min)));
+  hold_pos = decay_pos + floor(0.1 * w);
+  release_pos = hold_pos + floor(0.5 * 0.65 * w * (0.25 + 0.75 * (slider(release_slider_idx) - rel_min) / (rel_max - rel_min)));
+  
+  over = (mouse_x > x) && (mouse_y > y) && (mouse_x < (x + w)) && (mouse_y < (y + h));
+  (over) ? (
+    (abs(mouse_wheel) > 0) ? (
+      modifier = 0.00025 * t_max;
+      (mouse_cap & 4 > 0) ? modifier *= 0.5;
+      (mouse_cap & 8 > 0) ? modifier *= 0.25;
+      t_max = max(0.0001, min(t_max - modifier * mouse_wheel, attack_s + 2 * decay_s + release_s));
+      mouse_wheel = 0;
+    );
+   
+    (last_cap == 0) ? (
+      (mouse_x < (x + attack_pos)) ? (
+        over = 2;
+      ) : (mouse_x < (x + decay_pos)) ? (
+        over = 3;
+      ) : (mouse_x < (x + hold_pos)) ? (
+        over = 4;
+      ) : (
+        over = 5;
+      );
+    ) : (
+      (captured == drag_atk) ? ( over = 2; )
+      : (captured == drag_decay) ? ( over = 3; )
+      : (captured == drag_sustain) ? ( over = 4; )
+      : (captured == drag_release) ? ( over = 5; )
+    );
+  
+    (last_cap == 0) && (mouse_cap == 1) ? (
+      (over == 2) ? (
+        captured = drag_atk;
+      ) : (over == 3) ? (
+        captured = drag_decay;
+      ) : (over == 4) ? (
+        captured = drag_sustain;
+      ) : (over == 5) ? (
+        captured = drag_release;
+      );
+    );
+  );
+  
+  colormodel(0.94); gfx_a = 1;
+  !active ? grayscale();
+  
+  x1 = floor(x) + 1;
+  x2 = floor(x + attack_pos);
+  x3 = floor(x + decay_pos);
+  x4 = floor(x + hold_pos);
+  x5 = floor(x + release_pos);
+  y1 = floor(y + h - 2);
+  y2 = floor(y + 0.1 * h);
+  y3 = floor(y + h - 2 - (h - 0.1 * h - 2) * sustain_level);
+  y4 = floor(y + h - 2 - (h - 0.1 * h - 2) * sustain_level);
+  y5 = floor(y + h - 3);
+  
+  colormodel(1);
+  !active ? grayscale();
+  gfx_line(x1, y1, x2, y2, 1);
+  gfx_line(x2, y2, x3, y3, 1);
+  gfx_line(x3, y3, x4, y4, 1);
+  gfx_line(x4, y4, x5, y5, 1);
+  gfx_line(x5, y5, x + w - 2, y5, 1);
+  gfx_line(x1, y1 - 0.5, x2, y2 - 0.5, 1);
+  gfx_line(x2, y2 - 0.5, x3, y3 - 0.5, 1);
+  gfx_line(x3, y3 - 0.5, x4, y4 - 0.5, 1);
+  gfx_line(x4, y4 - 0.5, x5, y5 - 0.5, 1);
+  gfx_line(x5, y5 - 0.5, x + w - 2, y5 - 0.5, 1);
+  
+  o2 = 0.2 * ((over == 2) || (captured == drag_atk)) + 0.8 * o2;
+  o3 = 0.2 * ((over == 3) || (captured == drag_decay)) + 0.8 * o3;
+  o4 = 0.2 * ((over == 4) || (captured == drag_sustain)) + 0.8 * o4;
+  o5 = 0.2 * ((over == 5) || (captured == drag_release)) + 0.8 * o5;
+  
+  gfx_a = 0.05;
+  !active ? grayscale();
+  gfx_triangle(x1, y1, x2 - 1, y2, x2 - 1, y1);
+  gfx_triangle(x2, y1, x2, y2, x3, y3, x3, y1);
+  gfx_triangle(x3 + 1, y1, x3 + 1, y3, x4, y4, x4, y1);
+  gfx_triangle(x4 + 1, y1, x4 + 1, y4, x5, y5, x5, y1);
+  
+  active ? (
+    gfx_a = 0.7 * abs(sin(time_precise())) * o2;
+    gfx_triangle(x1, y1, x2 - 1, y2, x2 - 1, y1);
+    gfx_a = 0.7 * abs(sin(time_precise())) * o3;
+    gfx_triangle(x2, y1, x2, y2, x3, y3, x3, y1);
+    gfx_a = 0.7 * abs(sin(time_precise())) * o4;
+    gfx_triangle(x3 + 1, y1, x3 + 1, y3, x4, y4, x4, y1);
+    gfx_a = 0.7 * abs(sin(time_precise())) * o5;
+    gfx_triangle(x4 + 1, y1, x4 + 1, y4, x5, y5, x5, y1);
+  );
+
+  active && ((captured >= drag_atk) && (captured <= drag_release)) ? (
+    (mouse_cap == 0) ? (
+      captured = 0;
+    ) : (
+      modifier = 0.01;
+      (mouse_cap & 4 > 0) ? modifier *= 0.5;
+      (mouse_cap & 8 > 0) ? modifier *= 0.25;
+    
+      dx = modifier * (mouse_x - last_x);
+      (captured == drag_atk) ? (
+        // Attack
+        slider_automate(slider(attack_slider_idx) = min(atk_max, max(atk_min, slider(attack_slider_idx) + dx)));
+        hinter.sethint(sprintf(90, "Attack:\n%.2f ms", attack_s * 1000));
+        hinter.hint_time = 1000;
+      ) : (captured == drag_decay) ? (
+        // Decay
+        slider_automate(slider(sustain_level_idx) = min(1, max(0, slider(sustain_level_idx) - modifier * (mouse_y - last_y))));
+        slider_automate(slider(decay_slider_idx) = min(dec_max, max(dec_min, slider(decay_slider_idx) + dx)));
+        hinter.sethint(sprintf(90, "Decay:\n%.2f ms\nSustain:\n%d\n", decay_s * 1000, 100 * sustain_level));
+        hinter.hint_time = 1000;
+      ) : (captured == drag_sustain) ? (
+        slider_automate(slider(decay_slider_idx) = min(dec_max, max(dec_min, slider(decay_slider_idx) + dx)));
+        slider_automate(slider(sustain_level_idx) = min(1, max(0, slider(sustain_level_idx) - modifier * (mouse_y - last_y))));
+        hinter.sethint(sprintf(90, "Sustain:\n%d\nDecay:\n%.2f ms\n", 100 * sustain_level, decay_s * 1000));
+        hinter.hint_time = 1000;
+      ) : (captured == drag_release) ? (
+        // Release
+        slider_automate(slider(release_slider_idx) = min(rel_max, max(rel_min, slider(release_slider_idx) + dx)));
         hinter.sethint(sprintf(90, "Release:\n%.2f ms", release_s * 1000));
         hinter.hint_time = 1000;
       )
