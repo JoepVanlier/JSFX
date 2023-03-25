@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.51
+version: 0.52
 author: Joep Vanlier
-changelog: Add option for aggressive voice stealing.
+changelog: Fix bug in voice assignment. Add option to set release parameters (lower right).
 license: MIT
 provides:
   partials_dependencies/*
@@ -50,6 +50,9 @@ slider36:filter_attack=0<0,2,0.0001>-Filter Attack
 slider37:filter_decay=1<0,3,0.0001>-Filter Decay
 slider38:filter_releaser=1.5<0,3,0.0001>-Filter Release
 slider39:filter_sustain=0.3<0,1,0.0001>-Filter Sustain
+slider40:damp_release=0<-4, 4, 0.000001>-Damping release mod
+slider41:freq_damp_release=0<-5, 5, 0.000001>-Frequency dependent damping release mod
+slider42:inharmonicity_release=0<-4,4,0.00000001>-Inharmonicity release mod
 
 slider52:glide_speed=0<0,1,1>-Glide [10-1000ms]
 slider53:legacy_gain=0<0,1,1>-Legacy mode
@@ -100,24 +103,24 @@ version = 6;
 
 string1.used_partials = string2.used_partials = string3.used_partials = string4.used_partials = string5.used_partials = 0;
 
-// _start, _stop, _default, _slider_idx, _vel_slider_idx
-playmode_knob.init_knob(0, 5.99, 0.1, 55, 0);
-brightness_knob.init_knob(1, 0, 0.1, 2, 54);
-position_knob.init_knob(0, 1, 0.1, 3, 14);
-damp_knob.init_knob(-2, 2, 0.1, 4, 15);
-freq_damp_knob.init_knob(-6, -1, -4, 5, 16);
-inharmonic_knob.init_knob(-4, 0, -4, 6, 17);
-stiffness_knob.init_knob(3, 6, 4.6, 7, 0);
-stiffness_exp_knob.init_knob(1.0, 3.0, 2.3, 8, 0);
-force_fb.init_knob(0, 15.0, 1.0, 11, 0);
-partials.init_knob(16, 64, 32, 12, 0);
-glide_knob.init_knob(0, 1, 0, 52, 0);
+// _start, _stop, _default, _slider_idx, _vel_slider_idx, _release_slider_idx
+playmode_knob.init_knob(0, 5.99, 0.1, 55, 0, 0);
+brightness_knob.init_knob(1, 0, 0.1, 2, 54, 0);
+position_knob.init_knob(0, 1, 0.1, 3, 14, 0);
+damp_knob.init_knob(-2, 2, 0.1, 4, 15, 40);
+freq_damp_knob.init_knob(-6, -1, -4, 5, 16, 41);
+inharmonic_knob.init_knob(-4, 0, -4, 6, 17, 42);
+stiffness_knob.init_knob(3, 6, 4.6, 7, 0, 0);
+stiffness_exp_knob.init_knob(1.0, 3.0, 2.3, 8, 0, 0);
+force_fb.init_knob(0, 15.0, 1.0, 11, 0, 0);
+partials.init_knob(16, 64, 32, 12, 0, 0);
+glide_knob.init_knob(0, 1, 0, 52, 0, 0);
 
-spin_freq_knob.init_knob(0, 20, 1, 25, 0);
-spin_depth_knob.init_knob(0, 4, 0, 26, 0);
+spin_freq_knob.init_knob(0, 20, 1, 25, 0, 0);
+spin_depth_knob.init_knob(0, 4, 0, 26, 0, 0);
 
-filter_cutoff_knob.init_knob(0, 1, 0.4, 30, 31);
-filter_envelope_knob.init_knob(-1, 1, 0.5, 34, 35);
+filter_cutoff_knob.init_knob(0, 1, 0.4, 30, 31, 0);
+filter_envelope_knob.init_knob(-1, 1, 0.5, 34, 35, 0);
 
 function stft_init()
 local()
@@ -299,12 +302,13 @@ global(
   relative_position, damp, freq_damp, inharmonic,
   position_vel, damp_vel, freq_damp_vel, inharmonic_vel,
 )
-instance(base_damp, f_damp, inharm, rel_position, freq, target_freq)
+instance(base_damp, f_damp, inharm, rel_position, freq, target_freq, last_vel)
 (
   // position 0 to 1
   // damp -2 to 2
   // freq_damp -6 to -1
   // inharmonic -4 to 0
+  last_vel = vel;
   rel_position = min(max(0, relative_position + position_vel * vel), 1);
   base_damp = 10^(min(max(-2, damp + damp_vel * vel), 2));
   f_damp = 10^(min(max(-6, freq_damp + freq_damp_vel * vel), -1));
@@ -317,6 +321,16 @@ instance(base_damp, f_damp, inharm, rel_position, freq, target_freq)
   ) : (
     target_freq = f_0;
   );
+);
+
+function damp_string()
+local()
+global(damp, freq_damp, inharmonic, damp_vel, freq_damp_vel, damp_release, inharmonic_vel, freq_damp_release, inharmonicity_release)
+instance(base_damp, f_damp, inharm, rel_position, freq, target_freq, last_vel)
+( 
+  base_damp = 10^(min(max(-2, damp + damp_vel * last_vel + damp_release), 2));
+  f_damp = 10^(min(max(-6, freq_damp + freq_damp_vel * last_vel + freq_damp_release), -1));
+  inharm = inharm * 0.8 + 0.2 * 10^(min(max(-4, inharmonic + inharmonic_vel * last_vel + inharmonicity_release), 0));
 );
 
 function eval_string(f_h, env, on)
@@ -420,6 +434,16 @@ global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, s
        enable_filter,
        filter_cutoff, filter_cutoff_vel, filter_envelope, filter_envelope_vel,
        latest_note,
+       string1.damp_string,
+       string2.damp_string,
+       string3.damp_string,
+       string4.damp_string,
+       string5.damp_string,
+       string1.update_freq,
+       string2.update_freq,
+       string3.update_freq,
+       string4.update_freq,
+       string5.update_freq
        )
 local(ref_pitch, scaling, max_vel,
       note_vel0, note_vel1, note_vel2, note_vel3, note_vel4,
@@ -481,6 +505,12 @@ local(ref_pitch, scaling, max_vel,
     note_on2 ? ( string3.set_pars(scaling * 2 ^ ((note_on2 + ref_pitch) / 12), note_vel2, 0); string3.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel2; );
     note_on3 ? ( string4.set_pars(scaling * 2 ^ ((note_on3 + ref_pitch) / 12), note_vel3, 0); string4.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel3; );
     note_on4 ? ( string5.set_pars(scaling * 2 ^ ((note_on4 + ref_pitch) / 12), note_vel4, 0); string5.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel4; );
+    
+    (note_state0 == -1) ? (string1.damp_string(); string1.update_freq(); );
+    (note_state1 == -1) ? (string2.damp_string(); string2.update_freq(); );
+    (note_state2 == -1) ? (string3.damp_string(); string3.update_freq(); );
+    (note_state3 == -1) ? (string4.damp_string(); string4.update_freq(); );
+    (note_state4 == -1) ? (string5.damp_string(); string5.update_freq(); );
   );
   
   use_envelopes ? (
@@ -879,6 +909,9 @@ file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
 
 (version < 6) ? (
   voice_thievery = 0;
+  damp_release = 0;
+  freq_damp_release = 0;
+  inharmonicity_release = 0;
 ) : (
   file_var(0, voice_thievery);
 );
@@ -1561,17 +1594,30 @@ global(mouse_x, mouse_y, mouse_cap, gfx_x, gfx_y, last_cap, hinter.sethint)
 );
 
 gfx_setfont(3, "Arial", 12 * max(1, scaling));
-gfx_measurestr("[Velocity]", velw, velh);
+gfx_measurestr("[Rel]", velw2, velh2);
+colormodel(change_rel_mod - 0.01);
+label_toggle(right - velw - 5, 0.935 * _gfx_h, " [Rel]", "Click this to change the release sensitivity of the parameters.\nParameters that can be linked to MIDI note velocity will\nbe highlighted.\n\nChanging their settings will result in those parameters\nchanging upon note release. This sensitivity is\nindicated by a differently colored arc.") ? (
+  change_rel_mod = 1 - change_rel_mod;
+  change_rel_mod == 1 ? (
+    change_vel_mod = 0;
+  );
+);
+
+gfx_setfont(3, "Arial", 12 * max(1, scaling));
+gfx_measurestr("[Vel]", velw, velh);
 colormodel(change_vel_mod - 0.01);
-label_toggle(right - velw - 5, 0.935 * _gfx_h, " [Velocity]", "Click this to change the velocity sensitivity of the parameters.\nParameters that can be linked to MIDI note velocity will\nbe highlighted.\n\nChanging their settings will result in those parameters\nbeing sensitive to MIDI note velocity. This sensitivity is\nindicated by a differently colored arc.") ? (
+label_toggle(right - velw2 - velw - 10, 0.935 * _gfx_h, " [Vel]", "Click this to change the velocity sensitivity of the parameters.\nParameters that can be linked to MIDI note velocity will\nbe highlighted.\n\nChanging their settings will result in those parameters\nbeing sensitive to MIDI note velocity. This sensitivity is\nindicated by a differently colored arc.") ? (
   change_vel_mod = 1 - change_vel_mod;
+  change_vel_mod == 1 ? (
+    change_rel_mod = 0;
+  );
 );
 
 label_toggle(0.02 * _gfx_w, 0.93 * _gfx_h, "[Linear] ", "Display frequencies on a linear scale") ? (display_log = 0);
 colormodel(display_log);
 label_toggle(gfx_x, gfx_y, "[Logarithmic]", "Display frequencies on a logarithmic scale") ? (display_log = 1);
 
-keyboard.draw_keyboard(base_note, gfx_x + 0.01 * _gfx_w, 0.935 * _gfx_h, right - velw - gfx_x - 0.01 * _gfx_w, 0.05 * gfx_y);
+keyboard.draw_keyboard(base_note, gfx_x + 0.01 * _gfx_w, 0.935 * _gfx_h, right - velw - velw2 - gfx_x - 0.01 * _gfx_w, 0.05 * gfx_y);
 
 midi.note_on0 ? keyboard.highlight_note(midi.active_note_mem[0]);
 midi.note_on1 ? keyboard.highlight_note(midi.active_note_mem[1]);
@@ -2012,7 +2058,7 @@ sample_data_gfx_finalize();
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.41 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.52 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
