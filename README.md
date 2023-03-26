@@ -87,6 +87,8 @@ Features:
 ## Partials - Modal synthesis effect
 ![partials](https://user-images.githubusercontent.com/19836026/172025042-576cab4b-b185-4d68-aa2a-6c66c33cbe11.gif)
 
+![MKII](https://user-images.githubusercontent.com/19836026/227781704-760d4262-0fcd-45e2-b836-730a0972c03e.PNG)
+
 Modal resonator effect with 5 note polyphony. It can be played almost like an instrument, or kind of like a reverb-like thing. It's pretty good at string-like and marimba-like sounds and pairs well with a dash of reverb after it.
 
 #### Controlling the pitch
@@ -97,6 +99,12 @@ Features:
 - Frequency domain mode (efficient)
 - Time domain mode (inefficient but allows feedback, note instability can occur!).
 - UI that visualizes the partials.
+- 5 note polyphony.
+- Round robin sample mode. In sampling mode, drag impulse samples onto one of the four pads and play with your samples. Enable sampling mode by setting the play-mode (leftmost knob) to the right.
+- Allow having the decay parameters respond to note release (bottom right).
+- Stereo spinning/vibrato effect (note that this effect is not very mono compatible).
+- Filter envelopes.
+- Presets.
 
 Samples:
 
@@ -107,6 +115,14 @@ Samples:
 [Simple sounds with MIDI input](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/stft_test.mp3?raw=true)
 
 [Simple sounds with MIDI input](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/stft_test2.mp3?raw=true)
+
+[Impulse mode paired with a reverb](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/partials_impulse_pan_feedback.mp3?raw=true)
+
+[Audio as impulse](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/partials_is_weird.mp3?raw=true)
+
+[Paired with DuskVerb](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/partials_voice_cycling_prototype2.mp3?raw=true)
+
+[Paired with guitar body impulse response](https://github.com/JoepVanlier/Audio_Demos/blob/main/Partials/partials_spin_imp_test.mp3?raw=true)
 
 ## Dusk Verb
 
