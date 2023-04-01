@@ -1,0 +1,282 @@
+desc:ReaBee
+tags: unique effect
+version: 0.01
+author: Joep Vanlier
+changelog: Initial commit
+license: MIT
+
+slider2:depth=35<1,100,0.01>bzzz
+slider3:bees=48<1, 64, 1># bzzzzz!
+slider4:spread_factor=0<0,0.3,0.01>buzz?
+slider5:timescale=1<0.5,2.0>BUZZ >:(
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+options:gfx_hz=1000
+
+@init
+arena_w = 1200;
+arena_h = 600;
+
+function initBuffer(buffer_in, buffer_max_in)
+local()
+global()
+instance(write_ptr, buffer_max, buffer)
+(
+  buffer      = buffer_in;
+  buffer_max  = buffer_max_in;
+  
+  write_ptr < buffer ? (
+    write_ptr = buffer 
+  ) : ( write_ptr > buffer_max ) ? write_ptr = buffer
+);
+
+function writeBuffer(sample)
+local()
+global()
+instance(write_ptr, buffer, buffer_max)
+(
+  write_ptr[] = sample;
+  write_ptr += 1;
+  write_ptr > buffer_max ? write_ptr = buffer;
+);
+
+function readBuffer_cheapo(offset)
+local(ism1, is0, frac)
+global()
+instance(read_ptr, write_ptr, buffer, buffer_max)
+(
+  read_ptr = write_ptr - offset - 1;
+  
+  frac = read_ptr - floor(read_ptr);
+  read_ptr = floor(read_ptr);
+  read_ptr < buffer ? read_ptr += (buffer_max - buffer + 1);    
+
+  ism1 = read_ptr[];
+  read_ptr += 1; read_ptr >= buffer_max ? read_ptr = buffer;
+  is0 = read_ptr[];
+  
+  is0 * frac + ism1 * (1.0 - frac);
+);
+
+function populate(mem, mem_gfx, x, y, w, h, N)
+local(ptr, gfx_ptr)
+global()
+(
+  ptr = mem;
+  gfx_ptr = mem_gfx;
+  loop(N,
+    ptr[1] = ptr[] = x + w * rand();
+    gfx_ptr[0] = ptr[];
+    gfx_ptr[1] = ptr[1];
+    gfx_ptr += 2;
+    ptr += 2;
+    ptr[1] = ptr[] = y + h * rand();
+    ptr += 2;
+  );
+);
+
+drag = 1;
+target_dist = 125;
+function verlet_integrate(mem, N)
+local(s, ix, x, y, xl, yl, fx, fy, ptr, ptr2, dx, dy, mag, dist, drag_factor, mdx, mdy, mnorm)
+global(tsq, drag, target_dist, mouse_x, mouse_y, mouse_cap, arena_w, arena_h, iscale, spread_factor)
+(
+  ptr = mem;
+  ix = 1;
+  loop(N,
+    x = ptr[];
+    xl = ptr[1];
+    y = ptr[2];
+    yl = ptr[3];
+    
+    drag_factor = 15000 * (ix / (1.0 + ix + ix + ix));
+    (mouse_cap & 2 == 0) ? (
+      fx = - drag_factor * drag * (x - xl) + (rand() - 0.5) * 70000;
+      fy = - drag_factor * drag * (y - yl) + (rand() - 0.5) * 70000;
+  
+      ptr2 = mem;
+      loop(N,
+        (ptr != ptr2) ? (
+          dx = x - ptr2[];
+          dy = y - ptr2[2];
+          dist = sqrt(dx * dx + dy * dy);
+          mag = (target_dist - dist);
+          mag > 0 ? mag *= (1.0 + spread_factor * mag);
+          mag < 0 ? mag *= .02 * (1.0 + spread_factor);
+          mag < -150 ? mag = 0;
+  
+          fx += drag * mag * dx;
+          fy += drag * mag * dy;
+        );
+        
+        ptr2 += 4;
+      );
+    
+    ) : (
+      (mouse_cap & 1 == 1) ? (
+        fy = - drag_factor * drag * (x - xl);
+        fx = drag_factor * drag * (y - yl);
+      ) : (
+        fx = fy = 0;
+      );
+    );
+    
+    (y < 0) ? fy += drag_factor * 100;
+    (y > arena_h) ? fy -= drag_factor * 100;
+    (x < 0) ? fx += drag_factor * 100;
+    (x > arena_w) ? fx -= drag_factor * 100;
+     
+    (mouse_cap == 1) ? (
+      mdx = x - mouse_x * iscale;
+      mdy = y - mouse_y * iscale;
+      mnorm = 30000.0 / sqrt(mdx * mdx + mdy * mdy);
+      fx -= mnorm * mdx;
+      fy -= mnorm * mdy;
+    );
+  
+    ptr[1] = x;
+    ptr[3] = y;
+    ptr[] = 2.0 * x - xl + fx * tsq;
+    ptr[2] = 2.0 * y - yl + fy * tsq;
+    
+    ptr += 4;
+    ix += 1;
+  );
+);
+
+function draw(mem, N)
+local(ptr, lptr, xx, yy)
+global(mem, mem_gfx, gfx_a)
+(
+  ptr = mem;
+  lptr = mem_gfx;
+  loop(N,
+    xx = ptr[];
+    yy = ptr[2];
+    gfx_a = 0.6;
+    gfx_circle(xx, yy, 2, 1);
+    gfx_a = 0.25;
+    gfx_line(lptr[], lptr[1], xx, yy);
+    gfx_line(lptr[] + 1, lptr[1] + 1, xx + 1, yy + 1);
+    lptr[] = xx;
+    lptr[1] = yy;
+    ptr += 4;
+    lptr += 2;
+  );
+);
+
+N = 25;
+mem = 0;
+
+mem_gfx = 32768;
+
+tsq = 0.000001;
+freemem = 32768 * 2;
+BUF_SIZE = 32768 * 2;
+freemem = (left = freemem) + BUF_SIZE;
+freemem = (right = freemem) + BUF_SIZE;
+l_buffer.initBuffer(left, left + BUF_SIZE);
+r_buffer.initBuffer(right, right + BUF_SIZE);
+
+!populated ? (
+  populate(mem, mem_gfx, arena_w / 4, arena_h / 4, arena_w / 2, arena_h / 2, 128);
+  populated = 1;
+);
+
+last_depth = depth;
+
+@slider
+
+@block
+d_depth = (depth - last_depth) / samplesblock;
+
+
+@sample
+last_depth += d_depth;
+
+csample += 1;
+tsq = 0.000001 * timescale;
+update_cnt = 128;
+
+(csample % update_cnt == 0) ? (
+  verlet_integrate(mem, bees);
+  csample = 0;
+);
+
+delta = csample / update_cnt;
+
+l_buffer.writeBuffer(spl0);
+r_buffer.writeBuffer(spl1);
+
+left = 0;
+right = 0;
+ptr = mem;
+loop(bees,
+  pos = ptr[] * delta + ptr[1] * (1.0 - delta);
+  pan = ptr[2] * delta + ptr[3] * (1.0 - delta);
+
+  cpan = 0.5 * $pi * pan / arena_h;
+  cpan_l = cos(cpan);
+  cpan_r = sin(cpan);
+  
+  left += l_buffer.readBuffer_cheapo(last_depth * abs(pos)) * cpan_l;
+  right += r_buffer.readBuffer_cheapo(last_depth * abs(pos)) * cpan_r;
+  
+  ptr += 4;
+);
+
+isqn = 1.0 / sqrt(N);
+spl0 = left * isqn;
+spl1 = right * isqn;
+
+@gfx 1200 600
+scale = min(gfx_w / arena_w, gfx_h / arena_h);
+iscale = 1.0 / scale;
+
+((lw != arena_w) || (lh != arena_h)) ? (
+  gfx_setimgdim(1, arena_w, arena_h);
+  gfx_dest = 1;
+  gfx_set(0, 0, 0, 1.0);
+  gfx_x = 0;
+  gfx_y = 0;
+  gfx_rect(0, 0, arena_w, arena_h);
+  lw = arena_w;
+  lh = arena_h;
+  gfx_dest = -1;
+);
+
+gfx_dest = 1;
+gfx_mode = 1;
+gfx_x = gfx_y = 0;
+
+gfx_x = rand() * 30;
+gfx_y = rand() * 30;
+gfx_a = 0.08;
+gfx_blit(1, 1.0, 0.0);
+
+gfx_blurto(arena_w, arena_h);
+gfx_set(0, 0, 0, 0.05);
+gfx_rect(0, 0, arena_w, arena_h);
+
+gfx_set(1.0, 1.0, 1.0, 0.1);
+gfx_setfont(2, "Arial", 500);
+gfx_measurestr("BEEZ", str_w, str_h);
+gfx_x = 0.5 * (arena_w - str_w) + rand() * 10;
+gfx_y = 0.5 * (arena_h - str_h) + rand() * 10;
+gfx_printf("BEEZ");
+
+gfx_set(1, 1, 1, 1);
+draw(mem, bees);
+
+gfx_dest = -1;
+gfx_mode = 0;
+gfx_x = 0;
+gfx_y = 0;
+gfx_set(1, 1, 1, 1);
+gfx_blit(1, scale, 0.0);
+gfx_x = gfx_y = 0;
+gfx_setfont(0);
