@@ -123,10 +123,10 @@ global()
 
 function set_pars_stft_basic(f_0)
 global(soundboard_factor, srate, model, legacy_gain)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, max_bin, norm_factor)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, max_bin, norm_factor, s)
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, num_partials,
-  base_damp, f_damp, inharm, rel_position, max_partial,
+  base_damp, f_damp, inharm, rel_position, max_partial, mod,
 )
 (
   norm_factor = calc_base_gain(f_0);
@@ -163,15 +163,46 @@ instance(
     );
     k += k_inc;
   );
+  
+  mod ? (
+    norm_factor *= 0.1 * mod;
+    s = -2.5 * mod;
+    loop(4,
+      s += mod;
+      k = 1;
+      loop(5,
+        f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1)) + s * k;
+        omega_k = 2.0 * $pi * f_k;
+        advance = omega_k * irate;
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+        
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + f_damp * omega_k) * irate);
+            
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+              
+          mix_mem[num_partials] = norm_factor * sin(k * $pi * rel_position) * 100 * (k * soundboard_factor) / f_k;
+          num_partials += 1; idx += 2;
+        );
+        k += k_inc;
+      );
+    );
+  );
 );
 
 
 function set_pars_stft_messy(f_0)
 global(soundboard_factor, srate, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin, norm_factor)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, k_inc, offset, max_bin, norm_factor, s)
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, num_partials,
-  base_damp, f_damp, inharm, rel_position, max_partial,
+  base_damp, f_damp, inharm, rel_position, max_partial, mod,
 )
 (
   norm_factor = calc_base_gain(f_0);
@@ -212,14 +243,47 @@ instance(
     );
     k += 1;
   );
+  
+  mod ? (
+    norm_factor *= 0.25 * min(mod, 1.0);
+    s = -2.5 * mod;
+    loop(4,
+      s += mod;
+      k = 1;
+      offset = 0;
+      loop(4,
+        f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1)) + offset * (1 + .05 * k * k) * (0.1 + rel_position);
+        omega_k = 2.0 * $pi * (f_k + s * k);
+        advance = omega_k * irate;
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+        
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+        
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + f_damp * omega_k * (1 + f_k / 1000)) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+            
+          mix_mem[num_partials] = 0.5 * norm_factor * ((2 * floor(k / 2) != floor(k)) + 0.08) * 100 * (k * soundboard_factor) / f_k;
+          num_partials += 1; idx += 2;
+        );
+        k += 1;
+      );
+    );
+  );
 );
 
 function set_pars_stft_beam(f_0, clamped)
 global(soundboard_factor, srate, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, norm_factor)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, norm_factor, s)
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, num_partials,
-  base_damp, f_damp, inharm, rel_position, max_partial,
+  base_damp, f_damp, inharm, rel_position, max_partial, mod,
 )
 (
   norm_factor = calc_base_gain(f_0);
@@ -279,15 +343,71 @@ instance(
     );
     k += 1;
   );
+  
+  mod ? (
+    norm_factor *= 0.03 * mod;
+    s = -2.5 * mod;
+    loop(4,
+      s += mod;
+      k = 2;
+      loop(3,
+        clamped ? (
+          (k == 1) ? (
+            f_k = f_0 * 0.59686420;
+          ) : ( k == 2 ) ? (
+            f_k = f_0 * 1.49417560;
+          ) : ( k == 3 ) ? (
+            f_k = f_0 * 2.50024690;
+          ) : ( k == 4 ) ? (
+            f_k = f_0 * 3.49998930;
+          ) : ( 
+            f_k = f_0 * (k - 0.5);
+          );
+        ) : (
+          (k == 1) ? (
+            f_k = f_0 * 1.5056187;
+          ) : ( k == 2 ) ? (
+            f_k = f_0 * 2.4997527;
+          ) : ( k == 3 ) ? (
+            f_k = f_0 * 3.5000107;
+          ) : ( 
+            f_k = f_0 * (k + 0.5);
+          );
+        );
+        f_k *= (1 + inharm * k);
+        f_k += s * k;
+        omega_k = 2.0 * $pi * f_k;
+        advance = omega_k * irate;
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+        
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+        
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+          
+          mix_mem[num_partials] = norm_factor * sin(k * $pi * rel_position) * 100 * (k * soundboard_factor) / f_k;
+          num_partials += 1; idx += 2;
+        );
+        k += 1;
+      );
+    );
+  );
 );
 
 
 function set_pars_stft_marimba(f_0)
 global(soundboard_factor, srate, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp, norm_factor)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp, norm_factor, s)
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, num_partials,
-  base_damp, f_damp, inharm, rel_position, max_partial
+  base_damp, f_damp, inharm, rel_position, max_partial, mod,
 )
 (
   norm_factor = calc_base_gain(f_0);
@@ -350,6 +470,58 @@ instance(
       num_partials += 1; idx += 2;
     );
     k += 1;
+  );
+  
+  mod ? (
+    norm_factor *= 0.2 * min(mod, 1.0);
+    s = -2.5 * mod;
+    loop(4,
+      s += mod;
+      k = 1;
+      loop(partials,
+        camp = 1;
+        (k < 9) ? (
+          (k == 1) ? (
+            f_k = f_0;
+          ) : ( k == 2 ) ? (
+            f_k = f_0 * 4;
+          ) : ( k == 3 ) ? (
+            f_k = f_0 * 10.25;
+          ) : ( k == 4 ) ? (
+            f_k = f_0 * 19;
+          ) : ( k == 5 ) ? (
+            f_k = f_0 * 24.352574; // Torsional
+            camp = 0.04 + 0.2 * rel_position;
+          );
+        ) : ( 
+          f_k = f_0 * k * 2;
+          camp = 0.09;
+        );
+        f_k *= sqrt((1 + inharm * k * k));
+        f_k += s * k;
+        omega_k = 2.0 * $pi * f_k;
+        advance = omega_k * irate;
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+        
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+        
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+          
+          mix_mem[num_partials] = norm_factor * camp * 100 * (k * soundboard_factor) / f_k;
+          num_partials += 1; idx += 2;
+        );
+        k += 1;
+      );
+      
+    );
   );
 );
 
@@ -423,11 +595,13 @@ local(
   x, xsq, ptr,
   inharm_01, damp_01, // Mapped to [0 - 1]
   new_freq, new_damp, new_amp,
+  
+  norm_factor, s,
 )
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem,
   fft_size, fft_interval, num_partials, max_partial,
-  rel_position,
+  rel_position, mod,
 )
 (
   memset(coeff_mem, 0, 2 * fft_size);
@@ -456,6 +630,7 @@ instance(
   // Sorry devs who see this. Mistakes of the past ;_;
   inharm_01 = 0.25 * inharmonic + 1; // inharmonic - Value between -4 and 0 (linearly mapped) => [0, 1]
   damp_01 = 0.2 * freq_damp + 1.2; // freq_damp - Value between -6 and -1 (linearly mapped) => [0, 1]
+  norm_factor = 0.16 * Adivfs;
   
   loop(partials,
     // Sensitivity feels better when mapping nonlinearly
@@ -480,13 +655,53 @@ instance(
       damp = exp(-new_damp * irate);
       coeff_mem[idx] = cos(advance) * damp;
       coeff_mem[idx + 1] = sin(advance) * damp;
-      mix_mem[num_partials] = 0.16 * Adivfs * new_amp;
+      mix_mem[num_partials] = norm_factor * new_amp;
       num_partials += 1; idx += 2;
     );
     
     k += 1;
   );
-  k
+  
+  mod ? (
+    norm_factor *= 0.16 * min(mod, 1.0);
+    s = -2.5 * mod;
+    loop(4,
+      s += mod;
+      k = 1;
+      
+      loop(4,
+        // Sensitivity feels better when mapping nonlinearly
+        x = m_freq_relative[k - 1] * (1.0 - inharm_01) + m_freq_relative2[k - 1] * inharm_01;
+        xsq = x * x; relative_freq = sign(x) * (3 * xsq - 2 * xsq * abs(x));
+        
+        new_freq = f_0 * (k + relative_freq) + m_freq_abs[k - 1] * (1.0 - inharm_01) + m_freq_abs2[k - 1] * inharm_01;
+        new_damp = - ((m_decay[k - 1] * (1.0 - damp_01) + m_decay2[k - 1] * damp_01) - 1);
+        new_amp = m_amplitude[k - 1] * (1.0 - rel_position) + m_amplitude2[k - 1] * rel_position;
+        new_amp = new_amp > -71.999 ? pow(10, new_amp / 20) : 0;
+        
+        omega_k = 2.0 * $pi * (new_freq + s * k);
+        advance = omega_k * irate;
+        bin = 2 * floor((new_freq / srate) * (2 * fft_size) + 0.5);
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+        
+          bin_mem[num_partials] = bin;
+          damp = exp(-new_damp * irate);
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+          mix_mem[num_partials] = norm_factor * new_amp;
+          num_partials += 1; idx += 2;
+        );
+        
+        k += 1;
+      );
+    );
+  );
+  
+  num_partials
 );
 
 function _stft_rot_phase(bin_diff, idx)
@@ -506,9 +721,6 @@ instance(fft_interval, fft_size, state_mem)
   
   state_mem[idx] = re * rerot - im * imrot;
   state_mem[idx + 1] = re * imrot + im * rerot;
-  
-  //state_mem[idx] *= -1;
-  //state_mem[idx + 1] *= -1;
 );
 
 function set_pars_stft_from_memory_b(f_0)
@@ -526,11 +738,13 @@ local(
   x, xsq, ptr,
   inharm_01, damp_01, // Mapped to [0 - 1]
   new_freq, new_damp, new_amp,
+  
+  norm_factor, s,
 )
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, inharm,
   fft_size, fft_interval, num_partials, max_partial,
-  rel_position, base_damp, f_damp,
+  rel_position, base_damp, f_damp, mod,
 )
 (
   memset(coeff_mem, 0, 2 * fft_size);
@@ -552,6 +766,7 @@ instance(
   ptr = (m_decay = ptr) + 2 * MAX_CUSTOM_PARTIALS;
   ptr = (m_amplitude = ptr) + 2 * MAX_CUSTOM_PARTIALS;
   
+  norm_factor = 0.16 * Adivfs;
   loop(partials,
     // Sensitivity feels better when mapping nonlinearly
     x = m_freq_relative[k - 1];
@@ -573,18 +788,57 @@ instance(
       );
     
       bin_mem[num_partials] = bin;
-      damp = exp(- (new_damp + base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
+      damp = exp(- (new_damp + base_damp + (f_damp * 0.001) * omega_k * omega_k) * irate);
       
       coeff_mem[idx] = cos(advance) * damp;
       coeff_mem[idx + 1] = sin(advance) * damp;
-      mix_mem[num_partials] = 0.16 * Adivfs * new_amp * sin(k * $pi * rel_position);
+      mix_mem[num_partials] = norm_factor * new_amp * sin(k * $pi * rel_position);
       num_partials += 1; idx += 2;
     );
     
     k += 1;
   );
   
-  k
+  mod ? (
+    norm_factor *= 0.12 * min(mod, 1.0);
+    s = -2.5 * mod;
+    loop(4,
+      s += mod;
+      k = 1;
+      
+      loop(4,
+        // Sensitivity feels better when mapping nonlinearly
+        x = m_freq_relative[k - 1];
+        xsq = x * x;
+        relative_freq = sign(x) * (3 * xsq - 2 * xsq * abs(x));
+        
+        new_freq = f_0 * sqrt((1 + inharm * k * k)) * (k + relative_freq) + m_freq_abs[k - 1];
+        new_damp = - (m_decay[k - 1] - 1);
+        new_amp = m_amplitude[k - 1];
+        new_amp = new_amp > -71.999 ? pow(10, new_amp / 20) : 0;
+        
+        omega_k = 2.0 * $pi * (new_freq + s * k);
+        advance = omega_k * irate;
+        bin = 2 * floor((new_freq / srate) * (2 * fft_size) + 0.5);
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+        
+          bin_mem[num_partials] = bin;
+          damp = exp(- (new_damp + base_damp + (f_damp * 0.001) * omega_k * omega_k) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+          mix_mem[num_partials] = norm_factor * new_amp * sin(k * $pi * rel_position);
+          num_partials += 1; idx += 2;
+        );
+      );
+    );
+  );
+  
+  num_partials
 );
 
 function grayscale()
@@ -663,10 +917,10 @@ local(frac)
 
 function set_pars_stft_pan(f_0)
 global(soundboard_factor, srate, model, bessel_roots)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp, norm_factor)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp, norm_factor, s)
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, num_partials
-  base_damp, f_damp, inharm, rel_position, max_partial
+  base_damp, f_damp, inharm, rel_position, max_partial, mod
 )
 (
   norm_factor = calc_base_gain(f_0);
@@ -742,6 +996,63 @@ instance(
     );
     k += 1;
   );
+  
+  mod ? (
+    norm_factor *= 0.2 * min(2.0 * mod, 1.0);
+    s = -5 * mod;
+    loop(4,
+      s += mod + mod;
+      k = 1;
+      loop(4,
+        camp = 1;
+        (k < 11) ? (
+          (k == 1) ? (
+            f_k = f_0;
+            camp = 3.5 - 1.0 * rel_position;
+          ) : ( k == 2 ) ? (
+            f_k = f_0 * 1.19672275218;
+            camp = 0.05 + 0.26 * rel_position;
+          ) : ( k == 3 ) ? (
+            f_k = f_0 * 0.74899885;
+            camp = 0.05 + 0.18 * rel_position;
+          ) : ( k == 4 ) ? (
+            f_k = f_0 * 1.57885;
+            camp = 0.01 + 0.03 * rel_position;
+            camp *= 0;
+          ) : ( k == 5 ) ? (
+            f_k = f_0 * 2.000333953889411;
+            camp = 0.025
+          );
+        ) : ( 
+          f_k = f_0 * (k + 2) * 0.5;
+          camp = 0.0005;
+        );
+        f_k *= sqrt((1 + (inharm - 0.0001) * k * k));
+        f_k += k * s;
+        camp *= 0.33;
+        omega_k = 2.0 * $pi * f_k;
+        advance = omega_k * irate;
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+        
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+          
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + (5/k) + (f_damp / 1000) * omega_k * omega_k) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+            
+          mix_mem[num_partials] = norm_factor * camp * 100 * (k * soundboard_factor) / f_k;
+          num_partials += 1; idx += 2;
+        );
+        k += 1;
+      );
+    );
+  );
 );
 
 
@@ -785,10 +1096,10 @@ instance(
 
 function set_pars_stft_vowel(f_0, vowel)
 global(soundboard_factor, srate, Adivfs, model)
-local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp, tmp, spectrum_a, spectrum_b, spectrum_idx, spectrum_frac)
+local(idx, k, f_k, omega_k, advance, bin, irate, damp, partials, max_bin, camp, tmp, spectrum_a, spectrum_b, spectrum_idx, spectrum_frac, s, norm_factor)
 instance(
   bin_mem, coeff_mem, mix_mem, state_mem, fft_size, fft_interval, num_partials
-  base_damp, f_damp, inharm, rel_position, max_partial,
+  base_damp, f_damp, inharm, rel_position, max_partial, mod,
 )
 (
   memset(coeff_mem, 0, 2 * fft_size);
@@ -825,7 +1136,7 @@ instance(
       );
       
       bin_mem[num_partials] = bin;
-      damp = exp(- (base_damp + (f_damp / 1000) * omega_k * omega_k) * irate);
+      damp = exp(- (base_damp + (f_damp * 0.001) * omega_k * omega_k) * irate);
       
       coeff_mem[idx] = cos(advance) * damp;
       coeff_mem[idx + 1] = sin(advance) * damp;
@@ -834,6 +1145,45 @@ instance(
       num_partials += 1; idx += 2;
     );
     k += 1;
+  );
+  
+  mod ? (
+    norm_factor = 0.3 * min(2.0 * mod, 1.0) * Adivfs;
+    s = -5 * mod;
+    loop(4,
+      s += (mod + mod);
+      k = 2;
+      
+      loop(4,
+        f_k = f_0 * k * sqrt((1 + (inharm - 0.0001) * k * k)) + s * k;
+        camp = f_k < 22050 ? (
+          tmp = f_k - floor(f_k);
+          (spectrum_a[f_k] * (1.0 - tmp) + spectrum_a[f_k + 1] * tmp) * (1 - spectrum_frac) +
+          (spectrum_b[f_k] * (1.0 - tmp) + spectrum_b[f_k + 1] * tmp) * spectrum_frac
+        ) : 0;
+        
+        omega_k = 2.0 * $pi * f_k;
+        advance = omega_k * fft_interval / srate;
+        bin = 2 * floor((f_k / srate) * (2 * fft_size) + 0.5);
+        
+        bin < max_bin ? (
+          (bin != bin_mem[num_partials]) ? (
+            state_mem[idx] *= -1;
+            state_mem[idx + 1] *= -1;
+          );
+          
+          bin_mem[num_partials] = bin;
+          damp = exp(- (base_damp + (f_damp * 0.001) * omega_k * omega_k) * irate);
+          
+          coeff_mem[idx] = cos(advance) * damp;
+          coeff_mem[idx + 1] = sin(advance) * damp;
+          
+          mix_mem[num_partials] = norm_factor * camp;
+          num_partials += 1; idx += 2;
+        );
+        k += 1;
+      );
+    );
   );
 );
 
@@ -948,15 +1298,23 @@ global()
 // Writes impulses to the input buffer.
 function read_stft(f_h)
 local()
-global()
+global(bp_resonator_mode)
 instance(
   fft_idx, fft_interval,
   input_mem, input_idx,
   in_fft_mem, out_fft_mem, window_mem,
-  fft_size, buffer_size
+  fft_size, buffer_size,
+  
+  in_m2, in_m1, current_in,
 )
 (
   input_idx == buffer_size ? input_idx = 0;
+  
+  in_m2 = in_m1;
+  in_m1 = current_in;
+  current_in = f_h;
+  f_h = bp_resonator_mode ? 4.0 * (current_in - in_m2) : current_in;
+  
   input_mem[input_idx] = f_h;
   
   (fft_idx == fft_interval) ? (
