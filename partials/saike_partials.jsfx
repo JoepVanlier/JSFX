@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.58
+version: 0.59
 author: Joep Vanlier
-changelog: Fix envelope release bug (release mode would act like retrigger towards sustain level).
+changelog: Add option for frequency beating in STFT mode.
 license: MIT
 provides:
   partials_dependencies/*
@@ -56,8 +56,8 @@ slider42:inharmonicity_release=0<-4,4,0.00000001>-Inharmonicity release mod
 
 slider43:force_fb_vel=1<-15,15,0.0001>-Forced feedback Velocity Sensitivity (USE AT YOUR OWN RISK)
 
-slider44:lf_mod=0<0,4,0.01>Modulation
-slider45:lf_mod_vel=0<-4,4,0.01>Modulation velocity sensitivity
+slider44:lf_mod=0<0,4,0.01>-Modulation
+slider45:lf_mod_vel=0<-4,4,0.01>-Modulation velocity sensitivity
 slider52:glide_speed=0<0,1,1>-Glide [10-1000ms]
 slider53:legacy_gain=0<0,1,1>-Legacy mode
 slider54:brightness_vel=0<0,1,0.0001>-Brightness vel
@@ -103,7 +103,7 @@ env.init_envelope(0, 56, 57, 59, 58);
 env2.init_envelope(1, 36, 37, 39, 38);
 
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
-version = 8;
+version = 9;
 
 string1.used_partials = string2.used_partials = string3.used_partials = string4.used_partials = string5.used_partials = 0;
 
@@ -125,6 +125,8 @@ spin_depth_knob.init_knob(0, 4, 0, 26, 0, 0);
 
 filter_cutoff_knob.init_knob(0, 1, 0.4, 30, 31, 0);
 filter_envelope_knob.init_knob(-1, 1, 0.5, 34, 35, 0);
+
+modulation_knob.init_knob(0, 4, 0, 44, 45, 0);
 
 function stft_init()
 local()
@@ -937,7 +939,12 @@ file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
   file_var(0, bp_resonator_mode);  
 );
 
-version = 8;
+(version < 9) ? (
+  lf_mod = 0;
+  lf_mod_vel = 0;
+);
+
+version = 9;
 last_selected_sample = -1;
 reset_zoom = 1;
 
@@ -1429,6 +1436,23 @@ instance(_x, _y, _r, relative_position)
       );
       sy += 1;
     );
+  ) : ( id == 25 ) ? (
+    gfx_a = 0.2 + 0.8 * enabled;
+    rr = 0.4 * _r * (0.25 + 0.75 * relative_position);
+    di = 10 / _r / (0.4);
+    sy = 0;
+    loop(2,
+      i = 0;
+      s = _x - 0.4 * _r;
+      gfx_x = s;
+      gfx_y = _y + sy;
+      loop(0.8 * _r,
+        gfx_lineto(s, _y + sy - rr * sin(- 0.35 * i), 1);
+        s += 1;
+        i += di;
+      );
+      sy += 1;
+    );
   );
 );
 
@@ -1819,25 +1843,30 @@ force_fb.draw_knob(cx, cy, radius, "", "Feedback Level", 1, 1 - stft_selection);
 force_fb.gfx_draw_icon(6, 1 - stft_selection);
 cx += 2 * radius + knob_spacing;
 
-max_partial = max(string5.used_partials, max(string4.used_partials, max(string3.used_partials, max(string2.used_partials, string1.used_parials))));
-partials.textbox_control(cx + 0.9 * radius, cy - 1.2 * radius, 12, 1.0 - stft_selection, sprintf(22, 
-"Number of partials to use.
+stft_selection ? (
+  modulation_knob.draw_knob(cx, cy, radius, "", "Partial fluctuation\n\nIncreasing this adds extra partials close to the\npartials of the sound. This creates a chorus-like\nsound.", 1, stft_selection);
+  modulation_knob.gfx_draw_icon(25, stft_selection);
+) : (
+  max_partial = max(string5.used_partials, max(string4.used_partials, max(string3.used_partials, max(string2.used_partials, string1.used_parials))));
+  partials.textbox_control(cx + 0.9 * radius, cy - 1.2 * radius, 12, 1.0 - stft_selection, sprintf(22, 
+  "Number of partials to use.
+  
+  More leads to more high frequencies but higher CPU use.
+  Low notes tend to require more partials. The currently 
+  highest requested count is: %d
+  ", max_partial), 16);
+  partials.over ? (
+    (mouse_cap & 2 == 2) ? (
+      menu_selection = gfx_showmenu("16|32|48|64");
+    );
+    menu_selection ? (
+      partials = 16 * menu_selection;
+    );
+  );
 
-More leads to more high frequencies but higher CPU use.
-Low notes tend to require more partials. The currently 
-highest requested count is: %d
-", max_partial), 16);
-partials.over ? (
-  (mouse_cap & 2 == 2) ? (
-    menu_selection = gfx_showmenu("16|32|48|64");
-  );
-  menu_selection ? (
-    partials = 16 * menu_selection;
-  );
+  stiffness_knob.draw_knob(cx, cy, radius, "", "Stiffness (tends to make things louder)", 1, 1 - stft_selection);
+  stiffness_knob.gfx_draw_icon(4, 1 - stft_selection);
 );
-
-stiffness_knob.draw_knob(cx, cy, radius, "", "Stiffness (tends to make things louder)", 1, 1 - stft_selection);
-stiffness_knob.gfx_draw_icon(4, 1 - stft_selection);
 cx += 2 * radius + knob_spacing;
 
 choice_x = cx - radius;
@@ -2087,7 +2116,7 @@ sample_data_gfx_finalize();
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.58 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.59 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
