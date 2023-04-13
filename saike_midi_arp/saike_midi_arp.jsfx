@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.30
+version: 0.31
 author: Joep Vanlier
-changelog: Added MIDI passthrough option. Added 4 more CC channels. Fixed bug that prevented block selecting the last CC row. Fixed bug that did not show last touched for the CC parameters.
+changelog: Added optional sorting.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -62,20 +62,46 @@ import saike_midi_arp_pattern_handling.jsfx-inc
 import saike_midi_arp_gfx_funcs.jsfx-inc
 
 @init
-file_version = CURRENT_VERSION = 5;
+file_version = CURRENT_VERSION = 6;
 last_sequencer_index = -1;
 gfx_ext_retina = 1;
 MAX_POLYPHONY = 12;
 function assign_notes(arp_mem, poly_mode)
-local(idx, idx2, dir)
-instance(notes_on, active_note_mem)
-global()
+local(idx, idx2, dir, used_note_mem, change, idx, tmp)
+instance(notes_on, active_note_mem, sorted_note_mem)
+global(enable_midi_sort)
 (
+  enable_midi_sort ? (
+    memcpy(sorted_note_mem, active_note_mem, notes_on);
+    
+    // Simple bubble sort
+    change = 1;
+    while(change) (
+      change = 0;
+      idx = 0;
+      loop(notes_on - 1,
+        (sorted_note_mem[idx] > sorted_note_mem[idx + 1]) ? (
+          // Swap elements
+          tmp = sorted_note_mem[idx];
+          sorted_note_mem[idx] = sorted_note_mem[idx + 1];
+          sorted_note_mem[idx + 1] = tmp;
+          
+          change = 1; // Need another pass
+        );
+        idx += 1;
+      );
+    );
+  
+    used_note_mem = sorted_note_mem;
+  ) : (
+    used_note_mem = active_note_mem;
+  );
+
   idx = 0;
   (poly_mode == 0) ? (
     // No extend
     loop(notes_on,
-      arp_mem[idx] = active_note_mem[idx];
+      arp_mem[idx] = used_note_mem[idx];
       idx += 1;
     );
     loop(12 - notes_on,
@@ -87,7 +113,7 @@ global()
     idx = 0;
     idx2 = 0;
     loop(12,
-      arp_mem[idx] = active_note_mem[idx2];
+      arp_mem[idx] = used_note_mem[idx2];
       idx += 1; idx2 += 1;
       (idx2 == notes_on) ? idx2 = 0;
     );
@@ -97,7 +123,7 @@ global()
     idx2 = 0;
     dir = 1;
     loop(12,
-      arp_mem[idx] = active_note_mem[idx2];
+      arp_mem[idx] = used_note_mem[idx2];
       idx += 1; idx2 += dir;
       (idx2 == notes_on - 1) ? (dir = -dir);
       (idx2 == 0) ? (dir = -dir);
@@ -285,6 +311,12 @@ file_var(0, enable_mod);
   enable_cc7 = 0;
   enable_cc8 = 0;
   disable_midi = 0;
+);
+
+(file_version > 5) ? (
+  file_var(0, enable_midi_sort);
+) : (
+  enable_midi_sort = 0;
 );
 
 file_version = CURRENT_VERSION;
@@ -911,28 +943,32 @@ micro_view ? (
   !disable_midi ? (
     cx += ctrl_spacing;
     cx = poly_mode.selection_button(0, cx, yc + 2, 1.8 * block_width, host_toggles, "Once", 0.2, 0.1, 0.05, "Don't repeat notes.");
-    cx = poly_mode.selection_button(1, cx, yc + 2, 2.0* block_width, host_toggles, "Repeat", 0.2, 0.1, 0.05, "Repeat notes to fill polyphony.");
+    cx = poly_mode.selection_button(1, cx, yc + 2, 2.0 * block_width, host_toggles, "Rep", 0.2, 0.1, 0.05, "Repeat notes to fill polyphony.");
     cx = poly_mode.selection_button(2, cx, yc + 2, 1.8 * block_width, host_toggles, "Bidi", 0.2, 0.1, 0.05, "Repeat notes bidirectionally to fill polyphony.");
     poly_mode = poly_mode.value;
   );
   
+  sort_midi.value = enable_midi_sort;
+  cx = sort_midi.selection_button(-1, cx, yc + 2, 0.75 * block_width, block_width - 4, "↗", 0.2, 0.1, 0.05, "Sort incoming MIDI notes.");
+  enable_midi_sort = sort_midi.value;
+  
   pattern_toggle.value = -1;
   cx += ctrl_spacing;
-  cx = pattern_toggle.selection_button(0, cx, yc + 2, 0.9 * block_width, host_toggles, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
+  cx = pattern_toggle.selection_button(0, cx, yc + 2, 0.8 * block_width, host_toggles, "«", 0.3, 0.1, 0.05, "Decrease pattern index.");
   cx = pattern_toggle.drag_button(1, cx, yc + 2, 1.2 * block_width, host_toggles, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
-  cx = pattern_toggle.selection_button(2, cx, yc + 2, 0.9 * block_width, host_toggles, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
+  cx = pattern_toggle.selection_button(2, cx, yc + 2, 0.8 * block_width, host_toggles, "»", 0.3, 0.1, 0.05, "Increase pattern index.");
   
   cx += ctrl_spacing;
   
-  cx = pattern_toggle.selection_button(5, cx, yc + 2, block_width, host_toggles, "/\\", 0.316, 0.3, 0.425, "Increase pattern length.");
+  cx = pattern_toggle.selection_button(5, cx, yc + 2, 0.8 * block_width, host_toggles, "▲", 0.316, 0.3, 0.425, "Increase pattern length.");
   cx = pattern_toggle.drag_button(6, cx, yc + 2, 1.2 * block_width, host_toggles, sprintf(3, "%d", loop_point), 0.316, 0.3, 0.425, "Current pattern length", DRAG_SETTING);
-  cx = pattern_toggle.selection_button(7, cx, yc + 2, block_width, host_toggles, "\\/", 0.316, 0.3, 0.425, "Decrease pattern length.");
+  cx = pattern_toggle.selection_button(7, cx, yc + 2, 0.8 * block_width, host_toggles, "▼", 0.316, 0.3, 0.425, "Decrease pattern length.");
   
   cx += ctrl_spacing;
   
-  cx = pattern_toggle.selection_button(8, cx, yc + 2, 0.9 * block_width, host_toggles, "-", 0.16, 0.1, 0.425, "Decrease speed.");
+  cx = pattern_toggle.selection_button(8, cx, yc + 2, 0.8 * block_width, host_toggles, "-", 0.16, 0.1, 0.425, "Decrease speed.");
   cx = pattern_toggle.drag_button(9, cx, yc + 2, 1.2 * block_width, host_toggles, current_speed > 0 ? sprintf(3, "%d", current_speed) : sprintf(3, "1/%d", abs(current_speed) + 2), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
-  cx = pattern_toggle.selection_button(10, cx, yc + 2, 0.9 * block_width, host_toggles, "+", 0.16, 0.1, 0.425, "Increase speed.");
+  cx = pattern_toggle.selection_button(10, cx, yc + 2, 0.8 * block_width, host_toggles, "+", 0.16, 0.1, 0.425, "Increase speed.");
   
   cx = pattern_toggle.selection_button(3, cx + ctrl_spacing, yc + 2, 2 * block_width, host_toggles, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
   cx = pattern_toggle.selection_button(4, cx, yc + 2, 2 * block_width,host_toggles, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
