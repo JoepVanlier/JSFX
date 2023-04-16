@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect
-version: 0.59
+version: 0.60
 author: Joep Vanlier
-changelog: Add option for frequency beating in STFT mode.
+changelog: Add option for high frequency unison on some models in STFT mode. Add option for pitch bend beyond 2 (right mouse on play mode).
 license: MIT
 provides:
   partials_dependencies/*
@@ -58,6 +58,8 @@ slider43:force_fb_vel=1<-15,15,0.0001>-Forced feedback Velocity Sensitivity (USE
 
 slider44:lf_mod=0<0,4,0.01>-Modulation
 slider45:lf_mod_vel=0<-4,4,0.01>-Modulation velocity sensitivity
+slider46:lf_mod2=0<0,4,0.01>-Modulation 2
+slider47:lf_mod2_vel=0<-4,4,0.01>-Modulation 2 velocity sensitivity
 slider52:glide_speed=0<0,1,1>-Glide [10-1000ms]
 slider53:legacy_gain=0<0,1,1>-Legacy mode
 slider54:brightness_vel=0<0,1,0.0001>-Brightness vel
@@ -103,7 +105,7 @@ env.init_envelope(0, 56, 57, 59, 58);
 env2.init_envelope(1, 36, 37, 39, 38);
 
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
-version = 9;
+version = 10;
 
 string1.used_partials = string2.used_partials = string3.used_partials = string4.used_partials = string5.used_partials = 0;
 
@@ -127,6 +129,7 @@ filter_cutoff_knob.init_knob(0, 1, 0.4, 30, 31, 0);
 filter_envelope_knob.init_knob(-1, 1, 0.5, 34, 35, 0);
 
 modulation_knob.init_knob(0, 4, 0, 44, 45, 0);
+modulation2_knob.init_knob(0, 4, 0, 46, 47, 0);
 
 function stft_init()
 local()
@@ -309,19 +312,22 @@ global(
   stft,
   relative_position, damp, freq_damp, inharmonic,
   position_vel, damp_vel, freq_damp_vel, inharmonic_vel,
-  lf_mod, lf_mod_vel,
+  lf_mod, lf_mod_vel, lf_mod2, lf_mod2_vel,
 )
-instance(base_damp, f_damp, inharm, rel_position, freq, target_freq, last_vel, mod)
+instance(base_damp, f_damp, inharm, rel_position, freq, target_freq, last_vel, mod, mod2, new_note)
 (
   // position 0 to 1
   // damp -2 to 2
   // freq_damp -6 to -1
   // inharmonic -4 to 0
+  new_note = max(new_note, (last_vel != vel) && !glide);
+  
   last_vel = vel;
   rel_position = min(max(0, relative_position + position_vel * vel), 1);
   base_damp = 10^(min(max(-2, damp + damp_vel * vel), 2));
   f_damp = 10^(min(max(-6, freq_damp + freq_damp_vel * vel), -1));
   mod = max(0, lf_mod + vel * lf_mod_vel);
+  mod2 = max(0, lf_mod2 + vel * lf_mod2_vel);
   
   inharm = inharm * 0.8 + 0.2 * 10^(min(max(-4, inharmonic + inharmonic_vel * vel), 0));
   
@@ -455,7 +461,8 @@ global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, s
        string2.update_freq,
        string3.update_freq,
        string4.update_freq,
-       string5.update_freq
+       string5.update_freq,
+       pitchbend_range
        )
 local(ref_pitch, scaling, max_vel,
       note_vel0, note_vel1, note_vel2, note_vel3, note_vel4,
@@ -464,7 +471,7 @@ local(ref_pitch, scaling, max_vel,
       )
 (
   scaling = 440;
-  ref_pitch = 2 * midi.pitchbend + pitch_shift - 69;
+  ref_pitch = pitchbend_range * midi.pitchbend + pitch_shift - 69;
   
   midi_recv = max(midi_recv, ((note_state0 > 0) + (note_state1 > 0) + (note_state2 > 0) + (note_state3 > 0) + (note_state4 > 0)) > 0);
   latest_note = note_history[notes_on - 1];
@@ -944,7 +951,14 @@ file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
   lf_mod_vel = 0;
 );
 
-version = 9;
+(version < 10) ? (
+  lf_mod2 = lf_mod2_vel = 0;
+  pitchbend_range = 2;
+) : (
+  file_var(0, pitchbend_range);
+);
+
+version = 10;
 last_selected_sample = -1;
 reset_zoom = 1;
 
@@ -1453,6 +1467,27 @@ instance(_x, _y, _r, relative_position)
       );
       sy += 1;
     );
+  ) : ( id == 26 ) ? (
+    gfx_a = 0.2 + 0.8 * enabled;
+    rr = 0.8 * _r * (0 + 1.2 * relative_position);
+    i = 0;
+    
+    gfx_line(_x, _y + 0.4 * _r, _x, _y - 0.4 * _r);
+    gfx_line(_x + 1, _y + 0.4 * _r, _x + 1, _y - 0.4 * _r);
+    gfx_line(_x - 1, _y + 0.4 * _r, _x - 1, _y - 0.4 * _r);
+    
+    loop(2,
+      s = _x - 0.4 * rr;
+      sy = -2;
+      gfx_x = s;
+      gfx_y = _y + sy;
+      loop(5,
+        gfx_line(s + i, _y + 0.4 * _r, s + i, _y - 0.4 * _r / (1.0 + 1.2 * abs(sy)));
+        s += 0.2 * rr;
+        sy += 1;
+      );
+      i += 1;
+    );
   );
 );
 
@@ -1781,10 +1816,36 @@ playmode_knob.gfx_draw_icon(8 + floor(play_mode), 1);
 
 playmode_knob.over ? (
   ((mouse_cap & 2) == 2) && (last_cap == 0) ? (
-    menu_selection = gfx_showmenu("Audio input fixed notes|Audio input with MIDI notes|Spike impulse with MIDI notes|Noise impulse with MIDI notes|Continuous notes MIDI|Sample based impulse");
+    menu_selection = gfx_showmenu(
+    sprintf(10, "%sAudio input fixed notes|%sAudio input with MIDI notes|%sSpike impulse with MIDI notes|%sNoise impulse with MIDI notes|%sContinuous notes MIDI|%sSample based impulse|>Pitch bend|%s00|%s01|%s02|%s03|%s04|%s05|%s06|%s07|%s08|%s09|%s10|%s11|%s12",
+    (play_mode >= 0) && (play_mode < 1) ? "!" : "",
+    (play_mode >= 1) && (play_mode < 2) ? "!" : "",
+    (play_mode >= 2) && (play_mode < 3) ? "!" : "",
+    (play_mode >= 3) && (play_mode < 4) ? "!" : "",
+    (play_mode >= 4) && (play_mode < 5) ? "!" : "",
+    (play_mode >= 5) && (play_mode < 6) ? "!" : "",
+    (pitchbend_range == 0) ? "!" : "",
+    (pitchbend_range == 1) ? "!" : "",
+    (pitchbend_range == 2) ? "!" : "",
+    (pitchbend_range == 3) ? "!" : "",
+    (pitchbend_range == 4) ? "!" : "",
+    (pitchbend_range == 5) ? "!" : "",
+    (pitchbend_range == 6) ? "!" : "",
+    (pitchbend_range == 7) ? "!" : "",
+    (pitchbend_range == 8) ? "!" : "",
+    (pitchbend_range == 9) ? "!" : "",
+    (pitchbend_range == 10) ? "!" : "",
+    (pitchbend_range == 11) ? "!" : "",
+    (pitchbend_range == 12) ? "!" : ""
+    )
+    );
     menu_selection > 0 ? (
-      play_mode = menu_selection - 1;
-      menu_selection = 0;
+      menu_selection < 6 ? (
+        play_mode = menu_selection - 1;
+        menu_selection = 0;
+      ) : (
+        pitchbend_range = menu_selection - 7;
+      );
     );
   );
 );
@@ -1839,14 +1900,18 @@ last_stft = stft_selection;
 
 bp_resonator_mode = resonatorModeToggle.processMouseToggle(cx + 0.95 * radius, cy - 1.1 * radius, button_size, button_size, bp_resonator_mode, "Bandpass resonator\n\nBy default the resonator is a lowpass filter.\nEnabling this makes it a bandpass filter.\nThis leads to more stability, but a thinner\nless feedback prone sound.", mouse_x, mouse_y, mouse_cap);
 
-force_fb.draw_knob(cx, cy, radius, "", "Feedback Level", 1, 1 - stft_selection);
-force_fb.gfx_draw_icon(6, 1 - stft_selection);
-cx += 2 * radius + knob_spacing;
-
 stft_selection ? (
+  modulation2_knob.draw_knob(cx, cy, radius, "", "High frequency unison\n\nIncreasing this adds extra partials close to the\npartials of the sound. This creates a unison-like\nsound.", 1, stft_selection);
+  modulation2_knob.gfx_draw_icon(26, stft_selection);
+  cx += 2 * radius + knob_spacing;
+  
   modulation_knob.draw_knob(cx, cy, radius, "", "Partial fluctuation\n\nIncreasing this adds extra partials close to the\npartials of the sound. This creates a chorus-like\nsound.", 1, stft_selection);
   modulation_knob.gfx_draw_icon(25, stft_selection);
 ) : (
+  force_fb.draw_knob(cx, cy, radius, "", "Feedback Level", 1, 1 - stft_selection);
+  force_fb.gfx_draw_icon(6, 1 - stft_selection);
+  cx += 2 * radius + knob_spacing;
+
   max_partial = max(string5.used_partials, max(string4.used_partials, max(string3.used_partials, max(string2.used_partials, string1.used_parials))));
   partials.textbox_control(cx + 0.9 * radius, cy - 1.2 * radius, 12, 1.0 - stft_selection, sprintf(22, 
   "Number of partials to use.
@@ -2116,7 +2181,7 @@ sample_data_gfx_finalize();
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.59 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.60 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
