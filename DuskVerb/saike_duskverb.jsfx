@@ -1,8 +1,8 @@
 desc:Dusk Verb (saike) (Public alpha)
 tags: effect, reverb, atmosphere, granular, long
-version: 0.09
+version: 0.10
 author: Joep Vanlier
-changelog: Fix bug related to stopping transport. The granular module was synced to the beat. When transport was stopped at exactly a beat, it previously kept firing grains. Since there is a limited number of grains in the pool, this in turn leads to them all being occupied. As a result, when playback is resumed, few grains are available for playback. Instead, now, when playback is stopped, the plugin switched to its own internal clock for maintaining synchronization. Thanks a lot for the bug report Someone65! Very helpful!
+changelog: Interpolate haunt setting.
 license: MIT
 provides:
   DuskVerb_Dependencies/* 
@@ -160,6 +160,7 @@ current_verb_mix = verb_mix;
 current_grain_mix = grain_mix;
 current_shimmer = shimmer;
 current_shifter_down = shifter_down;
+current_freq_shift_amount = freq_shift_amount;
 
 function calc_rc_coeff(frequency)
 global(srate)
@@ -226,6 +227,7 @@ d_grain_mix = (grain_mix - current_grain_mix) * invblock;
 d_shimmer = (shimmer - current_shimmer) * invblock;
 d_shifter_down = (shifter_down - current_shifter_down) * invblock;
 d_damping_factor = (calc_rc_coeff(damping_freq) - damping_factor) * invblock;
+d_freq_shift_amount = (freq_shift_amount - current_freq_shift_amount) * invblock;
 
 hp_automation = abs(d_hp) > 0.01;
 lp_automation = abs(d_lp) > 0.01;
@@ -256,6 +258,8 @@ current_grain_mix += d_grain_mix;
 
 current_shimmer += d_shimmer;
 current_shifter_down += d_shifter_down;
+
+current_freq_shift_amount += d_freq_shift_amount;
 
 lp_automation ? ( 
   lp.init_linearSVF_absolute(lp_freq, 0);
@@ -395,8 +399,9 @@ current_grain_mix ? granulator.granulator_update(fire_grain, grain_samples, spee
   granulator.l = grain_blip_left.blips(granulator.l, 0.95);
   granulator.r = grain_blip_right.blips(granulator.r, 0.95);
 ) : (grain_algorithm == 5) ? (
-  granulator.l += 0.125 * grain_blip_left.blips(granulator.l, 0.95);
-  granulator.r += 0.125 * grain_blip_right.blips(granulator.r, 0.95);
+  cgmx = min(1.0, current_grain_mix);
+  granulator.l += 0*0.125 * grain_blip_left.blips(cgmx * granulator.l, 0.95);
+  granulator.r += 0*0.125 * grain_blip_right.blips(cgmx * granulator.r, 0.95);
 );
 
 current_grain_mix > 1 ? (
@@ -433,14 +438,14 @@ current_verb_mix ? (
   in_shimmer = in_gain * current_shimmer;
   verb.in.in.in.in.s2 = in_shimmer * shifter_shimmer.outL;
   verb.in.in.in.in.s3 = in_shimmer * shifter_shimmer.outR;
-  in_haunt = (haunt_algorithm == 0) ? in_gain * freq_shift_amount : 0;
+  in_haunt = (haunt_algorithm == 0) ? in_gain * current_freq_shift_amount : 0;
   verb.in.in.in.in.s4 = in_haunt * freq_shifter.outL;
   verb.in.in.in.in.s5 = in_haunt * freq_shifter.outR;
   overall_scaling_factor = verb.in.in.in.scaling_factor * verb.in.in.scaling_factor * verb.in.scaling_factor * verb.scaling_factor;
   
   (haunt_algorithm == 2) ? (
-     verb.in.in.in.in.s4 += freq_shift_amount * haunt_blip_left.blips(out_left - spl0, 0.94 + 0.0000340 * freq_shift);
-     verb.in.in.in.in.s5 += freq_shift_amount * haunt_blip_right.blips(out_right - spl1, 0.94 + 0.0000340 * freq_shift);
+     verb.in.in.in.in.s4 += current_freq_shift_amount * haunt_blip_left.blips(out_left - spl0, 0.94 + 0.0000340 * freq_shift);
+     verb.in.in.in.in.s5 += current_freq_shift_amount * haunt_blip_right.blips(out_right - spl1, 0.94 + 0.0000340 * freq_shift);
   );
   
   sample_verb(current_mode);
@@ -454,10 +459,10 @@ current_verb_mix ? (
 
 // Barber pole
 (haunt_algorithm == 3) ? (
-  freq_shift_amount ? freq_shifter.eval_cheapest_freq_shifter(out_left, out_right);
+  (current_freq_shift_amount > 0.0000000000001) ? freq_shifter.eval_cheapest_freq_shifter(out_left, out_right);
   
-  out_left -= freq_shift_amount * freq_shifter.outR;
-  out_right -= freq_shift_amount * freq_shifter.outL;
+  out_left -= current_freq_shift_amount * freq_shifter.outR;
+  out_right -= current_freq_shift_amount * freq_shifter.outL;
 );
 
 // Doppler thingy
