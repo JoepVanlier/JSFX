@@ -10,6 +10,7 @@ function initializeMIDI(mem, mem2, mWheel, passThrough)
 local()
 global(MAX_NOTES)
 instance(noteMem, modWheel, pass, activeNoteMem,
+         numSustain, sustaining, sustainMem,
          voice1, voice2, voice3, voice4,
          notesOn, lastNotesOn)
 (
@@ -18,6 +19,9 @@ instance(noteMem, modWheel, pass, activeNoteMem,
   modWheel = mWheel;
   pass = passThrough;
   activeNoteMem = mem2;
+  sustainMem = mem2 + 4096;
+  numSustain = 0;
+  sustaining = 0;
   notesOn = 0; 
   lastNotesOn = 0;
   memset(activeNoteMem, 0, MAX_NOTES);
@@ -26,9 +30,9 @@ instance(noteMem, modWheel, pass, activeNoteMem,
 
 function processMIDIBlock()
 local(offset, msg1, msg2, msg3
-      noteOn, noteOff, mwCC, mWheel, pb)
+      noteOn, noteOff, mwCC, mWheel, pb, idx)
 global()
-instance(notePtr, noteMem, pass, modWheel, curSample, remainingNotes, nextNote)
+instance(notePtr, noteMem, pass, modWheel, curSample, remainingNotes, nextNote, numSustain, sustaining, sustainMem)
 (
   notePtr = noteMem;
   while (midirecv(offset,msg1,msg2,msg3)) (
@@ -45,22 +49,49 @@ instance(notePtr, noteMem, pass, modWheel, curSample, remainingNotes, nextNote)
       notePtr[] = msg2;
       notePtr += 1;
     ) : ( noteOff ) ? (
-      notePtr[] = offset;
-      notePtr += 1;
-      notePtr[] = -1;
-      notePtr += 1;
-      notePtr[] = msg2;
-      notePtr += 1;
-    ) : ( mwCC ) ? (
-      ( modWheel ) ? (
+      !sustaining ? (
         notePtr[] = offset;
         notePtr += 1;
-        notePtr[] = -2;
+        notePtr[] = -1;
         notePtr += 1;
         notePtr[] = msg2;
         notePtr += 1;
-        notePtr[] = msg3;
-        notePtr += 1;
+      ) : (
+        // Log the sustained notes instead
+        sustainMem[numSustain] = msg2;
+        numSustain += 1;
+      );
+    ) : ( mwCC ) ? (
+      // Catch sustain toggling before forwarding the CC since we wanna handle that here.
+      (msg2 == $x40) ? (
+        sustaining = msg3 >= 64;
+        
+        // Released the sustain? Play all the note offs we collected
+        !sustaining ? (
+          idx = 0;
+          while(idx < numSustain) (
+            notePtr[] = offset;
+            notePtr += 1;
+            notePtr[] = -1;
+            notePtr += 1;
+            notePtr[] = sustainMem[idx];
+            sustainMem[idx] = 0;
+            notePtr += 1;
+            idx += 1;
+          );
+          numSustain = 0;
+        );
+      ) : (
+        ( modWheel ) ? (
+          notePtr[] = offset;
+          notePtr += 1;
+          notePtr[] = -2;
+          notePtr += 1;
+          notePtr[] = msg2;
+          notePtr += 1;
+          notePtr[] = msg3;
+          notePtr += 1;
+        );
       );
     ) : pb ? (
       notePtr[] = offset;
