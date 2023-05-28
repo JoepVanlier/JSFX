@@ -1,4 +1,4 @@
-desc:Saike dumdrum
+desc:Saike Dum Drum
 slider1:kick_type=0<0,3,1>Kick Type
 slider2:kick_decay=0.7<0,1,.00001>Kick Pitch Decay
 slider3:kick_min_pitch=0.15<0,1,.00001>Kick Minimum Pitch
@@ -30,7 +30,16 @@ slider42:ride_decay=0.5<0,1,0.00001>Ride decay
 slider43:ride_tone=0.5<0,1,0.00001>Ride tone
 slider44:ride_duty=0.4798<0.2,0.8,0.00001>Ride duty cycle
 
-slider50:dum=0<0,1,1>dum
+slider50:tom_type=0<0,2,1>Tom type
+slider51:low_tom_tune=0.5<0,1,0.0001>Low tom tune
+slider52:low_tom_decay=0.5<0,1,0.0001>Low tom decay
+
+slider54:mid_tom_tune=0.5<0,1,0.0001>Mid tom tune
+slider55:mid_tom_decay=0.5<0,1,0.0001>Mid tom decay
+
+slider57:high_tom_tune=0.5<0,1,0.0001>High tom tune
+slider58:high_tom_decay=0.5<0,1,0.0001>High tom decay
+
 
 in_pin:left input
 in_pin:right input
@@ -56,6 +65,24 @@ kick.shift_6hz.init_cheapest_freq_shifter(7);
 snare.shift.init_cheapest_freq_shifter(12.5);
 
 aa.init_linearSVF_invq(10000, 1);
+
+function naiveTri(t)
+(
+  t -= floor(t);
+  t <= 0.5 ? (
+    (4.0 * t - 1.0)
+  ) : (
+    (3.0 - 4.0 * t)
+  )
+);
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  (2/(1+exp(-2*x)) - 1)
+);
 
 function kick_reset()
 local()
@@ -630,6 +657,327 @@ instance(
   k3_rel *= 2;
 );
 
+function tom_synth1_reset(which, tune, decay)
+local(t_s, w, tuning, decay_mod, core_freq)
+global(srate, israte)
+instance(punch, lp, bp)
+(
+  //decay_mod = pow(2, tune - 0.5);
+  t_s = 300 * 0.001 * (0.5 + decay + 0.2 * (which == 2)); // punch_decay
+  
+  punch.state = 1 + 0.1 * (which == 2);
+  punch.atk = 1;
+  punch.k = pow(10, -24 / (20 * t_s * srate));
+  punch.k_atk = pow(10, -24 / (20 * 0.00025 * srate));
+  
+  tuning = pow(2, tune - 0.5);
+  which == 0 ? (
+    core_freq = 154 * tuning;
+  ) : (which == 1) ? (
+    core_freq = 147 * tuning;
+  ) : (which == 2) ? (
+    core_freq = 101 * tuning;
+  );
+  punch.dt = 2.0 * $pi * core_freq * israte;  // oscillating at 147 Hz
+  
+  w = punch.dt;
+  punch.sin_coeff = 2.0 * cos(w);
+  punch.t += punch.dt;
+  punch.sin_1 = - cos(- w + punch.t);
+  punch.sin_2 = - cos(- 2.0 * w + punch.t);
+  punch.t -= punch.dt;
+  
+   // Gain = 6.4 + 6.4
+  bp.init_linearSVF_invq(core_freq, 0.5);    // 900 Hz, Q = 2.0
+  lp.init_linearSVF_invq(564, 1);    // 900 Hz, Q = 2.0
+);
+
+function tom_synth1_eval()
+local(st)
+global()
+instance(punch, lp, bp)
+(
+  punch.t += punch.dt;
+  st = punch.sin_coeff * punch.sin_1 - punch.sin_2;
+  punch.sin_2 = punch.sin_1;
+  punch.sin_1 = st;
+  punch.state *= punch.k;
+  punch.atk *= punch.k_atk;
+  
+  (1.0 - punch.atk) * st * sqr(punch.state) + 0.5 * lp.eval_linearSVF_LP(bp.eval_linearSVF_BP(rand() - 0.5)) * punch.state;
+);
+
+function tom_synth2_reset(which, tune, decay)
+local(t_s, w, tuning, pitch_decay, decay_mod, core_freq, shift)
+global(srate, israte)
+instance(punch, lp, lp2, bp, bp2, low_scale, gain)
+(
+  //decay_mod = pow(2, tune - 0.5);
+  t_s = 300 * 0.0022 * (0.5 + decay + 0.2 * (which == 2)); // punch_decay
+  
+  punch.state = 1 + 0.1 * (which == 2);
+  punch.state2 = 1;
+  punch.state3 = 1;
+  punch.atk = 1;
+  punch.k = pow(10, -24 / (20 * t_s * srate));
+  punch.k2 = pow(10, -64 / (20 * t_s * srate));
+  punch.k3 = pow(10, -64 / (1 * t_s * srate));
+  punch.k_atk = pow(10, -24 / (20 * 0.005 * srate));
+  
+  punch.pitch_decay = pow(10, -24 / (20 * 0.5 * srate));
+  
+  tuning = pow(2, tune - 0.5);
+  which == 0 ? (
+    core_freq = 115 * tuning;
+    shift = 30 * tuning;
+    gain = 1.0;
+    punch.dt3 = 115 * israte;
+    low_scale = 1.0;
+  ) : (which == 1) ? (
+    core_freq = 90 * tuning;
+    shift = 25 * tuning;
+    gain = 1.0;
+    low_scale = 1.1;
+    punch.dt3 = 105 * israte;
+  ) : (which == 2) ? (
+    core_freq = 81 * tuning;
+    shift = 20 * tuning;
+    low_scale = 1.1;
+    gain = 0.7;
+    punch.dt3 = 88 * israte;
+  );
+  punch.dt = core_freq * israte;
+  punch.dt2 = shift * israte;
+  
+   // Gain = 6.4 + 6.4
+  bp.init_linearSVF_invq(core_freq, 0.9);    // 900 Hz, Q = 2.0
+  bp2.init_linearSVF_invq(core_freq, 0.5);    // 900 Hz, Q = 2.0
+  lp.init_linearSVF_invq(2564, 1);    // 900 Hz, Q = 2.0
+  lp2.init_linearSVF_invq(444 + core_freq, 0.2);    // 900 Hz, Q = 2.0
+  
+  bp2.init_linearSVF_invq(600 + core_freq, 0.2);    // 900 Hz, Q = 2.0
+);
+
+function tom_synth2_eval()
+local(st, noise)
+global()
+instance(punch, lp, lp2, bp, bp2, low_scale, gain, sqp)
+(
+  punch.t += (punch.dt + punch.dt2);
+  punch.t3 += (punch.dt3 + punch.dt2);
+  punch.dt2 *= punch.pitch_decay;
+  
+  st = bp.eval_linearSVF_BP(
+    lp.eval_linearSVF_LP(
+      0.6 * naiveTri(low_scale * punch.t) + 
+      0.3 * punch.state2 * naiveTri(2.0 * punch.t3) + 
+      0.4 * punch.state2 * naiveTri(2.9 * punch.t3) + 
+      0.5 * naiveTri(0.7 * punch.t) + 
+      0.023 * naiveTri(1.4 * punch.t3)
+    )
+  );
+
+  st += 0.31 * st * st * st * punch.state2;
+  
+  punch.atk *= punch.k_atk;
+  punch.state *= punch.k;
+  punch.state2 *= punch.k2;
+  punch.state3 *= punch.k3;
+
+  noise = rand() - 0.5;
+  sqp = 2.0 * sqr(punch.state) * punch.state;
+  gain * ((1.0 - punch.atk) * st * sqp + gain * 1.0 * lp2.eval_linearSVF_BP(noise) * sqr(punch.state2) * sqr(punch.state2) + bp2.eval_linearSVF_BP(noise) * sqr(punch.state3));
+);
+
+function tom_synth3_reset(which, tune, decay)
+local(t_s, w, tuning, pitch_decay, decay_mod, core_freq, shift)
+global(srate, israte)
+instance(punch, lp, lp2, bp, bp2)
+(
+  t_s = 300 * 0.0014 * (0.5 + decay + 0.2 * (which == 2)); // punch_decay
+  
+  punch.state = 1;
+  punch.state2 = 1;
+  punch.state3 = 1;
+  punch.atk = 1;
+  punch.k = pow(10, -24 / (20 * t_s * srate));
+  punch.k2 = pow(10, -24 / (20 * t_s * srate));
+  punch.k3 = pow(10, -60 / (20 * t_s * srate));
+  punch.k_atk = pow(10, -24 / (20 * 0.005 * srate));
+  punch.pitch_decay = pow(10, -24 / (20 * 0.5 * srate));
+  
+  tuning = pow(2, tune - 0.5);
+  which == 0 ? (
+    core_freq = 130 * tuning;
+    shift = 140 * tuning;
+  ) : (which == 1) ? (
+    core_freq = 120 * tuning;
+    shift = 130 * tuning;
+    punch.dt3 = 105 * israte;
+  ) : (which == 2) ? (
+    core_freq = 80 * tuning;
+    shift = 120 * tuning;
+    punch.dt3 = 88 * israte;
+  );
+  punch.dt = core_freq * israte;
+  punch.dt2 = shift * israte;
+  
+   // Gain = 6.4 + 6.4
+  bp.init_linearSVF_invq(600, 2);    // 900 Hz, Q = 2.0
+  
+  bp2.init_linearSVF_invq(core_freq, 0.5);    // 900 Hz, Q = 2.0
+  lp.init_linearSVF_invq(364, 1);    // 900 Hz, Q = 2.0
+  lp2.init_linearSVF_invq(444 + core_freq, 0.6);    // 900 Hz, Q = 2.0
+  
+  bp2.init_linearSVF_invq(600 + core_freq, 0.2);    // 900 Hz, Q = 2.0
+);
+
+function tom_synth3_eval()
+local(st, noise)
+global()
+instance(punch, lp, lp2, bp, bp2, sqp)
+(
+  punch.t += (punch.dt + punch.dt2);
+  punch.dt2 *= punch.pitch_decay;
+  
+  st = bp.eval_linearSVF_LP(
+    lp.eval_linearSVF_LP(
+      0.6 * sqs(punch.t) +
+      0.12 * sqs(2.0 * punch.t)
+    );
+  );
+
+  //st += 0.31 * st * st * st * punch.state2;
+  
+  punch.atk *= punch.k_atk;
+  punch.state *= punch.k;
+  punch.state2 *= punch.k2;
+  punch.state3 *= punch.k3;
+
+  noise = rand() - 0.5;
+  sqp = 2.0 * punch.state;
+  (sqp < 0.95) ? punch.state *= punch.k * punch.k * punch.k * punch.k;
+  noise = 2.0 * lp2.eval_linearSVF_BP(noise) * sqr(punch.state2) + bp2.eval_linearSVF_BP(noise) * sqr(punch.state3);
+  sqp = ((1.0 - punch.atk) * st * sqp + noise * punch.state2);
+  
+  0.3 * (abs(sqp) > 0.001 ? sqp = floor(sqp * 512) / 512);
+);
+
+function hi_tom_reset()
+local()
+global(tom_type, high_tom_tune, high_tom_decay)
+instance(current_tom)
+(
+  current_tom = tom_type;
+  
+  (current_tom == 1) ? (
+    this.tom_synth1_reset(0, high_tom_tune, high_tom_decay);
+  ) : (current_tom == 0) ? (
+    this.tom_synth2_reset(0, high_tom_tune, high_tom_decay);
+  ): (current_tom == 2) ? (
+    this.tom_synth3_reset(0, high_tom_tune, high_tom_decay);
+  );;
+);
+
+function mid_tom_reset()
+local()
+global(tom_type, mid_tom_tune, mid_tom_decay)
+instance(current_tom)
+(
+  current_tom = tom_type;
+  
+  (current_tom == 1) ? (
+    this.tom_synth1_reset(1, mid_tom_tune, mid_tom_decay);
+  ) : (current_tom == 0) ? (
+    this.tom_synth2_reset(1, mid_tom_tune, mid_tom_decay);
+  ): (current_tom == 2) ? (
+    this.tom_synth3_reset(1, mid_tom_tune, mid_tom_decay);
+  );
+);
+
+function low_tom_reset()
+local()
+global(tom_type, low_tom_tune, low_tom_decay)
+instance(current_tom)
+(
+  current_tom = tom_type;
+  
+  (current_tom == 1) ? (
+    this.tom_synth1_reset(2, low_tom_tune, low_tom_decay);
+  ) : (current_tom == 0) ? (
+    this.tom_synth2_reset(2, low_tom_tune, low_tom_decay);
+  ) : (current_tom == 2) ? (
+    this.tom_synth3_reset(2, low_tom_tune, low_tom_decay);
+  );
+);
+
+function hi_tom_tick()
+local()
+global()
+instance(current_tom)
+(
+  (current_tom == 1) ? (
+    this.tom_synth1_eval();
+  ) : (current_tom == 0) ? (
+    this.tom_synth2_eval();
+  ) : (current_tom == 2) ? (
+    this.tom_synth3_eval();
+  );
+);
+
+function mid_tom_tick()
+local()
+global()
+instance(current_tom)
+(
+  (current_tom == 1) ? (
+    this.tom_synth1_eval();
+  ) : (current_tom == 0) ? (
+    this.tom_synth2_eval();
+  ) : (current_tom == 2) ? (
+    this.tom_synth3_eval();
+  );
+);
+
+function low_tom_tick()
+local()
+global()
+instance(current_tom)
+(
+  (current_tom == 1) ? (
+    this.tom_synth1_eval();
+  ) : (current_tom == 0) ? (
+    this.tom_synth2_eval();
+  ) : (current_tom == 2) ? (
+    this.tom_synth3_eval();
+  );
+);
+
+function hi_tom_stop()
+local()
+global()
+instance(current_tom)
+(
+  0
+);
+
+function mid_tom_stop()
+local()
+global()
+instance(current_tom)
+(
+  0
+);
+
+function low_tom_stop()
+local()
+global()
+instance(current_tom)
+(
+  0
+);
+
+
 function env_tick()
 instance(t, k_rise, k_decay, attack_samples, val)
 global()
@@ -642,24 +990,6 @@ global()
   );
   
   val
-);
-
-function naiveTri(t)
-(
-  t -= floor(t);
-  t <= 0.5 ? (
-    (4.0 * t - 1.0)
-  ) : (
-    (3.0 - 4.0 * t)
-  )
-);
-
-function tanh(x)
-local()
-global()
-instance()
-(
-  (2/(1+exp(-2*x)) - 1)
 );
 
 function kick_tick()
@@ -776,6 +1106,9 @@ NOTE_CLAP = 64;
 NOTE_CLOSED_HAT = 65;
 NOTE_OPEN_HAT = 66;
 NOTE_RIDE = 67;
+NOTE_HI_TOM = 68;
+NOTE_MID_TOM = 69;
+NOTE_LOW_TOM = 70;
 
 
 function processMIDISample()
@@ -791,12 +1124,22 @@ global(play_state, ttt,
        ride.ride_stop,
        hat.hat_reset,
        hat.hat_stop,
+       low_tom.low_tom_reset,
+       mid_tom.mid_tom_reset,
+       hi_tom.hi_tom_reset,
+       low_tom.low_tom_stop,
+       mid_tom.mid_tom_stop,
+       hi_tom.hi_tom_stop,
        NOTE_OPEN_HAT,
        NOTE_CLOSED_HAT,
        NOTE_RIDE,
        NOTE_CLAP,
        NOTE_KICK,
-       NOTE_SNARE)
+       NOTE_SNARE,
+       NOTE_LOW_TOM,
+       NOTE_MID_TOM,
+       NOTE_HI_TOM,
+       )
 instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, pitchBend)
 (
   
@@ -815,6 +1158,9 @@ instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, p
         note == NOTE_RIDE ? ride.ride_reset();
         note == NOTE_CLOSED_HAT ? hat.hat_reset(1);
         note == NOTE_OPEN_HAT ? hat.hat_reset(0);
+        note == NOTE_LOW_TOM ? low_tom.low_tom_reset();
+        note == NOTE_MID_TOM ? mid_tom.mid_tom_reset();
+        note == NOTE_HI_TOM ? hi_tom.hi_tom_reset();
         ttt += 1;
       ) : (notePtr[] == -1) ? ( // note-off
         notePtr += 1;
@@ -824,6 +1170,9 @@ instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, p
         note == NOTE_RIDE ? ride.ride_stop();
         note == NOTE_CLOSED_HAT ? hat.hat_stop();
         note == NOTE_OPEN_HAT ? hat.hat_stop();
+        note == NOTE_LOW_TOM ? low_tom.low_tom_stop();
+        note == NOTE_MID_TOM ? mid_tom.mid_tom_stop();
+        note == NOTE_HI_TOM ? hi_tom.hi_tom_stop();
       ) : (notePtr[] == -2) ? ( // CC
         notePtr += 1;
         cur_cc = notePtr[];
@@ -849,6 +1198,5 @@ instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, p
 
 midi.processMIDISample();
 
-spl1 = spl0 = kick.kick_tick() + snare.snare_tick() + clap.clap_tick() + ride.ride_tick() + hat.hat_tick();
-
+spl1 = spl0 = kick.kick_tick() + snare.snare_tick() + clap.clap_tick() + ride.ride_tick() + hat.hat_tick() + low_tom.low_tom_tick() + mid_tom.mid_tom_tick() + hi_tom.hi_tom_tick();
 
