@@ -7,7 +7,7 @@ slider5:kick_envelope=0.3<0,0.5,.00001>-Kick Pitch Envelope
 slider6:kick_noise_envelope=0.78<0,1,.000001>-Noise
 slider7:kick_decay=0<0,1,0.00001>-Kick decay
 slider8:kick_gain=0<-24,6,0.0001>-Kick gain
-slider9:kick_pan=0<-1,1,0.0001>Kick panning
+slider9:kick_pan=0<-1,1,0.0001>-Kick panning
 
 slider10:snare_type=1<0,3,1>-Snare type
 slider11:snare_decay=0.67<0,1,.00001>-Snare Pitch Decay
@@ -24,7 +24,7 @@ slider22:clap_decay=0.25<0,1,.00001>-Clap Decay
 slider23:clap_gain=0<-24,6,0.0001>-Clap gain
 slider24:clap_pan=0<-1,1,0.0001>-Clap panning
 
-slider25:rim_type=0<0,3,1>-Rim type
+slider25:rim_type=0<0,2,1>-Rim type
 slider26:rim_decay=0.5<0,1,0.0001>-Rim decay
 slider27:rim_tune=0.5<0,1,0.0001>-Rim tune
 slider28:rim_gain=0<-24,6,0.0001>-Rim gain
@@ -86,12 +86,19 @@ import saikedrums_drum_elements.jsfx-inc
 import saikedrums_pixel_gfx.jsfx-inc
 
 @init
+img_w = 256;
+img_h = 150;
+osc_downsample_factor = 64;
+osc_skipfactor = 2;
+osc_buffer = img_w * osc_downsample_factor;
+
 CURRENT_VERSION = 1;
 version = CURRENT_VERSION;
 
 israte = 1.0 / srate;
 freemem = midi.initializeMIDI(free_mem, 1, 1);
-
+freemem = (audio_buffer = freemem) + img_w * 8;
+audio_buffer_idx = 0;
 
 function initialize_knob(_slider_idx, _min_value, _max_value, _default, _label)
 local()
@@ -105,6 +112,29 @@ instance(slider_idx, min_value, max_value, default, label, active)
   default = _default;
   label = _label;
 );
+
+function initialize_type_toggle(_type_idx, _type_slider, _min_type, _max_type)
+local()
+global()
+instance(type_idx, type_slider, min_type, max_type)
+(
+  type_idx = _type_idx;
+  type_slider = _type_slider;
+  min_type = _min_type;
+  max_type = _max_type;
+);
+
+kick.initialize_type_toggle(1, 1, 0, 3);
+snare.initialize_type_toggle(21, 10, 0, 2);
+clap.initialize_type_toggle(3, 20, 0, 1);
+ride.initialize_type_toggle(4, 42, 0, 1);
+hat.initialize_type_toggle(5, 30, 0, 1);
+shaker.initialize_type_toggle(6, 49, 0, 1);
+low_tom.initialize_type_toggle(7, 54, 0, 2);
+mid_tom.initialize_type_toggle(7, 54, 0, 2);
+hi_tom.initialize_type_toggle(7, 54, 0, 2);
+rim.initialize_type_toggle(8, 25, 0, 2);
+cowbell.initialize_type_toggle(9, 37, 0, 2);
 
 MIN_GAIN = -12;
 MAX_GAIN = 12;
@@ -387,17 +417,14 @@ spl1 =
   cowbell.right_out + 
   shaker.right_out;
 
+audio_buffer[audio_buffer_idx] = 0.5 * (spl0 + spl1);
+audio_buffer_idx += 1;
+audio_buffer_idx > osc_buffer ? audio_buffer_idx = 0;
+
 @gfx
 loaded = 0;
 !loaded ? (
   loaded = gfx_loadimg(12, "./saikedrums_dependencies/font.png");
-  
-  img_h = 147;
-  img_w = 256;
-  
-  img_w = 256;
-  img_h = 150;
-  
   gfx_setimgdim(13, img_w, img_h);
 );
 
@@ -418,9 +445,6 @@ function reset_color()
 
 side_pad = 3;
 reset_color();
-//txt_blit("KICK", 5, cy);
-
-//txt_blit("KCK SNR CLP CYM SHK HAT LT MT HT RIM COW", 5, cy);
 
 pad_size = 17;
 pad_spacing = 3;
@@ -578,16 +602,39 @@ global(gfx_mode, gfx_a, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b)
   );
 );
 
+function draw_types(me, x, y)
+local(choice_size)
+instance(type_idx, type_slider, min_type, max_type)
+global()
+(
+  /*type_idx = _type_idx;
+  type_slider = _type_slider;
+  min_type = _min_type;
+  max_type = _max_type;*/
+  choice_size = 3;
+  gfx_set(0.2, 0.2, 0.2, 0.2);
+  gfx_rect(x, y - 1, 17, 5, 0);
+  x += 1;
+  colormodel(me / 11);
+  this.choice1.choice_toggle(x, y, choice_size, 0, type_slider, "");
+  max_type > 0 ? this.choice2.choice_toggle(x + choice_size + 1, y, choice_size, 1, type_slider, "");
+  max_type > 1 ? this.choice3.choice_toggle(x + 2 * choice_size + 2, y, choice_size, 2, type_slider, "");
+  max_type > 2 ? this.choice4.choice_toggle(x + 3 * choice_size + 3, y, choice_size, 3, type_slider, "");
+  
+);
+
 function draw_pad(me, cy, pad_size, label, hint, override_ly)
 local(tapped, highlight, knob_radius, knob_spacing, cy2)
 global(cx, select, pad_spacing)
-instance(hly, is_closed)
+instance(hly, is_closed, height, max_y)
 (
   gfx_set(1, 1, 1, 1);
   this.txt_measure(label);
   
   gfx_set(0.21, 0.21, 0.62, 1.0);
-  gfx_rect(cx - 2, cy + 6, pad_size + 4, 5.7 * pad_size, 0);
+  height = 6 * pad_size;
+  gfx_rect(cx - 2, cy + 6, pad_size + 4, height, 0);
+  max_y = cy + 6 + height;
   
   gfx_set(0.02, 0.02, 0.02, 1);
   txt_blit(label, cx + 0.5 * (pad_size - this.txt_w + 1), cy);
@@ -597,8 +644,10 @@ instance(hly, is_closed)
   gfx_set(1, 1, 1, 1);
   knob_radius = 7;
   knob_spacing = 4;
-  cy2 = ceil(cy + pad_size + pad_size / 2) - 2;
   
+  cy2 = ceil(cy + pad_size + pad_size / 2) + 4;
+  
+  this.draw_types(me, cx, cy2 - 9);
   this.gain.draw_knob(cx + floor(pad_size / 2), cy2 + knob_spacing, knob_radius, me / 11);
   this.pan.draw_knob(cx + floor(pad_size / 2), cy2 + 2 * knob_spacing + ceil(2 * knob_radius), knob_radius, me / 11);
   this.tune.draw_knob(cx + floor(pad_size / 2), cy2 + 3 * knob_spacing + ceil(4 * knob_radius), knob_radius, me / 11);
@@ -711,16 +760,49 @@ show_ui ? (
   haunt.xy_pad(2, 3, cy + 5, pad_width, pad_height);
   
 );
-  
 
 gfx_set(1, 1, 1, 0.3);
 txt_blit("DD-101", side_pad, img_h - 6);
 txt_blit("ALPHA VERSION", img_w - 66, img_h - 6);
 
+function draw_oscilloscope(x, y, w, h)
+global(
+  gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, gfx_mode, color_model,
+  audio_buffer, x_step, osc_buffer, osc_downsample_factor, osc_skipfactor
+)
+local(ix, yc, hh, phh, y_top, y_bottom)
+instance()
+(
+  gfx_x = x;
+  ix = 0;
+  colormodel(0.4);
+  gfx_mode = 1;
+  gfx_a = 0.4;
+  hh = 0.5 * h;
+  phh = 0.67 * h;
+  yc = y + hh;
+  y_top = y + h - 2;
+  y_bottom = y + 2;
+  x_step = w / (osc_buffer / osc_skipfactor);
+  loop(osc_buffer / osc_skipfactor,
+    gfx_y = yc + audio_buffer[ix] * phh;
+    (gfx_y < y_top) && (gfx_y > y_bottom) ? (
+      gfx_setpixel(gfx_r, gfx_g, gfx_b);
+    );
+    ix += osc_skipfactor;
+    gfx_x += x_step;
+  );
+);
+
+//gfx_rect(0, kick.max_y, img_w, img_h - kick.max_y - 9);
+draw_oscilloscope(0, kick.max_y, img_w, img_h - kick.max_y - 9);
+
+
 hinter.draw_hints();
 
 gfx_dest = -1;
 gfx_set(1, 1, 1, 1);
+
 blit_scale = floor(min(gfx_h / img_h, gfx_w / img_w));
 x_offset = (gfx_w - blit_scale * img_w) * 0.5;
 y_offset = (gfx_h - blit_scale * img_h) * 0.5;
