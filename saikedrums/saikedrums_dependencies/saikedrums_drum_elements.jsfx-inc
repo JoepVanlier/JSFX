@@ -66,34 +66,181 @@ instance(
   amp.k_decay *= 4;
 );
 
+function env_tick()
+instance(t, k_rise, k_decay, attack_samples, val)
+global()
+(
+  (t < attack_samples) ? (
+    val += k_rise * (1.0 - val);
+    t += 1;
+  ) : (
+    val -= k_decay * val;
+  );
+  
+  val
+);
+
+
+// snare_bottom
+function snare1_reset(decay)
+local(t_s, snare_bottom, snare_noise_decay)
+instance(punch, bp, bp2, bp3, bp4, bp5, bp6, bp7, bp8, bp9, noise)
+global(srate, israte, time_factor, snare_tune)
+(
+  t_s = 0.015 * (0.5 + decay);
+  
+  punch.state = 1;
+  punch.state2 = 1;
+  punch.state3 = 1;
+  punch.attack_fast = 1;
+  punch.twack = 20;
+  
+  punch.atk = 1;
+  punch.k = pow(10, -24 / (20 * t_s * srate));
+  punch.k2 = pow(10, -24 / (30 * t_s * srate));
+  punch.k3 = pow(10, -24 / (30 * 5 * t_s * srate));
+  
+  punch.k_atk = pow(10, -24 / (20 * 0.015 * 0.5 * srate));
+  punch.k_atk_fast = pow(10, -24 / (20 * t_s * srate));
+  punch.pitch_decay = pow(10, -24 / (20 * 0.5 * srate));
+  
+  snare_noise_decay = 1;
+  noise.vol = 0.4 + 0.6 * decay;
+  noise.k_rise = time_factor * 0.006;  // 2 ms rise time (1/3)
+  noise.k_decay = time_factor * 0.4 * exp(-4.605170185988092*(0.5 + decay*.4));
+  noise.attack_samples = 0.07 * snare_noise_decay * srate; // 10 ms
+  noise.val = 0;
+  noise.t = 0;  
+  
+  //tuning = pow(2, tune - 0.5);
+  
+   // Gain = 6.4 + 6.4
+  snare_bottom = 170 + 230 * snare_tune;
+  bp.init_linearSVF_invq(snare_bottom, 0.03 + (1 - decay));
+  bp8.init_linearSVF_invq(snare_bottom * 1.05, 0.03);
+  bp2.init_linearSVF_invq(1.25 * snare_bottom, 0.05 + 0.02 * (1 - decay));
+  bp3.init_linearSVF_invq(1.4 * snare_bottom, 0.04);
+  bp4.init_linearSVF_invq(1.575 * snare_bottom, 0.04 + 0.02 * (1 - decay));
+  bp5.init_linearSVF_invq(2.15 * snare_bottom, 0.03 + 0.02 * (1 - decay));
+  bp6.init_linearSVF_invq(7000, 1.4);
+  bp7.init_linearSVF_invq(4000, 0.8);
+  bp9.init_linearSVF_invq(700, 0.8);
+);
+
+function snare1_tick()
+local(y, noise_env, late_noise)
+instance(punch, bp, bp2, bp3, bp4, bp5, bp6, bp7, bp8, bp9, noise)
+global()
+(
+  // (1.0 - punch.atk)
+   
+  y = 0.7 * (1.0 - punch.attack_fast) * (
+    0.27 * bp.eval_linearSVF_BP(punch.state3) + 
+    0.6 * bp8.eval_linearSVF_BP(punch.state3 + rand() - 0.5) * punch.state3 +
+    0.11 * bp2.eval_linearSVF_BP(punch.state3) + 
+    0.15 * bp3.eval_linearSVF_BP(punch.state2 + rand() - 0.5) * punch.state3 +
+    0.14 * bp4.eval_linearSVF_BP(punch.state3) +
+    0.12 * bp5.eval_linearSVF_BP(punch.state3)
+  );
+  
+  punch.twack *= punch.k_atk;
+  punch.atk *= punch.k_atk;
+  punch.attack_fast *= punch.k_atk_fast;
+  punch.state *= punch.k;
+  punch.state2 *= punch.k2;
+  punch.state3 *= punch.k3;
+  
+  noise_env = noise.env_tick();
+  //y *= .5 * noise_env;
+  late_noise = 0.5 * noise.vol * noise_env * bp6.eval_linearSVF_BP((rand() - 0.5) * (0.3 + rand() > 0.85));
+  y += late_noise;
+  
+  y += 1.4 * noise_env * noise.vol * bp9.eval_linearSVF_BP((rand() - 0.5) * (0.3 + rand() > 0.85)) * sqr(punch.state3);
+  
+  y += 2 * min(1.0, punch.twack) * noise.vol * (1.0 - punch.attack_fast) * (bp7.eval_linearSVF_LP(rand() * 2 - 1) + 0.3 * (rand() * 2 - 1)) * punch.atk;
+  //y = mud_dip.bell_tick(y)
+  
+  y = (y + y + y + y) / (1 + abs(y + y));
+);
+
 function snare_reset()
 local()
-global(time_factor, srate, snare_decay, snare_amp_decay, snare_noise_decay, ALIVE_COUNT)
+global(snare_type, time_factor, srate, snare_decay, snare_amp_decay, snare_noise_decay, ALIVE_COUNT)
 instance(amp, pitch, noise, t_osc, t_osc2, smooth, alive)
 (
   alive = ALIVE_COUNT;
   
-  pitch.k_rise = time_factor * (1/2);  // 2 ms rise time (1/3)
-  pitch.k_decay = time_factor * 0.933 * exp(-4.605170185988092*snare_decay);
-  pitch.attack_samples = 0.01 * srate; // 10 ms
-  pitch.val = 0;
-  pitch.t = 0;
+  (snare_type == 0) ? (
+    this.snare1_reset(snare_decay);
+  ) : (
+    pitch.k_rise = time_factor * (1/2);  // 2 ms rise time (1/3)
+    pitch.k_decay = time_factor * 0.933 * exp(-4.605170185988092*snare_decay);
+    pitch.attack_samples = 0.01 * srate; // 10 ms
+    pitch.val = 0;
+    pitch.t = 0;
+    
+    noise.k_rise = time_factor * (1/1);  // 2 ms rise time (1/3)
+    noise.k_decay = time_factor * 0.4 * exp(-4.605170185988092*(0.6 + snare_noise_decay*.3));
+    noise.attack_samples = 0.08 * snare_noise_decay * srate; // 10 ms
+    noise.val = 0;
+    noise.t = 0;
+    
+    amp.k_rise = time_factor * (1/1);  // 1 ms rise time (1/3)
+    amp.k_decay = time_factor * 0.33 * exp(-4.605170185988092*snare_amp_decay);
+    amp.attack_samples = 0.04 * srate; // 100 ms
+    amp.val = 0;
+    amp.t = 0;
+    
+    t_osc = 0;
+    t_osc2 = 0;
+    smooth = 5;
+  );
+);
+
+function snare_tick()
+local(timestep, amp_env, noise_env)
+instance(pitch, noise, amp, smooth, y, ly, pitch_hz, t_osc, mud_dip, shift, clap)
+global(snare_type, snare_envelope, snare_bottom, freq_shift)
+(
+  ly = y;
+  (snare_type == 0) ? (
+    y = this.snare1_tick()
   
-  noise.k_rise = time_factor * (1/1);  // 2 ms rise time (1/3)
-  noise.k_decay = time_factor * 0.4 * exp(-4.605170185988092*(0.6 + snare_noise_decay*.3));
-  noise.attack_samples = 0.08 * snare_noise_decay * srate; // 10 ms
-  noise.val = 0;
-  noise.t = 0;
-  
-  amp.k_rise = time_factor * (1/1);  // 1 ms rise time (1/3)
-  amp.k_decay = time_factor * 0.33 * exp(-4.605170185988092*snare_amp_decay);
-  amp.attack_samples = 0.04 * srate; // 100 ms
-  amp.val = 0;
-  amp.t = 0;
-  
-  t_osc = 0;
-  t_osc2 = 0;
-  smooth = 5;
+    /*pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+    timestep = pitch_hz;
+    t_osc += timestep;
+    y = naiveTri(t_osc);
+    
+    y *= .3 * amp.env_tick();
+    y += this.eval_linearSVF_BP(noise.env_tick() * (rand() - 0.5));
+    y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
+    y = 2 * mud_dip.bell_tick(y);*/
+  ) : (snare_type == 1) ? (
+    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+    timestep = pitch_hz;
+    t_osc += timestep;
+    y = naiveTri(t_osc);
+    y = 0.91 * (tanh(2 * y + 0.1) - 0.1) + 0.1 * y;
+    noise.val < 0.4 * rand() ? noise.t = 0;
+    amp_env = amp.env_tick();
+    y += 2 * noise.env_tick() * (rand() - 0.5);
+    y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
+    y = mud_dip.bell_tick(clap.eval_linearSVF_BP(y)) * amp_env;
+  ) : (snare_type == 2) ? (
+    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+    timestep = pitch_hz;
+    t_osc += timestep;
+    y = naiveTri(t_osc);
+    y = 0.91 * (tanh(2 * y + 0.1) - 0.1) + 0.1 * y;
+    noise_env = noise.env_tick();
+    amp_env = amp.env_tick();
+    y *= .5 * amp_env * noise_env;
+    y += this.eval_linearSVF_BP(noise_env * noise_env * (rand() - 0.5)) * (1 - amp_env * y * y);
+    y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
+    y = mud_dip.bell_tick(y);
+    freq_shift ? y = shift.eval_cheapest_freq_shifter(y);
+    y
+  );
 );
 
 function clap_reset()
@@ -972,8 +1119,9 @@ global(srate, israte)
 );
 
 function rim_synth1_tick()
-local()
+local(y)
 instance(punch, bp, bp2, bp3, bp4, bp5)
+global()
 (
   punch.atk *= punch.k_atk;
   punch.state *= punch.k;
@@ -1021,8 +1169,9 @@ global(srate, israte)
 );
 
 function rim_synth2_tick()
-local()
+local(y)
 instance(punch, bp, bp2, bp3, bp4, bp5)
+global()
 (
   punch.atk *= punch.k_atk;
   punch.state *= punch.k;
@@ -1424,21 +1573,6 @@ instance()
   0;
 );
 
-
-function env_tick()
-instance(t, k_rise, k_decay, attack_samples, val)
-global()
-(
-  (t < attack_samples) ? (
-    val += k_rise * (1.0 - val);
-    t += 1;
-  ) : (
-    val -= k_decay * val;
-  );
-  
-  val
-);
-
 function kick_tick()
 local(y, env_tick)
 global(kick_type, kick_envelope, kick_bottom, srate, timestep, pitch_hz, freq_shift)
@@ -1488,49 +1622,5 @@ instance(ly, amp, pitch, t_osc, t_osc2, t_osc3, env, smooth, noise_level, noise_
   noise_level -= noise_decay * noise_level;
   y += this.eval_linearSVF_BP(noise_level * (rand() - 0.5));
   y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
-);
-
-function snare_tick()
-local(timestep, amp_env, noise_env)
-instance(pitch, noise, amp, smooth, y, ly, pitch_hz, t_osc, mud_dip, shift, clap)
-global(snare_type, snare_envelope, snare_bottom, freq_shift)
-(
-  ly = y;
-  (snare_type == 0) ? (
-    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
-    timestep = pitch_hz;
-    t_osc += timestep;
-    y = naiveTri(t_osc);
-    
-    y *= .3 * amp.env_tick();
-    y += this.eval_linearSVF_BP(noise.env_tick() * (rand() - 0.5));
-    y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
-    y = 2 * mud_dip.bell_tick(y);
-  ) : (snare_type == 1) ? (
-    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
-    timestep = pitch_hz;
-    t_osc += timestep;
-    y = naiveTri(t_osc);
-    y = 0.91 * (tanh(2 * y + 0.1) - 0.1) + 0.1 * y;
-    noise.val < 0.4 * rand() ? noise.t = 0;
-    amp_env = amp.env_tick();
-    y += 2 * noise.env_tick() * (rand() - 0.5);
-    y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
-    y = mud_dip.bell_tick(clap.eval_linearSVF_BP(y)) * amp_env;
-  ) : (snare_type == 2) ? (
-    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
-    timestep = pitch_hz;
-    t_osc += timestep;
-    y = naiveTri(t_osc);
-    y = 0.91 * (tanh(2 * y + 0.1) - 0.1) + 0.1 * y;
-    noise_env = noise.env_tick();
-    amp_env = amp.env_tick();
-    y *= .5 * amp_env * noise_env;
-    y += this.eval_linearSVF_BP(noise_env * noise_env * (rand() - 0.5)) * (1 - amp_env * y * y);
-    y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
-    y = mud_dip.bell_tick(y);
-    freq_shift ? y = shift.eval_cheapest_freq_shifter(y);
-    y
-  );
 );
 
