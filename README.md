@@ -218,6 +218,10 @@ Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/mul
 
 Demo: https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Ravager/upwardcompress.mp3
 
+A demo was kindly provided by Alejandro over at [Reapertips](https://www.reapertips.com/post/js-ravager-the-extreme-upward-compressor).
+
+[![Ravager](https://img.youtube.com/vi/vn2lfqXs0yc/hqdefault.jpg)](https://www.youtube.com/watch?v=vn2lfqXs0yc)
+
 ## Swellotron - Soundscape effect
 ![SwellotronUI](https://i.imgur.com/ikizwwk.gif)
 
@@ -285,6 +289,10 @@ Features
 
 Demo: https://www.youtube.com/watch?v=Y8ibWk8Tpm0
 
+A demo was kindly provided by Alejandro over at [Reapertips](https://www.reapertips.com/post/js-nostalgizer).
+
+[![Nostalgizer](https://img.youtube.com/vi/KHqSn5F4DgI/hqdefault.jpg)](https://www.youtube.com/watch?v=KHqSn5F4DgI)
+
 ## FM Filter - Filter
 ![FMFilter](https://imgur.com/iFOhQAd.png)
 
@@ -321,6 +329,10 @@ Features:
 - Ice effects.
 - Preset EQ curves.
 - UI with fluid dynamics.
+
+A tutorial was kindly provided by Alejandro over at [Reapertips](https://www.reapertips.com/post/js-lava-reverb-amazing-free-shimmer-reverb).
+
+[![Lava verb tutorial](https://img.youtube.com/vi/56yRgGmM-Qs/hqdefault.jpg)](https://www.youtube.com/watch?v=56yRgGmM-Qs)
 
 ## SatanVerb - Pitching Reverb
 ![SatanUI](https://i.imgur.com/JLXFrOH.png)
