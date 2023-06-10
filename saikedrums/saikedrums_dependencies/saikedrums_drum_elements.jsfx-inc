@@ -8,6 +8,7 @@ snare.mud_dip.set_bell(480, 12.0, -50);
 kick.shift_6hz.init_cheapest_freq_shifter(7);
 snare.shift.init_cheapest_freq_shifter(12.5);
 aa.init_linearSVF_invq(10000, 1);
+ride.fshift.init_cheapest_freq_shifter(110);
 
 function naiveTri(t)
 (
@@ -160,7 +161,7 @@ global()
   y += 2 * min(1.0, punch.twack) * noise.vol * (1.0 - punch.attack_fast) * (bp7.eval_linearSVF_LP(rand() * 2 - 1) + 0.3 * (rand() * 2 - 1)) * punch.atk;
   //y = mud_dip.bell_tick(y)
   
-  y = (y + y + y + y) / (1 + abs(y + y));
+  y = (4 * y) / (1 + abs(y + y));
 );
 
 function snare_reset()
@@ -205,8 +206,8 @@ global(snare_type, snare_envelope, snare_bottom, freq_shift)
   ly = y;
   (snare_type == 0) ? (
     y = this.snare1_tick()
-  
-    /*pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+  ) : (snare_type == 3) ? (
+    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc);
@@ -214,7 +215,7 @@ global(snare_type, snare_envelope, snare_bottom, freq_shift)
     y *= .3 * amp.env_tick();
     y += this.eval_linearSVF_BP(noise.env_tick() * (rand() - 0.5));
     y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
-    y = 2 * mud_dip.bell_tick(y);*/
+    y = 2 * mud_dip.bell_tick(y);
   ) : (snare_type == 1) ? (
     pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
     timestep = pitch_hz;
@@ -362,6 +363,45 @@ instance(attack, wash, bp, hp, hp2, bp2, bp3, hf_level, atk_level, wash_level)
   atk_level * attack + wash_level * wash + hf_level * attack_hf
 );
 
+function polynomial_aa_sq(t, dt)
+(
+  // 0 <= t < 1
+  (t < dt) ?
+  (
+    t /= dt;
+    t+t - sqr(t) - 1.0
+  ) : (t > 1.0 - dt) ? (
+    t = (t - 1.0) / dt;
+    sqr(t) + t+t + 1.0
+  );
+);
+
+
+function saw(t, dt)
+local(phase, y)
+global()
+instance()
+(
+  phase = t - floor(t);
+  y = 2.0 * phase - 1.0;
+  y - polynomial_aa_sq(phase, dt)
+);
+
+function sqs(t)
+(
+  2.0 * (t - floor(t) > .5) - 1.0
+);
+
+function sq(t, dt, duty)
+local(phase, y)
+global()
+instance()
+(
+  phase = t - floor(t);
+  y = 2.0 * (phase >duty) - 1.0;
+  y - polynomial_aa_sq(phase, dt) + polynomial_aa_sq(phase + (1.0 - duty) - floor(phase + (1.0 - duty)), dt)
+);
+
 function ride_stop()
 instance(
   k1_2_rel, k1_3_rel, k2_rel, k3_rel,
@@ -373,7 +413,95 @@ instance(
   k3_rel *= 2;
 );
 
-function ride_reset()
+function ride_reset_2()
+local(t_s)
+global(srate, israte, ride_attack, ride_decay, ride_tone, ALIVE_COUNT)
+instance(
+  t,
+  bp_wide, peak1, peak2, peak3, peak4, peak5, peak6, peak7,
+  alive,
+  e1, e2, e3,
+  dt1, dt2, dt3, dt4,
+  fshift2,
+  israte_decay
+)
+(
+  alive = ALIVE_COUNT;
+  t = 0;
+
+  bp_wide.init_linearSVF_invq(6000, 0.5);
+  peak1.init_linearSVF_invq(8200.75, 0.02);
+  peak2.init_linearSVF_invq(5889, 0.02);
+  peak3.init_linearSVF_invq(2456, 0.03);
+  peak4.init_linearSVF_invq(3712.49, 0.02);
+  peak5.init_linearSVF_invq(10012.49, 0.08);
+  peak6.init_linearSVF_invq(12000.49, 0.1);
+  peak7.init_linearSVF_invq(8200.49, 0.1);
+  
+  fshift2.init_cheapest_freq_shifter(0.4);
+  
+  t_s = 0.66 * (0.5 + ride_decay);
+  
+  dt1 = 25.3 * israte;
+  dt2 = 169.6 * israte * (0.5 + 0.4 * ride_tone);
+  dt3 = 304.4 * israte;
+  dt4 = 522.7 * israte * (0.5 + 0.6 * ride_tone);
+  
+  israte_decay = 1.0 / (srate * (0.3 + ride_decay));
+  e1.amp = 0.05;
+  e1.n = 0.01 * 0.13362501578292 * srate;
+  e1.atk = 7.264430222920869 / e1.n;
+  e1.rel = 7.264430222920869 * israte_decay;
+  
+  e3.amp = 0.02;
+  e3.n = 0.13362501578292 * srate;
+  e3.atk = 7.264430222920869 / e1.n;
+  e3.rel = 2 * 7.264430222920869 * israte_decay;
+   
+  t_s = 0.03 * (0.2 + ride_decay);
+  e2.state = 0.014;
+  e2.k = pow(10, -24 / (20 * t_s * srate));
+);
+
+function ride_tick_2()
+local(oscs, oscs2, v1, v2, v3)
+global(srate, israte, ride_duty, ride_tone)
+instance(
+  t,
+  bp_wide, peak1, peak2, peak3, peak4, peak5, peak6, peak7,
+  e1, e2, e3,
+  
+  dt1, dt2, dt3, dt4, t1, t2, t3, t4,
+)
+(
+  t1 += dt1;
+  t2 += dt2;
+  t3 += dt3;
+  t4 += dt4;
+  
+  oscs = saw(t1, dt1) + sq(t2, dt2, ride_duty) * e1.state + saw(t3, dt3) + sq(t4, dt4, ride_duty);
+  oscs = this.fshift.eval_cheapest_freq_shifter(oscs);
+  oscs2 = this.fshift2.eval_cheapest_freq_shifter(oscs);
+
+  e1.state += (t < e1.n) ? e1.atk * (e1.amp - e1.state) : - e1.rel * e1.state;
+  e3.state += (t < e3.n) ? e3.atk * (e3.amp - e3.state) : - e3.rel * e3.state;
+  e2.state *= e2.k;
+
+  t += 1;
+  v2 = (0.06 * e1.state + e2.state) * (
+    peak1.eval_linearSVF_BP(rand() * 2.0 - 1.0) + 
+    peak2.eval_linearSVF_BP(rand() * 2.0 - 1.0 + oscs) +
+    peak3.eval_linearSVF_BP(rand() * 2.0 - 1.0) +
+    peak4.eval_linearSVF_BP(rand() * 2.0 - 1.0) +
+    peak5.eval_linearSVF_BP(rand() * 2.0 - 1.0 + oscs) +
+    peak6.eval_linearSVF_BP(rand() * 2.0 - 1.0 + oscs);
+  );
+  v3 = 0.6 * (bp_wide.eval_linearSVF_HP(oscs) * e1.state + peak7.eval_linearSVF_HP(rand() * 0.5 - 0.25 + 0.4 * oscs2) * e3.state);
+  v1 = v2 + v3;
+  v1 + v1
+);
+
+function ride_reset_1()
 local(attack_factor, decay_factor, israte_with_decay, idecay)
 global(srate, israte, ride_attack, ride_decay, ride_tone, ALIVE_COUNT)
 instance(
@@ -441,45 +569,20 @@ instance(
   k3_rel = 7.264430222920869 * israte_with_decay / 0.21747253516471457;
 );
 
-function polynomial_aa_sq(t, dt)
+function ride_reset()
+local()
+global(ride_type)
+instance(current_ride)
 (
-  // 0 <= t < 1
-  (t < dt) ?
-  (
-    t /= dt;
-    t+t - sqr(t) - 1.0
-  ) : (t > 1.0 - dt) ? (
-    t = (t - 1.0) / dt;
-    sqr(t) + t+t + 1.0
+  (ride_type == 0) ? (
+    this.ride_reset_1();
+  ) : (ride_type == 1) ? (
+    this.ride_reset_2();
   );
+  current_ride = ride_type;
 );
 
-function sqs(t)
-(
-  2.0 * (t - floor(t) > .5) - 1.0
-);
-
-function sq(t, dt, duty)
-local(phase, y)
-global()
-instance()
-(
-  phase = t - floor(t);
-  y = 2.0 * (phase >duty) - 1.0;
-  y - polynomial_aa_sq(phase, dt) + polynomial_aa_sq(phase + (1.0 - duty) - floor(phase + (1.0 - duty)), dt)
-);
-
-function saw(t, dt)
-local(phase, y)
-global()
-instance()
-(
-  phase = t - floor(t);
-  y = 2.0 * phase - 1.0;
-  y - polynomial_aa_sq(phase, dt)
-);
-
-function ride_tick()
+function ride_tick_1()
 local(oscs, v1, v2, v3, metal2)
 global(srate, israte, ride_duty, ride_tone)
 instance(
@@ -520,6 +623,19 @@ instance(
   t += 1;
   
   0.00012 * (hp1.eval_linearSVF_HP(v1) * sqr(s1_2) + 2.1493863499171737 * sqr(s2) * sqr(s1_3) * hp2.eval_linearSVF_HP(v2) + 3.1827788623083535 * sqr(s3) * hp3.eval_linearSVF_HP(v3)) + metal2 * s3;
+  
+);
+
+function ride_tick()
+local()
+instance(current_ride)
+global()
+(
+  (current_ride == 0) ? (
+    this.ride_tick_1();
+  ) : (current_ride == 1) ? (
+    this.ride_tick_2();
+  );
 );
 
 
