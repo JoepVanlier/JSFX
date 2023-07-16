@@ -88,7 +88,7 @@ local(t_s, snare_bottom, snare_noise_decay)
 instance(punch, bp, bp2, bp3, bp4, bp5, bp6, bp7, bp8, bp9, noise)
 global(srate, israte, time_factor, snare_tune)
 (
-  t_s = 0.015 * (0.5 + decay);
+  t_s = 0.015 * (0.2 + 1.3 * decay);
   
   punch.state = 1;
   punch.state2 = 1;
@@ -152,7 +152,6 @@ global()
   punch.state3 *= punch.k3;
   
   noise_env = noise.env_tick();
-  //y *= .5 * noise_env;
   late_noise = 0.5 * noise.vol * noise_env * bp6.eval_linearSVF_BP((rand() - 0.5) * (0.3 + rand() > 0.85));
   y += late_noise;
   
@@ -418,9 +417,9 @@ local(t_s)
 global(srate, israte, ride_attack, ride_decay, ride_tone, ALIVE_COUNT)
 instance(
   t,
-  bp_wide, peak1, peak2, peak3, peak4, peak5, peak6, peak7,
+  bp_wide, peak1, peak2, peak3, peak4, peak5, peak6, peak7, peak8, peak9,
   alive,
-  e1, e2, e3,
+  e1, e2, e3, e4,
   dt1, dt2, dt3, dt4,
   fshift2,
   israte_decay
@@ -437,6 +436,9 @@ instance(
   peak5.init_linearSVF_invq(10012.49, 0.08);
   peak6.init_linearSVF_invq(12000.49, 0.1);
   peak7.init_linearSVF_invq(8200.49, 0.1);
+  
+  peak8.init_linearSVF_invq(6200.49, 1.0);
+  peak9.init_linearSVF_invq(14200.49, 1.0);
   
   fshift2.init_cheapest_freq_shifter(0.4);
   
@@ -457,6 +459,11 @@ instance(
   e3.n = 0.13362501578292 * srate;
   e3.atk = 7.264430222920869 / e1.n;
   e3.rel = 2 * 7.264430222920869 * israte_decay;
+  
+  e4.amp = 0.05;
+  e4.n = 0.13362501578292 * srate;
+  e4.atk = 7.264430222920869 / (500 * e1.n);
+  e4.rel = 7.264430222920869 * israte_decay;
    
   t_s = 0.03 * (0.2 + ride_decay);
   e2.state = 0.014;
@@ -464,13 +471,13 @@ instance(
 );
 
 function ride_tick_2()
-local(oscs, oscs2, v1, v2, v3)
+local(oscs, oscs2, v1, v2, v3, crash, crash_env)
 global(srate, israte, ride_duty, ride_tone)
 instance(
   t,
-  bp_wide, peak1, peak2, peak3, peak4, peak5, peak6, peak7,
-  e1, e2, e3,
-  
+  bp_wide, peak1, peak2, peak3, peak4, peak5, peak6, peak7, peak8, peak9,
+  e1, e2, e3, e4,
+  is_crash,
   dt1, dt2, dt3, dt4, t1, t2, t3, t4,
 )
 (
@@ -482,13 +489,25 @@ instance(
   oscs = saw(t1, dt1) + sq(t2, dt2, ride_duty) * e1.state + saw(t3, dt3) + sq(t4, dt4, ride_duty);
   oscs = this.fshift.eval_cheapest_freq_shifter(oscs);
   oscs2 = this.fshift2.eval_cheapest_freq_shifter(oscs);
+  
+  0 ? (
+    crash_env = min(1.0, 10 * e3.state + 4 * e4.state + sqrt(e4.state));
+    crash = min(1.0, e3.state + e4.state) * peak8.eval_linearSVF_BP((rand() > 0.5) * (sin(811*t1) + sin(9811*t1)) * 0.5 - 0.25);
+    crash += peak9.eval_linearSVF_BP((rand() * sin(2111*t1) * 0.5 - 0.25) * crash_env);
+    oscs += crash;
+  ) : (
+    crash_env = 0;
+    crash = 0;
+  );
 
   e1.state += (t < e1.n) ? e1.atk * (e1.amp - e1.state) : - e1.rel * e1.state;
   e3.state += (t < e3.n) ? e3.atk * (e3.amp - e3.state) : - e3.rel * e3.state;
   e2.state *= e2.k;
+  e4.state += (t < e4.n) ? e4.atk * (e4.amp - e4.state) : - e4.rel * e4.state;
 
   t += 1;
-  v2 = (0.06 * e1.state + e2.state) * (
+  
+  v2 = (0.06 * e1.state + e2.state + 0.002 * crash_env) * (
     peak1.eval_linearSVF_BP(rand() * 2.0 - 1.0) + 
     peak2.eval_linearSVF_BP(rand() * 2.0 - 1.0 + oscs) +
     peak3.eval_linearSVF_BP(rand() * 2.0 - 1.0) +
@@ -496,8 +515,10 @@ instance(
     peak5.eval_linearSVF_BP(rand() * 2.0 - 1.0 + oscs) +
     peak6.eval_linearSVF_BP(rand() * 2.0 - 1.0 + oscs);
   );
-  v3 = 0.6 * (bp_wide.eval_linearSVF_HP(oscs) * e1.state + peak7.eval_linearSVF_HP(rand() * 0.5 - 0.25 + 0.4 * oscs2) * e3.state);
-  v1 = v2 + v3;
+  
+  v3 = 0.6 * (bp_wide.eval_linearSVF_HP(oscs) * (e1.state + crash_env * 0.03) + peak7.eval_linearSVF_HP(rand() * 0.5 - 0.25 + 0.4 * oscs2) * (e3.state + crash_env * 0.05));
+  
+  v1 = v2 + v3 + 0.2 * crash;
   v1 + v1
 );
 
@@ -1612,7 +1633,7 @@ function cowbell_stop()
 
 function shaker_reset()
 local(t_decay, t_atk, tuning)
-global(shaker_decay, shaker_tune, shaker_type, srate, ALIVE_COUNT)
+global(shaker_decay, shaker_tune, shaker_type, srate, ALIVE_COUNT, shaker_tune_freq)
 instance(env, lp, lp2, hp, hp2, bell, bell2, bell3, current_shaker, alive)
 (
   alive = ALIVE_COUNT;
@@ -1636,6 +1657,7 @@ instance(env, lp, lp2, hp, hp2, bell, bell2, bell3, current_shaker, alive)
     hp2.init_linearSVF_invq(3000 * tuning, 1);
     bell.init_linearSVF_bell(5121 * tuning, 7, 20);
     bell2.init_linearSVF_bell(10121 * tuning, 9, 20);
+    shaker_tune_freq = max(shaker_tune_freq, 10121 * tuning);
     env.state2 = 1;
   );
   
