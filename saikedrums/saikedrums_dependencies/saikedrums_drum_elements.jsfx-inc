@@ -28,6 +28,45 @@ instance()
   (2/(1+exp(-2*x)) - 1)
 );
 
+function polynomial_aa_sq(t, dt)
+(
+  // 0 <= t < 1
+  (t < dt) ?
+  (
+    t /= dt;
+    t+t - sqr(t) - 1.0
+  ) : (t > 1.0 - dt) ? (
+    t = (t - 1.0) / dt;
+    sqr(t) + t+t + 1.0
+  );
+);
+
+
+function saw(t, dt)
+local(phase, y)
+global()
+instance()
+(
+  phase = t - floor(t);
+  y = 2.0 * phase - 1.0;
+  y - polynomial_aa_sq(phase, dt)
+);
+
+function sqs(t)
+(
+  2.0 * (t - floor(t) > .5) - 1.0
+);
+
+function sq(t, dt, duty)
+local(phase, y)
+global()
+instance()
+(
+  phase = t - floor(t);
+  y = 2.0 * (phase >duty) - 1.0;
+  y - polynomial_aa_sq(phase, dt) + polynomial_aa_sq(phase + (1.0 - duty) - floor(phase + (1.0 - duty)), dt)
+);
+
 ALIVE_COUNT = 256;
 
 function kick_reset()
@@ -243,10 +282,12 @@ global(snare_type, snare_envelope, snare_bottom, freq_shift)
 
 function clap_reset()
 local(db, t_s, t2_s, t3_s, t4_s, t_wash)
-global(srate, clap_attack, clap_decay, clap_type, ALIVE_COUNT)
-instance(attack, wash, bp, hp, hp2, bp2, bp3, atk_level, wash_level, hf_level, alive)
+global(israte, srate, clap_attack, clap_decay, clap_type, ALIVE_COUNT)
+instance(attack, wash, bp, hp, hp2, bp2, bp3, atk_level, wash_level, hf_level, alive, sr, current_clap)
 (
   alive = ALIVE_COUNT;
+
+  current_clap = clap_type;
 
   clap_type == 0 ? (
     db = -24;
@@ -322,6 +363,39 @@ instance(attack, wash, bp, hp, hp2, bp2, bp3, atk_level, wash_level, hf_level, a
     atk_level = 4.36; // 12.8 dB
     wash_level = 0.16; // -16 dB
     hf_level = 0;
+  ) : (clap_type == 2) ? (
+    db = -24;
+    t_s = 12 * 0.001 * (0.5 + clap_decay);
+    t2_s = 13 * 0.001 * (0.5 + clap_decay);
+    t3_s = 13 * 0.001 * (0.5 + clap_decay);
+    t4_s = 350 * 0.001 * (0.5 + clap_decay);
+    
+    t_wash = 500 * (0.5 + 2 * clap_decay) * 0.001;
+    
+    attack.thresh = pow(10, -24 / 20);
+    attack.k_current = pow(10, -24 / (20 * t_s * srate));
+    attack.k1 = pow(10, -24 / (20 * t2_s * srate));
+    attack.k2 = pow(10, -24 / (20 * t3_s * srate));
+    attack.k3 = pow(10, -100 / (20 * t4_s * srate));
+    
+    attack.snap = 0;
+    attack.k_current = attack.k1;
+    attack.state = 1;
+    
+    sr = 970 * israte * (0.5 + clap_attack);
+    
+    wash.rate = pow(10, -40 / (20 * t_wash * srate));
+    wash.state = 1;
+    
+    hp.init_linearSVF_invq(650, 2.38);
+    hp2.init_linearSVF_invq(990, 0.4);
+    bp.init_linearSVF_invq(990, 1.25);
+    bp2.init_linearSVF_invq(990, 1.0);
+    bp3.init_linearSVF_invq(1970, 1.0);
+    
+    atk_level = 4.36; // 12.8 dB
+    wash_level = 0.26; // -16 dB
+    hf_level = 0.8;
   );
 );
 
@@ -337,66 +411,54 @@ instance(attack, wash)
 );
 
 function clap_tick()
-local(attack_hf)
-global(clap_type)
-instance(attack, wash, bp, hp, hp2, bp2, bp3, hf_level, atk_level, wash_level)
+local(attack_hf, srt, srt2, yy)
+global(polynomial_aa_sq)
+instance(current_clap, ts, ts2, attack, wash, bp, hp, hp2, bp2, bp3, hf_level, atk_level, wash_level, sr)
 (
-  attack.state *= attack.k_current;
-  (attack.state < attack.thresh) && (attack.snap < 3) ? (
-    attack.state = 1;
-    attack.snap += 1;
-    (attack.snap == 1) ? (attack.k_current = attack.k1)
-    : (attack.snap == 2) ? (attack.k_current = attack.k2; (clap_type == 1) ? wash.state = 1;)
-    : (attack.snap == 3) ? (attack.k_current = attack.k3);
+  (current_clap < 2) ? (
+    attack.state *= attack.k_current;
+    (attack.state < attack.thresh) && (attack.snap < 3) ? (
+      attack.state = 1;
+      attack.snap += 1;
+      (attack.snap == 1) ? (attack.k_current = attack.k1)
+      : (attack.snap == 2) ? (attack.k_current = attack.k2; (current_clap == 1) ? wash.state = 1;)
+      : (attack.snap == 3) ? (attack.k_current = attack.k3);
+    );
+    
+    attack = hp.eval_linearSVF_HP(bp.eval_linearSVF_BP(attack.state * (rand() - 0.5)));
+    
+    attack_hf = (current_clap == 0) ? hp2.eval_linearSVF_HP(attack.state * (rand() - 0.5)) : 0;
+  
+    wash.state *= wash.rate;
+    wash = bp3.eval_linearSVF_BP(bp2.eval_linearSVF_BP(wash.state * (rand() - 0.5)));
+    
+    atk_level * attack + wash_level * wash + hf_level * attack_hf
+  ) : (current_clap == 2) ? (
+    attack.state *= attack.k_current;
+    (attack.state < attack.thresh) && (attack.snap < 3) ? (
+      attack.state = 1;
+      attack.snap += 1;
+      (attack.snap == 1) ? (attack.k_current = attack.k1)
+      : (attack.snap == 2) ? (attack.k_current = attack.k2; (current_clap == 1) ? wash.state = 1;)
+      : (attack.snap == 3) ? (attack.k_current = attack.k3);
+    );
+    
+    srt = sr * (1.0 + 1.0 * attack.state);
+    ts += srt;
+    ts > 1 ? ts = 0;
+    
+    srt2 = sr * (1.0 - 0.5 * attack.state);
+    ts2 += srt2;
+    ts2 > 1.0 ? ts2 = 0;
+    yy = polynomial_aa_sq(ts, srt) + polynomial_aa_sq(ts2, srt2);
+    attack = hp.eval_linearSVF_HP(bp.eval_linearSVF_BP(attack.state * ((1.5 + 0.8 * rand()) * yy)));
+    attack_hf = hp2.eval_linearSVF_HP(attack.state * (rand() - 0.5));
+    
+    wash.state *= wash.rate;
+    wash = bp3.eval_linearSVF_BP(bp2.eval_linearSVF_BP(wash.state * (rand() - 0.5 + 0.2 * yy)));
+    
+    atk_level * attack + wash_level * wash + hf_level * attack_hf
   );
-  
-  attack = hp.eval_linearSVF_HP(bp.eval_linearSVF_BP(attack.state * (rand() - 0.5)));
-  
-  attack_hf = (clap_type == 0) ? hp2.eval_linearSVF_HP(attack.state * (rand() - 0.5)) : 0;
-
-  wash.state *= wash.rate;
-  wash = bp3.eval_linearSVF_BP(bp2.eval_linearSVF_BP(wash.state * (rand() - 0.5)));
-  
-  atk_level * attack + wash_level * wash + hf_level * attack_hf
-);
-
-function polynomial_aa_sq(t, dt)
-(
-  // 0 <= t < 1
-  (t < dt) ?
-  (
-    t /= dt;
-    t+t - sqr(t) - 1.0
-  ) : (t > 1.0 - dt) ? (
-    t = (t - 1.0) / dt;
-    sqr(t) + t+t + 1.0
-  );
-);
-
-
-function saw(t, dt)
-local(phase, y)
-global()
-instance()
-(
-  phase = t - floor(t);
-  y = 2.0 * phase - 1.0;
-  y - polynomial_aa_sq(phase, dt)
-);
-
-function sqs(t)
-(
-  2.0 * (t - floor(t) > .5) - 1.0
-);
-
-function sq(t, dt, duty)
-local(phase, y)
-global()
-instance()
-(
-  phase = t - floor(t);
-  y = 2.0 * (phase >duty) - 1.0;
-  y - polynomial_aa_sq(phase, dt) + polynomial_aa_sq(phase + (1.0 - duty) - floor(phase + (1.0 - duty)), dt)
 );
 
 function ride_stop()
