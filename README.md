@@ -200,6 +200,18 @@ Features:
 - Control Change automation.
 - Synchronize the patterns to the host, free or MIDI.
 
+## DD-101 - Basic synthesis-based drum machine
+
+![drummachine](https://github.com/JoepVanlier/JSFX/assets/19836026/3eaeafa0-2772-4aad-807d-78c49469bf14)
+
+This is a small synthesis-based drum machine with some classic and new drum sounds.
+
+Features:
+- Remappable MIDI notes.
+- 12 drum sounds with variants.
+- Allows linking note velocity to drum kit parameter.
+- Retro pixel look.
+
 ## Ravager - Extreme upwards compressor
 ![ravager_new_cut](https://user-images.githubusercontent.com/19836026/109434612-6d816d80-7a16-11eb-8bbc-f5fbaf97dd75.gif)
 
