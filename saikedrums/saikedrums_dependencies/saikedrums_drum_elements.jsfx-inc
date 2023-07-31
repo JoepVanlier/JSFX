@@ -1,14 +1,17 @@
 @init
-kick.init_linearSVF(0.65, .75);
-kick.mud_dip.set_bell(480, 12.0, -50);
-kick.click_boost.set_bell(3413.3, 0.5, 6.3);
-snare.init_linearSVF(0.66, .2);
-snare.clap.init_linearSVF(0.65, .432);
-snare.mud_dip.set_bell(480, 12.0, -50);
-kick.shift_6hz.init_cheapest_freq_shifter(7);
-snare.shift.init_cheapest_freq_shifter(12.5);
-aa.init_linearSVF_invq(10000, 1);
-ride.fshift.init_cheapest_freq_shifter(110);
+function reinit()
+(
+  kick.init_linearSVF(0.65, .75);
+  kick.mud_dip.set_bell(480, 12.0, -50);
+  kick.click_boost.set_bell(3413.3, 0.5, 6.3);
+  snare.init_linearSVF(0.66, .2);
+  snare.clap.init_linearSVF(0.65, .432);
+  snare.mud_dip.set_bell(480, 12.0, -50);
+  kick.shift_6hz.init_cheapest_freq_shifter(7);
+  snare.shift.init_cheapest_freq_shifter(12.5);
+  aa.init_linearSVF_invq(10000, 1);
+  ride.fshift.init_cheapest_freq_shifter(110);
+);
 
 function naiveTri(t)
 (
@@ -76,7 +79,7 @@ instance(pitch, amp, t_osc, t_osc2, smooth, noise_level, noise_decay, alive)
 (
   alive = ALIVE_COUNT;
   
-  pitch.k_rise = time_factor * (1/2);  // 2 ms rise time (1/3)
+  pitch.k_rise = time_factor * 0.5;  // 2 ms rise time (1/3)
   pitch.k_decay = time_factor * 0.33 * exp(-4.605170185988092*kick_pitch_decay);
   pitch.attack_samples = 0.01 * srate; // 10 ms
   pitch.val = 0;
@@ -85,8 +88,10 @@ instance(pitch, amp, t_osc, t_osc2, smooth, noise_level, noise_decay, alive)
   noise_level = 2;
   noise_decay = time_factor * 13 * exp(-4.605170185988092*kick_noise_envelope);
   
-  amp.k_rise = time_factor * (1/1);  // 1 ms rise time (1/3)
+  amp.k_rise = time_factor;  // 1 ms rise time (1/3)
   amp.k_decay = time_factor * 0.033 * exp(-4.605170185988092*kick_amp_decay);
+  amp.k_high_decay = 4 * amp.k_decay;
+  
   amp.attack_samples = 0.04 * srate; // 100 ms
   amp.val = 0;
   amp.t = 0;
@@ -103,7 +108,7 @@ instance(
   amp
 )
 (
-  amp.k_decay *= 4;
+  amp.k_decay = amp.k_high_decay;
 );
 
 function env_tick()
@@ -125,7 +130,7 @@ global()
 function snare1_reset(decay, snare_amp_decay, snare_envelope, snare_noise_decay)
 local(t_s, snare_bottom)
 instance(punch, bp, bp2, bp3, bp4, bp5, bp6, bp7, bp8, bp9, noise)
-global(srate, israte, time_factor, snare_tune)
+global(srate, israte, time_factor, snare_tune, sample_ratio)
 (
   t_s = 0.015 * (0.2 + 1.3 * decay);
   
@@ -141,14 +146,14 @@ global(srate, israte, time_factor, snare_tune)
   punch.k3 = pow(10, -24 / (30 * 5 * t_s * srate));
   
   punch.k_atk = pow(10, -24 / (20 * 0.015 * 0.5 * srate));
-  punch.k_atk_fast = pow(10, -24 / (20 * t_s * srate * (1.0 - snare_amp_decay)));
+  punch.k_atk_fast = pow(10, -24 / (20 * t_s * srate * (1.0 - snare_amp_decay))); 
   punch.pitch_decay = pow(10, -24 / (20 * 0.5 * srate));
   
   snare_noise_decay = snare_noise_decay + 0.8;
   noise.vol = 0.4 + 0.6 * decay;
   noise.k_rise = time_factor * 0.006;  // 2 ms rise time (1/3)
   noise.k_decay = time_factor * 0.4 * exp(-4.605170185988092*(0.5 + decay*.4));
-  noise.attack_samples = 0.07 * snare_noise_decay * srate; // 10 ms
+  noise.attack_samples = 0.07 * snare_noise_decay * srate;
   noise.val = 0;
   noise.t = 0;  
   
@@ -170,8 +175,6 @@ local(y, noise_env, late_noise)
 instance(punch, bp, bp2, bp3, bp4, bp5, bp6, bp7, bp8, bp9, noise)
 global()
 (
-  // (1.0 - punch.atk)
-   
   y = 0.7 * (1.0 - punch.attack_fast) * (
     0.27 * bp.eval_linearSVF_BP(punch.state3) + 
     0.6 * bp8.eval_linearSVF_BP(punch.state3 + rand() - 0.5) * punch.state3 +
@@ -191,13 +194,11 @@ global()
   noise_env = noise.env_tick();
   late_noise = 0.5 * noise.vol * noise_env * bp6.eval_linearSVF_BP((rand() - 0.5) * (0.3 + rand() > 0.85));
   y += late_noise;
-  
   y += 1.4 * noise_env * noise.vol * bp9.eval_linearSVF_BP((rand() - 0.5) * (0.3 + rand() > 0.85)) * sqr(punch.state3);
-  
   y += 2 * min(1.0, punch.twack) * noise.vol * (1.0 - punch.attack_fast) * (bp7.eval_linearSVF_LP(rand() * 2 - 1) + 0.3 * (rand() * 2 - 1)) * punch.atk;
-  //y = mud_dip.bell_tick(y)
-  
   y = (4 * y) / (1 + abs(y + y));
+  
+  y
 );
 
 function snare_reset()
@@ -217,7 +218,7 @@ instance(amp, pitch, noise, t_osc, t_osc2, smooth, alive)
     pitch.t = 0;
     
     noise.k_rise = time_factor * (1/1);  // 2 ms rise time (1/3)
-    noise.k_decay = time_factor * 0.4 * exp(-4.605170185988092*(0.6 + snare_noise_decay*.3));
+    noise.k_decay = time_factor * 0.4 * exp(-4.605170185988092 * (0.6 + snare_noise_decay*.3));
     noise.attack_samples = 0.08 * snare_noise_decay * srate; // 10 ms
     noise.val = 0;
     noise.t = 0;
@@ -237,13 +238,13 @@ instance(amp, pitch, noise, t_osc, t_osc2, smooth, alive)
 function snare_tick()
 local(timestep, amp_env, noise_env)
 instance(pitch, noise, amp, smooth, y, ly, pitch_hz, t_osc, mud_dip, shift, clap)
-global(snare_type, snare_envelope, snare_bottom, freq_shift)
+global(snare_type, snare_envelope, snare_bottom, freq_shift, sample_ratio)
 (
   ly = y;
   (snare_type == 0) ? (
     y = this.snare1_tick()
   ) : (snare_type == 3) ? (
-    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom) * sample_ratio;
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc);
@@ -253,7 +254,7 @@ global(snare_type, snare_envelope, snare_bottom, freq_shift)
     y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
     y = 2 * mud_dip.bell_tick(y);
   ) : (snare_type == 1) ? (
-    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom) * sample_ratio;
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc);
@@ -264,7 +265,7 @@ global(snare_type, snare_envelope, snare_bottom, freq_shift)
     y = smooth ? (smooth -= 1; .9 * ly + .1*y) : y;
     y = mud_dip.bell_tick(clap.eval_linearSVF_BP(y)) * amp_env;
   ) : (snare_type == 2) ? (
-    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom);
+    pitch_hz = .5 * exp((1 - .4 * snare_envelope * pitch.env_tick()) * snare_bottom) * sample_ratio;
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc);
@@ -464,12 +465,17 @@ instance(current_clap, ts, ts2, attack, wash, bp, hp, hp2, bp2, bp3, hf_level, a
 function ride_stop()
 instance(
   k1_2_rel, k1_3_rel, k2_rel, k3_rel,
+  k1_2_rel_fast, k1_3_rel_fast, k2_rel_fast, k3_rel_fast,
+  e1, e2, e3, e4
 )
+global()
 (
-  k1_2_rel *= 9;
-  k1_3_rel *= 2;
-  k2_rel *= 2;
-  k3_rel *= 2;
+  k1_2_rel = k1_2_rel_fast;
+  k1_3_rel = k1_3_rel_fast;
+  k2_rel = k2_rel_fast;
+  k3_rel = k3_rel_fast;
+  
+  e1.rel = e2.rel = e3.rel = e4.rel = e4.fast_release;
 );
 
 function ride_reset_2()
@@ -524,6 +530,8 @@ instance(
   e4.n = 0.13362501578292 * srate;
   e4.atk = 7.264430222920869 / (500 * e1.n);
   e4.rel = 7.264430222920869 * israte_decay;
+  
+  e4.fast_release = 2 * e4.rel;
    
   t_s = 0.03 * (0.2 + ride_decay);
   e2.state = 0.014;
@@ -653,13 +661,25 @@ instance(
 function ride_reset()
 local()
 global(ride_type)
-instance(current_ride)
+instance(
+  current_ride,
+  k1_2_rel_fast, k1_2_rel,
+  k1_3_rel_fast, k1_3_rel,
+  k2_rel_fast, k2_rel,
+  k3_rel_fast, k3_rel,
+)
 (
   (ride_type == 0) ? (
     this.ride_reset_1();
   ) : (ride_type == 1) ? (
     this.ride_reset_2();
   );
+  
+  k1_2_rel_fast = k1_2_rel * 9;
+  k1_3_rel_fast = k1_3_rel * 2;
+  k2_rel_fast = k2_rel * 2;
+  k3_rel_fast = k3_rel * 2;
+  
   current_ride = ride_type;
 );
 
@@ -730,6 +750,9 @@ instance(
   s1_3, n1_3, k1_3_atk, k1_3_rel, a1_3,
   s2, n2, k2_atk, k2_rel, a2,
   s3, n3, k3_atk, k3_rel, a3,
+  
+  k1_2_rel_fast, k1_3_rel_fast, k2_rel_fast, k3_rel_fast,
+  
   dt1, dt2, dt3, dt4, dt5, dt6,
   dt7, dt8, dt9, dt10, dt11, dt12, dt13,
   alive,
@@ -853,6 +876,11 @@ instance(
     k3_atk = 7.264430222920869 / n3;
     k3_rel = 7.264430222920869 * israte_with_decay / 0.21747253516471457;
   );
+  
+  k1_2_rel_fast = k1_2_rel * 9;
+  k1_3_rel_fast = k1_3_rel * 2;
+  k2_rel_fast = k2_rel * 2;
+  k3_rel_fast = k3_rel * 2;
 );
 
 function hat_tick()
@@ -960,12 +988,13 @@ instance(
 function hat_stop()
 instance(
   k1_2_rel, k1_3_rel, k2_rel, k3_rel,
+  k1_2_rel_fast, k1_3_rel_fast, k2_rel_fast, k3_rel_fast,
 )
 (
-  k1_2_rel *= 9;
-  k1_3_rel *= 2;
-  k2_rel *= 2;
-  k3_rel *= 2;
+  k1_2_rel = k1_2_rel_fast;
+  k1_3_rel = k1_3_rel_fast;
+  k2_rel = k2_rel_fast;
+  k3_rel = k3_rel_fast;
 );
 
 function tom_synth1_reset(which, tune, decay)
@@ -1264,26 +1293,32 @@ instance(current_tom)
 
 function hi_tom_stop()
 local()
-global()
-instance(current_tom)
+global(srate)
+instance(current_tom, punch)
 (
-  0
+  punch.k = pow(10, -64 / (12 * srate));
+  punch.k2 = pow(10, -64 / (12 * srate));
+  punch.k3 = pow(10, -64 / (12 * srate));
 );
 
 function mid_tom_stop()
 local()
-global()
-instance(current_tom)
+global(srate)
+instance(current_tom, punch)
 (
-  0
+  punch.k = pow(10, -64 / (8 * srate));
+  punch.k2 = pow(10, -64 / (12 * srate));
+  punch.k3 = pow(10, -64 / (12 * srate));
 );
 
 function low_tom_stop()
 local()
-global()
-instance(current_tom)
+global(srate)
+instance(current_tom, punch)
 (
-  0
+  punch.k = pow(10, -64 / (14 * srate));
+  punch.k2 = pow(10, -64 / (8 * srate));
+  punch.k3 = pow(10, -64 / (4 * srate));
 );
 
 function rim_synth1_reset(tune, decay)
@@ -1827,12 +1862,12 @@ instance()
 
 function kick_tick()
 local(y, env_tick)
-global(kick_type, kick_envelope, kick_bottom, srate, timestep, pitch_hz, freq_shift)
+global(kick_type, kick_envelope, kick_bottom, srate, timestep, pitch_hz, freq_shift, sample_ratio, myy)
 instance(ly, amp, pitch, t_osc, t_osc2, t_osc3, env, smooth, noise_level, noise_decay, mud_dip, shift_6hz, click_boost)
 (
   ly = y;
   (kick_type == 0) ? (
-    pitch_hz = .5 * exp((1 - kick_envelope * pitch.env_tick()) * kick_bottom);
+    pitch_hz = .5 * exp((1 - kick_envelope * pitch.env_tick()) * kick_bottom) * sample_ratio;
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc);
@@ -1840,18 +1875,16 @@ instance(ly, amp, pitch, t_osc, t_osc2, t_osc3, env, smooth, noise_level, noise_
     y *= amp.env_tick();
     y = mud_dip.bell_tick(y);
     freq_shift ? y = shift_6hz.eval_cheapest_freq_shifter(y);
-    // y = click_boost.bell_tick(y);
   ) : (kick_type == 1) ? (
-    pitch_hz = .5 * exp((1 - kick_envelope * pitch.env_tick()) * kick_bottom);
+    pitch_hz = .5 * exp((1 - kick_envelope * pitch.env_tick()) * kick_bottom) * sample_ratio;
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc) * amp.env_tick();
     y = 0.91 * (tanh(2 * y + 0.1) - 0.1) + 0.1 * y;
     y = mud_dip.bell_tick(y);
     freq_shift ? y = shift_6hz.eval_cheapest_freq_shifter(y);
-    //y = click_boost.bell_tick(y);
   ) : (kick_type == 2) ? (
-    pitch_hz = .5 * exp((1 - kick_envelope * pitch.env_tick()) * kick_bottom);
+    pitch_hz = .5 * exp((1 - kick_envelope * pitch.env_tick()) * kick_bottom) * sample_ratio;
     timestep = pitch_hz;
     t_osc += timestep;
     y = naiveTri(t_osc);
@@ -1861,12 +1894,12 @@ instance(ly, amp, pitch, t_osc, t_osc2, t_osc3, env, smooth, noise_level, noise_
     y = click_boost.bell_tick(y);
   ) : (kick_type == 3) ? (
     env_tick = pitch.env_tick();
-    pitch_hz = .5 * exp((1 - kick_envelope * env_tick) * kick_bottom);
+    pitch_hz = .5 * exp((1 - kick_envelope * env_tick) * kick_bottom) * sample_ratio;
     timestep = pitch_hz;
-    y = sin(2 * $pi * t_osc) * amp.env_tick();   //kick_envelope * pitch.env_tick()
+    y = sin(2 * $pi * t_osc) * amp.env_tick();
     
     t_osc2 += 8 * timestep;
-    t_osc += timestep + .001 * env_tick * sin(2 * $pi * t_osc2);
+    t_osc += timestep + .001 * env_tick * sin(2 * $pi * t_osc2) * sample_ratio;
     freq_shift ? y = y + shift_6hz.eval_cheapest_freq_shifter((tanh(2 * y) - y) * 0.5);
     y = click_boost.bell_tick(y);
   );
