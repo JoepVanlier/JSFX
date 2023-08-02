@@ -1,8 +1,8 @@
 desc:Saike Dum Drums (DD-101)
 tags: drum, drum machine, drumkit, drums, drum synth
-version: 0.08
+version: 0.09
 author: Joep Vanlier
-changelog: Fix shifter initialization issue. Add multi-out mode. Fix up clap tooltip. Make verby part of the clap slightly less immediate when sound is stopped. Allow stopping snare. Make stopping sounds (release) when MIDI note ends optional. Add option to mute pads (left-click on the name, right-click to mute/unmute all).
+changelog: Make sure velocity automations (incl mute) are processed for a while even when a pad has gone to sleep. Darken inactive columns.
 license: MIT
 provides:
   saikedrums_dependencies/* 
@@ -248,28 +248,54 @@ instance(slider_idx, min_value, max_value)
   );
 );
 
-function hard_update()
-local(gain, pan, target_left, target_right, new_panning, new_gain)
-global(invblock, MIN_GAIN, MAX_GAIN)
+function lerp_output_settings_block(me)
+local(pan, new_panning, new_gain)
+global(samplesblock, invblock, MIN_GAIN, MAX_GAIN, mute, solo, mmm)
 instance(
-  current_left, current_right, delta_left, delta_right, vel,
-  gain_slider, pan_slider, gain_slider_vel, pan_slider_vel,
+  current_left, current_right, delta_left, delta_right, target_left, target_right, vel,
+  gain_slider, pan_slider, gain_slider_vel, pan_slider_vel, total_gain,
+  alive,
+)
+(
+  new_panning = min(1, max(-1, slider(pan_slider) + vel * slider(pan_slider_vel)));
+  new_gain = min(MAX_GAIN, max(MIN_GAIN, slider(gain_slider) + vel * slider(gain_slider_vel)));
+
+  pan = 0.5 * (new_panning + 1);
+  total_gain = pow(10, new_gain / 20);
+  
+  mute & (1 << me) ? ( total_gain = 0; );
+  
+  target_left = total_gain * sin(0.5 * (1.0 - pan) * $pi);
+  target_right = total_gain * sin(0.5 * pan * $pi);
+
+  delta_left = (target_left - current_left) * invblock;
+  delta_right = (target_right - current_right) * invblock;
+
+  ((abs(delta_left) + abs(delta_right)) > 0.00000001) ? (
+    alive = samplesblock;
+  );
+);
+
+function hard_update()
+local()
+global(samplesblock)
+instance(
+  current_left, current_right, delta_left, delta_right, target_left, target_right,
+  vel,
   last_vel,
+  alive,
 )
 (
   // Only force a vel update immediately if it's louder (otherwise things get clicky)
   (vel > last_vel) ? (
-    // Force hard update when triggered
-    new_panning = min(1, max(-1, slider(pan_slider) + vel * slider(pan_slider_vel)));
-    new_gain = min(MAX_GAIN, max(MIN_GAIN, slider(gain_slider) + vel * slider(gain_slider_vel)));
-  
-    pan = 0.5 * (new_panning + 1);
-    gain = pow(10, new_gain / 20);
-    current_left = gain * sin(0.5 * (1.0 - pan) * $pi);
-    current_right = gain * sin(0.5 * pan * $pi);
-  
+    this.lerp_output_settings_block();
+    
+    current_left = target_left;
+    current_right = target_right;
     delta_left = 0;
     delta_right = 0;
+    
+    alive = samplesblock;
   );
   last_vel = vel;
 );
@@ -574,35 +600,6 @@ snare_bottom = log((170 + 230 * snare_tune)/22050);
   last_reinit_state = sample_ratio;
 );
 
-
-function lerp_output_settings_block(me)
-local(pan, target_left, target_right, new_panning, new_gain)
-global(invblock, MIN_GAIN, MAX_GAIN, mute, solo)
-instance(
-  current_left, current_right, delta_left, delta_right, vel,
-  gain_slider, pan_slider, gain_slider_vel, pan_slider_vel, total_gain,
-)
-(
-  new_panning = min(1, max(-1, slider(pan_slider) + vel * slider(pan_slider_vel)));
-  new_gain = min(MAX_GAIN, max(MIN_GAIN, slider(gain_slider) + vel * slider(gain_slider_vel)));
-
-  pan = 0.5 * (new_panning + 1);
-  total_gain = pow(10, new_gain / 20);
-  
-  mute & (1 << me) ? ( total_gain = 0; );
-  
-  target_left = total_gain * sin(0.5 * (1.0 - pan) * $pi);
-  target_right = total_gain * sin(0.5 * pan * $pi);
-
-  delta_left = (target_left - current_left) * invblock;
-  delta_right = (target_right - current_right) * invblock;
-);
-/*
-  am_muted = mute & (1 << me);
-  am_muted ? gfx_set(0.02, 0.02, 0.02, 0.3);
-  
-  am_solo = solo & (1 << me);
-*/
 kick.lerp_output_settings_block(0);
 snare.lerp_output_settings_block(1);
 clap.lerp_output_settings_block(2);
@@ -745,7 +742,7 @@ local()
 global()
 (
   hly = max(hly, ly);
-  ly = max(0.999 * ly, abs(y));
+  ly = max(0.999 * ly, abs(y) + abs(delta_left) + abs(delta_right));
   // 0.00001584893 = -96 dB
   ly < 0.0000001584893 ? alive -= 1;
 
@@ -978,6 +975,7 @@ global(gfx_mode, gfx_a, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, hinter.set_hint, mous
   vel_angle = 1.5 * vel_value;
   
   colormodel(0.5*color);
+  
   gfx_mode = 0;
   gfx_a = 0.25;
   gfx_circle(x, y, radius, 0, 0);
@@ -1005,9 +1003,7 @@ global(gfx_mode, gfx_a, gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, hinter.set_hint, mous
   colormodel(color);
   gfx_a = 0.2;
   gfx_circle(x, y, radius + 1, 0, 0);
-  gfx_a = 0.2;
   gfx_circle(x, y, radius - 1, 0, 1);
-  gfx_a = 0.2;
   gfx_circle(x, y, radius - 2, 0, 1);
   gfx_a = 0.05;
   gfx_circle(x, y, radius - 3, 0, 1);
@@ -1084,7 +1080,7 @@ instance(over_advanced, advanced, advanced_highlight)
 );
 
 function draw_pad(me, chan, cy, pad_size, knob_radius, knob_spacing, label, hint, override_ly, has_advanced)
-local(tapped, highlight, cy2, am_muted, am_solo, ret)
+local(ys, tapped, highlight, cy2, am_muted, am_solo, ret)
 global(cx, select, pad_spacing, mute, solo, mouse_nx, mouse_ny, mouse_cap, mouse_x, mouse_y, gfx_x, gfx_y, last_cap)
 instance(hly, is_closed, height, max_y, gain, total_gain)
 (
@@ -1100,6 +1096,7 @@ instance(hly, is_closed, height, max_y, gain, total_gain)
     this.draw_advanced(me, cx + pad_size - 1, cy + height + 3);
   );
   
+  ys = cy;
   gfx_set(0.02, 0.02, 0.02, 1);
   
   // TO DO: Finish solo implementation
@@ -1179,9 +1176,14 @@ instance(hly, is_closed, height, max_y, gain, total_gain)
     tapped = 1;
   );
   
+  am_muted ? (
+    gfx_set(0, 0, 0, 0.3);
+    gfx_rect(cx - 1, ys, pad_size + 2, 107);
+  );
+  
   cx += pad_size + pad_spacing;
   
-  tapped
+  tapped & !am_muted
 );
 
 SCREEN_SHAKE_AMNT = 3;
