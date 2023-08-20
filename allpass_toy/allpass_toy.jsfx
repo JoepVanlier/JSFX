@@ -1,0 +1,177 @@
+desc:allpass
+
+slider2:sat=0<0,0.25,0.0001>Saturation
+slider3:freq=5<5, 22000, 0.1:log>Freq
+slider4:mod_freq=20<0.1, 22000, 0.1:log>Mod Freq
+slider5:mod_depth=0<0, 1, 0.001:log>Mod Depth Freq
+slider6:strength=1<1,16,1>Strength
+slider7:fb=0<-0.99,0.99, 0.00001>Feedback
+slider8:fb_mod=0<0, 0.5, 0.00001>Feedback Mod
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saikedrums_pixel_gfx.jsfx-inc
+
+@init
+last_reinit_state = -1;
+img_w = 256;
+img_h = 150;
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  (2/(1+exp(-2*x)) - 1)
+);
+
+@slider
+
+@block
+dt = mod_freq / srate; 
+
+@sample
+function polynomial_aa_sq(t, dt)
+(
+  // 0 <= t < 1
+  (t < dt) ?
+  (
+    t /= dt;
+    t+t - sqr(t) - 1.0
+  ) : (t > 1.0 - dt) ? (
+    t = (t - 1.0) / dt;
+    sqr(t) + t+t + 1.0
+  );
+);
+
+
+function saw(t, dt)
+local(phase, y)
+global()
+instance()
+(
+  phase = t - floor(t);
+  y = 2.0 * phase - 1.0;
+  y - polynomial_aa_sq(phase, dt)
+);
+
+function sq(t, dt, duty)
+local(phase, y)
+global()
+instance()
+(
+  phase = t - floor(t);
+  y = 2.0 * (phase >duty) - 1.0;
+  y - polynomial_aa_sq(phase, dt) + polynomial_aa_sq(phase + (1.0 - duty) - floor(phase + (1.0 - duty)), dt)
+);
+
+
+y0 = spl0;
+t_mod += dt;
+//mod_val = sin(2.0 * $pi * t_mod);
+mod_val = saw(t_mod, dt);
+//mod_val = sq(t_mod, dt, 0.4);
+
+
+f_b = min(0.25 * srate, max(3, freq + freq * mod_val * mod_depth));
+
+factor = tan($pi * f_b / srate);
+m_last = m;
+m = (factor - 1.0) / (factor + 1.0);
+
+<?
+  loop(
+    s=1; 16,
+      stages = 8 * s;
+      printf("function allpass%d(y0, m, m_last)", s);
+      printf("local("); loop(i=1;stages + 1, printf("x%d, y%d,", i, i); i += 1 ); printf(")\n");
+      printf("instance("); loop(i=1;stages + 1, printf("x%d_last, y%d_last, ", i, i); i += 1 ); printf(")\n");
+      printf("global(sat)\n");
+      printf("(");
+        loop(
+            i=1;stages + 1,
+            printf("x%d = y%d; y%d = x%d_last + x%d * m - y%d_last * m_last; x%d_last = x%d; y%d_last = y%d;\ny%d = y%d / (1.0 + sat * abs(y%d));", i, i - 1, i, i, i, i, i, i, i, i, i, i, i);
+            i += 1
+          );
+        printf("y%d", stages);
+      printf(");");
+      s += 1;
+  );
+?>
+
+mod_val2 = saw(t_mod, dt);
+spl0 += fb * lspl0 * (1 + fb_mod * mod_val2);
+spl1 += fb * lspl1 * (1 + fb_mod * mod_val2);
+
+<?
+  printf("(strength == 1) ? ( spl0 = a1.allpass1(spl0, m, m_last); spl1 = a2.allpass1(spl1, m, m_last); )");
+  loop(
+    s = 2; 15,
+    printf(": (strength == %d) ? ( spl0 = a1.allpass%d(spl0, m, m_last); spl1 = a2.allpass%d(spl1, m, m_last); )", s, s, s);
+    s += 1;
+  )
+?>;
+
+lspl0 = spl0;
+lspl1 = spl1;
+
+@gfx 784 481
+loaded = 0;
+!loaded ? (
+  loaded = gfx_loadimg(12, "./saikedrums_dependencies/font.png");
+  gfx_setimgdim(13, img_w, img_h);
+);
+
+gfx_x = 0;
+gfx_y = 0;
+
+/* Background color */
+gfx_dest = 13;
+gfx_clear = 0;
+gfx_set(0, 0, 0, 1);
+gfx_rect(0, 0, img_w, img_h);
+
+function reset_color()
+(
+  gfx_r = gfx_g = gfx_b = 0.0; gfx_a = 1.0;
+  gfx_mode = 1;
+);
+
+side_pad = 3;
+reset_color();
+
+
+gfx_set(1, 1, 1, 0.3);
+txt_blit("PH4S3", side_pad, img_h - 6);
+
+gfx_dest = -1;
+gfx_set(1, 1, 1, 1);
+
+raw_blit_scale = min(gfx_h / img_h, gfx_w / img_w);
+blit_scale = raw_blit_scale >= 1 ? floor(raw_blit_scale) : raw_blit_scale;
+x_offset = (gfx_w - blit_scale * img_w) * 0.5;
+y_offset = (gfx_h - blit_scale * img_h) * 0.5;
+gfx_x = x_offset; gfx_y = y_offset;
+gfx_x += rand() * shake;
+gfx_y += rand() * shake;
+shake > 0 ? shake -= 1;
+
+/*!show_ui ? (
+  gfx_set(10/255, 31/255, 49/255, 1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+);*/
+
+gfx_set(1, 1, 1, 1);
+gfx_mode = 4;
+gfx_blit(13, blit_scale, 0);
+
+
+last_cap = mouse_cap;
+last_mouse_x = mouse_x;
+last_mouse_y = mouse_y;
+mouse_nx = (mouse_x - x_offset) / blit_scale;
+mouse_ny = (mouse_y - y_offset) / blit_scale;
+
