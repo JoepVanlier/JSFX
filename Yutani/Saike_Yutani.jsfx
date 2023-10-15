@@ -1,8 +1,8 @@
 desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
-version: 0.85
+version: 0.86
 author: Joep Vanlier
-changelog: Support sustain pedal (midi CC 64).
+changelog: Add envelope shape button. Add allpass effect.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -113,6 +113,12 @@ slider62:fix_dc=0<0,1,1>-Fix DC
 slider63:inertia=60<0,200,.001>-Filter Inertia [ms]
 slider64:oversampling=1<1,8,1>-Oversampling
 
+slider65:cutoff_env_shape=0<-1.0, 1.0, 0.001>-Cutoff env shape
+slider66:cutoff_env_shape_vel=0<-2.0, 2.0, 0.001>-Cutoff env shape
+slider71:ap_freq=0.4431<0, 1, 0.0001>-AP frequency
+slider72:ap_feedback=0.17<-1, 1, 0.001>-AP Feedback
+slider73:ap_sat=0.25<0.01, 0.25, 0.001>-AP saturation
+
 in_pin:left input
 in_pin:right input
 out_pin:left output
@@ -132,6 +138,7 @@ import Saike_Yutani_sample_delay_buffer.jsfx-inc
 import Saike_Yutani_LFOs.jsfx-inc
 
 @init
+VERSION = 2;
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
 amp1 = 1;
 style = 1;
@@ -208,11 +215,13 @@ function initialize_interpolators()
     
   current_ceiling_interpolator.interpolator_init(48);
   warmth_interpolator.interpolator_init(49);
+  ap_cutoff_interpolator.interpolator_init(71);
      
   (last_inertia != inertia) ? (
     last_inertia = inertia;
     inertia_cutoff = 1000.0/inertia;
     cutoff_interpolator.initialize_smoother(inertia_cutoff);
+    ap_cutoff_interpolator.initialize_smoother(inertia_cutoff);
     reso_interpolator.initialize_smoother(inertia_cutoff);
     morph_interpolator.initialize_smoother(inertia_cutoff);
     drive_interpolator.initialize_smoother(inertia_cutoff);
@@ -230,6 +239,7 @@ function initialize_interpolators()
     cutoff_phase_interpolator.s = slider(36);
     current_ceiling_interpolator.s = slider(45);
     warmth_interpolator.s = slider(46);
+    ap_cutoff_interpolator.s = ap_freq;
   );
 );
 
@@ -269,7 +279,7 @@ UpdateFMFilter();
 );
 
 @serialize
-file_var(0, 1); // Version
+file_var(0, VERSION); // Version
 file_var(0, m_lfo_sync);
 file_var(0, c_lfo_sync);
 file_var(0, shaper);
@@ -409,15 +419,29 @@ file_var(0, inharmonicity_enabled);
 file_var(0, inharmonicity_snap);
 file_var(0, inharmonicity);
 
-loop(197,
+file_var(0, allpass_enabled);
+
+// Set defaults for older presets
+version < 2 ? (
+  cutoff_env_shape = 0;
+  cutoff_env_shape_vel = 0;
+  ap_freq = 0.4431;
+  ap_feedback = 0.17;
+  ap_sat = 0.25;
+);
+
+loop(196,
   file_var(0, 0);
 );
+
+VERSION = 2;
 
 @slider
 updateSlider();
 
 @block
 pitch_scaling = (440 + freq_shift) / srate;
+inv_block = 1.0 / samplesblock;
 
 pb_range = floor(pitch_bend_range) + 2;
 //israte_t60 = 1.0 / (pow(10, 1 - 0.2 * comb_time) * srate);
@@ -437,6 +461,7 @@ vib_factor = 16 * $pi * israte;
 midi.processMIDIBlock(); 
 
 cutoff_interpolator.interpolator_block();
+ap_cutoff_interpolator.interpolator_block();
 reso_interpolator.interpolator_block();
 morph_interpolator.interpolator_block();
 drive_interpolator.interpolator_block();
@@ -445,7 +470,22 @@ morph_phase_interpolator.interpolator_block();
 cutoff_phase_interpolator.interpolator_block();
 current_ceiling_interpolator.interpolator_block();
 warmth_interpolator.interpolator_block();
-    
+
+
+function quick_interpolate_block(slider_value)
+local()
+instance(current, target, delta_value)
+global(inv_block)
+(
+  current = target;
+  target = slider_value;
+  delta_value = (target - current) * inv_block;
+);
+
+cutoff_env_shape_interpolate.quick_interpolate_block(cutoff_env_shape);
+ap_fb_interpolate.quick_interpolate_block(ap_feedback);
+ap_sat_interpolate.quick_interpolate_block(ap_sat);
+
 oversampling_method = 1;
 
 oversampling_method == 1 ? (
@@ -487,6 +527,7 @@ function updateCurrentVelocitySettings(update_env)
   cutoff_velmod = cutoff_vel * midi.lastVel;
   reso_velmod = reso_vel * midi.lastVel;
   morph_velmod = morph_vel * midi.lastVel;
+  env_shape_velmod = cutoff_env_shape_vel * midi.lastVel;
   
   current_fm_amnt = fm_amnt + fm_amnt_vel * midi.lastVel + fm_amnt_mw;
   current_fm_spread = fm_spread + fm_spread_vel * midi.lastVel;
@@ -748,6 +789,13 @@ amp_envelope = amp_env.update_envelope(m_notes_on);
 pitch_envelope = pitch_env.update_envelope(m_notes_on);
 cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
 
+current_env_shape = cutoff_env_shape_interpolate.current + env_shape_velmod;
+(current_env_shape != 0) ? (
+  cutoff_shape = 1.0 - current_env_shape;
+  cutoff_reset ? cutoff_shape *= cutoff_shape;
+  cutoff_envelope = pow(cutoff_envelope, cutoff_shape);
+);
+
 // Oscillator section
   // Pulls in k_glide, hard_sync, amp_envelope, pitch_envelope and pitch_env from global namespace
   current_fm = any_non_simple_active ? 0 : cl01(fm_level + fm_level_velmod + fm_level_mw);
@@ -798,7 +846,7 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
   inharmonicity_enabled ? (
     y = freq_shifter.eval_cheapest_freq_shifter(y);
   );
-
+  
   // Filter modulation section
   sliderCutoffL = sliderCutoffR = cutoff_interpolator.interpolate() + cutoff_velmod + cutoff_mw + .1*faux_analog;
   sliderReso = clamp(reso_interpolator.interpolate() + reso_velmod + reso_mw, 0, 1);
@@ -1042,6 +1090,31 @@ cutoff_envelope = cutoff_env.update_envelope(m_notes_on);
       spl1 = spl1 - .5 * l_delay.readBuffer(l_offset);
     );
     
+    // Allpass block
+    allpass_enabled ? (
+      spl0 += ap_fb_interpolate.current * ap_lspl0;
+      spl1 += ap_fb_interpolate.current * ap_lspl1;
+      
+      ap_coeff_last = ap_coeff;
+      ap_coeff = allpass_coeff(ap_cutoff_interpolator.interpolate());
+      
+      // Fixed strength to 4
+      spl0 = a1.allpass4(spl0, ap_coeff, ap_coeff_last, ap_sat_interpolate.current);
+      spl1 = a2.allpass4(spl1, ap_coeff, ap_coeff_last, ap_sat_interpolate.current);
+      
+      /*
+        printf("(ap_strength == 1) ? ( spl0 = a1.allpass1(spl0, ap_coeff, ap_coeff_last, ap_sat_interpolate.current); spl1 = a2.allpass1(spl1, ap_coeff, ap_coeff_last, ap_sat_interpolate.current); )");
+        loop(
+          s = 2; 15,
+          printf(": (ap_strength == %d) ? ( spl0 = a1.allpass%d(spl0, ap_coeff, ap_coeff_last, ap_sat_interpolate.current); spl1 = a2.allpass%d(spl1, ap_coeff, ap_coeff_last, ap_sat_interpolate.current); )", s, s, s);
+          s += 1;
+        )
+      */
+      
+      ap_lspl0 = spl0;
+      ap_lspl1 = spl1;
+    );
+    
     post_sub ? (
       sub_osc_sig = subosc_vol * subosc.update_subosc(subosc_shape) * amp_envelope * final_boost * .25;
       spl0 += sub_osc_sig;
@@ -1062,6 +1135,11 @@ spl0 += spl_0;
 spl1 += spl_1;
 
 m_out_last = max(abs(spl0), abs(spl1));
+
+// Simpler interpolators
+cutoff_env_shape_interpolate.current += cutoff_env_shape_interpolate.delta_value;
+ap_fb_interpolate.current += ap_fb_interpolate.delta_value;
+ap_sat_interpolate.current += ap_sat_interpolate.delta_value;
 
 @gfx 1460 600
 style != 0 ? (
@@ -1139,6 +1217,7 @@ style == 0 ? (
   s_FLFO = sprintf(78, "FREE LFO");
   s_VOWEL = sprintf(79, "VOWEL FILTER");
   s_FREQ = sprintf(80, "INHARMONIC");
+  s_SMEAR = sprintf(80, "SMEAR");
 ) : ( style == 1 ) ? (
   xOrigin = 60*(1+scaling);
   yOrigin = 82*(1+scaling);
@@ -1165,6 +1244,7 @@ style == 0 ? (
   s_FLFO = sprintf(78, "Free LFO");
   s_VOWEL = sprintf(79, "Vowel filter");
   s_FREQ = sprintf(80, "Inharmonic");
+  s_SMEAR = sprintf(81, "Smear");
 ) : ( style == 2 ) ? (
   xOrigin = 60*(1+scaling);
   yOrigin = 82*(1+scaling);
@@ -1191,6 +1271,7 @@ style == 0 ? (
   s_FLFO = sprintf(78, "FREE LFO");
   s_VOWEL = sprintf(79, "Vowel filter");
   s_FREQ = sprintf(80, "Inharmonic");
+  s_SMEAR = sprintf(81, "Smear");
 );
 
 style == 0 ? (
@@ -2086,7 +2167,7 @@ activeModifier == 1 ? ( ampSustainKnob.knob_modifier_processMouse(0, amp_sustain
 
 cX = nextPanel + panelSpacing;
 
-nextPanel = drawPanel(s_FILT_ENV, cX, cY - .53*panelHeight + .2*knobSize, 14.75*knobSpacing, panelHeight, 1);
+nextPanel = drawPanel(s_FILT_ENV, cX, cY - .53*panelHeight + .2*knobSize, 18.5*knobSpacing, panelHeight, 1);
 
 cX += 2 * knobSpacing;
 style == 0 ? (
@@ -2156,6 +2237,14 @@ dial_animation ? (
 envSustainKnob.knob_draw_modifier(cutoff_sustain_vel, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
 activeModifier == 1 ? ( envSustainKnob.knob_modifier_processMouse(0, cutoff_sustain_vel) ? ( cutoff_sustain_vel = envSustainKnob.value; );
 ) : envSustainKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( cutoff_sustain = envSustainKnob.value; slider_automate(cutoff_sustain); );
+
+cX += 2.5 * knobSize;
+
+envShapeKnob.knob_set(sprintf(4, "   %d %%%%", 100*(cutoff_env_shape)), 1 , cutoff_env_shape * .5 + .5);
+envShapeKnob.drawKnob(cX, cY, knobSize, "- Shape +", "Envelope Shape", 1.0);
+envShapeKnob.knob_draw_modifier(cutoff_env_shape_vel * .5, bipolar, mod1_color_r, mod1_color_g, mod1_color_b, mod1_color_a, 1);
+activeModifier == 1 ? ( envShapeKnob.knob_modifier_processMouse(0, cutoff_env_shape_vel * .5) ? ( cutoff_env_shape_vel = envShapeKnob.value * 2; );
+) : envShapeKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? ( cutoff_env_shape = envShapeKnob.value * 2 - 1; slider_automate(cutoff_env_shape); );
 
 cX = nextPanel + panelSpacing;
 
@@ -2605,6 +2694,68 @@ chorusKnob.drawKnob(cX, cY, knobSize, "Space", "Bass preserving spatializer (pai
 chorusKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
   chorus_enabled = chorusKnob.value * 2;
 );
+
+cX = nextPanel + panelSpacing;
+nextPanel = drawPanel(s_SMEAR, cX, cY - .53*panelHeight + .2*knobSize, 6.15 * knobSpacing, panelHeight, c_lfo_enabled);
+
+cX += 2 * knobSpacing;
+
+
+center = .5 * sampling_ratio * srate * exp((1 - ap_freq) * log(20/22050));
+allpassCutoffKnob.knob_set(center < 1000 ? sprintf(1, "%d Hz", center) : sprintf(1, "%.1f kHz", center/1000), allpass_enabled, ap_freq);
+allpassCutoffKnob.drawKnob(cX, cY, knobSize, "Frequency", "Allpass cutoff", 1.0);
+allpassCutoffKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.25) ? ( ap_freq = allpassCutoffKnob.value; slider_automate(ap_freq); );
+
+smearEnabledToggle.drawToggle(cX-knobSize, cy-knobSize, .15*knobSize, .15*knobSize, allpass_enabled, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Enable allpass stack.");
+allpass_enabled = smearEnabledToggle.processMouseToggle(mouse_x, mouse_y, mouse_cap);
+
+cX += 1.85 * knobSize;
+allpassFBKnob.active = allpass_enabled;
+allpassFBKnob.value = (ap_feedback + 1) * .5;
+allpassFBKnob.drawKnob(cX, cY + .65*knobSize, .5*knobSize, "", "Feedback", 1.0);
+allpassFBKnob.label = "☠";
+allpassFBKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  ap_feedback = 2 * allpassFBKnob.value - 1;
+  slider_automate(ap_feedback);
+);
+
+
+allpassSat.active = allpass_enabled;
+allpassSat.value = (ap_sat - 0.01) / 0.249;
+allpassSat.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Saturation", 1.0);
+allpassSat.label = "♨";
+allpassSat.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  ap_sat = 0.01 + 0.249 * allpassSat.value;
+  slider_automate(ap_sat);
+);
+
+
+/*
+nextPanel = drawPanel(s_CLFO, cX, cY - .53*panelHeight + .2*knobSize, 9.65*knobSpacing, panelHeight, c_lfo_enabled);
+
+cX += 1.85 * knobSize;
+cutoffLFOLRPhaseKnob.active = c_lfo_enabled;
+cutoffLFOLRPhaseKnob.value = (c_lfo_phase + 1) * .5;
+cutoffLFOLRPhaseKnob.drawKnob(cX, cY + .65*knobSize, .5*knobSize, "", "Cutoff LFO Pan Phase", 1.0);
+cutoffLFOLRPhaseKnob.label = "LR";
+cutoffLFOLRPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  c_lfo_phase = 2 * cutoffLFOLRPhaseKnob.value - 1;
+  slider_automate(c_lfo_phase);
+);
+
+
+cutoffLFOPhaseKnob.active = c_lfo_enabled;
+cutoffLFOPhaseKnob.value = (c_lfo_center_phase + 1) * .5;
+cutoffLFOPhaseKnob.drawKnob(cX, cY - .6*knobSize, .5*knobSize, "", "Cutoff LFO Phase", 1.0);
+cutoffLFOPhaseKnob.label = "Φ";
+cutoffLFOPhaseKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.5) ? (
+  c_lfo_center_phase = 2 * cutoffLFOPhaseKnob.value - 1;
+  slider_automate(c_lfo_center_phase);
+);
+
+cX = nextPanel + panelSpacing;
+*/
+
   
 showOptions = 1;
 showOptions ? (
