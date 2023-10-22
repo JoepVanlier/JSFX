@@ -2,7 +2,7 @@ desc:Yutani Mono Bass Synth [Saike] (BETA)
 tags: synth bass
 version: 0.89
 author: Joep Vanlier
-changelog: Allow entering numeric values for many of the controls. Right mouse button and then start typing!
+changelog: Started work on supported wavetable oscillators.
 license: MIT
 provides:
   Yutani_Dependencies/* 
@@ -35,14 +35,14 @@ out_pin:left output
 out_pin:right output
 
 slider1:osc1_db=-9<-48, 0, .000001>-Oscillator 1 Gain
-slider2:osc1_semi=0<-36, 36, .000001>-Oscillator 1 Semitone
+slider2:osc1_semi=0<-36, 36, .000001>-Oscillator 1 Semitone 
 slider3:free_osc=0<0, 1, 1>-Reset Osc on note
-slider4:osc1_shape=0<0,7,1{Saw,Square,Triangle,Fin,PWM,Comb Sa,Comb Sq,SSaw,Glot}>-Oscillator 1 Shape
+slider4:osc1_shape=0<0,7,1{Saw,Square,Triangle,Fin,PWM,Comb Sa,Comb Sq,SSaw,Glot,WT}>-Oscillator 1 Shape
 
 slider5:osc2_db=-9<-48, 0, .000001>-Oscillator 2 Gain
 slider6:osc2_semi=12<-48, 48, .000001>-Oscillator 2 Semitone
 slider7:hardsync=1<0,1,1{Off,On}>-Hard Sync
-slider8:osc2_shape=0<0,7,1{Saw,Square,Triangle,Fin,PWM,Comb Sa,Comb Sq,SSaw,Glot}>-Oscillator 2 Shape
+slider8:osc2_shape=0<0,7,1{Saw,Square,Triangle,Fin,PWM,Comb Sa,Comb Sq,SSaw,Glot,WT}>-Oscillator 2 Shape
 
 slider9:glide_time=.4<0,1,.00001>-Glide time
 
@@ -119,6 +119,9 @@ slider71:ap_freq=0.4431<0, 1, 0.0001>-AP frequency
 slider72:ap_feedback=0.17<-1, 1, 0.001>-AP Feedback
 slider73:ap_sat=0.25<0.01, 0.25, 0.001>-AP saturation
 
+slider80:wt1_position=0<0,7,0.001>-WT1 position
+slider81:wt2_position=0<0,7,0.001>-WT2 position
+
 in_pin:left input
 in_pin:right input
 out_pin:left output
@@ -130,6 +133,7 @@ import Saike_Yutani_distortion.jsfx-inc
 import Saike_Yutani_Envelope.jsfx-inc
 import Saike_Yutani_interpolators.jsfx-inc
 import Saike_Yutani_filters.jsfx-inc
+import Saike_Yutani_WT.jsfx-inc
 import Saike_Yutani_Oscs.jsfx-inc
 import Saike_Yutani_oversampling.jsfx-inc
 import Saike_Yutani_upsamplers.jsfx-inc
@@ -138,7 +142,7 @@ import Saike_Yutani_sample_delay_buffer.jsfx-inc
 import Saike_Yutani_LFOs.jsfx-inc
 
 @init
-VERSION = 2;
+VERSION = 3;
 gfx_ext_retina == 0 ? gfx_ext_retina = 1;
 amp1 = 1;
 style = 1;
@@ -201,6 +205,27 @@ freemem = oscs3.oscsInitBuffer(freemem);
 freemem = oscs4.oscsInitBuffer(freemem);
 
 freemem = initialize_vowel(freemem);
+
+// Store instance variables such that every osc has access to this memory
+OSC_STEP = 2;
+oscs.osc1.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+oscs2.osc1.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+oscs3.osc1.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+oscs4.osc1.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+
+// Used as shared interface
+freemem = wt.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+
+oscs.osc2.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+oscs2.osc2.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+oscs3.osc2.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+oscs4.osc2.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+
+// Used as shared interface
+freemem = wt2.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);
+
+wt.create_wavetable();
+wt2.create_wavetable();
 
 function initialize_interpolators()
 (
@@ -279,6 +304,13 @@ UpdateFMFilter();
 );
 
 @serialize
+write_mode = file_avail(0) < 0;
+
+(!write_mode) ? (
+  memset(wt.sample_mem_start, 0, 8 * SAMPLES_PER_WT * WT_LENGTH);
+  memset(wt2.sample_mem_start, 0, 8 * SAMPLES_PER_WT * WT_LENGTH);
+);
+
 file_var(0, VERSION); // Version
 file_var(0, m_lfo_sync);
 file_var(0, c_lfo_sync);
@@ -422,6 +454,7 @@ file_var(0, inharmonicity);
 file_var(0, allpass_enabled);
 file_var(0, large_bonus);
 
+
 // Set defaults for older presets
 version < 2 ? (
   cutoff_env_shape = 0;
@@ -431,11 +464,24 @@ version < 2 ? (
   ap_sat = 0.25;
 );
 
-loop(195,
+version < 3 ? (
+  has_wavetable_data = 0;
+  wt1_position = 0;
+  wt2_position = 0;
+);
+
+file_var(0, has_wavetable_data);
+
+loop(194,
   file_var(0, 0);
 );
 
-VERSION = 2;
+has_wavetable ? (
+  wt.serialize_sample(SAMPLES_PER_WT, WT_LENGTH);
+  wt2.serialize_sample(SAMPLES_PER_WT, WT_LENGTH);
+);
+
+VERSION = 3;
 
 @slider
 updateSlider();
@@ -518,6 +564,9 @@ pre_sub = subosc_vol && subosc_enabled && subosc_pre;
 post_sub = subosc_vol && subosc_enabled && !subosc_pre;
 
 @sample
+wt.wt_position[] = wt1_position;
+wt2.wt_position[] = wt2_position;
+
 m_state = max(0.9999 * m_state, max(midi.lastNotesOn, m_out_last));
 audio_running = m_state > 0.00000000001;
 
@@ -1219,7 +1268,7 @@ style == 0 ? (
   s_FLFO = sprintf(78, "FREE LFO");
   s_VOWEL = sprintf(79, "VOWEL FILTER");
   s_FREQ = sprintf(80, "INHARMONIC");
-  s_SMEAR = sprintf(80, "SMEAR");
+  s_SMEAR = sprintf(81, "SMEAR");
 ) : ( style == 1 ) ? (
   xOrigin = 60*(1+scaling);
   yOrigin = 82*(1+scaling);
@@ -1340,7 +1389,7 @@ gfx_setfont(TOGGLE_FONT, "Arial", floor(13 * (1+fontscaling)));
 cX = xOrigin;
 cY = yOrigin;
 
-nextPanel = drawPanel(s_OSC1, cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 12*knobSpacing, panelHeight, 1);
+nextPanel = osc1_panel.drawPanel(s_OSC1, cX - 2*knobSpacing, cY - .53*panelHeight + .2*knobSize, 12*knobSpacing, panelHeight, 1);
 cX += knobSize;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
@@ -1430,6 +1479,12 @@ the same value for this parameter.
 Note that hard sync is not possible when using 
 this waveshape for either oscillator."
 );
+drawSelectionButton("WT", cX - 0.5 * knobSize, cY_ref + 4*y_move, ww, hh, 9, OSC1_SELECT, 
+"Wavetable
+
+Wavetable oscillator. Drag a sample into Yutani to 
+load it as a wavetable."
+);
 
 oscResetToggle.drawToggle(cX - 1.9 * knobSize, cY + 1.15 * knobSize, .15*knobSize, .15*knobSize, free_osc, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Free\n\nDo not reset the phase of oscillator on note on.\n\nNote that for comb filters, this setting switches\nthe input from impulse to noise.");
 
@@ -1456,6 +1511,7 @@ activeModifier == 3 ? ( osc1AmpKnob.knob_modifier_processMouse(0, osc1_db_flfo /
 osc1AmpKnob.check_text_input(1) ? ( osc1_db = max(-48, min(0, text_box.result)); );
 
 cX += 2.5 * knobSize;
+
 semiTonesKnob.knob_set(sprintf(1, "%.2f ", osc1_semi), 1, (osc1_semi + 36)/72);
 semiTonesKnob.drawKnob(cX, cY, knobSize, "Semitones", "Oscillator 1 tuning.\n\nHold CTRL + SHIFT to rotate slower.", 1.0);
 semiTonesKnob.knob_draw_modifier(osc1_tune_flfo / 72, bipolar, mod3_color_r, mod3_color_g, mod3_color_b, mod1_color_a, 3);
@@ -1475,6 +1531,10 @@ activeModifier == 3 ? ( semiTonesKnob.knob_modifier_processMouse(0, osc1_tune_fl
 
 semiTonesKnob.check_text_input(2) ? ( osc1_semi = max(-48, min(48, text_box.result)); );
 
+gfx_set(1, 1, 1, 1);
+osc1_panel.overPanel() ? ( wt.handle_dropped_files() ? ( wt.create_wavetable(); ); );
+(osc1_shape == 9) ? oscs.osc1.draw_table(cX, cY, knobSize, knobSize);
+
 (osc1_shape == 7) ? (
   sawDetuneKnob.knob_set("", 0.6666, ssaw_detune / 3);
   sawDetuneKnob.drawKnob(cX - 1.23 * knobSize, cY + 0.85 * knobSize, 0.35 * knobSize, "", "Supersaw Detune / Spread.\n\nNote: both oscillators share the\nsame detune factor.", 1.0);
@@ -1492,6 +1552,12 @@ semiTonesKnob.check_text_input(2) ? ( osc1_semi = max(-48, min(48, text_box.resu
   glotKnob.drawKnob(cX - 1.23 * knobSize, cY + 0.85 * knobSize, 0.35 * knobSize, "", "Glottis harshness.\n\nNote: both oscillators share the\nsame glottis position.", 1.0);
   glotKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.3333333333) ? (
     glottis_position = glotKnob.value;
+  );
+) : ( osc1_shape == 9 ) ? (
+  positionKnob.knob_set("", 0.6666, wt1_position / 7);
+  positionKnob.drawKnob(cX - 1.23 * knobSize, cY + 0.85 * knobSize, 0.35 * knobSize, "", "Wavetable position.", 1.0);
+  positionKnob.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.3333333333) ? (
+    wt1_position = positionKnob.value * 7;
   );
 );
 
@@ -1522,7 +1588,7 @@ activeModifier == 1 ? ( pwmRateKnob.knob_modifier_processMouse(0, pwm_rate_vel) 
 
 cX = nextPanel + panelSpacing;
 
-nextPanel = drawPanel(s_OSC2, cX, cY - .53*panelHeight + .2*knobSize, 16.85 * knobSpacing, panelHeight, 1);
+nextPanel = osc2_panel.drawPanel(s_OSC2, cX, cY - .53*panelHeight + .2*knobSize, 16.85 * knobSpacing, panelHeight, 1);
 cX += knobSize + 2 * knobSpacing;
 gfx_setfont(KNOB_FONT);
 y_move = .4 * knobSize;
@@ -1610,6 +1676,12 @@ the same value for this parameter.
 Note that hard sync is not possible when using 
 this waveshape for either oscillator."
 );
+drawSelectionButton("WT", cX - 0.5 * knobSize, cY_ref + 4*y_move, ww, hh, 9, OSC2_SELECT, 
+"Wavetable
+
+Wavetable oscillator. Drag a sample into Yutani to 
+load it as a wavetable."
+);
 
 syncToggle.inactive = any_non_simple_active;
 syncToggle.drawToggle(cX - 1.9 * knobSize, cY + 1.15 * knobSize, .15*knobSize, .15*knobSize, hardsync, widget_r, widget_g, widget_b, widget_a, toggle_r, toggle_g, toggle_b, toggle_a, "Hard Sync\n\nReset oscillator 2 when oscillator 1 crosses zero.");
@@ -1671,6 +1743,10 @@ activeModifier == 3 ? ( semiTonesKnob2.knob_modifier_processMouse(0, osc2_tune_f
   mouse_cap < 4 ? osc2_semi = floor(osc2_semi + .5); slider_automate(osc2_semi); 
 );
 
+gfx_set(1, 1, 1, 1);
+osc2_panel.overPanel() ? ( wt2.handle_dropped_files() ? ( wt2.create_wavetable(); ); );
+(osc2_shape == 9) ? oscs.osc2.draw_table(cX, cY, knobSize, knobSize);
+
 semiTonesKnob2.check_text_input(5) ? ( osc2_semi = max(-48, min(48, text_box.result)); );
 
 (osc2_shape == 7) ? (
@@ -1690,6 +1766,12 @@ semiTonesKnob2.check_text_input(5) ? ( osc2_semi = max(-48, min(48, text_box.res
   glotKnob2.drawKnob(cX - 1.23 * knobSize, cY + 0.85 * knobSize, 0.35 * knobSize, "", "Glottis harshness.\n\nNote: both oscillators share the\nsame glottis position.", 1.0);
   glotKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.3333333333) ? (
     glottis_position = glotKnob2.value;
+  );
+) : ( osc2_shape == 9 ) ? (
+  positionKnob2.knob_set("", 0.6666, wt2_position / 7);
+  positionKnob2.drawKnob(cX - 1.23 * knobSize, cY + 0.85 * knobSize, 0.35 * knobSize, "", "Wavetable position.", 1.0);
+  positionKnob2.knob_processMouse(mouse_x, mouse_y, mouse_cap, 0.3333333333) ? (
+    wt2_position = positionKnob2.value * 7;
   );
 );
 
@@ -2991,3 +3073,5 @@ style == 2 ? (
 
 text_box.render_text_input();
 
+/* Reset dropped file status */
+gfx_getdropfile(-1);
