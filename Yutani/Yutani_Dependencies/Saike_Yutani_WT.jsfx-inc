@@ -3,10 +3,216 @@ base_frequency = 440 * pow(2, -5.75);  // f_0
 SAMPLES_PER_WT = 8;
 WT_LENGTH = 2048;
 
+
+function auto_alignment_td(offset)
+local(
+  ix, source_ptr, target_ptr, window_len, diff, ref_value, norm_len, min_val, next, lag_range, y1, y2, y3, y4, y5, a, b
+  start_position,
+  lag,
+)
+global(SAMPLES_PER_WT, WT_LENGTH)
+instance(
+  sample_mem_start, scratch_start, length, sample_data_length, min_idx, minimum_found
+)
+(
+  // Wipe scratch memory before we begin
+  memset(scratch_start, 0, SAMPLES_PER_WT * length);
+
+  start_position = sample_mem_start + offset;
+
+  window_len = sample_data_length * 0.25;//length;
+  lag_range = sample_data_length * 0.5;
+
+  // Find maximum
+  source_ptr = start_position;
+  target_ptr = scratch_start;
+  
+  // Set up difference function (incorrect)
+  /*loop(lag_range,
+    ix = 1;
+    ref_value = source_ptr[];
+    loop(window_len,
+      diff = ref_value - source_ptr[ix];
+      target_ptr[] += diff * diff;
+      ix += 1;
+    );
+    
+    source_ptr += 1;
+    target_ptr += 1;
+  );*/
+  
+  loop(window_len,
+    lag = 1;
+    ref_value = source_ptr[];
+    target_ptr = scratch_start;
+    loop(lag_range,
+      diff = ref_value - source_ptr[lag];
+      target_ptr[] += diff * diff;
+    
+      lag += 1;
+      target_ptr += 1;
+    );
+    
+    source_ptr += 1;
+  );
+  
+  
+  // Normalization
+  // We start from the end, since the normalization overwrites the buffer
+  // and we need data 1 : tau.
+  target_ptr = scratch_start + lag_range;
+  
+  loop(lag_range,
+    ref_value = 0;
+    source_ptr = target_ptr;
+    norm_len = source_ptr - scratch_start;
+    loop(norm_len,
+      ref_value += source_ptr[];
+      source_ptr -= 1;
+    );
+    target_ptr[] /= (ref_value / norm_len);
+    
+    // Going backwards, to not overwrite data we still need.
+    target_ptr -= 1;
+  );
+  
+  // Find absolute minimum as reference point
+  ix = 0; min_val = 1000000000;
+  loop(lag_range - 15,
+    ref_value = scratch_start[ix];
+    (ref_value < min_val) ? (
+      min_val = ref_value;
+    );
+    
+    ix += 1;
+  );
+  
+  ix = 5; minimum_found = 0;
+  while((!minimum_found) && (ix < lag_range)) (
+    ref_value = scratch_start[ix];
+    
+    (ref_value < (min_val + 0.1)) ? (
+      minimum_found = 1;
+      min_idx = ix;
+    );
+    
+    ix += 1;
+  );
+  
+  next = scratch_start[ix + 1];
+  while(next < ref_value) (
+    ix += 1;
+    ref_value = next;
+    next = scratch_start[ix + 1];
+  );
+  min_idx = ix;
+  
+  // Now we do a parabolic refinement at min_idx
+  // With a * x^2 + b * x + c a local parabolic fit the peak can be found at:  - b / (2 * a)
+  y1 = scratch_start[min_idx - 1];
+  y2 = scratch_start[min_idx];
+  y3 = scratch_start[min_idx + 1];
+  a = 0.5 * (y1 + y3) - y2;
+  b = 0.5 * (y3 - y1);
+  
+  /*y1 = scratch_start[min_idx - 2];
+  y2 = scratch_start[min_idx - 1];
+  y3 = scratch_start[min_idx];
+  y4 = scratch_start[min_idx + 1];
+  y5 = scratch_start[min_idx + 2];
+  
+  a = - 0.5 * y1 - y3 + 0.5 * y5;
+  b = y1 - 3 * y2 - 2 * y3 + 0.25 * y5;*/
+
+  min_idx -= b / (2 * a);
+  
+  min_idx + 1
+);
+
+function auto_alignment_fd()
+local(ix, max_bin, max_val, i0, i1, val, y1, y2, y3, y4, y5, a, b)
+global(SAMPLES_PER_WT)
+instance(sample_mem_start, scratch_start, length, min_idx)
+(
+  // Copy the sample back into the scratch memory
+  memset(scratch_start, 0, SAMPLES_PER_WT * length);
+  memcpy(scratch_start, sample_mem_start, SAMPLES_PER_WT * length);
+  
+  // Try and figure out the frequency
+  fft_real(scratch_start, SAMPLES_PER_WT * length);
+  fft_permute(scratch_start, SAMPLES_PER_WT * length / 2);
+  
+  // Find maximum
+  ix = scratch_start + 8; /* Skip DC and LF */
+  max_val = -100000;
+  loop(SAMPLES_PER_WT * length / 2,
+    i0 = ix[0];
+    i1 = ix[1];
+    val = i0 * i0 + i1 * i1;
+    (val > max_val) ? (
+      max_bin = ix - scratch_start;
+      max_val = val;
+    );
+    ix += 2;
+  );
+  
+  y1 = scratch_start[max_bin - 1];
+  y2 = scratch_start[max_bin];
+  y3 = scratch_start[max_bin + 1];
+  a = 0.5 * (y1 + y3) - y2;
+  b = 0.5 * (y3 - y1);
+  
+  /*
+  y1 = scratch_start[min_idx - 2];
+  y2 = scratch_start[min_idx - 1];
+  y3 = scratch_start[min_idx];
+  y4 = scratch_start[min_idx + 1];
+  y5 = scratch_start[min_idx + 2];
+  
+  a = - 0.5 * y1 - y3 + 0.5 * y5;
+  b = y1 - 3 * y2 - 2 * y3 + 0.25 * y5;
+  */
+  
+  min_idx = 2 * SAMPLES_PER_WT * length / (max_bin - b / (2 * a));
+);
+
+function read_now(file_handle, num_channels)
+local(ix, reading_length, to_ptr, mx)
+global(SAMPLES_PER_WT)
+instance(length, scratch_start, sample_mem_start, sample_data_length)
+(
+  // Read a sample from an open file handle into the sample buffer
+  reading_length = min(file_avail(file_handle), 2 * SAMPLES_PER_WT * length);
+  
+  reading_length ? (
+    file_mem(file_handle, scratch_start, reading_length);
+    
+    ix = 0; mx = 0;
+    memset(sample_mem_start, 0, SAMPLES_PER_WT * length);
+    to_ptr = sample_mem_start;
+    loop(SAMPLES_PER_WT * length,
+      to_ptr[] = scratch_start[ix];
+      mx = max(mx, scratch_start[ix]);
+      ix += num_channels;
+      to_ptr += 1;
+    );
+    
+    to_ptr = sample_mem_start;
+    loop(SAMPLES_PER_WT * length,
+      to_ptr[] /= mx;
+      to_ptr += 1;
+    );
+    
+    sample_data_length = to_ptr - sample_mem_start;
+  );
+  
+  reading_length > 0
+);
+
 function handle_dropped_files()
-local(file_handle, num_channels, samplerate, ix, to_ptr, did_drop, reading_length, mx)
-global(DROPPED_FILE_STR, SAMPLES_PER_WT, has_wavetable)
-instance(scratch_start, sample_mem_start, length, sample_data_length)
+local(file_handle, num_channels, samplerate, did_drop, min_idx)
+global(DROPPED_FILE_STR, SAMPLES_PER_WT, has_wavetable_data, nch, sr, WT_LENGTH, estimate_pitch)
+instance(resampling_factor)
 (
   /* Has the user dropped a file? */
   DROPPED_FILE_STR = 80;
@@ -17,33 +223,30 @@ instance(scratch_start, sample_mem_start, length, sample_data_length)
     file_handle >= 0 ? (
       file_rewind(file_handle);
       file_riff(file_handle, num_channels, samplerate);
-      reading_length = min(file_avail(file_handle), 2 * SAMPLES_PER_WT * length);
-      
-      reading_length ? (
-        file_mem(file_handle, scratch_start, reading_length);
-        
-        ix = 0; mx = 0;
-        memset(sample_mem_start, 0, SAMPLES_PER_WT * length);
-        to_ptr = sample_mem_start;
-        loop(SAMPLES_PER_WT * length,
-          to_ptr[] = scratch_start[ix];
-          mx = max(mx, scratch_start[ix]);
-          ix += num_channels;
-          to_ptr += 1;
-        );
-        
-        to_ptr = sample_mem_start;
-        loop(SAMPLES_PER_WT * length,
-          to_ptr[] /= mx;
-          to_ptr += 1;
-        );
-        sample_data_length = to_ptr - sample_mem_start;
-        
+
+      this.read_now(file_handle, num_channels) ? (
         did_drop = 1;
-        has_wavetable = 1;
+        has_wavetable_data = 1;
       );
       
       file_close(file_handle);
+      
+      estimate_pitch ? (
+        //min_idx = 10 * this.auto_alignment_fd();
+        min_idx = this.auto_alignment_td(0);
+        
+        file_handle = file_open(DROPPED_FILE_STR);
+        file_handle >= 0 ? (
+          // Min_idx has to end up at ...
+          file_rewind(file_handle);
+          resampling_factor = WT_LENGTH / min_idx / num_channels; //18.755;//
+          file_riff(file_handle, nch='rqsr', sr=samplerate * resampling_factor);
+          this.read_now(file_handle, num_channels);
+          file_close(file_handle);
+        );
+      );
+      
+      //min_idx = this.auto_alignment_td();
     );
   );
   
@@ -51,6 +254,7 @@ instance(scratch_start, sample_mem_start, length, sample_data_length)
   
   did_drop
 );
+
 
 function allocate_wavetable(freemem, osc_length, min_note, max_note, step)
 local(scratch_length, wavetable_length)
