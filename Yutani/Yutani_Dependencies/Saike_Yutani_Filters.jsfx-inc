@@ -1157,6 +1157,249 @@ global(preamp)
     d1 = d2 = y1 = y2 = 0.0;
   );
   
+  function init_svf2(cutoff, reso, morph)
+  instance(k, wc, mo0, mo1, mo2)
+  local(f0, rm)
+  global(isampling_factor)
+  (
+    f0 = exp( (1.0 - cutoff) * log(20/22050) ) * isampling_factor;
+    wc = tan(0.5 * $pi * f0);
+    k = .999 - reso + .01;
+
+    /*hh = h * h;
+    h2 = 2.0 * h;
+    k2h = h2 * k;
+    denom = 1.0 / (hh + k2h + 1.0);*/
+    
+    // The different modes can be obtained from the outputs as follows:
+    //       x   y1   y2
+    // LP    0    0    1   0
+    // BP    0    2    0   0.25
+    // HP    1    0   -1   0.5
+    // BR    1   -2    0   0.75
+    ( morph < 0.25 ) ? (
+      mo0 = 0;
+      mo1 = 8 * morph;
+      mo2 = 1.0 - 4 * morph;
+    ) : ( morph < 0.5 ) ? (
+      rm = morph - 0.25;
+      mo0 = rm * 4;
+      mo1 = 2.0 - rm * 8;
+      mo2 = - rm * 4;
+    ) : ( morph < 0.75 ) ? (
+      rm = morph - 0.5;
+      mo0 = 1.0;
+      mo1 = - rm * 8;
+      mo2 = -1.0 + rm * 4;
+    ) : ( morph < 1.0 ) ? (
+      rm = morph - 0.75;
+      mo0 = 1.0 - rm * 4;
+      mo1 = rm * 8 - 2.0;
+      mo2 = rm * 4;
+    );
+  );
+  
+  function c_svf2(x)
+  local()
+  global()
+  instance()
+  (
+    1.25 * x + 3.75 * x * x / (1 + abs(5 * x))
+  );
+  
+  function dc_svf2(x)
+  local(ax)
+  global()
+  instance()
+  (
+    ax = 1.0 / (5 * abs(x) + 1);
+    7.5 * x * ax - 18.75 * x * x * sign(x) * ax * ax + 1.25
+  );
+  
+  function g_svf2(s)
+  local()
+  global()
+  instance()
+  (
+    s / (1 + abs(s));
+  );
+  
+  function g_svf2_inverse(s)
+  (
+    s / (1 - abs(s))
+  );
+  
+  function dg_svf2(q)
+  local(qsq)
+  global()
+  instance()
+  (
+    qsq = q * q;
+    (abs(q) > 0.00001) ? abs(q) / (qsq * abs(q) + 2 * qsq + abs(q)) : 1
+  );
+  
+  function dg2_svf2(q)
+  local(aq)
+  global()
+  instance()
+  (
+    aq = abs(q) + 1;
+    (abs(q) > 0.00001) ? - 2 * sign(q) / (aq * aq * aq) : 0
+  );
+  
+  /* Soft clipper */
+  function f_svf2(s)
+  local()
+  global()
+  instance()
+  (
+    s = 3 * s;
+    0.8 * s / (1 + abs(2 * s)) + 0.2 * s
+  );
+  
+  function df_svf2(q)
+  local(qsq)
+  global()
+  instance()
+  (
+    q = 3 * q;
+    qsq = q * q;
+    (abs(q) > 0.00001) ? 0.8 * abs(q) / (4 * qsq * abs(q) + 4 * qsq + abs(q)) + 0.2 : 1
+  );
+  
+  function eval_svf2(v0)
+  global(epsilon, maxiter_svf, preamp)
+  local(
+    f1, f2, fh1, fh2,
+    f1_const, f2_const,  /* Constant part of the implicit equation */
+    norm,
+    a, b, c, d, /* Jacobian elements */
+    dg_v1, cterm,
+    k_factor,
+  )
+  instance(res, iter, v0n, v1, v2, k, wc, g_v1, mo0, mo1, mo2)
+  (
+    //g_v1 = g_svf2(v1);
+    v0 = 3.0 * v0;
+    k_factor = 1.0 + preamp * (1.0 - k) * 0.2;
+    
+    /* Calculate fixed stuff from previous iteration */
+    f1_const = wc * c_svf2(v0n - v2 - 2 * (v1 + f_svf2(g_v1 * (k - k_factor)))) + v1;
+    f2_const = wc * g_v1 + v2;
+
+    v0n = v0;
+
+    iter = 0;
+    while(
+      iter += 1;
+      
+      g_v1 = g_svf2(v1);
+      dg_v1 = dg_svf2(v1);
+      
+      // Residual
+      cterm = v0 - v2 - 2 * (v1 + f_svf2(g_v1 * (k - k_factor)));
+      f1 = wc * c_svf2(cterm) - v1 + f1_const;
+      f2 = wc * g_v1 - v2 + f2_const;
+      
+      //a = -2 * wc * ((k - 1) * dg_svf2(v1) + 1.0) - 1.0;
+      a = -2 * wc * ((k - 1) * dg_v1 * df_svf2((k - k_factor)*g_v1) + 1.0) * dc_svf2(cterm) - 1.0;
+      b = - wc;
+      c = wc * dg_v1;
+      d = -1;
+      
+      res = abs(f1) + abs(f2);
+      
+      norm = 1.0 / ( a * d - b * c );
+      v1 = v1 - ( d*f1 - b*f2 ) * norm;
+      v2 = v2 - ( a*f2 - c*f1 ) * norm;
+      
+      (res > epsilon) && (iter < maxiter_svf);
+    );
+    
+    //v2 = tanh(v2*0.333333) * 3;
+    //v1 = tanh(v1*0.333333) * 3;
+//    v2 * 0.33333333
+    0.33333 * (mo0 * v0 + mo1 * v1 + mo2 * v2)
+  );
+  
+  function g_svf2b(s)
+  local(ts, nl)
+  global()
+  instance()
+  (
+    ts = s * s * s;
+    nl = 5; // 5
+    (s*s*s + s) / (1.0 + abs(s*s*s + nl*s))
+  );
+  
+  function dg_svf2b(s)
+  local(s2, s3, denom, nl)
+  global()
+  instance()
+  (
+    s2 = s * s;
+    s3 = s * s2;
+    nl = 5;
+    
+    denom = abs(s3 + nl * s) + 1;
+    (3 * s2 + 1) / denom - (3 * s2 + nl) * (s3 + s) * sign(s3 + nl*s) / ((denom + 1) * (denom + 1))
+  );
+
+  function eval_svf2b(v0)
+  global(epsilon, maxiter_svf, preamp)
+  local(
+    f1, f2, fh1, fh2,
+    f1_const, f2_const,  /* Constant part of the implicit equation */
+    norm,
+    a, b, c, d, /* Jacobian elements */
+    dg_v1, cterm,
+    k_factor,
+  )
+  instance(res, iter, v0n, v1, v2, k, wc, g_v1, mo0, mo1, mo2)
+  (
+    //g_v1 = g_svf2(v1);
+    v0 = 3.0 * v0;
+    k_factor = 1.0 + preamp * (1.0 - k) * 0.2;
+    
+    /* Calculate fixed stuff from previous iteration */
+    f1_const = wc * c_svf2(v0n - v2 - 2 * (v1 + g_v1 * (k - k_factor))) + v1;
+    f2_const = wc * g_v1 + v2;
+
+    v0n = v0;
+
+    iter = 0;
+    while(
+      iter += 1;
+      
+      g_v1 = g_svf2b(v1);
+      dg_v1 = dg_svf2b(v1);
+      
+      // Residual
+      cterm = v0 - v2 - 2 * (v1 + g_v1 * (k - k_factor));
+      f1 = wc * c_svf2(cterm) - v1 + f1_const;
+      f2 = wc * g_v1 - v2 + f2_const;
+      
+      //a = -2 * wc * ((k - 1) * dg_svf2(v1) + 1.0) - 1.0;
+      a = -2 * wc * ((k - 1) * dg_v1 * (k - k_factor)*g_v1 + 1.0) * dc_svf2(cterm) - 1.0;
+      b = - wc;
+      c = wc * dg_v1;
+      d = -1;
+      
+      res = abs(f1) + abs(f2);
+      
+      norm = 1.0 / ( a * d - b * c );
+      v1 = v1 - ( d*f1 - b*f2 ) * norm;
+      v2 = v2 - ( a*f2 - c*f1 ) * norm;
+      
+      (res > epsilon) && (iter < maxiter_svf);
+    );
+    
+    //v2 = tanh(v2*0.333333) * 3;
+    //v1 = tanh(v1*0.333333) * 3;
+//    v2 * 0.33333333
+    0.33333 * (mo0 * v0 + mo1 * v1 + mo2 * v2)
+  );
+  
   function init_SVF_nonlin(cutoff, reso, morph)
   instance(h, k, hh, h2, k2h, denom, mo0, mo1, mo2)
   local(f0)
@@ -2667,6 +2910,14 @@ global(oversampling, safety_limit_pir, safety_limit_ms20, safety_limit_moog, cur
       );
       L.hla.init_1p_tpt_based(sliderCutoffL, sliderReso);
       R.hla.init_1p_tpt_based(sliderCutoffR, sliderReso);
+    ) : ( filter_type == 27 ) ? (
+      L.init_svf2(sliderCutoffL, sliderReso, sliderMorphL);
+      R.init_svf2(sliderCutoffR, sliderReso, sliderMorphR);
+    ) : ( filter_type == 28 ) ? (
+      L.init_svf2(sliderCutoffL, 0, sliderMorphL);
+      R.init_svf2(sliderCutoffR, 0, sliderMorphR);
+      L2.init_svf2(sliderCutoffL, sliderReso, sliderMorphL);
+      R2.init_svf2(sliderCutoffR, sliderReso, sliderMorphR);
     );
   );
   
@@ -2784,6 +3035,12 @@ global(ssl, ssr, epsilon)
       ) : ( filter_type == 26 ) ? (
         ssl = L.hla.eval_1p_tpt_based(ssl, filter_choiceL, frac_morphL);
         ssr = R.hla.eval_1p_tpt_based(ssr, filter_choiceL, frac_morphL);
+      ) : ( filter_type == 27 ) ? (
+        ssl = L.eval_svf2(ssl);
+        ssr = R.eval_svf2(ssr);
+      ) : ( filter_type == 28 ) ? (
+        ssl = L2.eval_svf2b(L.eval_svf2(ssl));
+        ssr = R2.eval_svf2b(R.eval_svf2(ssr));
       );
     );
   );
