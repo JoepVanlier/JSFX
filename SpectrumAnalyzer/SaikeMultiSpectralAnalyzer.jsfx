@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.32
+version: 5.0.33
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Wipe value when switching to max mode.
+changelog: Rescale the spectrum when floor or ceiling is changed. Allow changing settings on memory. Be aware, this change may have introduced some new bugs!
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -140,7 +140,7 @@ local(mx, ix)
     );
     ix += 1;
   );
-  (slider28 >= (num_ch / 2 - 1)) ? (
+  (slider28 >= (num_ch / 2)) ? (
     slider28 = 0;
   );
   
@@ -450,6 +450,45 @@ latencyCompensation ? (
 );
 
 @gfx 900 600
+function rescale(buf)
+global(
+  mem_block_size,
+  spectral_offset_pixels, spectrum_yoffset, logf_to_pixels,
+  last_spectral_offset_pixels, last_spectrum_yoffset, last_logf_to_pixels,
+)
+local(update, y_raw)
+instance()
+(
+  update = (
+    (spectral_offset_pixels != 0) ||
+    (spectrum_yoffset != 0) ||
+    (logf_to_pixels != 0) ||
+    (last_spectral_offset_pixels != 0) ||
+    (last_spectrum_yoffset != 0) ||
+    (last_logf_to_pixels != 0) ||
+    (spectral_offset_pixels != last_spectral_offset_pixels) ||
+    (spectrum_yoffset != last_spectrum_yoffset) ||
+    (logf_to_pixels != last_logf_to_pixels)
+  );
+
+  update ? (
+    loop(mem_block_size,
+      y_raw = - 2.0 * (buf[] + last_spectral_offset_pixels - last_spectrum_yoffset) / last_logf_to_pixels;
+      buf[] = y_raw * -0.5 * logf_to_pixels + spectrum_yoffset - spectral_offset_pixels;
+      buf += 1;
+    );
+  );
+);
+
+// rescale
+rescale(memA);
+rescale(memB);
+rescale(memA2);
+rescale(memB2);
+last_spectral_offset_pixels = spectral_offset_pixels;
+last_spectrum_yoffset = spectrum_yoffset;
+last_logf_to_pixels = logf_to_pixels;
+
 (lastIntegrate != maxIntegrate) ? (
   wipe = 1;
 ) : (
@@ -1061,7 +1100,7 @@ local(extra_scale, scaling, val, plot_val, f, accumulated_step, current_max, ste
             better_scaling ? (
               // Maximum value is given by: - scale_offset_db_user
               // Minimum value is given by: slider2 - scale_offset_db_user
-              plot_val = scaling * log(current_max);
+              plot_val = scaling * log(current_max + 0.00000000000000000000000000000001);
               plot_val = min(1, max(0, (plot_val - scale_offset_db_user + extra_scale) / slider2));
               !invert ? plot_val = 1 - plot_val;
               sonoColorLoc = sonoColorMap + 3 * ceil(255 * plot_val);
@@ -1086,7 +1125,7 @@ local(extra_scale, scaling, val, plot_val, f, accumulated_step, current_max, ste
         better_scaling ? (
           // Maximum value is given by: - scale_offset_db_user
           // Minimum value is given by: slider2 - scale_offset_db_user
-          plot_val = scaling * log(sonogramBuffer[]);
+          plot_val = scaling * log(sonogramBuffer[] + 0.00000000000000000000000000000001);
           plot_val = min(1, max(0, (plot_val - scale_offset_db_user + extra_scale) / slider2));
           !invert ? plot_val = 1 - plot_val;
           sonoColorLoc = sonoColorMap + 3 * ceil(255 * plot_val);
@@ -1116,7 +1155,7 @@ local(extra_scale, scaling, val, plot_val, f, accumulated_step, current_max, ste
           better_scaling ? (
             // Maximum value is given by: - scale_offset_db_user
             // Minimum value is given by: slider2 - scale_offset_db_user
-            plot_val = scaling * log(val);
+            plot_val = scaling * log(val + 0.00000000000000000000000000000001);
             plot_val = min(1, max(0, (plot_val - scale_offset_db_user + extra_scale) / slider2));
             !invert ? plot_val = 1 - plot_val;
             sonoColorLoc = sonoColorMap + 3 * ceil(255 * plot_val);
@@ -2726,7 +2765,8 @@ global(slider8, slider36, slider45, mem_block_size,
        M_BLOCK_SIZE,
        kernelSize, fftsize, xscale,
        sModeA, kernelSizeA, fftSizeA, xScaleA,
-       sModeB, kernelSizeB, fftSizeB, xScaleB)
+       sModeB, kernelSizeB, fftSizeB, xScaleB,
+       lockSettings, smoothing)
 local(jl, incr, cref, ccolor, jl, isActive, halfShade, shade)
 instance()
 (
@@ -2783,18 +2823,35 @@ instance()
     );
   );
   
-  showA ? (
-    memcpy(filtout, memA, mem_block_size);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
-    memcpy(filtout, memA2, mem_block_size);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
-  );
-  
-  showB ? (
-    memcpy(filtout, memB, mem_block_size);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
-    memcpy(filtout, memB2, mem_block_size);
-    prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+  lockSettings ? (
+    showA ? (
+      memcpy(filtout, memA, mem_block_size);
+      prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+      memcpy(filtout, memA2, mem_block_size);
+      prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscaleA, sModeA, kernelSizeA);
+    );
+    
+    showB ? (
+      memcpy(filtout, memB, mem_block_size);
+      prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+      memcpy(filtout, memB2, mem_block_size);
+      prepareForDrawing(filtout, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscaleB, sModeB, kernelSizeB);
+    );
+  ) : (
+    kernelSize = smoothing > 0 ? floor( smoothing/5 + 1 ) : 0;
+    showA ? (
+      memcpy(filtout, memA, mem_block_size);
+      prepareForDrawing(filtout - kernelSize + kernelSizeA, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscale, floor(slider45), kernelSize);
+      memcpy(filtout, memA2, mem_block_size);
+      prepareForDrawing(filtout - kernelSize + kernelSizeA, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeA, xscale, floor(slider45), kernelSize);
+    );
+    
+    showB ? (
+      memcpy(filtout, memB, mem_block_size);
+      prepareForDrawing(filtout - kernelSize + kernelSizeB, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscale, floor(slider45), kernelSize);
+      memcpy(filtout, memB2, mem_block_size);
+      prepareForDrawing(filtout - kernelSize + kernelSizeB, sumposl, fftwl, ibufl, sumshl, .5, .5, .5, 1, 1, fftsizeB, xscale, floor(slider45), kernelSize);
+    );
   );
 );
 
