@@ -1,8 +1,8 @@
 desc:Partials (Saike)
 tags: modal effect, instrument
-version: 0.65
+version: 0.66
 author: Joep Vanlier
-changelog: Add instrument tag.
+changelog: Support microtuning through .TUN files.
 license: MIT
 provides:
   partials_dependencies/*
@@ -181,6 +181,7 @@ global(
   idx,
   N_SAMPLES, SAMPLE_SIZE,
   SAMPLE_FONT, TINY_FONT, BIG_FONT,
+  tuning_memory,
 )
 (
   freemem = 0;
@@ -268,6 +269,7 @@ global(
     
   freemem = (scratchloc = freemem) + SAMPLE_SIZE;
   freemem = (copyloc = freemem) + SAMPLE_SIZE;
+  freemem = (tuning_memory = freemem) + 256;
   
   SAMPLE_FONT = 5;
   TINY_FONT = 6;
@@ -419,6 +421,121 @@ global()
   state += rate * (current_target - state);
 );
 
+function handle_dropped_files_microtuning(tuning_memory)
+local(file_handle, note_index, frequency, found_tuning, cent_scaling)
+global(
+  DROPPED_FILE_STR, PARSE_STR, microtuned, base_freq, reading_tuning
+)
+instance()
+(
+  DROPPED_FILE_STR = 80;
+  PARSE_STR = 88;
+  
+  // Scaling to convert from 2^(x/1200) to exp(cent_scaling * x)
+  cent_scaling = log(2) / 1200;
+  gfx_getdropfile(0, DROPPED_FILE_STR) ? (
+    (matchi("*.TUN", 80) == 1) ? (
+      microtuned = 0;
+      file_handle = file_open(DROPPED_FILE_STR);
+      file_handle >= 0 ? (
+        memset(tuning_memory, 0, 128);
+        file_rewind(file_handle);
+        
+        /* Prefer exact if possible */
+        found_tuning = 0;
+        base_freq = 8.17579891564371;
+        while(file_avail(file_handle) && (!found_tuning))
+        (
+          file_string(file_handle, PARSE_STR);
+          (strnicmp("[Exact Tuning]", PARSE_STR, 13) == 0) ? (
+            found_tuning = 1;
+          );
+        );
+        
+        /* Read the tuning */
+        (found_tuning == 1) ? (
+        
+          found_tuning = 0;
+          while(file_avail(file_handle) && (found_tuning < 2))
+          (
+            file_string(file_handle, PARSE_STR);
+            matchi("basefreq*?=*?%f*", PARSE_STR, base_freq);
+            matchi("note %d*?=*?%f*", PARSE_STR, note_index, frequency) ? (
+              ((note_index > 0) && (note_index < 128)) ? (
+                tuning_memory[note_index] = base_freq * exp(cent_scaling * frequency);
+                found_tuning = 1;
+              );
+            );
+            
+            // Other section starts
+            matchi("[*", PARSE_STR) ? (
+              found_tuning = 2;
+            );
+          );
+        );
+        
+        /* We didn't find an exact tuning, see if we can find a sloppy one */
+        (found_tuning == 0) ? (
+          /* Prefer exact if possible */
+          found_tuning = 0;
+          file_rewind(file_handle);
+          while(file_avail(file_handle) && (!found_tuning))
+          (
+            file_string(file_handle, PARSE_STR);
+            (strnicmp("[Tuning]", PARSE_STR, 7) == 0) ? (
+              found_tuning = 1;
+            );
+          );
+          
+          /* Read the tuning */
+          (found_tuning == 1) ? (
+            found_tuning = 0;
+            while(file_avail(file_handle) && (found_tuning == 0))
+            (
+              file_string(file_handle, PARSE_STR);
+              matchi("note %d*?=*?%d*", PARSE_STR, note_index, frequency) ? (
+                ((note_index > 0) && (note_index < 128)) ? (
+                  tuning_memory[note_index] = base_freq * exp(cent_scaling * frequency);
+                  found_tuning = 1;
+                );
+              );
+              
+              // Other section starts
+              matchi("[*", PARSE_STR) ? (
+                found_tuning = 1;
+              );
+            );
+          );
+        );
+        
+      
+      );
+      file_close(file_handle);
+    );
+    
+    found_tuning ? (
+      microtuned = 1;
+    );
+  );
+  
+  DROPPED_FILE_STR = 0;
+);
+
+function pitch_to_freq(pitch)
+local(scaling, frac, temp)
+global(microtuned, tuning_memory, sample_time, ln)
+instance()
+(
+  microtuned ? (
+    temp = min(127, max(0, pitch + 69));
+    frac = temp - floor(temp);
+    ln = temp;
+    (pow(tuning_memory[temp], (1.0 - frac)) * pow(tuning_memory[temp + 1], frac))
+  ) : (
+    440 * 2 ^ (pitch / 12)
+  );
+);
+
 function update_notes()
 instance(notes_on, active_note_mem, active_note_vel, active_note_state, note_history,
          note_on0, note_on1, note_on2, note_on3, note_on4, last_count)
@@ -466,11 +583,12 @@ global(string1.set_pars, string2.set_pars, string3.set_pars, string4.set_pars, s
        string5.update_freq,
        pitchbend_range
        )
-local(ref_pitch, scaling, max_vel,
-      note_vel0, note_vel1, note_vel2, note_vel3, note_vel4,
-      note_state0, note_state1, note_state2, note_state3, note_state4,
-      remainder,
-      )
+local(
+  ref_pitch, scaling, max_vel,
+  note_vel0, note_vel1, note_vel2, note_vel3, note_vel4,
+  note_state0, note_state1, note_state2, note_state3, note_state4,
+  remainder,
+)
 (
   scaling = 440;
   ref_pitch = pitchbend_range * midi.pitchbend + pitch_shift - 69;
@@ -487,7 +605,7 @@ local(ref_pitch, scaling, max_vel,
       note_state0 = -1;
     );
     (notes_on > 0) ? (
-      string1.set_pars(scaling * 2 ^ ((note_on0 + ref_pitch) / 12), note_vel0, last_count > 0)+
+      string1.set_pars(pitch_to_freq(note_on0 + ref_pitch), note_vel0, last_count > 0)+
       string1.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel0;
     );
     
@@ -521,11 +639,11 @@ local(ref_pitch, scaling, max_vel,
     note_state4 = active_note_state[4];
     
     // Update note parameters
-    note_on0 ? ( string1.set_pars(scaling * 2 ^ ((note_on0 + ref_pitch) / 12), note_vel0, 0); string1.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel0; );
-    note_on1 ? ( string2.set_pars(scaling * 2 ^ ((note_on1 + ref_pitch) / 12), note_vel1, 0); string2.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel1; );
-    note_on2 ? ( string3.set_pars(scaling * 2 ^ ((note_on2 + ref_pitch) / 12), note_vel2, 0); string3.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel2; );
-    note_on3 ? ( string4.set_pars(scaling * 2 ^ ((note_on3 + ref_pitch) / 12), note_vel3, 0); string4.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel3; );
-    note_on4 ? ( string5.set_pars(scaling * 2 ^ ((note_on4 + ref_pitch) / 12), note_vel4, 0); string5.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel4; );
+    note_on0 ? ( string1.set_pars(pitch_to_freq(note_on0 + ref_pitch), note_vel0, 0); string1.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel0; );
+    note_on1 ? ( string2.set_pars(pitch_to_freq(note_on1 + ref_pitch), note_vel1, 0); string2.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel1; );
+    note_on2 ? ( string3.set_pars(pitch_to_freq(note_on2 + ref_pitch), note_vel2, 0); string3.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel2; );
+    note_on3 ? ( string4.set_pars(pitch_to_freq(note_on3 + ref_pitch), note_vel3, 0); string4.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel3; );
+    note_on4 ? ( string5.set_pars(pitch_to_freq(note_on4 + ref_pitch), note_vel4, 0); string5.ref_cutoff = filter_cutoff + filter_cutoff_vel * note_vel4; );
     
     (note_state0 == -1) ? (string1.damp_string(); string1.update_freq(); );
     (note_state1 == -1) ? (string2.damp_string(); string2.update_freq(); );
@@ -959,6 +1077,11 @@ file_mem(0, custom_partial_mem, MAX_CUSTOM_PARTIALS * 8 + 64);
   sample_follow_note = 0;
 ) : (
   file_var(0, pitchbend_range);
+);
+
+file_var(0, microtuned);
+microtuned ? (
+  file_mem(0, tuning_memory, 128);
 );
 
 version = 10;
@@ -1696,6 +1819,16 @@ label_toggle(right - velw2 - velw - 10, 0.935 * _gfx_h, " [Vel]", "Click this to
   );
 );
 
+microtuned ? (
+  gfx_setfont(3, "Arial", 12 * max(1, scaling));
+  gfx_measurestr("[Clr]", velw3, velh3);
+  colormodel(microtuned - 0.01);
+  label_toggle(right + 4, 0.935 * _gfx_h, " [Clr]", "Clear tuning file.") ? (
+    microtuned = 1 - microtuned;
+  );
+);
+
+
 colormodel(1 - display_log);
 label_toggle(0.02 * _gfx_w, 0.93 * _gfx_h, "[Linear] ", "Display frequencies on a linear scale") ? (display_log = 0);
 colormodel(display_log);
@@ -2179,12 +2312,13 @@ updated_loop ? (
   right = custom_partials.draw_custom_partial_ui(0.02 * _gfx_w, cy + 1.5 * radius, 0.96 * _gfx_w, 0.935 * _gfx_h - (cy + 1.5 * radius) - 5, custom_partial_mem, MAX_CUSTOM_PARTIALS, partials_used, model==11);
 );
 
+handle_dropped_files_microtuning(tuning_memory);
 sample_data_gfx_finalize();
 
 gfx_x = 115; gfx_y = 3;
 colormodel(0.4);
 gfx_setfont(4, "Arial", 10 * max(1,scaling));
-gfx_printf("v0.62 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
+gfx_printf("v0.66 ALPHA (Warning: this plugin is not production ready and is still actively being developed)");
 
 (model == 10) ? (
   colormodel(0.0);
@@ -2245,5 +2379,24 @@ loop(30,
 );
 */
 
+/*
+gfx_x = 0;
+gfx_y = 90;
+gfx_set(1, 1, 1, 1);
+fff = midi.sustain_history;
+loop(30,
+  gfx_printf("%f  ", fff[]);
+  fff += 1;
+);
+*/
+
 loaded_sample = 0;
+
+/*
+gfx_x = gfx_y = 0;ix = 0;
+loop(128,
+  gfx_printf("%f ", tuning_memory[ix]);
+  ix += 1;
+);
+*/
 
