@@ -1,8 +1,8 @@
 desc:Saike Dum Drums (DD-101)
 tags: drum, drum machine, drumkit, drums, drum synth, instrument
-version: 0.14
+version: 0.15
 author: Joep Vanlier
-changelog: Bugfix: Don't reset note mapping every time.
+changelog: Highlight played note on keyboard. Allow customization of the base octave when assigning keys and make the make the base octave 3.
 license: MIT
 provides:
   saikedrums_dependencies/* 
@@ -253,6 +253,8 @@ freemem = (note_mapping = freemem) + 256;
   
   notes_initialized = 1;
 );
+
+freemem = (active_notes = freemem) + 256;
 
 audio_buffer_idx = 0;
 
@@ -626,6 +628,8 @@ file_var(0, multi_out);
   open_hat_pan_vel = hat_pan_vel;
 );
 
+file_var(0, base_oct);
+
 version = CURRENT_VERSION;
 
 initialize_controls();
@@ -664,8 +668,8 @@ midi.processMIDIBlock();
 
 @sample
 function processMIDISample()
-local(cur_cc, i, note
-      vel)
+local(cur_cc, i, current_note
+      note, vel)
 global(play_state, ttt,
        uncoupled_hats,
        kick.kick_reset,
@@ -721,6 +725,7 @@ global(play_state, ttt,
        ignore_stop,
        hat_attack, hat_decay, hat_tone, hat_type, hat_body,
        ohat_attack, ohat_decay, ohat_tone, ohat_type, ohat_body,
+       active_notes,
        )
 instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, pitchBend)
 (
@@ -733,7 +738,9 @@ instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, p
       (notePtr[] > 0) ? ( // note-on
         vel = notePtr[]/127;
         notePtr += 1;
-        note = note_mapping[noteptr[]];
+        current_note = noteptr[];
+        note = note_mapping[current_note];
+        active_notes[current_note] = 1;
         
         note == NOTE_KICK ? ( kick.kick_update(vel); kick.kick_reset(); );
         note == NOTE_SNARE ? ( snare.snare_update(vel); snare.snare_reset(); );
@@ -754,7 +761,9 @@ instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, p
         ttt += 1;
       ) : (notePtr[] == -1) ? ( // note-off
         notePtr += 1;
-        note = note_mapping[notePtr[]];
+        current_note = noteptr[];
+        note = note_mapping[current_note];
+        active_notes[current_note] = 0;
         !ignore_stop ? (
           note == NOTE_KICK ? kick.kick_stop();
           note == NOTE_SNARE ? snare.snare_stop();
@@ -1476,10 +1485,13 @@ instance()
 ) : (advanced_open == 10) ? (
   scaling = 1;
   base_note_width = 7;
-  base_note = 60 - 12;
+  (base_oct == 0) ? (
+    base_oct = 4;
+  );
+  base_note = (base_oct - 1) * 12;
   cx = strip_x + floor(knob_radius / 2) - 2;
   cy = strip_y + floor((strip_h - knob_radius) / 2) - 1 - 2;
-  keys.draw_keyboard(base_note, cx, kick.max_y + 3, img_w - cx - 7, img_h - kick.max_y - 9 - 4, base_note_width, note_mapping);
+  keys.draw_keyboard(base_note, cx, kick.max_y + 3, img_w - cx - 7, img_h - kick.max_y - 9 - 4, base_note_width, note_mapping, active_notes);
   
   current_note = keys.note_clicked();
   keys.over ? (
@@ -1488,10 +1500,25 @@ instance()
     ((mouse_cap && 2 > 0) && (last_cap == 0)) ? (
       gfx_x = mouse_x;
       gfx_y = mouse_y;
-      ret = gfx_showmenu("None|Kick|Snare|Clap|Closed Hat|Open Hat|Ride|Shaker|Hi Tom|Mid Tom|Low Tom|Rim|Cowbell");
+      str = sprintf(12, "");
+      ix = 1;
+      loop(8,
+        (base_oct == ix) ? (
+          strcat(str, "!");
+        );
+        strcat(str, sprintf(13, "%d|", ix - 2));
+        ix += 1;
+      );
+      
+      str2 = sprintf(13, "None|Kick|Snare|Clap|Closed Hat|Open Hat|Ride|Shaker|Hi Tom|Mid Tom|Low Tom|Rim|Cowbell|>Change base octave|%s", str);
+      ret = gfx_showmenu(str2);
       
       ret ? (
-        note_mapping[current_note] = ret - 1;
+        ret < 14 ? (
+          note_mapping[current_note] = ret - 1;
+        ) : (
+          base_oct = ret - 13 ;
+        );
       );
     );
   );
