@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.33
+version: 5.0.34
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Rescale the spectrum when floor or ceiling is changed. Allow changing settings on memory. Be aware, this change may have introduced some new bugs!
+changelog: Added a few options to sync time domain displays to beat.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -79,6 +79,8 @@ slider58:interpolate_lines=0<0,1,1>-interpolate_lines
 slider59:dummy=0<0,1,1>-Dummy
 slider60:displayMode=0<0,1,1>-Display mode
 slider61:scale_offset_db_user=0<-48,48,1>-Scale offset
+slider62:sync=0<0,4,1>-Sync
+slider63:offset_x=0<0,0.5,0.00001>-shift
 //in_pin:left input 
 //in_pin:right input
 options:no_meter
@@ -89,7 +91,7 @@ lastIntegrate = -1;
 sono_sample = 0;
 last_sono_sample = 0;
 version = 2;
-chNames = 800;
+chNames = 900;
 memory_debugging = 0;
 !memory_debugging ? (
   ext_noinit = 1;
@@ -206,7 +208,7 @@ fftsize         = max_fft_size;
 mem_block_size  = 0.5 * max_fft_size;
 
 window          = max_fft_size; /* Location of the window */
-histsize        = 2 * max_fft_size;  /* Size of the audio buffer */
+histsize        = 4 * max_fft_size;  /* Size of the audio buffer */
 
 
 SONOSURFACE   = 4;
@@ -227,7 +229,7 @@ local(rpos, freemem, rpos, hsize, fftw, ibuf, csh, channel_offset, endpoints)
 global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activechannels, maxchannels, offscreenbuf, M_BLOCK_SIZE, 
        window, histsize, max_fft_size, maxIntegrate, filtout, filtout2, sumshl, sumshr, sumposl, sumposr, fftwl, fftwr, ibufl, ibufr, sumhsl, sumhsr
        latencyBuffer, latencyBufferMax, latencyPtr, memA, memB, memA2, memB2,memory_debugging, ch_endpoints,
-       mem_block_size)
+       mem_block_size, rec_positions_copy)
 (
   memory_debugging ? (
     memset(65536, 0, 512*512*1024);
@@ -243,6 +245,8 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
   shifts          = 500;
   activechannels  = 600;
   ch_endpoints    = 700;
+  rec_positions_copy = 800;
+  
   maxchannels     = 16;
   offscreenbuf    = 1;
   M_BLOCK_SIZE    = 65536;
@@ -293,7 +297,7 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
       freemem = ((csh + channel_offset)[] = (rpos + channel_offset)[] = freemem) + histsize;   // Buffer start
       (hsize + channel_offset)[] = freemem;  // Buffer end
       freemem = ((fftw + channel_offset)[] = freemem) + max_fft_size;  // Length of fftw space is max_fft_size
-      freemem = ((ibuf + channel_offset)[] = freemem) + max_fft_size; // Integration buffer is 0.5 * fftsize long, we round off to a full fft size
+      freemem = ((ibuf + channel_offset)[] = freemem) + max_fft_size;  // Integration buffer is 0.5 * fftsize long, we round off to a full fft size
       channel_offset = maxchannels;
     );
     endpoints[] = freemem;
@@ -305,8 +309,10 @@ global(recpositions, histsizes, fftworkspaces, integrate_bufs, shifts, activecha
     csh   += 1;
     endpoints += 1;
   );
+  
   freemem
 );
+
 (memA == 0 || memory_debugging) ? (total_mem = init_memory_mapping());
 
 @serialize
@@ -711,9 +717,18 @@ function hit_button(xp,yp,cm)
 function drag_slider(x, y, z, dx)
   globals(mouse_y, cap_last_y, cap_drag)
 (
-  x = min(max(x + dx * (cap_last_y-mouse_y),y),z);
-  cap_last_y=mouse_y;
-  cap_drag=1;
+  x = min(max(x + dx * (cap_last_y - mouse_y),y),z);
+  cap_last_y = mouse_y;
+  cap_drag = 1;
+  x;
+);
+
+function drag_slider_x(x, y, z, dx)
+  globals(mouse_x, cap_last_x, cap_drag)
+(
+  x = min(max(x + dx * (cap_last_x - mouse_x),y),z);
+  cap_last_x = mouse_x;
+  cap_drag = 1;
   x;
 );
 
@@ -728,6 +743,13 @@ function drag_slider_precise(x, y, z, dx)
 (
   (mouse_cap & 4) ? dx *= 0.1;
   drag_slider(x, y, z, dx);
+);
+
+function drag_slider_precise_x(x, y, z, dx)
+  globals(mouse_cap)
+(
+  (mouse_cap & 4) ? dx *= 0.1;
+  drag_slider_x(x, y, z, dx);
 );
 
 function drag_slider_micro(x, y, z, dx)
@@ -829,6 +851,81 @@ function scope.drawSignal(xp, yp, wp, hp, rpos, scaling, sampleSize, rr, gg, bb,
     mx = -1000000;
     loop(dx,
       val = scaling * rpos[]; rpos += 1;
+      (val > 1.0) ? val = 1.0 : ( val < -1.0 ? val = -1.0 );
+      mx = max(mx, val);
+      mn = min(mn, val);
+    );
+    mn = y + hh * mn + hh;
+    mx = y + hh * mx + hh;
+    (fill == 1) ? (
+      gfx_a=slider37;
+      gfx_line(xcoord, mn, xcoord, mx);
+    );
+    gfx_a = 0.85;
+    gfx_line(xcoord - 1, last_min, xcoord, mn);
+    gfx_line(xcoord - 1, last_max, xcoord, mx);
+    xcoord += 1;
+    last_min = mn;
+    last_max = mx;
+  );
+);
+
+function scope.drawSignal_resampled(xp, yp, wp, hp, rechead, endpos, startpos, scaling, sampleSize, rr, gg, bb, fill, sample_offset)
+  instance(w, h, x, y, dx, xcoord, hh)
+  globals(gfx_r, gfx_g, gfx_b, gfx_a, gfx_x, gfx_y, bufl, slider39, slider37)
+  local(mn, mx, val, last_min, last_max, offset_scaled, rpos)
+(
+  w = wp;
+   
+  h = hp;
+  hh = 0.5 * h;
+   
+  slider39 ? scope.drawGrid(xp, yp, wp, hp, scaling);
+  
+  x = xp;
+  y = yp;
+  gfx_r=rr; gfx_g=gg; gfx_b=bb;
+  dx = floor(sampleSize / w);
+  
+  offset_scaled = sample_offset / dx;
+  xcoord = x + offset_scaled;
+  rpos = rechead - sampleSize;
+  rpos < startpos ? rpos += (endpos - startpos);
+  loop(w - offset_scaled,
+    mn = 1000000;
+    mx = -1000000;
+    loop(dx,
+      val = scaling * rpos[];
+      rpos += 1;
+      rpos == endpos ? rpos = startpos;
+      (val > 1.0) ? val = 1.0 : ( val < -1.0 ? val = -1.0 );
+      mx = max(mx, val);
+      mn = min(mn, val);
+    );
+    mn = y + hh * mn + hh;
+    mx = y + hh * mx + hh;
+    (fill == 1) ? (
+      gfx_a=slider37;
+      gfx_line(xcoord, mn, xcoord, mx);
+    );
+    gfx_a = 0.85;
+    gfx_line(xcoord - 1, last_min, xcoord, mn);
+    gfx_line(xcoord - 1, last_max, xcoord, mx);
+    xcoord += 1;
+    last_min = mn;
+    last_max = mx;
+  );
+  
+  xcoord = x;
+  rpos = rechead - sample_offset;
+  rpos < startpos ? rpos += (endpos - startpos);
+  loop(offset_scaled,
+    mn = 1000000;
+    mx = -1000000;
+    loop(dx,
+      val = scaling * rpos[];
+      rpos += 1;
+      rpos == endpos ? rpos = startpos;
       (val > 1.0) ? val = 1.0 : ( val < -1.0 ? val = -1.0 );
       mx = max(mx, val);
       mn = min(mn, val);
@@ -2231,31 +2328,43 @@ over_sono_divider ? (
          channels_button.hit_button(mouse_x,mouse_y,-1) ? ( slider41=!slider41; slider_automate(slider41); old_w = 0; ) :
          sonogram.hit_button(mouse_x,mouse_y,slider29 == 0 ? 8 : 9);
 
+         showOptions = slider42 == 0;
          checkChannelButtons() ? : 
-                 slider42 == 0 ? showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateSliders = 1; old_w = 0) :
-                 slider42 == 0 ? floor_button.hit_button(mouse_x,mouse_y,1);
-                 slider42 == 0 ? ceil_button.hit_button(mouse_x,mouse_y, 49);
-                 slider42 == 0 ? slope_button.hit_button(mouse_x,mouse_y,29);
-                 slider42 == 0 ? window_button.hit_button(mouse_x,mouse_y,2);
-                 slider42 == 0 ? fft_button.hit_button(mouse_x,mouse_y,3);
-                 slider42 == 0 ? integrate_button.hit_button(mouse_x,mouse_y,4); 
-                 slider42 == 0 ? integration_type_button.hit_button(mouse_x, mouse_y, 46);
-                 slider42 == 0 ? show_side_button.hit_button(mouse_x, mouse_y, 47);
-                 slider42 == 0 ? show_notes_button.hit_button(mouse_x, mouse_y, 50);
-                 slider42 == 0 ? interpolation_button.hit_button(mouse_x, mouse_y, 51);
-                 slider42 == 0 ? diff_mode_button.hit_button(mouse_x, mouse_y, 48);
-                 slider42 == 0 ? scaling.hit_button(mouse_x,mouse_y,5);
-                 slider42 == 0 && slider43 == 1 ? colormap.hit_button(mouse_x,mouse_y,7);
-                 slider42 == 0 ? smoothing_button.hit_button(mouse_x,mouse_y,6);
-                 slider42 == 0 && slider43 == 1 ? alphalevel.hit_button(mouse_x,mouse_y,28);
-                 slider42 == 0 && slider43 == 1 ? background_button.hit_button(mouse_x,mouse_y,30);
-                 slider42 == 0 ? sonoScale.hit_button(mouse_x,mouse_y,10) ? :
-                 slider42 == 0 ? smoothing_type.hit_button(mouse_x,mouse_y,45);
+          showOptions ? (
+                 showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider27=!slider27; slider_automate(slider27); updateSliders = 1; old_w = 0) :
+                 floor_button.hit_button(mouse_x,mouse_y,1);
+                 ceil_button.hit_button(mouse_x,mouse_y, 49);
+                 slope_button.hit_button(mouse_x,mouse_y,29);
+                 window_button.hit_button(mouse_x,mouse_y,2);
+                 fft_button.hit_button(mouse_x,mouse_y,3);
+                 integrate_button.hit_button(mouse_x,mouse_y,4); 
+                 integration_type_button.hit_button(mouse_x, mouse_y, 46);
+                 show_side_button.hit_button(mouse_x, mouse_y, 47);
+                 show_notes_button.hit_button(mouse_x, mouse_y, 50);
+                 interpolation_button.hit_button(mouse_x, mouse_y, 51);
+                 diff_mode_button.hit_button(mouse_x, mouse_y, 48);
+                 scaling.hit_button(mouse_x,mouse_y,5);
+                 slider43 == 1 ? colormap.hit_button(mouse_x,mouse_y,7);
+                 smoothing_button.hit_button(mouse_x,mouse_y,6);
+                 slider43 == 1 ? alphalevel.hit_button(mouse_x,mouse_y,28);
+                 slider43 == 1 ? background_button.hit_button(mouse_x,mouse_y,30);
+                 sonoScale.hit_button(mouse_x,mouse_y,10) ? :
+                 smoothing_type.hit_button(mouse_x,mouse_y,45);
 
-                 (      // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position 
-                    (slider42 == 0) ? sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>3?slider29=0; slider_automate(slider29); old_w = 0 ):
-                    (slider42 == 0) ? sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0)
-                )                
+                 // Note that the sonogram condition works for capmode8 and 9 (sonogram / scope) since they are in the same position 
+                 sonogram_button.hit_button(mouse_x,mouse_y,-1) ? ( slider29=slider29+1; slider29>3?slider29=0; slider_automate(slider29); old_w = 0 ) :
+                 sonoLog.hit_button(mouse_x,mouse_y,-1) ? ( slider33=!slider33; slider_automate(slider33); updateSliders = 1; old_w = 0);
+                 
+                 // Only visible in TD mode
+                 ((slider29 == 1) || (slider29 == 2)) ? (
+                    scrolling.hit_button(mouse_x, mouse_y, -1) ? ( slider34 = 1; ) :
+                    frozen.hit_button(mouse_x, mouse_y, -1) ? ( slider34 = 0; sync = 0; ) :
+                    sync1.hit_button(mouse_x, mouse_y, -1) ? ( slider34 = 0; sync = 1; ) :
+                    sync2.hit_button(mouse_x, mouse_y, -1) ? ( slider34 = 0; sync = 2; ) : 
+                    sync3.hit_button(mouse_x, mouse_y, -1) ? ( slider34 = 0; sync = 3; ) :
+                    sync4.hit_button(mouse_x, mouse_y, -1) ? ( slider34 = 0; sync = 4; );
+                 );
+            );
           );
           
           ( over_sono_divider ) ?
@@ -2341,9 +2450,11 @@ over_sono_divider ? (
     ) :
     cap_mode == 9 && cap_last_y != mouse_y ? (
       // Signal
-      slider31 = drag_slider_precise(slider31, .1, 3, .03);
+      slider31 = drag_slider_precise(slider31, 0.1, 3, .03);
+      offset_x = drag_slider_precise_x(offset_x, 0, 0.5, 0.001);
       old_w=0;
       slider_automate(slider31);
+      slider_automate(offset_x);
     ) :
     cap_mode == 10 && cap_lasty_y != mouse_y ? (
       // Sono scaling
@@ -2652,7 +2763,16 @@ function DrawButtons()
       slider39 == 1 ? ( postOptions = gridAlpha_button.draw_button_fixedWidth(gfx_w-10, postOptions+buttonPad, hideTxtW, sprintf(#,"^ Alpha: %.1f ^" ,slider40)) );
       
       postSono = sonogram_button.draw_button_fixedWidth(gfx_w-10, postOptions + 4*buttonPad, hideTxtW, slider29==2?">>   Hide   >>" : slider29==1?"< Time (all) >" : slider29==0?"<    Time    >" : "<  Sonogram  |");
-      slider29 == 0 ? ( sonoLog.draw_button2_fixedWidth(gfx_w-10, postSono+buttonPad, hideTxtW, "Log(Sonogram)", slider33, 0, 0, 0, -1) );
+      slider29 == 0 ? ( 
+        sonoLog.draw_button2_fixedWidth(gfx_w-10, postSono+buttonPad, hideTxtW, "Log(Sonogram)", slider33, 0, 0, 0, -1)
+      ) : ((slider29 == 1) || (slider29 == 2)) ? ( 
+        scrolling.draw_button2_fixedWidth(gfx_w-10, postSono + buttonPad, hideTxtW, "Scroll", slider34 == 1, 0, 0, 0, -1);
+        frozen.draw_button2_fixedWidth(gfx_w-10, postSono + 2 * buttonPad + scrolling.h, hideTxtW, "Sync (Full)", slider34 == 0 && sync == 0, 0, 0, 0, -1);
+        sync1.draw_button2_fixedWidth(gfx_w-10, postSono + 3 * buttonPad + 2 * scrolling.h, hideTxtW, "Sync (1/2)", slider34 == 0 && sync == 1, 0, 0, 0, -1);
+        sync2.draw_button2_fixedWidth(gfx_w-10, postSono + 4 * buttonPad + 3 * scrolling.h, hideTxtW, "Sync (1)", slider34 == 0 && sync == 2, 0, 0, 0, -1);
+        sync3.draw_button2_fixedWidth(gfx_w-10, postSono + 5 * buttonPad + 4 * scrolling.h, hideTxtW, "Sync (2)", slider34 == 0 && sync == 3, 0, 0, 0, -1);
+        sync4.draw_button2_fixedWidth(gfx_w-10, postSono + 6 * buttonPad + 5 * scrolling.h, hideTxtW, "Sync (4)", slider34 == 0 && sync == 4, 0, 0, 0, -1);
+      );
     );
 );
 
@@ -2967,6 +3087,35 @@ mouse_cap > 0 ? (
   
   gfx_x = 0;
   gfx_y = gfx_h-sono_yoffset_bottom-sono_size;
+  
+ // Freeze recpositions here
+  memcpy(rec_positions_copy, recpositions, maxchannels);
+  sumposl_copy = sumposl;
+  sumposr_copy = sumposr;
+  sync_factor = (sync == 1) ? (
+    0.5
+  ) : ( sync == 2 ) ? (
+    1.0
+  ) : ( sync == 3 ) ? (
+    2.0
+  ) : ( sync == 4 ) ? (
+    3.0
+  ) : ( sync == 5 ) ? (
+    4.0
+  ) : ( sync == 6 ) ? (
+    6.0
+  );
+  
+  
+  samples_per_beat = pow(2, sync - 2) * (srate / 2) / (tempo / 60);
+  sample_increment = sono_sample - last_sample;
+  last_sample = sono_sample;
+  beat_offset += sample_increment;
+  while(beat_offset > samples_per_beat) (
+    beat_offset -= samples_per_beat;
+  );
+  total_offset = beat_offset + offset_x * samples_per_beat;
+  
   ( slider29 == 2 ) ? (
     isActive = activechannels;
   
@@ -2983,10 +3132,14 @@ mouse_cap > 0 ? (
     loop(maxchannels,
       (isActive[]) ? (
         ( slider34 == 0 ) ? (
-          relative_position = shifts[reference_chan] - recpositions[reference_chan]; /* Forced resync */
-          cpos = recpositions[idx] + relative_position;
-          cpos = (cpos < shifts[idx]) ? (cpos + histsizes[idx] - shifts[idx]) : cpos;
-          scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, histsizes[idx], shifts[idx], slider31, histsizes[0] - shifts[0], get_color(idx, 0), get_color(idx, 1), get_color(idx, 2), 1);
+          !sync ? (
+            relative_position = shifts[reference_chan] - recpositions[reference_chan]; /* Forced resync */
+            cpos = recpositions[idx] + relative_position;
+            cpos = (cpos < shifts[idx]) ? (cpos + histsizes[idx] - shifts[idx]) : cpos;
+            scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, cpos, histsizes[idx], shifts[idx], slider31, histsizes[0] - shifts[0], get_color(idx, 0), get_color(idx, 1), get_color(idx, 2), 1);
+          ) : (
+            scope.drawSignal_resampled(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, rec_positions_copy[idx], histsizes[idx], shifts[idx], slider31, samples_per_beat, get_color(idx, 0), get_color(idx, 1), get_color(idx, 2), 1, total_offset);
+          );
         ) : (
           relative_position = refpoint - recpositions[reference_chan]; /* Forced resync */
           scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, recpositions[idx] + relative_position, histsizes[idx], shifts[idx], slider31, histsizes[0] - shifts[0], get_color(idx, 0), get_color(idx, 1), get_color(idx, 2), 1);
@@ -2999,9 +3152,13 @@ mouse_cap > 0 ? (
     // Time window
     ( selected > -1 ) ? (
       ( slider34 == 0 ) ? (
-        scope.drawSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, shifts[selected], slider31, histsizes[0] - shifts[0], get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1);
+        !sync ? (
+          scope.drawSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, shifts[selected], slider31, histsizes[0] - shifts[0], get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1);
+        ) : (
+          scope.drawSignal_resampled(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, rec_positions_copy[selected], histsizes[selected], shifts[selected], slider31, samples_per_beat, get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1, total_offset);
+        );
       ) : (
-        scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, recpositions[selected], histsizes[selected], shifts[selected], slider31, histsizes[0] - shifts[0], get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1);
+        scope.drawMovingSignal(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, rec_positions_copy[selected], histsizes[selected], shifts[selected], slider31, histsizes[0] - shifts[0], get_color(selected, 0), get_color(selected, 1), get_color(selected, 2), 1);
       );
 
       gfx_r=gfx_g=gfx_b=1.0-bgColor;
@@ -3010,8 +3167,13 @@ mouse_cap > 0 ? (
       !micro_view ? gfx_printf( "Ch %d", selected + 1 );
     ) : (
       ( slider34 == 0 ) ? (
-        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 1);
-        scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 1);
+        !sync ? (
+          scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 1);
+          scope.drawSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 1);
+        ) : (
+          scope.drawSignal_resampled(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposl_copy, sumhsl, sumshl, slider31, samples_per_beat, 0.5, 0.5, 0.5, 1, total_offset);
+          scope.drawSignal_resampled(gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposr_copy, sumhsr, sumshr, slider31, samples_per_beat, 1.0, 1.0, 1.0, 1, total_offset);
+        );
       ) : (
         scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposr, sumhsr, sumshr, slider31, histsizes[0] - shifts[0], 0.5, 0.5, 0.5, 1);
         scope.drawMovingSignal( gfx_x, gfx_y, sigw*gfx_w, sigh*gfx_h, sumposl, sumhsl, sumshl, slider31, histsizes[0] - shifts[0], 1, 1, 1, 1);
