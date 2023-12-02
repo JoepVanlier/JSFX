@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.37
+version: 0.38
 author: Joep Vanlier
-changelog: Support lengths up to 64 and a maximum octave count of 4. Improve y-scaling behaviour.
+changelog: Support speed changes in pattern (beta feature).
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -51,6 +51,7 @@ slider34:max_cc7=127<0,128,1>-Maximum Assignable CC7
 slider35:cc8_choice=0<0,119,1>-Assignable CC8
 slider36:min_cc8=1<0,127,1>-Minimum Assignable CC8
 slider37:max_cc8=127<0,128,1>-Maximum Assignable CC8
+slider38:enable_speed=0<0,1,1>-Enable speed override
 
 in_pin:left input
 in_pin:right input
@@ -382,6 +383,7 @@ global(
   current_arp,
   modulator1_values,
   modulator2_values,
+  speed_values,
   min_vel, max_vel,
   min_modwheel, max_modwheel,
   enable_vel, enable_mod,
@@ -421,7 +423,7 @@ global(
       cc5_row.randomize ? randomize_row_modulator(midi_cc_5, n_segments);
       cc6_row.randomize ? randomize_row_modulator(midi_cc_6, n_segments);
       cc7_row.randomize ? randomize_row_modulator(midi_cc_7, n_segments);
-      cc8_row.randomize ? randomize_row_modulator(midi_cc_8, n_segments);      
+      cc8_row.randomize ? randomize_row_modulator(midi_cc_8, n_segments);
       mwrow.randomize ? randomize_row_modulator(modulator1_values, n_segments);
       velrow.randomize ? randomize_row_modulator(modulator2_values, n_segments);
     );
@@ -489,6 +491,40 @@ global(
   );
 );
 
+function interpret_speed_mod(mod)
+local()
+(
+  ((mod == 8) || (mod == 0)) ? (
+    1
+  ) : (mod == 9) ? (
+    3/4
+  ) : (mod == 7) ? (
+    4/3
+  ) : (mod == 10) ? (
+    2/3
+  ) : (mod == 6) ? (
+    3/2
+  ) : (mod == 11) ? (
+    1/2
+  ) : (mod == 5) ? (
+    2
+  ) : (mod == 12) ? (
+    1/4
+  ) : (mod == 4) ? (
+    3
+  ) : (mod == 13) ? (
+    1/5
+  ) : (mod == 3) ? (
+    4
+  ) : (mod == 14) ? (
+    1/6
+  ) : (mod == 2) ? (
+    6
+  ) : (mod == 1) ? (
+    8
+  );
+);
+
 function update_time_info()
 (
   samples_per_beat = current_speed > 0 ? (srate * 60) / tempo / current_speed : (srate * 60) / tempo * (abs(current_speed) + 2);
@@ -509,8 +545,17 @@ time_mode == 0 ? current_sample = beat_position * from_beat;
 // Loop my own samples
 block_position = 0;
 
+// Reset free mode position when play state changes.
+(time_mode == 1) ? (
+  play_state != last_play_state ? (
+    current_sample = beat_position * from_beat;
+    last_play_state =  play_state;
+  );
+);
+
 loop(samplesblock,
   midi.curSample += 1;
+
   midi.notes_remain ? (
     midi.midi_sample();
     midi.assign_notes(current_arp, poly_mode);
@@ -531,7 +576,12 @@ loop(samplesblock,
   even_index = 2 * floor(0.5 * current_index);
   sequencer_index = even_index + ((current_index - even_index) > (1 + 0.01 * swing));
   
-  current_sample += 1;
+  (!enable_speed) ? (
+    current_sample += 1;
+  ) : (
+    speed_mod = interpret_speed_mod(abs(speed_values[sequencer_index]));
+    current_sample += speed_mod;
+  );
   process_sequence(current_pattern_index, block_position);
   block_position += 1; 
 );
@@ -633,7 +683,43 @@ local(shift)
   );
 );
 
-function process_effect_row(row_index, me, mem, x, y, label, max_value, hint)
+function speed_mod_str(mod)
+local()
+(
+  ((mod == 8) || (mod == 0)) ? (
+    ""
+  ) : (mod == 9) ? (
+    "4/3"
+  ) : (mod == 7) ? (
+    "3/4"
+  ) : (mod == 10) ? (
+    "3/2"
+  ) : (mod == 6) ? (
+    "2/3"
+  ) : (mod == 11) ? (
+    "2"
+  ) : (mod == 5) ? (
+    "1/2"
+  ) : (mod == 12) ? (
+    "4"
+  ) : (mod == 4) ? (
+    "1/3"
+  ) : (mod == 13) ? (
+    "5"
+  ) : (mod == 3) ? (
+    "1/4"
+  ) : (mod == 14) ? (
+    "6"
+  ) : (mod == 2) ? (
+    "1/6"
+  ) : (mod == 15) ? (
+    "S"
+  ) : (mod == 1) ? (
+    "1/8"
+  );
+);
+
+function process_effect_row(row_index, me, mem, x, y, label, max_value, hint, block_type)
 global(label_width, block_width, block_spacing, selected_details,
        nice_rect, scaling,
        n_segments, potato,
@@ -650,7 +736,7 @@ global(label_width, block_width, block_spacing, selected_details,
        DRAG_EFFECT, DRAG_NUDGE, DRAG_BLOCK, DRAG_SOLO,
        randomize_toggle.value,
        micro_view)
-local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, cur_height)
+local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, active_r, active_g, active_b, cur_height, tmp)
 (
   x = floor(x);
   set_row_color(row_index);
@@ -674,7 +760,7 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   connect_size = 2 * (1 + scaling) + 2 * micro_view;
   loop(n_segments,
     current = ptr[];
-    cur_height = (abs(current) - 1) * block_width / 16;
+    cur_height = block_type == 0 ? (abs(current) - 1) * block_width / 16 : 0;
     abs(current) > 0 ? (
       active_r = row_color_r;
       active_g = row_color_g;
@@ -688,6 +774,16 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
       ) : (
         nice_rect(x, y, block_width, block_width, printed_value, active_r, active_g, active_b);
         gfx_set(0, 0, 0, 0.5); gfx_rect(x, y, block_width, cur_height);
+      );
+      
+      (block_type == 1) ? (
+        gfx_set(active_r * 2, active_g * 2, active_b * 2, 1);
+        gfx_measurestr(speed_mod_str(abs(current)), txt_w, txt_h);
+        gfx_x = x + 0.5 * (block_width - txt_w);
+        gfx_y = floor(y + 0.5 * (block_width - txt_h));
+        gfx_printf("%s", speed_mod_str(abs(current)));
+        //tmp = block_width * (abs(current) - 8) / 15 + 0.5 * block_width;
+        //gfx_line(x, y + tmp, x + block_width, y + tmp);
       );
     ) : (
       printed_value = 0;
@@ -708,8 +804,14 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
   );
   
   y_over = (mouse_y > y) && (mouse_y < (y + block_width));
-   
-  y_over ? hinter.updateHintTime("LMB - Create block\nRMB - remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all\nShift + Drag - Drag block\nShift + RMB - Copy/paste block\nScrollwheel - Alter note probability");
+  
+  y_over ? (
+    (block_type == 0) ? (
+      hinter.updateHintTime("LMB - Create block\nRMB - remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all\nShift + Drag - Drag block\nShift + RMB - Copy/paste block\nScrollwheel - Alter note probability");
+    ) : (
+      hinter.updateHintTime("Speed Column (beta feature)\n\nLMB - Create block\nRMB - remove block\nCTRL + LMB - Remove blocks\nAlt + LMB - Nudge row\nCTRL + ALT + LMB - Nudge all\nShift + Drag - Drag block\nShift + RMB - Copy/paste block\nScroll-wheel - Alter column speed\n\nNOTE: This mode only works\nwhen time mode is set to\nFree or MIDI.");
+    );
+  );
    
   (captured_by == me) ? dragging = 1;
   
@@ -762,7 +864,7 @@ local(connect_size, txt_w, txt_h, ptr, idx, target, y_over, last, current, activ
       start_idx = ptr;
       // Left or right mouse drag
       captured_by > 0 ? (
-        target = ((last_cap & 4) > 0) ? 0 : max(1, abs(mem[ptr]));
+        target = ((last_cap & 4) > 0) ? 0 : max(block_type == 0 ? 1 : 8, abs(mem[ptr]));
         //target > max_value ? target = max_value;
       ) : (
         target = 0;//abs(mem[ptr]) - 1;
@@ -1008,8 +1110,13 @@ micro_view ? (
   cx += ctrl_spacing;
   
   cx = pattern_toggle.selection_button(8, cx, yc + 2, 0.8 * block_width, host_toggles, "-", 0.16, 0.1, 0.425, "Decrease speed.");
-  cx = pattern_toggle.drag_button(9, cx, yc + 2, 1.2 * block_width, host_toggles, current_speed > 0 ? sprintf(3, "%d", current_speed) : sprintf(3, "1/%d", abs(current_speed) + 2), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
+  cx = pattern_toggle.drag_button(9, cx, yc + 2, 1 * block_width, host_toggles, current_speed > 0 ? sprintf(3, "%d", current_speed) : sprintf(3, "1/%d", abs(current_speed) + 2), 0.16, 0.1, 0.425, "Speed", DRAG_SETTING);
   cx = pattern_toggle.selection_button(10, cx, yc + 2, 0.8 * block_width, host_toggles, "+", 0.16, 0.1, 0.425, "Increase speed.");
+  
+  cx += ctrl_spacing;
+  spd_active.value = enable_speed;
+  cx = spd_active.selection_button(-1, cx, yc + 2, 0.75 * block_width, block_width - 4, "¾", 0.16, 0.1, 0.425, "Add row for customizable column\ndurations. This allows for more\ntempo variety.\n\nNote: This mode is only functional\nduring free and MIDI mode.");
+  enable_speed = spd_active.value;
   
   cx = pattern_toggle.selection_button(3, cx + ctrl_spacing, yc + 2, 2 * block_width, host_toggles, "Copy", 0.3, 0.2, 0.00, "Copy pattern.");
   cx = pattern_toggle.selection_button(4, cx, yc + 2, 2 * block_width,host_toggles, "Paste", 0.3, 0.2, 0.05, "Paste pattern.");
@@ -1121,7 +1228,7 @@ select_colormap(polyphony * (extra_octaves + 1));
     loop(polyphony,
       note = current_arp[polyphony - c_idx - 1];
       label = identify_note(note > 0 ? note + 12 * current_octave : 0);
-      yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 15, "");
+      yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 15, "", 0);
       row_idx += 1;
       c_idx += 1;
     );
@@ -1129,6 +1236,8 @@ select_colormap(polyphony * (extra_octaves + 1));
     yc += 1;
   );
 );
+
+enable_speed ? yc = process_effect_row((time_mode == 0) ? -1 : row_idx, row_idx + 1, speed_values, x, yc, "Speed", 15, "", 1);
 
 select_colormap(enable_vel + enable_mod + enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4 + enable_cc5 + enable_cc6 + enable_cc7 + enable_cc8);
 enable_vel ? (
