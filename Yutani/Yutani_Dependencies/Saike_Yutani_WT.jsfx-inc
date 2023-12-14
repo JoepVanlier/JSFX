@@ -139,29 +139,69 @@ instance(sample_mem_start, scratch_start, length, min_idx)
   a = 0.5 * (y1 + y3) - y2;
   b = 0.5 * (y3 - y1);
   
-  
   min_idx = 2 * SAMPLES_PER_WT * length / (max_bin - b / (2 * a));
 );
 
-function read_now(file_handle, num_channels)
-local(ix, reading_length, to_ptr, mx)
-global(SAMPLES_PER_WT)
+function normalize(ptr, length)
+local(ix, mx)
+global()
+instance()
+(
+  mx = -1000000; ix = 0;
+  loop(length,
+    mx = max(mx, abs(ptr[ix]));
+    ix += 1;
+  );
+  
+  loop(length,
+    ptr[ix] /= mx;
+    ix += 1;
+  );
+);
+
+function read_now(file_handle, num_channels, short)
+local(ix, reading_length, to_ptr, mx, sample)
+global(SAMPLES_PER_WT, wanted_size)
 instance(length, scratch_start, sample_mem_start, sample_data_length)
 (
   // Read a sample from an open file handle into the sample buffer
-  reading_length = min(file_avail(file_handle), 2 * SAMPLES_PER_WT * length);
+  wanted_size = 2 * SAMPLES_PER_WT * length;
+  reading_length = min(file_avail(file_handle), wanted_size);
   
   reading_length ? (
     file_mem(file_handle, scratch_start, reading_length);
     
+    (short > 0) ? (
+      to_ptr = scratch_start;
+      loop(SAMPLES_PER_WT - 1,
+        memcpy(to_ptr + length, to_ptr, length);
+        to_ptr += length;
+      );
+      reading_length = wanted_size;
+
+      // Prenormalize the short ones, since we also use these for interpolation.
+      // In that case, we don't want one of the two to have more weight.
+      normalize(scratch_start, SAMPLES_PER_WT * length);
+    );
+    
+    file_mem(file_handle, scratch_start, reading_length);
+    
     ix = 0; mx = 0;
-    memset(sample_mem_start, 0, SAMPLES_PER_WT * length);
+    (short != 2) ? memset(sample_mem_start, 0, SAMPLES_PER_WT * length);
     to_ptr = sample_mem_start;
-    loop(SAMPLES_PER_WT * length,
-      to_ptr[] = scratch_start[ix];
-      mx = max(mx, scratch_start[ix]);
-      ix += num_channels;
-      to_ptr += 1;
+    sample = 0;
+    loop(SAMPLES_PER_WT,
+      loop(length,
+        (short == 2) ? (
+          to_ptr[] = to_ptr[] * (1.0 - sample / SAMPLES_PER_WT) + scratch_start[ix] * sample / SAMPLES_PER_WT
+        ) : (
+          to_ptr[] = scratch_start[ix];
+        );
+        mx = max(mx, abs(scratch_start[ix]));
+        ix += num_channels;
+        to_ptr += 1;
+      );
+      sample += 1;
     );
     
     to_ptr = sample_mem_start;
@@ -177,43 +217,59 @@ instance(length, scratch_start, sample_mem_start, sample_data_length)
 );
 
 function handle_dropped_files()
-local(file_handle, num_channels, samplerate, did_drop, min_idx)
+local(file_handle, num_channels, samplerate, did_drop, min_idx, len)
 global(DROPPED_FILE_STR, SAMPLES_PER_WT, has_wavetable_data, nch, sr, WT_LENGTH, estimate_pitch)
-instance(resampling_factor)
+instance(resampling_factor, short)
 (
   /* Has the user dropped a file? */
   DROPPED_FILE_STR = 80;
   
   did_drop = 0;
   gfx_getdropfile(0, DROPPED_FILE_STR) ? (
+  
     file_handle = file_open(DROPPED_FILE_STR);
     file_handle >= 0 ? (
       file_rewind(file_handle);
-      file_riff(file_handle, num_channels, samplerate);
-
-      this.read_now(file_handle, num_channels) ? (
-        did_drop = 1;
-        has_wavetable_data = 1;
-      );
       
-      file_close(file_handle);
-      
-      estimate_pitch ? (
-        //min_idx = 10 * this.auto_alignment_fd();
-        min_idx = this.auto_alignment_td(0);
+      len = file_avail(file_handle);
+      len < 2048 ? (
+        // Support very short files (as single wavetable element
+        file_riff(file_handle, num_channels, samplerate);
+        file_rewind(file_handle);
+        resampling_factor = WT_LENGTH / len / num_channels;
+        file_riff(file_handle, nch='rqsr', sr=samplerate * resampling_factor);
+        this.read_now(file_handle, num_channels, short + 1) ? (
+          did_drop = 1;
+          has_wavetable_data = 1;
+          short = short + 1;
+          (short > 1) ? short = 0;
+        );
+        file_close(file_handle);
+      ) : (
+        file_riff(file_handle, num_channels, samplerate);
+  
+        this.read_now(file_handle, num_channels, 0) ? (
+          did_drop = 1;
+          has_wavetable_data = 1;
+        );
         
-        file_handle = file_open(DROPPED_FILE_STR);
-        file_handle >= 0 ? (
-          // Min_idx has to end up at ...
-          file_rewind(file_handle);
-          resampling_factor = WT_LENGTH / min_idx / num_channels; //18.755;//
-          file_riff(file_handle, nch='rqsr', sr=samplerate * resampling_factor);
-          this.read_now(file_handle, num_channels);
-          file_close(file_handle);
+        file_close(file_handle);
+        
+        estimate_pitch ? (
+          //min_idx = 10 * this.auto_alignment_fd();
+          min_idx = this.auto_alignment_td(0);
+          
+          file_handle = file_open(DROPPED_FILE_STR);
+          file_handle >= 0 ? (
+            // Min_idx has to end up at ...
+            file_rewind(file_handle);
+            resampling_factor = WT_LENGTH / min_idx / num_channels;
+            file_riff(file_handle, nch='rqsr', sr=samplerate * resampling_factor);
+            this.read_now(file_handle, num_channels, 0);
+            file_close(file_handle);
+          );
         );
       );
-      
-      //min_idx = this.auto_alignment_td();
     );
   );
   
@@ -395,7 +451,7 @@ global()
   //   (log(dt) + log(srate / f_minimum_pitch)) * f_lookup_norm
   
   element = min(num_mipmaps - 1, max(0, floor((log(dt) + log_min_pitch) * f_lookup_norm)));
-   
+  
   pos = wt_position[];
   wavetable_element_loc = wave_table_mem_start + length * element + floor(pos) * mipmap_size_per_sample;
   wavetable_element_loc2 = wavetable_element_loc + mipmap_size_per_sample;
