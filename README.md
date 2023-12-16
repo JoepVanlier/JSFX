@@ -36,7 +36,11 @@ Note that everything is permissively licensed, but if you use some of the code i
 I've had very good experiences using the VST3 they provide as a JSFX host for the plugins in this repo, but please report any issues you may encounter.
 
 2. If you're on Windows, another alternative is ReaJS: https://www.reaper.fm/reaplugs/
-This is the official Cockos JSFX implementation, but it hasn't been updated in a while. Some plugins will just work in ReaJS, but for some others you have to install their ReaJS compatibility version. For this, look in the repo for `reajs_compatibility`. These plugins generally end in `_compat`. Note that they require the regular plugin to be installed as well, since they use the same dependencies.
+This is the official Cockos JSFX implementation, but it hasn't been updated in a while. Some plugins will just work in ReaJS, but for some others you have to install their ReaJS compatibility version. For this, look here: https://github.com/JoepVanlier/reajs_compatibility. These plugins generally end in `_compat`. Note that they require the regular plugin to be installed as well, since they use the same dependencies.
+
+# Tips
+
+Many of the plugins have tooltips. Hover anywhere for more information.
 
 # The assortment
 
@@ -48,15 +52,18 @@ Monophonic/4-voice paraphonic bass synthesizer with some fancy filters and modul
 Note: Remember to import the bass presets when you download this thing.
 
 Features:
-- Anti-aliased oscillators.
-- 14 Filters of which 9 non-linear analog modelled ones, all with their own unique tone. Try driving them!
+- Anti-aliased oscillators (saw, square, tri, fin, PWM, comb saw, comb square, supersaw, glottis).
+- 26 multi-mode filters of which 21 non-linear analog modelled ones, all with their own unique tone. Try driving them!
 - Audio-rate modulation options on the filter.
 - Velocity, modulation wheel and LFO modulation options.
 - Stereo widening effect.
+- Feedback allpass smearing effect.
 - Noise.
 - Distortion module.
 - Glide.
 - Modwheel, MIDI velocity and pitch bend support.
+- Wave table support (drag and drop wave files into the oscillator).
+- For waves shorter than 2048 samples, you can drag two waves in sequentially and Yutani will interpolate.
 
 Demo here: https://www.youtube.com/watch?v=rBJ94Ye_az8
 
@@ -76,9 +83,9 @@ Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVan
 For those days when you want to have access to Yutani's non-linear filters, but want to use an audio source.
 
 Features:
-- 15 filters, from well behaved linear models, to gnarly analog modelled nastiness.
-- Audio and MIDI controllable filters.
-- Audio and MIDI controllable gate.
+- 26 multi-mode filters, from well behaved ones to gnarly analog modelled nastiness.
+- Audio (peak or RMS) and MIDI controllable filters.
+- Audio (peak or RMS) and MIDI controllable gate.
 - Three LFOs.
 - Modwheel and MIDI velocity support.
 - Stereo widening effect.
@@ -96,6 +103,7 @@ In non-MIDI mode, partials takes audio input and uses its internal resonators to
 
 Features:
 - 10 physical models to choose from.
+- Custom partial models where you can draw the partials.
 - Frequency domain mode (efficient)
 - Time domain mode (inefficient but allows feedback, note instability can occur!).
 - UI that visualizes the partials.
@@ -132,9 +140,9 @@ A multi-effect plugin intended to enhance atmospheric arpeggios
 
 Features:
 - 3 Reverberation algorithms.
-- Granular resampler.
-- Frequency shifter / pitch shifter.
-- Several audio shimmer modes.
+- 6 Granular resampler modes.
+- 4 Frequency shifter / pitch shifter modes.
+- 3 Audio shimmer modes.
 - X/Y controls for automation.
 - Classic adventure game look.
 
@@ -160,7 +168,7 @@ SEQS: A small GUI-based effect sequencer for stutters, slowdowns and various aud
 ![modulators_new](https://user-images.githubusercontent.com/19836026/115153706-a681aa00-a077-11eb-8105-ec78bf7133e1.gif)
 
 Features:
-- Choose from 14 effects, with lots of parameters inside each effect.
+- Choose from 15 effects, with lots of parameters inside each effect.
 - Modulate all of the effect parameters by linking them up to the two macro modulator controls.
 - Drag and drop to reorder the effects that do not control the playhead.
 - Synchronize the patterns to the host, free or MIDI.
@@ -171,6 +179,7 @@ Features:
 - Randomize tracks.
 - Copy pasting patterns or blocks.
 - Effect probabilities (ctrl + mouse scrollwheel).
+- Tooltips! Hover anywhere for more instructions.
 - Choose from a large number of effects:
   - Effects that modify the playhead: Slowdown, Tape stop, Retrigger, Reverse.
   - Chorus / Phaser / Flaser module.
@@ -193,11 +202,14 @@ This utility allows for arpeggiating incoming MIDI data. Basically, the idea is 
 Features:
 - Velocity automation.
 - Modwheel automation.
+- Control Change automation.
 - Supports docking into TCP/MCP.
 - Note probabilities.
 - Copy pasting patterns or blocks.
 - Playing over multiple octaves.
-- Control Change automation.
+- Swing
+- Automatic randomization.
+- Set speed dynamically.
 - Synchronize the patterns to the host, free or MIDI.
 
 ## DD-101 - Basic synthesis-based drum machine
