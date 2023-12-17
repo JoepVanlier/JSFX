@@ -1,0 +1,961 @@
+desc:Final Boss (Saike)
+tags: distortion, multi-effect, mangler, grunge
+version: 0.01
+author: Joep Vanlier
+changelog: Initial commit
+license: MIT
+provides:
+  saike_allpass_dependencies/* 
+about:
+  # A small distortion effect unit for grungy distortion effects
+  ### Features:
+  - Allpass stack with feedback.
+  - Upwards compression.
+  - Octaver.
+  - Pitch shifting chorus.
+  - Cabinet filters.
+  - Frequency shifter based spectral movement.
+  - A big skull looking mad at you.
+
+slider2:sat=0<0,0.25,0.0001>-Saturation
+slider3:freq=5<5, 22000, 0.1:log>-Freq
+slider4:mod_freq=20<0.1, 22000, 0.1:log>-Mod Freq
+slider5:mod_depth=0<0, 1, 0.001:log>-Mod Depth Freq
+slider6:strength=1<1,16,1>-Strength
+slider7:fb=0<-0.99,0.99, 0.00001>-Feedback
+slider8:fb_mod=0<0, 0.5, 0.00001>-Feedback Mod
+slider9:oct_lp=1<0,1,0.0001>-Oct LP
+slider10:equ=0<0,2,1>-Equ
+slider11:cab=0<0,14,1>-Cabinet
+slider12:oct_amp=0<0,1,0.0001>-Oct amp
+slider13:reconstruct_envelope=0<0,1,1>-Rebuild env
+slider14:octaver_mode=0<0,2,1>-Octave mode
+slider15:kot=0<0,1,1>-Enable distortion 1
+slider16:freq_bands=0<0,3,1{Off,Low,High,Both}>-Enable shifter
+slider17:freq_shift=5<0.1,10,0.00001>-Frequency Shift
+slider18:distortion=0<0,1,1>-Enable distortion 2
+slider19:cab_split=0<0,1,1>-Cab split
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+import saike_allpass_pixel_gfx.jsfx-inc
+import saike_allpass_toy_fx.jsfx-inc
+import saike_allpass_toy_cabs.jsfx-inc
+import saike_allpass_pitchlib.jsfx-inc
+
+@init
+//bsplit.bandsplitter_init(100, 1300, 6200);
+oversampling = 1;
+f1 = 97.83125;
+f2 = 1289.35855;
+bsplit.bandsplitter_init(f1, f2, 6151.68278);
+bsplit2.bandsplitter_init(f1, f2, 6151.68278);
+
+freq_slider.init_slider_ui(3, 5, 22000, 1);
+freq_shift.init_slider_ui(17, 0.1, 10.0, 0);
+
+mod_freq.init_slider_ui(4, 0.1, 22000, 1);
+mod_depth_slider.init_slider_ui(5, 0, 1, 0);
+
+// For FX that rely on band separation
+LF1.init_LR2(f2);
+RF1.init_LR2(f2);
+
+LFb1.init_LR2(200);
+RFb1.init_LR2(200);
+
+//init_xy(s1, s1_min, s1_max, s1_shape, s2, s2_min, s2_max, s2_shape)
+octaver_pad.init_xy(9, 0, 1, 0, 12, 0.0, 1.0, 0);
+feedback_pad.init_xy(7, -0.99, 0.99, 0, 2, 0, 0.25, 1);
+
+freq_shifter.init_cheapest_freq_shifter(freq_shift);
+last_freq_shift = freq_shift;
+
+function clamp()
+local()
+instance(slider_idx, min_value, max_value)
+(
+  slider(slider_idx) > max_value ? (
+    slider(slider_idx) = max_value;
+  );
+  slider(slider_idx) < min_value ? (
+    slider(slider_idx) = min_value;
+  );
+);
+
+function init_follower(atk, release)
+local(csrate)
+instance(at, rt, LPF)
+global(srate)
+(
+  csrate = srate;
+  at = ( atk > 0 ) ? exp(-1/(.5*.001*atk*csrate)) : 0;
+  rt = exp(-1/(.5*.001*release*csrate));
+);
+
+function eval_follower(x)
+local()
+instance(state, at, rt, x)
+global()
+(
+  x > state ? (
+    state = at * state + ( 1.0 - at ) * x;
+  ) : (
+    state = rt * state + ( 1.0 - rt ) * x;
+  );
+  
+  state
+);
+
+envFollower.init_follower(0.5, 280);
+envFollowerOut.init_follower(0.5, 180);
+
+function initialize_knob(_slider_idx, _min_value, _max_value, _default, _label, velocity_slider)
+local()
+global()
+instance(slider_idx, vel_slider_idx, min_value, max_value, default, label, active, max_vel_range)
+(
+  active = 1;
+  slider_idx = _slider_idx;
+  vel_slider_idx = velocity_slider;
+  min_value = _min_value;
+  max_value = _max_value;
+  default = _default;
+  label = _label;
+  max_vel_range = max_value - min_value;
+  
+  this.clamp();
+);
+
+last_reinit_state = -1;
+img_w = 256;
+img_h = 256;
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  (2/(1+exp(-2*x)) - 1)
+);
+
+function init_shifter(freemem)
+global()
+local(pitch_block_size, transition_region, shifter_buffer_size, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2)
+instance()
+(
+  transition_region = 1024;
+  pitch_block_size = 4*4096; /* We have 64 blocks of this */
+  
+  freemem = (fftmem1 = freemem) + pitch_block_size;
+  freemem = (fftmem2 = freemem) + pitch_block_size;
+  freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+  
+  shifter_buffer_size = 4 * transition_region;
+  this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
+  
+  
+  freemem = (fftmem1 = freemem) + pitch_block_size;
+  freemem = (fftmem2 = freemem) + pitch_block_size;
+  freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
+  freemem
+);
+freemem = pitch_shifter1.init_shifter(freemem);
+freemem = pitch_shifter2.init_shifter(freemem);
+freemem = init_kot_lut(freemem);
+freemem = (ash_buffer = freemem) + 256;
+
+kot_left.kot_init(0.5, 0.5);
+kot_right.kot_init(0.5, 0.5);
+kot_left.kot_reset();
+kot_right.kot_reset();
+
+@slider
+
+@block
+(last_freq_shift != freq_shift) ? (
+  freq_shifter.init_cheapest_freq_shifter(freq_shift);
+  last_freq_shift = freq_shift;
+);
+
+dt = mod_freq / srate;
+d_feedback = (fb - feedback) / samplesblock;
+d_octaver_lp = (oct_lp - octaver_lp) / samplesblock;
+d_octaver_amp = (oct_amp - octaver_amp) / samplesblock;
+
+@sample
+y0 = spl0;
+t_mod += dt;
+//mod_val = sin(2.0 * $pi * t_mod);
+mod_val = saw(t_mod, dt);
+//mod_val = sq(t_mod, dt, 0.4);
+
+glow_level = max(0.993 * gain, max(abs(spl1), abs(spl0)));
+
+function octaver_init()
+local()
+global(octaver_lp)
+instance(bal1, flipflopState, env)
+(
+  flipflopState == 0 ? (
+    flipflopState = 1;
+    this.svf3.init_linearSVF( .0005, 0 );
+    this.svf4.init_linearSVF( .01, 0 );
+    this.svf5.init_linearSVF( .0005, 0 );
+    this.svf6.init_linearSVF( .01, 0 );
+  );
+  
+  this.svf2.init_linearSVF( .05 + 0.2 * octaver_lp, 0 );
+  this.svf1.init_linearSVF( .1 + 0.3 * octaver_lp + (0.25 * octaver_lp * octaver_lp) * env, 0 );
+);
+
+function octaver_reset()
+local()
+global()
+instance(flipflopState)
+(
+  flipflopState = 1;
+  this.svf3.reset_linearSVF();
+  this.svf4.reset_linearSVF();
+  this.svf5.reset_linearSVF();
+  this.svf6.reset_linearSVF();
+);
+
+function octaver_up_init()
+local()
+global(octaver_lp)
+instance()
+(
+  this.svf1.init_linearSVF( .4 + 0.1 * octaver_lp, 0.2 + 0.5 * octaver_lp );
+  this.svf2.init_linearSVF( .1, 0.2 + 0.4 * octaver_lp );
+  this.svf3.init_linearSVF( .3, 0 );
+  this.svf4.init_linearSVF( .01, 0 );
+);
+
+function octaver_up_eval(sample)
+local(s)
+global()
+instance()
+(
+  s = this.svf1.eval_linearSVF2_LP(this.svf2.eval_linearSVF2_HP(sample));
+  this.svf3.eval_linearSVF2_HP(s * s)
+);
+
+
+function octaver_eval(sample, filter)
+local(out, s1)
+global()
+instance(lpsample, flipflopState, pflipflopState, h1, bal1, f_est, sidx, skipFlip, env)
+(
+  sidx += 1;
+  lpsample = this.svf3.eval_linearSVF2_LP(this.svf4.eval_linearSVF_HP(sample));
+  
+  (lpsample > 0 && h1 < 0 && sidx > 25) ? (
+    skipFlip ? (
+      skipFlip = 0;
+      sidx = 0;
+    ) : (
+      flipflopState = -flipflopState;
+      f_est = .7 * f_est + .3 * ( 1.0 / sidx );
+      sidx = 0;
+    );
+  );
+  
+  sample = this.svf5.eval_linearSVF2_AP(this.svf6.eval_linearSVF_AP(sample));
+  
+  h1 = lpsample;
+  out = sample * pflipflopState;
+  pflipflopState = .995*pflipflopState + .005*flipflopState;
+  env = max(min(1, abs(6 * sample)), 0.993 * env);
+  
+  filter ? (
+    this.svf2.eval_linearSVF_HP(this.svf1.eval_linearSVF_LP(out))
+  ) : (
+    s1 = this.svf1.eval_linearSVF_HP(out);
+    this.svf2.eval_linearSVF_LP(s1) * 4;
+  );
+);
+
+follower_state = envFollower.eval_follower(max(abs(spl0), abs(spl1)));
+
+// HIGAIN
+distortion ? (
+  spl0 = higainl.heavyDistortion(spl0 + spl0);
+  spl1 = higainr.heavyDistortion(spl1 + spl1);
+);
+
+kot ? (
+  spl0 = kot_left.kot_eval(0.8 * spl0) * 0.4;
+  spl1 = kot_right.kot_eval(0.8 * spl1) * 0.4;
+);
+
+o_amp = 15 * octaver_amp;
+(octaver_mode == 0) ? (
+  octaver.octaver_init();
+  oct_signal = octaver.octaver_eval(spl0, 1);
+  spl0 -= o_amp * oct_signal;
+  spl1 -= o_amp * oct_signal;
+) : (octaver_mode == 1) ? (
+  octaver.octaver_init();
+  oct_signal = octaver.octaver_eval(spl0, 0);
+  spl0 = (1 - octaver_amp) * spl0 + o_amp * oct_signal;
+  spl1 = (1 - octaver_amp) * spl1 + o_amp * oct_signal;
+) : (octaver_mode == 2) ? (
+  octaver_up.octaver_up_init();
+  oct_signal = octaver_up.octaver_up_eval(0.707 * (spl0 + spl1));
+  spl0 += o_amp * oct_signal;
+  spl1 += o_amp * oct_signal;
+) : (octaver_mode == 3) ? (
+  c_pitch = - oct_lp / 12;
+  (c_pitch != last_pitch) || (octaver_mode != last_octaver_mode) ? (
+    last_octaver_mode = octaver_mode;
+    pitch_shifter1.setPitchShifterSpeed(2*((2^(c_pitch))-1.0));
+    pitch_shifter2.setPitchShifterSpeed(2*((2^(-c_pitch))-1.0));
+    last_pitch = c_pitch;
+  );
+
+  pitch_shifter1.pitchShifterUpdate(spl0, spl1);
+  pitch_shifter2.pitchShifterUpdate(spl0, spl1);
+  
+  spl0 += (pitch_shifter1.outR + pitch_shifter2.outR) * o_amp / 15;
+  spl1 += (pitch_shifter1.outL + pitch_shifter2.outL) * o_amp / 15;
+) : (octaver_mode == 4) ? (
+  c_pitch = - oct_lp / 12;
+  (c_pitch != last_pitch) || (octaver_mode != last_octaver_mode) ? (
+    last_octaver_mode = octaver_mode;
+    pitch_shifter1.setPitchShifterSpeed(2*((2^(c_pitch - 1))-1.0));
+    last_pitch = c_pitch;
+  );
+  pitch_shifter1.pitchShifterUpdate(spl0, spl1);
+  
+  frac = o_amp / 15;
+  spl0 = spl0 * (1.0 - frac) + pitch_shifter1.outL * frac;
+  spl1 = spl1 * (1.0 - frac) + pitch_shifter1.outR * frac;
+) : (octaver_mode == 5) ? (
+  c_pitch = - oct_lp / 48;
+  (c_pitch != last_pitch) || (octaver_mode != last_octaver_mode) ? (
+    last_octaver_mode = octaver_mode;
+    pitch_shifter1.setPitchShifterSpeed(2*((2^(c_pitch + 7/12)) - 1.0));
+    pitch_shifter2.setPitchShifterSpeed(2*((2^(-c_pitch + 7/12)) - 1.0));
+    last_pitch = c_pitch;
+  );
+
+  pitch_shifter1.pitchShifterUpdate(spl0, spl1);
+  pitch_shifter2.pitchShifterUpdate(spl0, spl1);
+  
+  spl0 += (pitch_shifter1.outR + pitch_shifter2.outR) * o_amp / 15;
+  spl1 += (pitch_shifter1.outL + pitch_shifter2.outL) * o_amp / 15;
+);
+
+f_b = min(0.25 * srate, max(3, freq + freq * mod_val * mod_depth));
+
+factor = tan($pi * f_b / srate);
+m_last = m;
+m = (factor - 1.0) / (factor + 1.0);
+
+<?
+  loop(
+    s=1; 16,
+      stages = 8 * s;
+      printf("function allpass%d(y0, m, m_last)", s);
+      printf("local("); loop(i=1;stages + 1, printf("x%d, y%d,", i, i); i += 1 ); printf(")\n");
+      printf("instance("); loop(i=1;stages + 1, printf("x%d_last, y%d_last, ", i, i); i += 1 ); printf(")\n");
+      printf("global(sat)\n");
+      printf("(");
+      
+      1 ? (
+        loop(
+            i=1;stages + 1,
+            printf("x%d = y%d; y%d = x%d_last + x%d * m - y%d_last * m_last; x%d_last = x%d; y%d_last = y%d;\ny%d = y%d / (1.0 + sat * abs(y%d));", i, i - 1, i, i, i, i, i, i, i, i, i, i, i);
+            i += 1
+          );
+      ) : (
+        loop(
+            i=1;stages + 1,
+            ((i % 2) == 0) ? (
+              printf("x%d = y%d; y%d = x%d_last + x%d * m - y%d_last * m_last; x%d_last = x%d; y%d_last = y%d;\ny%d = y%d / (1.0 + sat * abs(y%d));", i, i - 1, i, i, i, i, i, i, i, i, i, i, i);
+            ) : (
+              printf("x%d = y%d; y%d = x%d_last + x%d * m - y%d_last * m_last; x%d_last = x%d; y%d_last = y%d;", i, i - 1, i, i, i, i, i, i, i, i, i, i);
+            );
+            i += 1
+          );
+      );
+      
+        printf("y%d", stages);
+      printf(");");
+      s += 1;
+  );
+?>
+
+mod_val2 = saw(t_mod, dt);
+
+spl0 += feedback * lspl0 * (1 + fb_mod * mod_val2);
+spl1 += feedback * lspl1 * (1 + fb_mod * mod_val2);
+
+<?
+  printf("(strength == 1) ? ( spl0 = a1.allpass1(spl0, m, m_last); spl1 = a2.allpass1(spl1, m, m_last); )");
+  loop(
+    s = 2; 15,
+    printf(": (strength == %d) ? ( spl0 = a1.allpass%d(spl0, m, m_last); spl1 = a2.allpass%d(spl1, m, m_last); )", s, s, s);
+    s += 1;
+  )
+?>;
+
+lspl0 = spl0;
+lspl1 = spl1;
+
+equ ? (
+  bsplit.setCompOptions(0, 0.8144, 0.7298);
+  bsplit.bandsplitter_eval(spl0, spl1);
+  bsplit.processBands();
+  
+  (freq_bands == 0) ? (
+    freq_shifter.l_out = freq_shifter.r_out = 0;
+  ) : (
+    freq_bands_r = freq_bands_l = 0;
+    ((freq_bands & 1) == 1) ? (
+      freq_bands_l = bsplit.b1.l + bsplit.b2.l;
+      freq_bands_r = bsplit.b1.r + bsplit.b2.r;
+    );
+    ((freq_bands & 2) == 2) ? (
+      freq_bands_l += bsplit.b3.l + bsplit.b4.l;
+      freq_bands_r += bsplit.b3.r + bsplit.b4.r;
+    );
+    freq_shifter.eval_cheapest_freq_shifter(freq_bands_l, freq_bands_r);
+  );
+  
+  spl0 = (bsplit.b1.l + bsplit.b2.l + bsplit.b3.l + bsplit.b4.l + freq_shifter.l_out) * 0.3;
+  spl1 = (bsplit.b1.r + bsplit.b2.r + bsplit.b3.l + bsplit.b4.l + freq_shifter.r_out) * 0.3;
+  
+  (equ == 2) ? (
+    bsplit2.setCompOptions(0, 0.8144, 0.7298);
+    wn = 0.000004 * rand() - 0.0000002;
+    wn *= (0.1 + spl0);
+    bsplit2.bandsplitter_eval(spl0 + wn, spl1 + wn);
+    bsplit2.processBands();
+    spl0 = (bsplit2.b1.l + bsplit2.b2.l + bsplit2.b3.l + bsplit2.b4.l) * 0.3;
+    spl1 = (bsplit2.b1.r + bsplit2.b2.r + bsplit2.b3.r + bsplit2.b4.r) * 0.3;
+  );
+) : (
+  (freq_bands == 0) ? (
+    freq_shifter.l_out = freq_shifter.r_out = 0;
+  ) : (
+    LF1.eval_LR2(spl0);
+    RF1.eval_LR2(spl1);
+    
+    freq_bands_r = freq_bands_l = 0;
+    ((freq_bands & 1) == 1) ? (
+      freq_bands_l = LF1.lp;
+      freq_bands_r = RF1.lp;
+    );
+    ((freq_bands & 2) == 2) ? (
+      freq_bands_l += LF1.hp;
+      freq_bands_r += RF1.hp;
+    );
+    
+    freq_shifter.eval_cheapest_freq_shifter(freq_bands_l, freq_bands_r);
+    spl0 = LF1.lp + LF1.hp + freq_shifter.l_out;
+    spl1 = RF1.lp + RF1.hp + freq_shifter.r_out;
+  );
+);
+
+cab > 0 ? (
+  cab_split ? (
+    LFb1.eval_LR2(spl0);
+    RFb1.eval_LR2(spl0);
+    cab.update_cabs(cab, LFb1.hp, RFb1.hp);
+    spl0 = LFb1.lp + cab.outL;
+    spl1 = RFb1.lp + cab.outR;
+  ) : (
+    cab.update_cabs(cab, spl0, spl1);
+    spl0 = cab.outL;
+    spl1 = cab.outR;
+  );
+);
+
+feedback += d_feedback;
+octaver_lp += d_octaver_lp;
+octaver_amp += d_octaver_amp;
+
+out_state = envFollowerOut.eval_follower(max(abs(spl0), abs(spl1)));
+
+reconstruct_envelope ? (
+  spl0 *= follower_state / (0.01 + max(follower_state, out_state));
+  spl1 *= follower_state / (0.01 + max(follower_state, out_state));
+);
+
+@gfx 800 600
+loaded = 0;
+!loaded ? (
+  loaded = gfx_loadimg(12, "./saike_allpass_dependencies/font.png");
+  loaded = gfx_loadimg(5, "./saike_allpass_dependencies/skullface_monochrome.png");
+  loaded = gfx_loadimg(6, "./saike_allpass_dependencies/skullface_edges.png");
+  loaded = gfx_loadimg(7, "./saike_allpass_dependencies/hori.png");
+  loaded = gfx_loadimg(8, "./saike_allpass_dependencies/skullface_edges3.png");
+  loaded = gfx_loadimg(9, "./saike_allpass_dependencies/skullface_hl.png");
+  loaded = gfx_loadimg(22, "./saike_allpass_dependencies/hell_glow2.png");
+  HELLGLOW = 22;
+
+  X_NORM_MINUS = 14;
+  X_NORM_PLUS = 15;
+  Y_NORM_MINUS = 16;
+  Y_NORM_PLUS = 17;
+  LIGHT_VEC_X = 18;
+  LIGHT_VEC_Y = 19;
+  TARGET_X = 20;
+  TARGET_Y = 21;
+  
+  gfx_setimgdim(TARGET_X, img_w, img_h);
+  gfx_setimgdim(TARGET_Y, img_w, img_h);
+  
+  loaded = gfx_loadimg(X_NORM_MINUS, "./saike_allpass_dependencies/skull_x-.png");
+  loaded = gfx_loadimg(X_NORM_PLUS, "./saike_allpass_dependencies/skull_x+.png");
+  loaded = gfx_loadimg(Y_NORM_MINUS, "./saike_allpass_dependencies/skull_y-.png");
+  loaded = gfx_loadimg(Y_NORM_PLUS, "./saike_allpass_dependencies/skull_y+.png");
+  
+  loaded = gfx_loadimg(LIGHT_VEC_X, "./saike_allpass_dependencies/x_kernel.png");
+  loaded = gfx_loadimg(LIGHT_VEC_Y, "./saike_allpass_dependencies/y_kernel.png");
+  gfx_setimgdim(13, img_w, img_h);
+ // gfx_setimgdim(5, img_w, img_h);
+);
+
+gfx_x = 0;
+gfx_y = 0;
+
+
+/* Background color */
+gfx_dest = 13;
+gfx_clear = 0;
+gfx_set(0, 0, 0, 1);
+gfx_rect(0, 0, img_w, img_h);
+
+function reset_color()
+(
+  gfx_r = gfx_g = gfx_b = 0.0; gfx_a = 1.0;
+  gfx_mode = 1;
+);
+
+side_pad = 3;
+reset_color();
+
+function color_scheme(color)
+(
+  (color == 0) ? (
+    // BG
+    gfx_r = 21 / 255;
+    gfx_g = 28 / 255;
+    gfx_b = 34 / 255;
+  ) : ( color == 1 ) ? (
+    // MID
+    gfx_r = 27 / 255;
+    gfx_g = 38 / 255;
+    gfx_b = 42 / 255;
+  ): ( color == 2 ) ? (
+    // PANEL
+    gfx_r = 19 / 255;
+    gfx_g = 33 / 255;
+    gfx_b = 36 / 255;
+  ) : ( color == 3 ) ? (
+    // EDGE IMPERFECTIONS
+    gfx_r = 204 / 255;
+    gfx_g = 118 / 255;
+    gfx_b = 83 / 255;
+  ) : ( color == 4 ) ? (
+    // Subpanels
+    gfx_r = 195 / 255;
+    gfx_g = 160 / 255;
+    gfx_b = 130 / 255;
+  ) : ( color == 5 ) ? (
+    // Front imperfections
+    gfx_r = 190 / 255;
+    gfx_g = 176 / 255;
+    gfx_b = 163 / 255;
+  );
+);
+
+
+color = 1;
+gfx_a = 0.7;
+color_scheme(0);
+gfx_rect(2, 2, img_w - 4, img_h - 4, 1);
+
+gfx_a = 1.0;
+color_scheme(1);
+pad = 4;
+
+gfx_x = 0;
+gfx_mode = 4;
+//gfx_a = 0.4 + 0.4 * abs(sin(time_precise()));
+gfx_a = 1.0;
+gfx_blit(5, 1, 0);
+
+
+equ ? (
+  gfx_mode = 1;
+  loop(3 + equ,
+    gfx_x = 10 * rand() - 20;
+    gfx_y = (1.0 - equ) * 40 * rand() - 40 * rand() * rand() * rand() * (equ > 1);
+    gfx_a = 0.5 * glow3 + 0.3 * fire * (1.5 + (equ > 1));
+    gfx_a *= 0.3 * (abs(sin(time_precise() * 0.1)) * (equ <= 1) + (equ > 1));
+    gfx_blit(HELLGLOW, 1, 0);
+  );
+);
+
+
+/*
+gfx_r = 2.0;
+gfx_g = 0.7;
+gfx_b = 0.5;
+gfx_gradrect(0, .5*img_h, img_w, .5*img_h, gfx_r, gfx_g, gfx_b, 0, .00, 0, 0, 0, 0.001, -0.01, -0.0001, .003);
+gfx_gradrect(0, .8*img_h, img_w, .2*img_h, gfx_r, gfx_g, gfx_b, 0, .00, 0, 0, 0, 0.001, -0.0001, -0.0001, .01);
+*/
+
+1 ? (
+  ash_ptr = ash_buffer;
+  gfx_mode = 1;
+  top = 0;
+  yvel = 2*img_h/375;
+  HXS = .005*yvel*sin(.1*time_precise())*sin(.5*time_precise());
+  loop(15 + 275 * (equ>1),
+    HX = .5*img_w;
+    HY = .5*img_h;
+  
+    X = ash_ptr[] += (rand()-.5) + yvel*sin(.03*X+.02*Y) + (X-HX)*HXS; ash_ptr += 1;
+    Y = ash_ptr[] -= 2+5*rand()  + yvel*cos(.01*X+.01*Y) + (X-HY)*HXS; ash_ptr += 1;
+    F = ash_ptr[] += rand();         ash_ptr += 1;
+    
+    ( ( Y < top ) || ( X > img_w ) || ( X < 0 ) ) ? (
+      ash_ptr -= 3;
+      X = ash_ptr[] = rand() * img_w; ash_ptr += 1;
+      Y = ash_ptr[] = img_h + 0.4 * rand() * img_h; ash_ptr += 1;
+      F = ash_ptr[] = 0; ash_ptr += 1;
+    );
+  
+    gfx_set(1, 1 - 0.006 * F * F + 0.07 * F, 1 - 0.05 * F, 0.1 - 0.0025 * F);
+    gfx_circle(X, Y, 2-.1*F, 1, 1);
+    
+    gfx_a = 1.0 - 0.025*F;
+    gfx_circle(X,Y,min(Y*.0001,2-.1*F),1,1);
+  );
+);
+
+function eye(xc, yc)
+local(x1, y1, ix)
+global(equ, mouse_x, mouse_y, gfx_w, gfx_h, fire, gfx_mode)
+instance()
+(
+  x1 = floor(xc + 3 * max(-1, min(1, 2*(mouse_x - 0.5 * gfx_w) / gfx_w)));
+  y1 = floor(yc + 3 * max(-1, min(1, 2*(mouse_y - 0.5 * gfx_h) / gfx_h)));
+  
+  (equ > 1) ? (
+    x1 = x1 + 0.5 * rand();
+    y1 = y1 + 0.5 * rand();
+  );
+  
+  gfx_set(1.0, 0.6, 0.3, 1.0);
+  gfx_circle(x1, y1, 1.2, 1, 1);
+  gfx_set(1.0, 0.6, 0.3, 0.3);
+  gfx_circle(x1, y1, 2, 1, 1);
+  gfx_set(1.0, 0.2, 0.3, 0.2);
+  gfx_circle(x1, y1, 3, 1, 1);
+  gfx_set(1.0, 0.2, 0.3, 0.03);
+  gfx_circle(x1, y1, 7, 1, 1);
+  gfx_set(1.0, 1.0, 1.0, fire);
+  gfx_circle(x1, y1, 1, 1, 1);
+  
+  (equ > 1) ? (
+    gfx_mode = 3;
+    gfx_set(1.0, 0.8, 0.5, 0.3);
+    loop(5,
+      gfx_circle(x1 + 4 * rand() - 2, y1 + 4 * rand() - 3, 0.5, 0, 1);
+    );
+    gfx_set(1.0, 1.0, 1.0, 0.5);
+    loop(5,
+      gfx_circle(x1 + 4 * rand() - 2, y1 + 3 * rand() - 3, 0.5, 0, 1);
+    );
+    ix = 0;
+    gfx_set(1.0, 0.5, 0.3, 0.02);
+    loop(5,
+      gfx_circle(x1 + 4 * rand() - 4, y1 + 4 * rand() - 4, 3 + 3 * ix, 1, 1);
+      ix += 1;
+    );
+  );
+  (equ > 0) ? (
+    ix = 0;
+    gfx_set(1.0, 0.5, 0.3, 0.02);
+    loop(5,
+      gfx_circle(x1 + 4 * rand() - 4, y1 + 4 * rand() - 4, 3 + 3 * ix, 1, 1);
+      ix += 1;
+    );
+  );
+);
+
+eye(104, 107);
+eye(149, 107);
+
+glow = 0.9 * glow + 0.00001 * rand() + rand() * (rand() < 0.01);
+glow2 = 0.9 * glow2 + 0.1 * rand() + rand() * (rand() < 0.01);
+glow3 = 0.9 * glow3 + 0.01 * rand() + 0.03 * rand() * (rand() < 0.2) + 0.08 * rand() * (rand() < 0.1);
+fire = 0.9 * fire + 0.1 * rand();
+
+gfx_x = 0;
+gfx_y = 0;
+gfx_mode = 3;
+gfx_a = 1.0 * glow * glow2;
+gfx_blit(6, 1, 0);
+
+gfx_x = 0;
+gfx_y = 0;
+gfx_mode = 3;
+gfx_a = 0.3 * glow + 0.1 * glow2;
+gfx_blit(7, 1, 0);
+
+gfx_x = 0;
+gfx_y = -1;
+gfx_mode = 1;
+gfx_a = 0.5 * glow3 + 0.3 * fire * (1.5 + (equ > 1));
+gfx_a *= abs(sin(time_precise() * 0.1)) * (equ <= 1) + (equ > 1);
+gfx_blit(8, 1, 0);
+
+
+gfx_x = 0;
+gfx_y = 0;
+gfx_mode = 3;
+gfx_a = 0.4 + 0.6 * fire;
+gfx_blit(9, 1, 0);
+
+
+//  loaded = gfx_loadimg(14, "./saike_allpass_dependencies/skull_x-.png");
+//  loaded = gfx_loadimg(15, "./saike_allpass_dependencies/skull_x+.png");
+//  loaded = gfx_loadimg(16, "./saike_allpass_dependencies/skull_y-.png");
+//  loaded = gfx_loadimg(17, "./saike_allpass_dependencies/skull_y+.png");
+//  gfx_setimgdim(13, img_w, img_h);
+
+  X_NORM_MINUS = 14;
+  X_NORM_PLUS = 15;
+  Y_NORM_MINUS = 16;
+  Y_NORM_PLUS = 17;
+  LIGHT_VEC_X = 18;
+  LIGHT_VEC_Y = 19;
+
+shading = 1;
+shading ? (
+
+  // Mouse in pixel perfect coords
+  rx = min(max(0, floor(mouse_nx)), img_w);
+  ry = min(max(0,floor(mouse_ny)), img_W);;
+  
+  // Blit the X normal taking the negative pointing vectors left of the 
+  // mouse and the positive pointing vectors right of the mouse.
+  gfx_a = 1;
+  gfx_dest = TARGET_X;
+  gfx_mode = 0;
+  gfx_blit(X_NORM_PLUS, 1, 0, 0, 0, rx, img_h, 0, 0, rx, img_h, 0, 0);
+  gfx_blit(X_NORM_MINUS, 1, 0, rx, 0, img_w - rx, img_h, rx, 0, img_w - rx, img_h, 0, 0);
+  
+  // Blit the lighting function. This normalizes the light source and applies 
+  // an attenuation factor with distance. This is done by exploiting that REAPER
+  // does alpha blending. We basically have a black texture where the alpha channel
+  // provides the inverse normalization constant times the attenuation.
+  gfx_blit(LIGHT_VEC_Y, 1.0, 0.0, 1.5 * img_w - rx, 1.5 * img_h - ry, img_w, img_h, 0, 0, img_w, img_h, 0, 0);
+  
+  // Blit the Y normal taking the upward pointing vectors upwards of the mouse
+  // and the downward pointing ones down of the mouse.
+  gfx_dest = TARGET_Y;
+  gfx_mode = 0;
+  gfx_blit(Y_NORM_MINUS, 1, 0, 0, 0, img_w, ry, 0, 0, img_w, ry, 0, 0);
+  gfx_blit(Y_NORM_PLUS, 1, 0, 0, ry, img_w, img_h - ry, 0, ry, img_w, img_h - ry, 0, 0);
+  
+  // Apply attenuation and normalization.
+  gfx_blit(LIGHT_VEC_X, 1.0, 0.0, 1.5 * img_w - rx, 1.5 * img_h - ry, img_w, img_h, 0, 0, img_w, img_h, 0, 0);
+  
+  // Render the final result by additively blitting the two components.
+  gfx_dest = 13;
+  gfx_mode = 1;
+  gfx_a = 1.0;
+  gfx_blit(TARGET_X, 1, 0);
+  gfx_mode = 1;
+  gfx_blit(TARGET_Y, 1, 0);
+);
+//gfx_blit(19, 1, 0);
+
+//gfx_blit(18, 1, 0);
+
+gfx_dest = 13;
+reset_color();
+
+gfx_a = 0.1;
+pad_width = 70;
+pad_height = 70;
+pad_spacing = 31;
+
+side_pad = 8;
+toggle_size = 7;
+gfx_set(0.7, 0.5, 0.2, 0.3);
+cy = 0;
+txt_blit("GAIN", side_pad, cy);
+//(x, y, w, select, slider_idx, hint, info)
+cx = side_pad;
+cy += 8;
+gaing1.choice_toggle(cx, cy, toggle_size, 0, 10, "Set plugin to low gain mode", "Low gain"); cx += toggle_size + 1;
+gaing2.choice_toggle(cx, cy, toggle_size, 1, 10, "Set plugin to medium gain mode", "Medium gain"); cx += toggle_size + 1;
+gaing3.choice_toggle(cx, cy, toggle_size, 2, 10, "Set plugin to high gain mode", "High gain"); cx += toggle_size + 1;
+
+envr_toggle.simple_serialize_toggle(cx + toggle_size + 1, cy, toggle_size, reconstruct_envelope, "Rebuild envelope\n\nCan be useful for getting dynamics back\nafter high gain amplification.", "Rebuild Env") ? (reconstruct_envelope = 1 - reconstruct_envelope);
+
+cy = 25;
+txt_blit("CAB", side_pad, cy);
+
+cabsplit_toggle.simple_serialize_toggle(cx + toggle_size + 1, cy - 1, toggle_size, cab_split, "Let low frequencies bypass the cabinet.", "Low freq bypass") ? (cab_split = 1 - cab_split);
+
+//(x, y, w, select, slider_idx, hint, info)
+cx = side_pad;
+cy += 8;
+cabg1.choice_toggle(cx, cy, toggle_size, 0, 11, "Off", "Cabinet off"); cx += toggle_size + 1;
+cabg2.choice_toggle(cx, cy, toggle_size, 1, 11, "Set cabinet to 1", "Cab 1"); cx += toggle_size + 1;
+cabg3.choice_toggle(cx, cy, toggle_size, 2, 11, "Set cabinet to 2", "Cab 2"); cx += toggle_size + 1;
+cabg4.choice_toggle(cx, cy, toggle_size, 3, 11, "Set cabinet to 3", "Cab 3"); cx += toggle_size + 1;
+cabg5.choice_toggle(cx, cy, toggle_size, 4, 11, "Set cabinet to 4", "Cab 4"); cx += toggle_size + 1;
+cx = side_pad;
+cy += 8;
+cabg6.choice_toggle(cx, cy, toggle_size, 5, 11, "Set cabinet to 5", "Cab 5"); cx += toggle_size + 1;
+cabg7.choice_toggle(cx, cy, toggle_size, 6, 11, "Set cabinet to 6", "Cab 6"); cx += toggle_size + 1;
+cabg8.choice_toggle(cx, cy, toggle_size, 7, 11, "Set cabinet to 7", "Cab 7"); cx += toggle_size + 1;
+cabg9.choice_toggle(cx, cy, toggle_size, 8, 11, "Set cabinet to 8", "Cab 8"); cx += toggle_size + 1;
+cabg10.choice_toggle(cx, cy, toggle_size, 9, 11, "Set cabinet to 9", "Cab 9"); cx += toggle_size + 1;
+cx = side_pad;
+cy += 8;
+cabg11.choice_toggle(cx, cy, toggle_size, 10, 11, "Set cabinet to 10", "Cab 10"); cx += toggle_size + 1;
+cabg12.choice_toggle(cx, cy, toggle_size, 11, 11, "Set cabinet to 11", "Cab 11"); cx += toggle_size + 1;
+cabg13.choice_toggle(cx, cy, toggle_size, 12, 11, "Set cabinet to 12", "Cab 12"); cx += toggle_size + 1;
+cabg14.choice_toggle(cx, cy, toggle_size, 13, 11, "Set cabinet to 13", "Cab 13"); cx += toggle_size + 1;
+cabg15.choice_toggle(cx, cy, toggle_size, 14, 11, "Set cabinet to 14", "Cab 14"); cx += toggle_size + 1;
+
+cy += 17;
+txt_blit("FX", side_pad, cy);
+cy += 8;
+
+cx = side_pad;
+distortion_toggle.simple_serialize_toggle(cx, cy, toggle_size, distortion, "Hard distortion.", "Fuzz") ? (distortion = 1 - distortion;); cx += toggle_size + 1;
+kot_toggle.simple_serialize_toggle(cx, cy, toggle_size, kot, "Overdrive distortion.", "Overdrive") ? (kot = 1 - kot;);
+
+
+cy += 17;
+txt_blit("MOVEMENT", side_pad, cy);
+cy += 8;
+
+cx = side_pad;
+freq_lf_toggle.simple_serialize_toggle(cx, cy, toggle_size, freq_bands & 1, "Add movement to low frequencies.", "LF movement") ? (freq_bands & 1 ? freq_bands -= 1 : freq_bands += 1;); cx += toggle_size + 1;
+freq_hf_toggle.simple_serialize_toggle(cx, cy, toggle_size, freq_bands & 2, "Add movement to high frequencies.", "HF movement") ? (freq_bands & 2 ? freq_bands -= 2 : freq_bands += 2;); cx += toggle_size + 1;
+
+freq_shift.active = freq_bands != 0;
+freq_shift.slider_ui(55, cx, cy, 3 * toggle_size + 4, 7, sprintf(9, ""), "Freq shifter");
+
+// Right side
+side_pad = 207;
+toggle_size = 7;
+gfx_set(0.7, 0.5, 0.2, 0.3);
+cy = 0;
+//measurement = txt_measure("GAIN");
+txt_blit("AP FREQ", side_pad, cy);
+//(x, y, w, select, slider_idx, hint, info)
+cx = side_pad;
+cy += 8;
+Hz = min(0.5 * srate, max(3, freq));
+freq_slider.slider_ui(56, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, "%d", Hz), "Allpass Frequency (Hz)");
+
+cy = 25;
+gfx_set(0.7, 0.5, 0.2, 0.3);
+txt_blit("STRENGTH", side_pad, cy);
+//(x, y, w, select, slider_idx, hint, info)
+cx = side_pad;
+cy += 8;
+strength1.choice_toggle(cx, cy, toggle_size, 1, 6, "Strength 1", "Strength 1"); cx += toggle_size + 1;
+strength2.choice_toggle(cx, cy, toggle_size, 2, 6, "Strength 2", "Strength 2"); cx += toggle_size + 1;
+strength3.choice_toggle(cx, cy, toggle_size, 3, 6, "Strength 3", "Strength 3"); cx += toggle_size + 1;
+strength4.choice_toggle(cx, cy, toggle_size, 4, 6, "Strength 4", "Strength 4"); cx += toggle_size + 1;
+strength5.choice_toggle(cx, cy, toggle_size, 5, 6, "Strength 5", "Strength 5"); cx += toggle_size + 1;
+cx = side_pad;
+cy += 8;
+strength6.choice_toggle(cx, cy, toggle_size, 6, 6, "Strength 6", "Strength 6"); cx += toggle_size + 1;
+strength7.choice_toggle(cx, cy, toggle_size, 7, 6, "Strength 7", "Strength 7"); cx += toggle_size + 1;
+strength8.choice_toggle(cx, cy, toggle_size, 8, 6, "Strength 8", "Strength 8"); cx += toggle_size + 1;
+strength9.choice_toggle(cx, cy, toggle_size, 9, 6, "Strength 9", "Strength 9"); cx += toggle_size + 1;
+strength10.choice_toggle(cx, cy, toggle_size, 10, 6, "Strength 10", "Strength 10"); cx += toggle_size + 1;
+cx = side_pad;
+cy += 8;
+strength11.choice_toggle(cx, cy, toggle_size, 11, 6, "Strength 11", "Strength 11"); cx += toggle_size + 1;
+strength12.choice_toggle(cx, cy, toggle_size, 12, 6, "Strength 12", "Strength 12"); cx += toggle_size + 1;
+strength13.choice_toggle(cx, cy, toggle_size, 13, 6, "Strength 13", "Strength 13"); cx += toggle_size + 1;
+strength14.choice_toggle(cx, cy, toggle_size, 14, 6, "Strength 14", "Strength 14"); cx += toggle_size + 1;
+strength15.choice_toggle(cx, cy, toggle_size, 15, 6, "Strength 15", "Strength 15"); cx += toggle_size + 1;
+
+cy += 17;
+
+txt_blit("AP MOD", side_pad, cy);
+//(x, y, w, select, slider_idx, hint, info)
+cx = side_pad;
+cy += 8;
+mod_hz = min(0.5 * srate, max(3, mod_freq));
+mod_depth_slider.slider_ui(60, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, "%d", 100 * mod_depth), "Mod Frequency (Hz)"); cy += toggle_size + 1;
+cy += 2;
+mod_freq.active = mod_depth;
+mod_freq.slider_ui(58, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, "%d", mod_hz), "Mod Frequency (Hz)"); cy += toggle_size + 1;
+
+
+side_pad = 4;
+cy = 155 - toggle_size - 2;
+cx = 8;
+oct_toggle1.choice_toggle(cx, cy, toggle_size, 0, 14, "Set Octaver to grumble", "Grumble mode"); cx += toggle_size + 1;
+oct_toggle2.choice_toggle(cx, cy, toggle_size, 1, 14, "Set Octaver to low frequency mix", "Low mode"); cx += toggle_size + 1;
+oct_toggle3.choice_toggle(cx, cy, toggle_size, 2, 14, "Set Octaver to octaver up", "Octave up"); cx += toggle_size + 1;
+oct_toggle4.choice_toggle(cx, cy, toggle_size, 3, 14, "Set effect to pitch chorus", "Pitch chorus"); cx += toggle_size + 1;
+oct_toggle5.choice_toggle(cx, cy, toggle_size, 4, 14, "Set effect to downward chorus", "Demon chorus"); cx += toggle_size + 1;
+oct_toggle6.choice_toggle(cx, cy, toggle_size, 5, 14, "Set effect to fifth", "Fifth"); cx += toggle_size + 1;
+
+octaver_pad.xy_pad(5, 5, 155, pad_width, pad_height, 2);
+feedback_pad.xy_pad(6, 125 + 50 + 5, 155, pad_width, pad_height, 3);
+
+gfx_set(1, 1, 1, 0.3);
+txt_blit("final-boss", side_pad, img_h - 6);
+(info_active > 0.001) ? (
+  gfx_a = min(0.3, info_active);
+  txt_blit(14, img_w - 66, img_h - 6);
+  info_active *= 0.7;
+) : (
+  txt_blit("ALPHA VERSION", img_w - 66, img_h - 6);
+);
+
+hinter.draw_hints();
+
+gfx_dest = -1;
+gfx_set(1, 1, 1, 1);
+
+raw_blit_scale = min(gfx_h / img_h, gfx_w / img_w);
+blit_scale = raw_blit_scale >= 1 ? floor(raw_blit_scale) : raw_blit_scale;
+x_offset = (gfx_w - blit_scale * img_w) * 0.5;
+y_offset = (gfx_h - blit_scale * img_h) * 0.5;
+shake = equ + 2 * (equ > 1);
+gfx_x = x_offset; gfx_y = y_offset;
+gfx_x += 0.25 * rand() * shake * blit_scale;
+gfx_y += 0.25 * rand() * shake * blit_scale;
+shake > 0 ? shake -= 1;
+
+/*!show_ui ? (
+  gfx_set(10/255, 31/255, 49/255, 1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+);*/
+
+gfx_set(1, 1, 1, 1);
+gfx_mode = 4;
+gfx_blit(13, blit_scale, 0);
+
+last_cap = mouse_cap;
+last_mouse_x = mouse_x;
+last_mouse_y = mouse_y;
+mouse_nx = (mouse_x - x_offset) / blit_scale;
+mouse_ny = (mouse_y - y_offset) / blit_scale;
+
