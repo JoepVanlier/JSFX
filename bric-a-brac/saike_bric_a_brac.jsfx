@@ -1,8 +1,8 @@
 desc:bric-a-brac (Saike)
 tags: texture adder
-version: 0.40
+version: 0.41
 author: Joep Vanlier
-changelog: Add panning
+changelog: Bugfix to take into account filtering for the triggered followers.
 license: MIT
 provides:
   bab_dependencies/*
@@ -366,11 +366,11 @@ instance(time_to_planned_note, thresh_min, primed, below_samples)
   );
 );
 
-function eval_follower(x)
+function eval_follower(x, cEnv)
 local()
 instance(env_mode, state, at, rt, env_attack_samples, sustain, 
-         thresh_min, thresh_max, env_hold_samples, hold_level, ticks, below, above, below_samples)
-global(cEnv, cEnv1)
+         thresh_min, thresh_max, env_hold_samples, hold_level, ticks, below, above, below_samples, cEnv1)
+global()
 (
   (env_mode == 0) ? (
     x = x < thresh_min ? 0 : x;
@@ -423,6 +423,7 @@ global(cEnv, cEnv1)
     );
   
     ticks += 1;
+    cEnv1 = cEnv;
     state
   );
 );
@@ -432,6 +433,12 @@ dec = 120;
 dec = 50;
 env_follower.init_follower_absolute(atk, dec);
 env_follower2.init_follower_absolute(atk, dec);
+
+// Followers for the filtered ones
+env_follower_f1.init_follower_absolute(atk, dec);
+env_follower_f2.init_follower_absolute(atk, dec);
+env_follower_f3.init_follower_absolute(atk, dec);
+env_follower_f4.init_follower_absolute(atk, dec);
 
 function update_followers()
 (
@@ -588,22 +595,45 @@ chan2.vol = gain_atk * chan2.vol + (1.0 - gain_atk) * target_gain2;
 chan3.vol = gain_atk * chan3.vol + (1.0 - gain_atk) * target_gain3;
 chan4.vol = gain_atk * chan4.vol + (1.0 - gain_atk) * target_gain4;
 
-m_signal = max(abs(spl0), abs(spl1));
-m_signal1 = input_filter1_active ? input_filter1.eval_lp_hp_env(spl0, spl1) : m_signal;
-m_signal2 = input_filter2_active ? input_filter2.eval_lp_hp_env(spl0, spl1) : m_signal;
-m_signal3 = input_filter3_active ? input_filter3.eval_lp_hp_env(spl0, spl1) : m_signal;
-m_signal4 = input_filter4_active ? input_filter4.eval_lp_hp_env(spl0, spl1) : m_signal;
-
-spl0 = audio_delay.simple_delay(spl0);
-spl1 = audio_delay.simple_delay(spl1);
+m_signal1 = m_signal2 = m_signal3 = m_signal4 = m_signal = max(abs(spl0), abs(spl1));
 
 cEnv1 = cEnv;
 cEnv = env_follower.simple_follower(m_signal);
 
-env1 = envdelay1.simple_delay(env1_follower.eval_follower(m_signal1));
-env2 = envdelay2.simple_delay(env2_follower.eval_follower(m_signal2));
-env3 = envdelay3.simple_delay(env3_follower.eval_follower(m_signal3));
-env4 = envdelay4.simple_delay(env4_follower.eval_follower(m_signal4));
+env1 = input_filter1_active ? (
+  m_signal1 = input_filter1.eval_lp_hp_env(spl0, spl1);
+  current_env = env_follower_f1.simple_follower(m_signal1);
+  envdelay1.simple_delay(env1_follower.eval_follower(m_signal1, current_env));
+) : (
+  envdelay1.simple_delay(env1_follower.eval_follower(m_signal, cEnv));
+);
+
+env2 = input_filter2_active ? (
+  m_signal2 = input_filter2.eval_lp_hp_env(spl0, spl1);
+  current_env = env_follower_f2.simple_follower(m_signal2);
+  envdelay2.simple_delay(env2_follower.eval_follower(m_signal2, current_env));
+) : (
+  envdelay2.simple_delay(env2_follower.eval_follower(m_signal, cEnv));
+);
+
+env3 = input_filter3_active ? (
+  m_signal3 = input_filter3.eval_lp_hp_env(spl0, spl1);
+  current_env = env_follower_f3.simple_follower(m_signal3);
+  envdelay3.simple_delay(env3_follower.eval_follower(m_signal3, current_env));
+) : (
+  envdelay3.simple_delay(env3_follower.eval_follower(m_signal, cEnv));
+);
+
+env4 = input_filter4_active ? (
+  m_signal4 = input_filter4.eval_lp_hp_env(spl0, spl1);
+  current_env = env_follower_f4.simple_follower(m_signal4);
+  envdelay4.simple_delay(env4_follower.eval_follower(m_signal4, current_env));
+) : (
+  envdelay4.simple_delay(env4_follower.eval_follower(m_signal, cEnv));
+);
+
+spl0 = audio_delay.simple_delay(spl0);
+spl1 = audio_delay.simple_delay(spl1);
 
 settings1.retrigger ? env1_follower.eval_trigger(cEnv, delay1) ? chan1.start_sample(0, pitch1);
 settings2.retrigger ? env2_follower.eval_trigger(cEnv, delay2) ? chan2.start_sample(1, pitch2);
@@ -907,7 +937,7 @@ global(samplelocs, loaded_sample, advanced,
     slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN) = slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX);
   );
   
-  y_buttons = (dynamic_fraction + 2 * y_fraction) * gfx_h;
+  y_buttons = floor((dynamic_fraction + 2 * y_fraction - 0.2 * y_fraction) * gfx_h);
   h_buttons = knob_fraction * gfx_h;
   (selected_sample == 0) ? (
     settings1.draw_buttons(xs + 0.2 * h_buttons, y_buttons, h_buttons);
