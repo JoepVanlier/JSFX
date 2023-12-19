@@ -1,8 +1,8 @@
 desc:bric-a-brac (Saike)
 tags: texture adder
-version: 0.41
+version: 0.42
 author: Joep Vanlier
-changelog: Bugfix to take into account filtering for the triggered followers.
+changelog: Add probability to triggered mode.
 license: MIT
 provides:
   bab_dependencies/*
@@ -368,7 +368,7 @@ instance(time_to_planned_note, thresh_min, primed, below_samples)
 
 function eval_follower(x, cEnv)
 local()
-instance(env_mode, state, at, rt, env_attack_samples, sustain, 
+instance(env_mode, state, at, rt, env_attack_samples, sustain, probability, high,
          thresh_min, thresh_max, env_hold_samples, hold_level, ticks, below, above, below_samples, cEnv1)
 global()
 (
@@ -389,10 +389,10 @@ global()
     state
   ) : (env_mode == 2) ? (
     (ticks < env_attack_samples) ? (
-      state = at * state + ( 1.0 - at );
+      state = at * state + (high - at);
     ) : (
       (ticks < env_hold_samples) ? (
-        state = rt * state + ( 1.0 - rt ) * hold_level;
+        state = rt * state + (high - rt) * hold_level;
       ) : (
         state = rt * state;
         
@@ -402,6 +402,7 @@ global()
             // If we rise for a set number of samples, fire again!
             (above > 15) ? (
               (x > thresh_min) ? (
+                high = (probability + 1) > rand();
                 ticks = 0;
                 below = 0;
                 above = 0;
@@ -570,6 +571,11 @@ input_filter3_active ? input_filter3.init_linear_svf_lp_hp(1 + settings3.input_l
 
 input_filter4_active = (settings4.input_lpf != 0) || (settings4.input_hpf != 0);
 input_filter4_active ? input_filter4.init_linear_svf_lp_hp(1 + settings4.input_lpf, settings4.input_hpf);
+
+env1_follower.probability = settings1.probability;
+env2_follower.probability = settings2.probability;
+env3_follower.probability = settings3.probability;
+env4_follower.probability = settings4.probability;
 
 @sample
 function clamp11(x)
@@ -767,7 +773,7 @@ function ui_vertical_thresh(x, w, ymin, ymax, slider_idx, smin, smax, drag_mode,
 local(yc, new)
 global(thresh_r, thresh_g, thresh_b, 
        thresh2_r, thresh2_g, thresh2_b,
-       qqt,
+       qqt, scale,
        gfx_mouse_r, gfx_a,
        captured, DRAG_THRESH,
        mouse_dy)
@@ -780,7 +786,7 @@ global(thresh_r, thresh_g, thresh_b,
   gfx_line(x, yc - 1, x+w, yc - 1);
   
   (captured == 0) ? (
-    mouse_over(x, yc - 6, w, 12) ? (
+    mouse_over(x, yc - 6, w, 18 * (1 + scale)) ? (
       gfx_a = .7;
       gfx_line(x, yc + 2, x+w, yc + 2);
       gfx_line(x, yc - 2, x+w, yc - 2);
@@ -880,7 +886,9 @@ global(samplelocs, loaded_sample, advanced,
        trig_label,
        no_sample_loaded,
        fontscaling,
-       scaling)
+       scaling,
+       currently_selected_env_mode, settings1.env, settings2.env, settings3.env, settings4.env
+)
 (
   button_width = 36 * (1 + scaling);
   button_height = 14 * (1 + scaling);
@@ -890,7 +898,7 @@ global(samplelocs, loaded_sample, advanced,
   dynamic_fraction = 0.4;
   waveform_fraction = 0.4;
   knob_fraction = (1.0 - 4 * y_fraction - dynamic_fraction - waveform_fraction);
-  knob_fraction *= min(1.0, gfx_w / (knob_fraction * gfx_h * (16 + 5.5 * advanced)));
+  knob_fraction *= min(1.0, gfx_w / (knob_fraction * gfx_h * (16 + 7.5 * advanced)));
   
   num_samples = 4;
   num_samples_x = 2;
@@ -931,7 +939,20 @@ global(samplelocs, loaded_sample, advanced,
   toggle_advanced = quick_toggle(xs + ws - 1, ys + hs - 1.5 * button_height, 2 * button_width, button_height, "Advanced", advanced, "Show advanced options");
   
   ui_vertical_thresh(xs, ws, ys + hs, ys, SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN, floorLevel, ceilLevel, DRAG_THRESH_MIN, 0);
-  ui_vertical_thresh(xs, ws, ys + hs, ys, SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX, floorLevel, ceilLevel, DRAG_THRESH_MAX, 1); 
+  
+  currently_selected_env_mode = (selected_sample == 0) ? (
+    settings1.env
+  ) : (selected_sample == 1) ? (
+    settings2.env
+  ) : (selected_sample == 2) ? (
+    settings3.env
+  ) : (selected_sample == 3) ? (
+    settings4.env
+  );
+  
+  (currently_selected_env_mode == 0) ? (
+    ui_vertical_thresh(xs, ws, ys + hs, ys, SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX, floorLevel, ceilLevel, DRAG_THRESH_MAX, 1); 
+  );
   /* Make sure max stays above min */
   slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX) < slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN) ? (
     slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN) = slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX);
