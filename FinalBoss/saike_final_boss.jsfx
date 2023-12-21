@@ -1,11 +1,12 @@
 desc:Final Boss (Saike)
 tags: distortion, multi-effect, mangler, grunge
-version: 0.01
+version: 0.02
 author: Joep Vanlier
-changelog: Initial commit
+changelog: Add gain slider.
 license: MIT
 provides:
   saike_allpass_dependencies/* 
+  saike_final_boss.jsfx.rpl
 about:
   # A small distortion effect unit for grungy distortion effects
   ### Features:
@@ -35,6 +36,8 @@ slider16:freq_bands=0<0,3,1{Off,Low,High,Both}>-Enable shifter
 slider17:freq_shift=5<0.1,10,0.00001>-Frequency Shift
 slider18:distortion=0<0,1,1>-Enable distortion 2
 slider19:cab_split=0<0,1,1>-Cab split
+slider20:cab_drywet=1<0,1,0.00001>-Cab drywet
+slider21:input_gain=0<-32,32,0.0001>-Input gain
 
 in_pin:left input
 in_pin:right input
@@ -47,6 +50,15 @@ import saike_allpass_toy_cabs.jsfx-inc
 import saike_allpass_pitchlib.jsfx-inc
 
 @init
+log10d20_conversion  = 0.11512925464970228420089957273422;
+current_input_gain = exp(log10d20_conversion * input_gain);
+
+higainl.init_dc_block(10);
+higainr.init_dc_block(10);
+
+kot_left.init_dc_block(15);
+kot_right.init_dc_block(15);
+
 //bsplit.bandsplitter_init(100, 1300, 6200);
 oversampling = 1;
 f1 = 97.83125;
@@ -54,11 +66,15 @@ f2 = 1289.35855;
 bsplit.bandsplitter_init(f1, f2, 6151.68278);
 bsplit2.bandsplitter_init(f1, f2, 6151.68278);
 
+// function init_slider_ui(s, s_min, s_max, s_shape)
 freq_slider.init_slider_ui(3, 5, 22000, 1);
 freq_shift.init_slider_ui(17, 0.1, 10.0, 0);
+cab_drywet.init_slider_ui(20, 0, 1.0, 0);
 
 mod_freq.init_slider_ui(4, 0.1, 22000, 1);
 mod_depth_slider.init_slider_ui(5, 0, 1, 0);
+
+gain_slider.init_slider_ui(21, -32, 32, 0);
 
 // For FX that rely on band separation
 LF1.init_LR2(f2);
@@ -157,7 +173,6 @@ instance()
   shifter_buffer_size = 4 * transition_region;
   this.pitchShifter(1, pitch_shift_buffer, shifter_buffer_size, fftmem1, fftmem2, transition_region, 1);
   
-  
   freemem = (fftmem1 = freemem) + pitch_block_size;
   freemem = (fftmem2 = freemem) + pitch_block_size;
   freemem = (pitch_shift_buffer = freemem) + pitch_block_size;
@@ -185,6 +200,8 @@ dt = mod_freq / srate;
 d_feedback = (fb - feedback) / samplesblock;
 d_octaver_lp = (oct_lp - octaver_lp) / samplesblock;
 d_octaver_amp = (oct_amp - octaver_amp) / samplesblock;
+
+d_input_gain = (exp(log10d20_conversion * input_gain) - current_input_gain) / samplesblock;
 
 @sample
 y0 = spl0;
@@ -251,7 +268,7 @@ global()
 instance(lpsample, flipflopState, pflipflopState, h1, bal1, f_est, sidx, skipFlip, env)
 (
   sidx += 1;
-  lpsample = this.svf3.eval_linearSVF2_LP(this.svf4.eval_linearSVF_HP(sample));
+  lpsample = this.svf3.eval_linearSVF_LP(this.svf4.eval_linearSVF_HP(sample));
   
   (lpsample > 0 && h1 < 0 && sidx > 25) ? (
     skipFlip ? (
@@ -264,11 +281,12 @@ instance(lpsample, flipflopState, pflipflopState, h1, bal1, f_est, sidx, skipFli
     );
   );
   
-  sample = this.svf5.eval_linearSVF2_AP(this.svf6.eval_linearSVF_AP(sample));
+  sample = this.svf5.eval_linearSVF_AP(this.svf6.eval_linearSVF_AP(sample));
   
   h1 = lpsample;
   out = sample * pflipflopState;
   pflipflopState = .995*pflipflopState + .005*flipflopState;
+//pflipflopState = .98*pflipflopState + .02*flipflopState;
   env = max(min(1, abs(6 * sample)), 0.993 * env);
   
   filter ? (
@@ -281,6 +299,9 @@ instance(lpsample, flipflopState, pflipflopState, h1, bal1, f_est, sidx, skipFli
 
 follower_state = envFollower.eval_follower(max(abs(spl0), abs(spl1)));
 
+spl0 *= current_input_gain;
+spl1 *= current_input_gain;
+
 // HIGAIN
 distortion ? (
   spl0 = higainl.heavyDistortion(spl0 + spl0);
@@ -291,6 +312,20 @@ kot ? (
   spl0 = kot_left.kot_eval(0.8 * spl0) * 0.4;
   spl1 = kot_right.kot_eval(0.8 * spl1) * 0.4;
 );
+
+/*
+function simple_ws(x)
+global()
+instance(mx, s)
+(
+  mx = max(0.999 * mx, abs(x));
+  s = 0.8 * s + 0.2 * ((x < -0.25 * mx) ? -1 : 0.3333);
+  abs(s) * tanh(x)
+);
+
+spl0 = hdl.simple_ws(spl0);
+spl1 = hdr.simple_ws(spl1);
+*/
 
 o_amp = 15 * octaver_amp;
 (octaver_mode == 0) ? (
@@ -465,20 +500,24 @@ equ ? (
 cab > 0 ? (
   cab_split ? (
     LFb1.eval_LR2(spl0);
-    RFb1.eval_LR2(spl0);
+    RFb1.eval_LR2(spl1);
     cab.update_cabs(cab, LFb1.hp, RFb1.hp);
-    spl0 = LFb1.lp + cab.outL;
-    spl1 = RFb1.lp + cab.outR;
+    cab2.update_cabs_matcher(cab, LFb1.lp, RFb1.lp);
+    spl0 = cab2.outL + cab.outL;
+    spl1 = cab2.outR + cab.outR;
   ) : (
     cab.update_cabs(cab, spl0, spl1);
-    spl0 = cab.outL;
-    spl1 = cab.outR;
+    cab2.update_cabs_matcher(cab, spl0, spl1);
+    fade = cab_drywet;
+    spl0 = cab.outL * fade + cab2.outL * (1.0 - fade);
+    spl1 = cab.outR * fade + cab2.outR * (1.0 - fade);
   );
 );
 
 feedback += d_feedback;
 octaver_lp += d_octaver_lp;
 octaver_amp += d_octaver_amp;
+current_input_gain += d_input_gain;
 
 out_state = envFollowerOut.eval_follower(max(abs(spl0), abs(spl1)));
 
@@ -519,7 +558,6 @@ loaded = 0;
   loaded = gfx_loadimg(LIGHT_VEC_X, "./saike_allpass_dependencies/x_kernel.png");
   loaded = gfx_loadimg(LIGHT_VEC_Y, "./saike_allpass_dependencies/y_kernel.png");
   gfx_setimgdim(13, img_w, img_h);
- // gfx_setimgdim(5, img_w, img_h);
 );
 
 gfx_x = 0;
@@ -806,10 +844,16 @@ gaing3.choice_toggle(cx, cy, toggle_size, 2, 10, "Set plugin to high gain mode",
 
 envr_toggle.simple_serialize_toggle(cx + toggle_size + 1, cy, toggle_size, reconstruct_envelope, "Rebuild envelope\n\nCan be useful for getting dynamics back\nafter high gain amplification.", "Rebuild Env") ? (reconstruct_envelope = 1 - reconstruct_envelope);
 
-cy = 25;
+cy += 8;
+
+cx = side_pad;
+gain_slider.slider_ui(59, cx, cy, 5 * toggle_size + 4, 7, sprintf(9, ""), "Input gain");
+
+cy = 25 + 8;
+gfx_set(0.7, 0.5, 0.2, 0.3);
 txt_blit("CAB", side_pad, cy);
 
-cabsplit_toggle.simple_serialize_toggle(cx + toggle_size + 1, cy - 1, toggle_size, cab_split, "Let low frequencies bypass the cabinet.", "Low freq bypass") ? (cab_split = 1 - cab_split);
+cabsplit_toggle.simple_serialize_toggle(cx + 5 * toggle_size - 3, cy - 1, toggle_size, cab_split, "Let low frequencies bypass the cabinet.", "Low freq bypass") ? (cab_split = 1 - cab_split);
 
 //(x, y, w, select, slider_idx, hint, info)
 cx = side_pad;
@@ -834,16 +878,24 @@ cabg13.choice_toggle(cx, cy, toggle_size, 12, 11, "Set cabinet to 12", "Cab 12")
 cabg14.choice_toggle(cx, cy, toggle_size, 13, 11, "Set cabinet to 13", "Cab 13"); cx += toggle_size + 1;
 cabg15.choice_toggle(cx, cy, toggle_size, 14, 11, "Set cabinet to 14", "Cab 14"); cx += toggle_size + 1;
 
-cy += 17;
-txt_blit("FX", side_pad, cy);
+cx = side_pad;
+cy += 8;
+
+cab_drywet.active = cab_split == 0 && cab > 0;
+cab_drywet.slider_ui(167, cx, cy, 5 * toggle_size + 4, 7, sprintf(9, ""), "Cab dry/wet");
+
+cy += 16;
+gfx_set(0.7, 0.5, 0.2, 0.3);
+txt_blit("DIST", side_pad, cy);
 cy += 8;
 
 cx = side_pad;
-distortion_toggle.simple_serialize_toggle(cx, cy, toggle_size, distortion, "Hard distortion.", "Fuzz") ? (distortion = 1 - distortion;); cx += toggle_size + 1;
+distortion_toggle.simple_serialize_toggle(cx, cy, toggle_size, distortion, "Hard distortion.", "Distortion") ? (distortion = 1 - distortion;); cx += toggle_size + 1;
 kot_toggle.simple_serialize_toggle(cx, cy, toggle_size, kot, "Overdrive distortion.", "Overdrive") ? (kot = 1 - kot;);
 
 
 cy += 17;
+gfx_set(0.7, 0.5, 0.2, 0.3);
 txt_blit("MOVEMENT", side_pad, cy);
 cy += 8;
 
@@ -860,6 +912,7 @@ toggle_size = 7;
 gfx_set(0.7, 0.5, 0.2, 0.3);
 cy = 0;
 //measurement = txt_measure("GAIN");
+gfx_set(0.7, 0.5, 0.2, 0.3);
 txt_blit("AP FREQ", side_pad, cy);
 //(x, y, w, select, slider_idx, hint, info)
 cx = side_pad;
@@ -894,7 +947,7 @@ strength14.choice_toggle(cx, cy, toggle_size, 14, 6, "Strength 14", "Strength 14
 strength15.choice_toggle(cx, cy, toggle_size, 15, 6, "Strength 15", "Strength 15"); cx += toggle_size + 1;
 
 cy += 17;
-
+gfx_set(0.7, 0.5, 0.2, 0.3);
 txt_blit("AP MOD", side_pad, cy);
 //(x, y, w, select, slider_idx, hint, info)
 cx = side_pad;

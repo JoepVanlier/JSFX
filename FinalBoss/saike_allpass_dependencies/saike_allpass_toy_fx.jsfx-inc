@@ -816,7 +816,8 @@ instance(
   ia0, b0, b1, b2, b3, b4, a0, a1, a2, a3, a4,
   ic, icOut, Iin, iR9, TdivC7, C7divT
   dx1, dx2, dx3, dx4, dy1, dy2, dy3, dy4, sgn, 
-  ptr, ptr2
+  ptr, ptr2,
+  xk, yk, xkm1, ykm1, xkm2, ykm2, c0, c1, c2,
 )
 global(kot_LUT_x, kot_LUT_y)
 local(y, Vc, vout, x1, x2, y1, y2)
@@ -873,8 +874,17 @@ local(y, Vc, vout, x1, x2, y1, y2)
 
     vout = ((y2-y1) / (x2-x1)) * (icOut - x1) + y1;
   );
+  
+  xk = vout*sgn*.2;
+  yk = c0 * (xk - xkm1 - xkm1 + xkm2) + c1 * yk + c2 * ykm2;
     
-  vout*sgn*.2
+  ykm2 = ykm1;
+  ykm1 = yk;
+    
+  xkm2 = xkm1;
+  xkm1 = xk;
+   
+  yk
 );
 
 function kot_reset() 
@@ -1044,10 +1054,23 @@ instance()
   2/(1+exp(-2*x)) - 1
 );
 
+function init_dc_block(freq)
+local(omega, sqh)
+global(srate)
+instance(c0, c1, c2)
+(
+  omega = 2.0 * $pi * freq / srate;
+  sqh = sqrt(0.5);
+  c0 = 1.0 - sqh * omega;
+  c1 = 2.0 - sqrt(2) * omega - 0.5 * omega * omega;
+  c2 = (1.0 - sqh * omega);
+  c2 *= -c2;
+);
+
 function heavyDistortion(x)
-local(dt, dl)
+local(dt, dl, legacy)
 global(srate, oversampling)
-instance(lastin, lastx, intx)
+instance(lastin, lastx, intx, xk, yk, xkm1, ykm1, xkm2, ykm2, c0, c1, c2)
 (
   /* Power */
   dt = 44100 / oversampling / srate;
@@ -1061,8 +1084,17 @@ instance(lastin, lastx, intx)
   // Determine the slow and the fast response
   lastx = lastx + .1*(dl-lastx)/overSampling;
   intx = intx + .01625*dt*(.25*x-intx)*(1+5.5*abs(intx));
-        
-  x - 2*lastx+intx
+  
+  xk = 2*lastx+intx;
+  yk = c0 * (xk - xkm1 - xkm1 + xkm2) + c1 * yk + c2 * ykm2;
+    
+  ykm2 = ykm1;
+  ykm1 = yk;
+    
+  xkm2 = xkm1;
+  xkm1 = xk;
+   
+  yk
 );
 
 higain_factor = 1.0 / (2.5*tanh(.5)*1.007);
