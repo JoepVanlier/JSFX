@@ -185,12 +185,16 @@ function pitchlibUpdateFall(N)
 // Binary search was slower than straightforward loop.
 function pitchlibDetermineMaxACF(B1, B2, buffer_size)
 local(idx, cmax, cmax_position, current, correction,
-      yc, yl, yr)
+      yc, yl, yr, acf_size, two_side)
 global(poox)
 instance()
 (
-  fft_real(B1, buffer_size);
-  fft_real(B2, buffer_size);
+  two_side = 1;
+  acf_size = buffer_size;
+  two_side ? (acf_size *= 2;);
+  
+  fft_real(B1, acf_size);
+  fft_real(B2, acf_size);
   
   idx = 0;
   loop(4,
@@ -198,31 +202,43 @@ instance()
     B2[idx] = 0;
     idx += 1;
   );
+  /*
   loop(buffer_size - 2,
     B1[idx] /= (1 + idx);
     B2[idx] /= (1 + idx);
     idx += 1;
   );
+  */
   
-  idx = 1;
-  loop(buffer_size*.5,
+  idx = 3;
+  loop(acf_size*.5,
     B2[idx] = -B2[idx];
     idx += 2;
   );
   
-  convolve_c(B1, B2, buffer_size);
-  ifft_real(B1, buffer_size);
-        
+  convolve_c(B1, B2, acf_size);
+  ifft_real(B1, acf_size);
+
+  /*
+  two_side ? (
+    idx = 0;
+    loop(buffer_size,
+      B1[idx] = B1[idx];
+      idx += 1;
+    );
+  );
+  */
+  
   // Find the maximum of the ACF
   cmax = -10000000;
-  idx = 0;
-  loop(.75*buffer_size-8,
-    current = B1[idx] + B1[idx+1];
+  idx = 1;
+  loop(buffer_size,
+    current = B1[idx] + 0.9 * (B1[idx - 1] + B1[idx + 1]);// + B1[idx+1];
     current > cmax ? (
       cmax_position = idx;
       cmax = current;
     );
-    idx += 2;
+    idx += 1;
   );
   
   poox = cmax_position;
@@ -232,8 +248,14 @@ instance()
   yl = B1[cmax_position-2] + B1[cmax_position-1];
   yr = B1[cmax_position+2] + B1[cmax_position+3];
   correction = (-2*cmax_position*yc + cmax_position*yl + cmax_position*yr + yl - yr)/(-2*yc + yl + yr) - cmax_position;
+
   abs(correction) < 4 ? cmax_position += correction;
   cmax_position = max(cmax_position, 0);
+  
+  two_side ? (
+    memset(B1, 0, acf_size);
+    memset(B2, 0, acf_size);
+  );
   
   cmax_position
 );
