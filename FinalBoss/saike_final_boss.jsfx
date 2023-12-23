@@ -1,8 +1,8 @@
 desc:Final Boss (Saike)
 tags: distortion, multi-effect, mangler, grunge
-version: 0.04
+version: 0.05
 author: Joep Vanlier
-changelog: Fix fade in issue controls. Fix lower limit issue AP mod (lower limit is now 0.1 Hz). Fix label AP depth.
+changelog: Allow decoupling left and right for allpass.
 license: MIT
 provides:
   saike_allpass_dependencies/* 
@@ -38,6 +38,8 @@ slider18:distortion=0<0,1,1>-Enable distortion 2
 slider19:cab_split=0<0,1,1>-Cab split
 slider20:cab_drywet=1<0,1,0.00001>-Cab drywet
 slider21:input_gain=0<-32,32,0.0001>-Input gain
+slider22:freq2=5<5, 22000, 0.1:log>-Allpass Freq 2
+slider23:allpass_decoupled=0<0,1,1>-Allpass decoupled
 
 in_pin:left input
 in_pin:right input
@@ -68,6 +70,7 @@ bsplit2.bandsplitter_init(f1, f2, 6151.68278);
 
 // function init_slider_ui(s, s_min, s_max, s_shape)
 freq_slider.init_slider_ui(3, 5, 22000, 1);
+freq_slider2.init_slider_ui(22, 5, 22000, 1);
 freq_shift.init_slider_ui(17, 0.1, 10.0, 0);
 cab_drywet.init_slider_ui(20, 0, 1.0, 0);
 
@@ -385,11 +388,26 @@ o_amp = 15 * octaver_amp;
   spl1 += (pitch_shifter1.outL + pitch_shifter2.outL) * o_amp / 15;
 );
 
-f_b = min(0.25 * srate, max(3, freq + freq * mod_val * mod_depth));
+function calculate_allpass_factor(freq)
+local(f_b, factor)
+global(mod_val, mod_depth, srate)
+instance()
+(
+  f_b = min(0.25 * srate, max(3, freq + freq * mod_val * mod_depth));
+  factor = tan($pi * f_b / srate);
+  (factor - 1.0) / (factor + 1.0);
+);
 
-factor = tan($pi * f_b / srate);
 m_last = m;
-m = (factor - 1.0) / (factor + 1.0);
+m = calculate_allpass_factor(freq);
+
+allpass_decoupled ? (
+  m2_last = m2;
+  m2 = calculate_allpass_factor(freq2);
+) : (
+  m2_last = m_last;
+  m2 = m;
+);
 
 <?
   loop(
@@ -431,10 +449,10 @@ spl0 += feedback * lspl0 * (1 + fb_mod * mod_val2);
 spl1 += feedback * lspl1 * (1 + fb_mod * mod_val2);
 
 <?
-  printf("(strength == 1) ? ( spl0 = a1.allpass1(spl0, m, m_last); spl1 = a2.allpass1(spl1, m, m_last); )");
+  printf("(strength == 1) ? ( spl0 = a1.allpass1(spl0, m, m_last); spl1 = a2.allpass1(spl1, m2, m2_last); )");
   loop(
     s = 2; 15,
-    printf(": (strength == %d) ? ( spl0 = a1.allpass%d(spl0, m, m_last); spl1 = a2.allpass%d(spl1, m, m_last); )", s, s, s);
+    printf(": (strength == %d) ? ( spl0 = a1.allpass%d(spl0, m, m_last); spl1 = a2.allpass%d(spl1, m2, m2_last); )", s, s, s);
     s += 1;
   )
 ?>;
@@ -913,14 +931,22 @@ gfx_set(0.7, 0.5, 0.2, 0.3);
 cy = 0;
 //measurement = txt_measure("GAIN");
 gfx_set(0.7, 0.5, 0.2, 0.3);
-txt_blit("AP FREQ", side_pad, cy);
+txt_blit("AP FRQ", side_pad, cy + 1);
 //(x, y, w, select, slider_idx, hint, info)
-cx = side_pad;
-cy += 8;
-Hz = min(0.5 * srate, max(3, freq));
-freq_slider.slider_ui(56, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, "%d", Hz), "Allpass Frequency (Hz)", "AP Freq");
 
-cy = 25;
+decouple_toggle.simple_serialize_toggle(side_pad + 32, cy, toggle_size, allpass_decoupled, "Decouple allpass\n\nAllow different frequency for left and right", "Decouple AP.") ? (allpass_decoupled = 1 - allpass_decoupled;); cx += toggle_size + 1;
+
+cx = side_pad;
+cy += 9;
+Hz = min(0.5 * srate, max(3, freq));
+freq_slider.slider_ui(56, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, "%d", Hz), "Allpass Frequency (Hz)", "Allpass Freq");
+
+cy += 9;
+Hz = min(0.5 * srate, max(3, freq2));
+freq_slider2.active = allpass_decoupled;
+freq_slider2.slider_ui(62, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, "%d", Hz), "Allpass Frequency (Hz)", "Allpass Freq");
+
+cy = 25 + 8;
 gfx_set(0.7, 0.5, 0.2, 0.3);
 txt_blit("STRENGTH", side_pad, cy);
 //(x, y, w, select, slider_idx, hint, info)
