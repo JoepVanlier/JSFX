@@ -146,6 +146,21 @@ Features:
 - X/Y controls for automation.
 - Classic adventure game look.
 
+## Final Boss - Distortion device
+
+A small distortion effect unit for grungy distortion effects.
+
+![rbJIeWx](https://github.com/JoepVanlier/JSFX/assets/19836026/e732bc05-76f4-4469-8278-d98fcd0474ce)
+
+Features:
+- Allpass stack with feedback.
+- Upwards compression.
+- Octaver.
+- Pitch shifting chorus.
+- Cabinet filters.
+- Frequency shifter based spectral movement.
+- A big skull looking mad at you (motivation!).
+
 ## Bric-a-brac - Texture machine
 
 Bric-a-brac is intended to add textures to existing sounds. It can for example be used to brighten up beats by loading a noise sample in a sample slot. Or add some organic textures by adding a creaking sound that plays before the attack of a synth.
