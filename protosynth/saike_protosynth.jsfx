@@ -10,15 +10,27 @@ provides:
 <?
   tuning_basic = 0.5;
   loop(i=0;7,
-    par = i * 10 + 1;
+    par = i * 6 + 1;
     printf("slider%d:osc%d_gain=-9<-72,0,0.0001>-osc%d gain\n", par, i + 1, i + 1);
-    printf("slider%d:osc%d_tune=%f<0.25,8,0.0001>osc%d tune\n", par + 1, i + 1, tuning_basic, i + 1);
+    printf("slider%d:osc%d_tune=%f<0.25,8,0.0001>-osc%d tune\n", par + 1, i + 1, tuning_basic, i + 1);
     printf("slider%d:osc%d_spacing=1<0.25,8,0.0001>-osc%d spacing\n", par + 2, i + 1, i + 1);
     printf("slider%d:osc%d_brightness=0.4<0.0,0.95,.0001>-osc%d brightness\n", par + 3, i + 1, i + 1);
     printf("slider%d:osc%d_spacing_offset=0<0,5000.0001>-osc%d spacing offset\n", par + 4, i + 1, i + 1);
     tuning_basic *= 1.5;
     
     i += 1
+  );
+?>
+
+<?
+  loop(i=0;7,
+    par = i * 5 + 43;
+    printf("slider%d:env%d_attack=3.0<3.0,300.0,0.0001:log>-env%d attack\n", par, i + 1, i + 1);
+    printf("slider%d:env%d_decay=30.0<30.0,3000.0.0001:log>-env%d decay\n", par + 1, i + 1, i + 1);
+    printf("slider%d:env%d_sustain=0.7<0.0,1.0,0.0001>-env%d sustain\n", par + 2, i + 1, i + 1);
+    printf("slider%d:env%d_release=30.0<30.0,3000.0,0.0001:log>-env%d release\n", par + 3, i + 1, i + 1);
+    
+    i += 1;
   );
 ?>
 
@@ -48,11 +60,12 @@ import saike_proto_synth_kp_midi.jsfx-inc
 import saike_proto_synth_pixel_gfx.jsfx-inc
 
 @init
+SLOW_UPDATE_FACTOR = 16;
 MAX_VOICES = 12;
 
 <?
   loop(i=0;8,
-    par = i * 10 + 1;
+    par = i * 6 + 1;
     printf("gain_slider%d.init_slider_ui(%d, -72, 0, 0);\n", i + 1, par);
     printf("tune_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 1);
     printf("spacing_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 2);
@@ -61,6 +74,18 @@ MAX_VOICES = 12;
     i += 1;
   );
 ?>
+
+<?
+  loop(i=0;8,
+    par = i * 5 + 43;
+    printf("env_attack_slider%d.init_slider_ui(%d, 3.0, 300.0, 1);\n", i + 1, par);
+    printf("env_decay_slider%d.init_slider_ui(%d, 30.0, 3000.0, 1);\n", i + 1, par + 1);
+    printf("env_sustain_slider%d.init_slider_ui(%d, 0, 1.0, 0);\n", i + 1, par + 2);
+    printf("env_release_slider%d.init_slider_ui(%d, 30, 3000.0, 1);\n", i + 1, par + 3);
+    i += 1;
+  );
+?>
+
 
 freemem = 0;
 freemem = midi.init_midi(freemem);
@@ -81,8 +106,9 @@ instance(osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8)
 );
 
 function update_voice()
-local(cur_freq, cfreq, noise_factor)
+local(cur_freq, cfreq, noise_factor, atk)
 global(
+  active_note_mem, active_note_vel,
   rel_spacing, freq_atten, n_update,
   <?loop(i=1;8, printf("osc%d_gain,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_tune,", i); i += 1);?>
@@ -90,18 +116,36 @@ global(
   <?loop(i=1;8, printf("osc%d_spacing,", i); i += 1);?>,
   <?loop(i=1;8, printf("osc%d_spacing_offset,", i); i += 1);?>,
   noise,
+  <?loop(i=1;8, printf("env%d_atk_samples,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_k_atk,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_k_decay,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_k_release,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_sustain,", i); i += 1);?>
 )
 instance(
-  freq, osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, b_decay, rand_src,
+  midi_idx,
+  freq, osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, rand_src,
   g1, g2, g3, g4, g5, g6, g7, g8,
+  has_output,
+  on,
+  current_sample, pressed, has_played,
+  <?loop(i=1;8, printf("e%d,", i); i += 1);?>
 )
 (
-  //osc1.update_dsf_osc(freq, rel_spacing * freq, freq_atten, 0);
-  //osc2.update_dsf_osc(2 * freq + 2, rel_spacing * freq, freq_atten, 0);
-  //osc3.update_dsf_osc(4 * freq + 7, rel_spacing * freq, freq_atten, 0);
-  //osc4.update_dsf_osc(4 * freq + 3, 2 * rel_spacing * freq, freq_atten, 0);
+  <?loop(i=1;8, printf("atk = current_sample < env%d_atk_samples; e%d += (atk ? env%d_k_atk : pressed ? env%d_k_decay : env%d_k_release) * (max(atk, env%d_sustain * pressed) - e%d);\n", i, i, i, i, i, i, i); i += 1);?>
   
-  <?loop(i=1;8, printf("g%d = 10^(osc%d_gain/20);", i, i); i += 1);?>
+  <?loop(i=1;8, printf("g%d = 10^(osc%d_gain/20) * e1;", i, i); i += 1);?>
+  
+  has_output = max(max(max(max(max(max(max(max(g1, g2), g3), g4), g5), g6), g7), g8), pressed) > 0.0001;
+  (!has_output) ? (
+    on = 0;
+    // Flag as available for new midi notes
+    has_played ? (
+      active_note_mem[midi_idx] = 0;
+      active_note_vel[midi_idx] = 0;
+      has_played = 0;
+    );
+  );
   
   rand_src = 0.9 * rand_src + 0.1 * rand();
   noise_factor = (1 - noise) + (noise + noise) * rand_src;
@@ -110,12 +154,47 @@ instance(
   <?
     loop(i=1;8,
       printf("cur_freq = osc%d_tune * cfreq;\n", i);
-      printf("osc%d.update_dsf_osc(cur_freq, osc%d_spacing * cur_freq + osc%d_spacing_offset, osc%d_brightness * b_decay, 0);\n", i, i, i, i);
+      printf("osc%d.update_dsf_osc(cur_freq, osc%d_spacing * cur_freq + osc%d_spacing_offset, osc%d_brightness, 0);\n", i, i, i, i);
       i += 1
     );
   ?>
   
-  b_decay *= 0.999;
+  current_sample += 1;
+);
+
+function initialize_envelopes()
+local(to_samples, sample_rate, log001, log001tds)
+global(
+  srate,
+  SLOW_UPDATE_FACTOR,
+  <?loop(i=1;8, printf("env%d_attack,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_decay,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_sustain,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_release,", i); i += 1);?>
+  
+  <?loop(i=1;8, printf("env%d_atk_samples,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_k_atk,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_k_decay,", i); i += 1);?>
+  <?loop(i=1;8, printf("env%d_k_release,", i); i += 1);?>
+)
+instance(current_sample, has_played)
+(
+  sample_rate = srate / SLOW_UPDATE_FACTOR;
+  to_samples = 0.001 * sample_rate;  // Since times were specified in ms
+  log001 = log(0.01);
+  log001tds = log001 / to_samples;
+  current_sample = 0;
+  has_played = 1;
+  
+  <?
+    loop(i=1;8,
+      printf("env%d_atk_samples = env%d_attack * to_samples;\n", i, i);
+      printf("env%d_k_atk = - log001 / env%d_atk_samples;\n", i, i);
+      printf("env%d_k_decay = - log001tds / env%d_decay;\n", i, i);
+      printf("env%d_k_release = - log001tds / env%d_release;\n", i, i);
+      i += 1;
+    );
+  ?>
 );
 
 function play_voice()
@@ -203,19 +282,23 @@ instance()
   );
 );
 
-function process_midi(active, vel, state, ref_pitch)
+function process_midi(note_idx, active, vel, state, ref_pitch)
 local()
-global()
-instance(on, freq, b_decay)
+global(initialize_envelopes)
+instance(on, freq, pressed, current_sample, midi_idx)
 (
+  midi_idx = note_idx;
   (state == 1) ? (
+    // Note on
     on = 1;
     freq = pitch_to_freq(active + ref_pitch);
+    pressed = 1;
+    this.initialize_envelopes();
     this.update_voice();
-    b_decay = 1.0;
   ) : (state == -1) ? (
     // Release
-    on = 0;
+    pressed = 0;
+    current_sample = 100000000000000000; // Make sure we are beyond the attack
   );
 );
 
@@ -249,23 +332,23 @@ local(
     v1.on = v2.on = v3.on = v4.on = v5.on = v6.on = v7.on = v8.on = v9.on = v10.on = v11.on = 0;
     
     (notes_on > 0) ? (
-      v0.process_midi(active_note_mem[latest_note], active_note_vel[latest_note], active_note_state[latest_note], ref_pitch);
+      v0.process_midi(latest_note, active_note_mem[latest_note], active_note_vel[latest_note], active_note_state[latest_note], ref_pitch);
     ) : (
-      v0.process_midi(active_note_mem[latest_note], active_note_vel[latest_note], -1, ref_pitch);
+      v0.process_midi(latest_note, active_note_mem[latest_note], active_note_vel[latest_note], -1, ref_pitch);
     );
   ) : (
-    v0.process_midi(active_note_mem[0], active_note_vel[0], active_note_state[0], ref_pitch);
-    v1.process_midi(active_note_mem[1], active_note_vel[1], active_note_state[1], ref_pitch);
-    v2.process_midi(active_note_mem[2], active_note_vel[2], active_note_state[2], ref_pitch);
-    v3.process_midi(active_note_mem[3], active_note_vel[3], active_note_state[3], ref_pitch);
-    v4.process_midi(active_note_mem[4], active_note_vel[4], active_note_state[4], ref_pitch);
-    v5.process_midi(active_note_mem[5], active_note_vel[5], active_note_state[5], ref_pitch);
-    v6.process_midi(active_note_mem[6], active_note_vel[6], active_note_state[6], ref_pitch);
-    v7.process_midi(active_note_mem[7], active_note_vel[7], active_note_state[7], ref_pitch);
-    v8.process_midi(active_note_mem[8], active_note_vel[8], active_note_state[8], ref_pitch);
-    v9.process_midi(active_note_mem[9], active_note_vel[9], active_note_state[9], ref_pitch);
-    v10.process_midi(active_note_mem[10], active_note_vel[10], active_note_state[10], ref_pitch);
-    v11.process_midi(active_note_mem[11], active_note_vel[11], active_note_state[11], ref_pitch);
+    v0.process_midi(0, active_note_mem[0], active_note_vel[0], active_note_state[0], ref_pitch);
+    v1.process_midi(1, active_note_mem[1], active_note_vel[1], active_note_state[1], ref_pitch);
+    v2.process_midi(2, active_note_mem[2], active_note_vel[2], active_note_state[2], ref_pitch);
+    v3.process_midi(3, active_note_mem[3], active_note_vel[3], active_note_state[3], ref_pitch);
+    v4.process_midi(4, active_note_mem[4], active_note_vel[4], active_note_state[4], ref_pitch);
+    v5.process_midi(5, active_note_mem[5], active_note_vel[5], active_note_state[5], ref_pitch);
+    v6.process_midi(6, active_note_mem[6], active_note_vel[6], active_note_state[6], ref_pitch);
+    v7.process_midi(7, active_note_mem[7], active_note_vel[7], active_note_state[7], ref_pitch);
+    v8.process_midi(8, active_note_mem[8], active_note_vel[8], active_note_state[8], ref_pitch);
+    v9.process_midi(9, active_note_mem[9], active_note_vel[9], active_note_state[9], ref_pitch);
+    v10.process_midi(10, active_note_mem[10], active_note_vel[10], active_note_state[10], ref_pitch);
+    v11.process_midi(11, active_note_mem[11], active_note_vel[11], active_note_state[11], ref_pitch);
     
 
     // Update note parameters
@@ -327,33 +410,33 @@ big_tick ? (
   midi.update_notes();
 );
 
-((n_update % 16) == 0) ? (
-  v0.on ? v0.update_voice();
-  v1.on ? v1.update_voice();
-  v2.on ? v2.update_voice();
-  v3.on ? v3.update_voice();
-  v4.on ? v4.update_voice();
-  v5.on ? v5.update_voice();
-  v6.on ? v6.update_voice();
-  v7.on ? v7.update_voice();
-  v8.on ? v8.update_voice();
-  v9.on ? v9.update_voice();
-  v10.on ? v10.update_voice();
-  v11.on ? v11.update_voice();
+((n_update % SLOW_UPDATE_FACTOR) == 0) ? (
+  v0.update_voice();
+  v1.update_voice();
+  v2.update_voice();
+  v3.update_voice();
+  v4.update_voice();
+  v5.update_voice();
+  v6.update_voice();
+  v7.update_voice();
+  v8.update_voice();
+  v9.update_voice();
+  v10.update_voice();
+  v11.update_voice();
 );
 
-v0.on ? v0.play_voice() : (v0.l = v0.r = 0);
-v1.on ? v1.play_voice() : (v1.l = v1.r = 0);
-v2.on ? v2.play_voice() : (v2.l = v2.r = 0);
-v3.on ? v3.play_voice() : (v3.l = v3.r = 0);
-v4.on ? v4.play_voice() : (v4.l = v4.r = 0);
-v5.on ? v5.play_voice() : (v5.l = v5.r = 0);
-v6.on ? v6.play_voice() : (v6.l = v6.r = 0);
-v7.on ? v7.play_voice() : (v7.l = v7.r = 0);
-v8.on ? v8.play_voice() : (v8.l = v8.r = 0);
-v9.on ? v9.play_voice() : (v9.l = v9.r = 0);
-v10.on ? v10.play_voice() : (v10.l = v10.r = 0);
-v11.on ? v11.play_voice() : (v11.l = v11.r = 0);
+v0.has_output ? v0.play_voice() : (v0.l = v0.r = 0);
+v1.has_output ? v1.play_voice() : (v1.l = v1.r = 0);
+v2.has_output ? v2.play_voice() : (v2.l = v2.r = 0);
+v3.has_output ? v3.play_voice() : (v3.l = v3.r = 0);
+v4.has_output ? v4.play_voice() : (v4.l = v4.r = 0);
+v5.has_output ? v5.play_voice() : (v5.l = v5.r = 0);
+v6.has_output ? v6.play_voice() : (v6.l = v6.r = 0);
+v7.has_output ? v7.play_voice() : (v7.l = v7.r = 0);
+v8.has_output ? v8.play_voice() : (v8.l = v8.r = 0);
+v9.has_output ? v9.play_voice() : (v9.l = v9.r = 0);
+v10.has_output ? v10.play_voice() : (v10.l = v10.r = 0);
+v11.has_output ? v11.play_voice() : (v11.l = v11.r = 0);
 
 spl0 = v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
 spl1 = v0.r + v1.r + v2.r + v3.r + v4.r + v5.r + v6.r + v7.r + v8.r + v9.r + v10.r + v11.r;
@@ -367,26 +450,6 @@ loaded = 0;
 !loaded ? (
   loaded = gfx_loadimg(12, "./protosynth_dependencies/font.png");
   gfx_setimgdim(13, img_w, img_h);
-);
-
-0 ? (
-  gfx_x = 0;
-  gfx_y = 30;
-  gfx_set(1, 1, 1, 1);
-  fff = midi.active_note_mem;
-  loop(30,
-    gfx_printf("%f  ", fff[]);
-    fff += 1;
-  );
-  
-  gfx_x = 0;
-  gfx_y = 0;
-  gfx_set(1, 1, 1, 1);
-  fff = midi.note_mem;
-  loop(30,
-    gfx_printf("%f  ", fff[]);
-    fff += 1;
-  );
 );
 
 function reset_color()
@@ -431,23 +494,21 @@ cy = 0;
     i += 1;
   );
 ?>
-/*
-    printf("slider%d:osc%d_gain=-9<-72,0,0.0001>-osc%d gain\n", par, i + 1, i + 1);
-    printf("slider%d:osc%d_tune=%f<0.25,8,0.0001>osc%d tune\n", par + 1, i + 1, tuning_basic, i + 1);
-    printf("slider%d:osc%d_spacing=1<0.25,8,0.0001>-osc%d spacing\n", par + 2, i + 1, i + 1);
-    printf("slider%d:osc%d_brightness=0.4<0.0,0.95,.0001>-osc%d brightness\n", par + 3, i + 1, i + 1);
-    printf("slider%d:osc%d_spacing_offset=0<0,5000.0001>-osc%d spacing offset\n", par + 4, i + 1, i + 1);
-    
-    loop(i=0;8,
-      par = i * 10 + 1;
-      printf("gain_slider%d.init_slider_ui(%d, -72, 0, 0);\n", i + 1, par);
-      printf("tune_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 1);
-      printf("spacing_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 2);
-      printf("brightness_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 3);
-      printf("spacing_offset_slider%d.init_slider_ui(%d, 0, 5000.0, 0);\n", i + 1, par + 4);
-      i += 1;
-    );
-*/
+cy += 5;
+<?
+  loop(i=0;7,
+    printf("cx = side_pad;\n");
+    printf("env%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, 1, \"Enable Envelope %d\", \"Enable ENV%d\");\ncx += toggle_size + 2;", i + 1, i + 1);
+    printf("txt_blit(\"ENV%d\", cx, cy + 2); cx += 25;", i + 1);
+    printf("env_attack_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_attack), \"Attack\", \"Attack\"); cx += 5 * toggle_size + 4 +2;", i + 1, i + 80, i + 1);
+    printf("env_decay_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_decay), \"Decay\", \"Decay\"); cx += 5 * toggle_size + 4 +2;", i + 1, i + 88, i + 1);
+    printf("env_sustain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * env%d_sustain), \"Sustain\", \"Sustain\"); cx += 5 * toggle_size + 4 +2;", i + 1, i + 96, i + 1);
+    printf("env_release_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_release), \"Release\", \"Release\"); cx += 5 * toggle_size + 4 +2;", i + 1, i + 104, i + 1);
+    printf("cy += 8;");
+    i += 1;
+  );
+?>
+
 tune_slider1.active = 1;
 
 //(x, y, w, select, slider_idx, hint, info)
@@ -494,3 +555,24 @@ last_mouse_y = mouse_y;
 mouse_nx = (mouse_x - x_offset) / blit_scale;
 mouse_ny = (mouse_y - y_offset) / blit_scale;
 
+/*
+1 ? (
+  gfx_x = 0;
+  gfx_y = 30;
+  gfx_set(1, 1, 1, 1);
+  fff = midi.active_note_mem;
+  loop(30,
+    gfx_printf("%f  ", fff[]);
+    fff += 1;
+  );
+  
+  gfx_x = 0;
+  gfx_y = 0;
+  gfx_set(1, 1, 1, 1);
+  fff = midi.note_mem;
+  loop(30,
+    gfx_printf("%f  ", fff[]);
+    fff += 1;
+  );
+);
+*/
