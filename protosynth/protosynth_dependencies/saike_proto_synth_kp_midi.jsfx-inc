@@ -1,0 +1,320 @@
+@init
+function identify_note(midi_pitch)
+local(octave, note, note_label)
+global(CUSTOM_SLIDER)
+(
+  (midi_pitch > 0) ? (
+    octave = floor((midi_pitch - 12) / 12);
+    note = (midi_pitch - 21) % 12;
+    note_label = note < 1 ? "A-" : note < 2 ? "A#" : note < 3 ? "B-" : note < 4 ? "C-" : note < 5 ? "C#" : note < 6 ? "D-" : note < 7 ? "D#" : note < 8 ? "E-" : note < 9 ? "F-" : note < 10 ? "F#" : note < 11 ? "G-" : "G#";
+    sprintf(CUSTOM_SLIDER, "%s%d", note_label, octave)
+  ) : "";
+);
+
+
+function init_midi(freemem)
+instance(note_mem,
+         active_note_mem, active_note_vel, active_note_state, note_history, sustaining, sustain_history, num_sustain,
+         max_notes, notes_on, pitchbend, modwheel)
+global()
+(
+  max_notes = 32;
+  freemem = (note_mem = freemem) + 32768;
+  freemem = (active_note_mem = freemem) + 4096;
+  freemem = (active_note_vel = freemem) + 4096;
+  freemem = (active_note_state = freemem) + 4096;
+  freemem = (note_history = freemem) + 4096;
+  freemem = (sustain_history = freemem) + 4096;
+  memset(active_note_mem, 0, 128);
+  memset(sustain_history, 0, 128);
+  memset(note_mem, 0, 32768);
+  notes_on = 0;
+  pitchbend = 0;
+  modwheel = 0;
+  num_sustain = 0;
+  sustaining = 0;
+  freemem
+);
+
+function reset_midi()
+instance(note_mem,
+         active_note_mem, active_note_vel, active_note_state, note_history,
+         sustaining, sustain_history, num_sustain,
+         notes_on, pitchbend, modwheel, max_notes,
+         last_vel)
+local(idx)
+global()
+(
+  idx = 0;
+  loop(max_notes,
+    note_mem[idx] = 0;
+    active_note_mem[idx] = 0;
+    active_note_vel[idx] = 0;
+    active_note_state[idx] = 0;
+    note_history[idx] = 0;
+    sustain_history[idx] = 0;
+    idx += 1;
+  );
+  notes_on = 0;
+  pitchbend = 0;
+  modwheel = 0;
+  last_vel = 0;
+  num_sustain = 0;
+  sustaining = 0;
+);
+
+function midi_block(pass_through)
+global()
+instance(note_next, active_note_mem, active_note_state, note_mem, notes_remain, curSample, note_ptr, sustaining, sustain_history, num_sustain)
+local(offset, msg1, msg2, msg3, note_on, note_off, mwCC, pb, lastpb, idx, found)
+(
+  notes_remain = 0;
+  note_ptr = note_mem;
+  lastpb = -1337;
+  while (midirecv(offset,msg1,msg2,msg3) && (note_ptr < (active_note_mem - 4))) (
+    note_on = msg1>$x8F&&msg1<$xA0 && msg3!=0;
+    note_off = (msg1>$x7F&&msg1<$x90) || (msg1>$x89&&msg1<$xA0 && msg3==0);
+    mwCC = (msg1>$xAF&&msg1<$xC0);
+    pb = msg1 & 0xF0 === 0xE0;
+    notes_remain = 1;
+    note_on ? (
+      note_ptr[] = offset;
+      note_ptr += 1;
+      note_ptr[] = msg3;
+      note_ptr += 1;
+      note_ptr[] = msg2;
+      note_ptr += 1;
+    ) : ( note_off ) ? (
+      !sustaining ? (
+        note_ptr[] = offset;
+        note_ptr += 1;
+        note_ptr[] = -1;
+        note_ptr += 1;
+        note_ptr[] = msg2;
+        note_ptr += 1;
+      ) : (
+        // Log the sustained notes instead
+        idx = 0; found = 0;
+        
+        // Check if we already got this one
+        while((idx < num_sustain) && !found) (
+          found = (msg2 == sustain_history[idx]);
+          idx += 1;
+        );
+        
+        !found ? (
+          sustain_history[num_sustain] = msg2;
+          num_sustain += 1;
+        );
+      );
+    ) : ( pb ) ? (
+      pb = (((msg3 << 8) | msg2) - 0x4000)/16384;
+      (pb != lastpb) ? (
+        note_ptr[] = offset;
+        note_ptr += 1;
+        note_ptr[] = -3;
+        note_ptr += 1;
+        note_ptr[] = pb;
+        note_ptr += 1;
+      );
+      lastpb = pb;
+    ) : ( mwCC ) ? (
+      // Catch sustain toggling before forwarding the CC since we wanna handle that here.
+      (msg2 == $x40) ? (
+        sustaining = msg3 >= 64;
+        
+        // Released the sustain? Play all the note offs we collected
+        !sustaining ? (
+          idx = 0;
+          while(idx < num_sustain) (
+            note_ptr[] = offset;
+            note_ptr += 1;
+            note_ptr[] = -1;
+            note_ptr += 1;
+            note_ptr[] = sustain_history[idx];
+            sustain_history[idx] = 0;
+            note_ptr += 1;
+            idx += 1;
+          );
+          num_sustain = 0;
+        );
+        
+      ) : (
+        note_ptr[] = offset;
+        note_ptr += 1;
+        note_ptr[] = -2;
+        note_ptr += 1;
+        note_ptr[] = msg2;
+        note_ptr += 1;
+        note_ptr[] = msg3;
+        note_ptr += 1;
+      );
+    );
+    
+    pass_through ? midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
+  );
+  note_ptr[]       = -1337;     // Signal end of note buffer
+  note_ptr         = note_mem;
+  curSample       = -1;        // Current sample in block
+  note_next       = note_ptr[];
+);
+
+function midi_clear_notes()
+local(i)
+instance(notes_on, active_note_mem, active_note_state, active_note_vel, note_history, max_notes)
+global()
+(
+  // Terminate all notes
+  i = 0;
+  notes_on = 0;
+  loop(MAX_NOTES,
+    ((active_note_mem[i] > 0) && (active_note_vel[i] > 0)) ? (
+      active_note_mem[i] = 0;
+      active_note_state[i] = -1;
+      active_note_vel[i] = 0;
+      note_history[i] = 0;
+    );
+    i += 1;
+  );
+);
+
+// Put in loop with
+// midi.notes_remain
+function midi_sample(respond_to_notes)
+instance(note_next, curSample, note_ptr, notes_remain, notes_on, note, velocity,
+         active_note_mem, active_note_vel, active_note_state, note_history,
+         cur_cc, cc_target, max_notes, modwheel, pitchbend, last_vel, last_slot)
+local(i, i2, found, current_item, change)
+global(MAX_STRING, voice_thievery)
+(
+  change = 0;
+  // Take notes from the stack until we hit the end marker -1
+  while(note_next == curSample) (
+    note_ptr += 1;
+    current_item = note_ptr[];
+
+    (current_item > 0) ? ( // note-on
+      respond_to_notes ? (
+        velocity = note_ptr[]/127;
+        (velocity > 0) ? last_vel = velocity;
+        note_ptr += 1;
+        note = note_ptr[];
+        found = 0; i=0;
+        loop(MAX_NOTES,
+          // If this note is already playing ignore it, but update velocity
+          // and flag it as newpress
+          ((active_note_mem[i] == note) && (active_note_vel[i] > 0)) ? (
+            found = 1;
+            active_note_state[i] = 1;
+            active_note_vel[i] = velocity;
+          );
+          i += 1;
+        );
+        // This note is not playing yet.
+        !found ? (
+          // Find empty slot
+          found = 1337;
+          
+          i = last_slot + 1;
+          (i >= MAX_STRING) ? i = 0;
+          
+          !voice_thievery ? (
+            // Try just cycling first.
+            while((found == 1337) && (i < MAX_STRING))
+            (
+              (active_note_mem[i] == 0) ? found = i;
+              i += 1;
+            );
+          );
+          
+          i = 0;
+          while((found == 1337) && (i < max_notes))
+          (
+            (active_note_mem[i] == 0) ? found = i;
+            i += 1;
+          );
+          
+          (found < MAX_NOTES) ? (
+            note_history[notes_on] = found;
+            notes_on += 1;
+            // Add note to list of active notes
+            last_slot = found;
+            active_note_mem[found] = note;
+            active_note_vel[found] = velocity;
+            active_note_state[found] = 1; /* Press state */
+          );
+        );
+        change = 1;
+      ) : (
+        note_ptr += 1;
+      );
+    ) : (current_item == -1) ? ( // note-off
+      respond_to_notes ? (
+        notes_on = notes_on - 1;
+        notes_on = max(0, notes_on);
+        note_ptr += 1;
+        note = note_ptr[];
+        
+        i = -1;
+        while(
+          i += 1;
+          (active_note_mem[i] != note) && (i < 30)
+        );
+
+        // Find the note index in the history and remove it.
+        found = 1337; i2 = -1;
+        while((found == 1337) && (i2 < 30))
+        (
+          i2 += 1;
+          (note_history[i2] == i) ? (
+            found = i2;
+          );
+        );
+        (found < MAX_NOTES) ? (
+          i2 = found;
+          loop(max_notes,
+            note_history[i2] = note_history[i2 + 1];
+            i2 += 1;
+          );
+        );
+        active_note_mem[i] = 0;
+        active_note_vel[i] = 0;
+        active_note_state[i] = -1; /* Release state */
+        change = 1;
+      ) : (
+        note_ptr += 1;
+      );
+    ) : (current_item == -2) ? ( // CC
+      note_ptr += 1;
+      // msg3
+      cur_cc = note_ptr[];
+      
+      note_ptr += 1;
+      // msg2
+      cur_cc == 1 ? (
+        cc_target = note_ptr[]/128;
+        
+        (modwheel != cc_target) ? change = 1;
+        modwheel = cc_target;
+      ) : ((cur_cc == 120) || (cur_cc = 123)) ? (
+        this.midi_clear_notes();
+        change = 1;
+      );
+    ) : (current_item == -3) ? (
+      note_ptr += 1;
+      (pitchbend != note_ptr[]) ? change = 1;
+      pitchbend = note_ptr[];
+    );
+    note_ptr += 1;
+    
+    // Avoid constantly dereferencing by picking up the next one
+    note_next = note_ptr[];
+    notes_remain = note_next != -1337;
+  );
+  
+  change
+);
+
+
+
+//midisend(offset,msg1,msg2,msg3); // passthrough MIDI events
