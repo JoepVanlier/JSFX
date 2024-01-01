@@ -1,4 +1,5 @@
 desc:Protosynth
+options:maxmem=20000000
 tags: instrument
 version: 0.01
 author: Joep Vanlier
@@ -29,7 +30,7 @@ provides:
     printf("slider%d:env%d_decay=30.0<30.0,3000.0.0001:log>-env%d decay\n", par + 1, i + 1, i + 1);
     printf("slider%d:env%d_sustain=0.7<0.0,1.0,0.0001>-env%d sustain\n", par + 2, i + 1, i + 1);
     printf("slider%d:env%d_release=300.0<30.0,3000.0,0.0001:log>-env%d release\n", par + 3, i + 1, i + 1);
-    printf("slider%d:env%d_amount=1<0.0,1.0,0.0001>-env%d amount\n", par + 3, i + 1, i + 1);
+    printf("slider%d:env%d_amount=1<0.0,1.0,0.0001>-env%d amount\n", par + 4, i + 1, i + 1);
     i += 1;
   );
 ?>
@@ -79,10 +80,13 @@ out_pin:right output
 import saike_proto_synth_oscillators.jsfx-inc
 import saike_proto_synth_kp_midi.jsfx-inc
 import saike_proto_synth_pixel_gfx.jsfx-inc
+import saike_proto_stft_fx.jsfx-inc
 
 @init
 SLOW_UPDATE_FACTOR = 16;
 MAX_VOICES = 12;
+<?MAX_VOICES = 12;?>
+INV_SLOW_UPDATE_FACTOR = 1.0 / SLOW_UPDATE_FACTOR;
 
 model = 5;
 
@@ -119,7 +123,9 @@ model = 5;
 function init_voice(freemem)
 local()
 global()
-instance(osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, modulator_mem)
+instance(
+  osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, modulator_mem
+)
 (
   freemem = (modulator_mem = freemem) + 32;
   memset(modulator_mem, 0, 32);
@@ -135,9 +141,26 @@ instance(osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, modulator_mem)
   freemem
 );
 
+function init_voice_mixers(freemem, shared_fft_buffer, window_buffer)
+local()
+global()
+instance(mix1, mix2, mix3, mix4, mix21, mix22, mix31)
+(
+  freemem = mix1.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix2.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix3.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix4.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix21.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix22.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix31.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  
+  freemem
+);
+
 function update_voice()
 local(cur_freq, cur_spacing, cur_brightness, cfreq, noise_factor, atk, gain)
 global(
+  INV_SLOW_UPDATE_FACTOR,
   active_note_mem, active_note_vel,
   rel_spacing, freq_atten, n_update,
   <?loop(i=1;8, printf("osc%d_gain,", i); i += 1);?>
@@ -157,29 +180,19 @@ global(
   <?loop(i=1;8, printf("gain_slider%d.mod_target1,", i); i += 1);?>
   <?loop(i=1;8, printf("gain_slider%d.mod_amount1,", i); i += 1);?>
   
-  <?loop(i=1;8, printf("tune_slider%d.mod_target1,", i); i += 1);?>
-  <?loop(i=1;8, printf("tune_slider%d.mod_amount1,", i); i += 1);?>
-  <?loop(i=1;8, printf("tune_slider%d.get_modulated_value1,", i); i += 1);?>
-  
-  <?loop(i=1;8, printf("spacing_slider%d.mod_target1,", i); i += 1);?>
-  <?loop(i=1;8, printf("spacing_slider%d.mod_amount1,", i); i += 1);?>
-  <?loop(i=1;8, printf("spacing_slider%d.get_modulated_value1,", i); i += 1);?>
-  
-  <?loop(i=1;8, printf("brightness_slider%d.mod_target1,", i); i += 1);?>
-  <?loop(i=1;8, printf("brightness_slider%d.mod_amount1,", i); i += 1);?>
-  <?loop(i=1;8, printf("brightness_slider%d.get_modulated_value1,", i); i += 1);?>
-  
-  //mod_target1
+  <?loop(i=1;8, printf("tune_slider%d.mod_target1, tune_slider%d.mod_amount1, tune_slider%d.get_modulated_value1, tune_slider%d.sl, tune_slider%d.sl_max, tune_slider%d.sl_min,", i, i, i, i, i, i); i += 1);?>
+  <?loop(i=1;8, printf("spacing_slider%d.mod_target1, spacing_slider%d.mod_amount1, spacing_slider%d.get_modulated_value1, spacing_slider%d.sl, spacing_slider%d.sl_max, spacing_slider%d.sl_min,", i, i, i, i, i, i); i += 1);?>
+  <?loop(i=1;8, printf("brightness_slider%d.mod_target1, brightness_slider%d.mod_amount1, brightness_slider%d.get_modulated_value1, brightness_slider%d.sl, brightness_slider%d.sl_max, brightness_slider%d.sl_min,", i, i, i, i, i, i); i += 1);?>
 )
 instance(
   midi_idx,
   freq, osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, rand_src,
   g1, g2, g3, g4, g5, g6, g7, g8,
+  dg1, dg2, dg3, dg4, dg5, dg6, dg7, dg8,
   has_output,
   on,
   current_sample, pressed, has_played,
   modulator_mem,
-  //<?loop(i=1;8, printf("e%d,", i); i += 1);?>
 )
 (
   // Update envelopes and modulators
@@ -202,14 +215,33 @@ instance(
   
   // Update oscillators
   <?
+    function get_modulated_value1_preproc(target, slider_name, idx)
+    (
+      printf("
+        %s = %s%d.mod_target1 ? (
+            max(min(slider(%s%d.sl) + %s%d.mod_amount1 * modulator_mem[%s%d.mod_target1], %s%d.sl_max), %s%d.sl_min)
+          ) : slider(%s%d.sl);
+        ",
+        target,
+        slider_name, idx,
+        slider_name, idx,
+        slider_name, idx,
+        slider_name, idx,
+        slider_name, idx,
+        slider_name, idx,
+        slider_name, idx
+      )
+    );
+  
     loop(i=1;8,
       printf("gain = min(0, osc%d_gain + (gain_slider%d.mod_target1 ? gain_slider%d.mod_amount1 * modulator_mem[gain_slider%d.mod_target1] : 0));", i, i, i, i);
-      printf("g%d = 10^(gain/20) * modulator_mem[gain_slider%d.gain_mod_target];", i, i);
+      printf("dg%d = INV_SLOW_UPDATE_FACTOR * (10^(0.05 * gain) * modulator_mem[gain_slider%d.gain_mod_target] - g%d);", i, i, i);
       
-      printf("cur_freq = tune_slider%d.get_modulated_value1(modulator_mem) * cfreq;\n", i);
-      printf("cur_spacing = spacing_slider%d.get_modulated_value1(modulator_mem);\n", i);
-      printf("cur_brightness = brightness_slider%d.get_modulated_value1(modulator_mem);\n", i);
-
+      get_modulated_value1_preproc("cur_freq", "tune_slider", i);
+      printf("cur_freq *= cfreq;");
+      get_modulated_value1_preproc("cur_spacing", "spacing_slider", i);
+      get_modulated_value1_preproc("cur_brightness", "brightness_slider", i);
+      
       printf("osc%d.update_dsf_osc(cur_freq, cur_spacing * cur_freq + osc%d_spacing_offset, cur_brightness, 0);\n", i, i);
       i += 1
     );
@@ -255,7 +287,7 @@ instance(current_sample, has_played)
 
 function play_voice()
 local(
-  o1, o2, o3, o4, o5, o6, o7, o8,
+  o1, o2, o3, o4, o5, o6, o7, o8, t1, t2,
 )
 global(
   mix_mode1, mix_mode2, mix_mode3, mix_mode4,
@@ -263,17 +295,33 @@ global(
   mix_mode31,
 )
 instance(
+  mix1, mix2, mix3, mix4, mix21, mix22, mix31,
   osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, l, r
   g1, g2, g3, g4, g5, g6, g7, g8,
+  dg1, dg2, dg3, dg4, dg5, dg6, dg7, dg8,
 )
 (
   <?
     function gen_mixer(mix_out, mix_id, o1, o2)
     (
-      printf("o%d = (mix_mode%d == 0) ? (o%d + o%d) : (mix_mode%d == 1) ? (o%d * (1.0 + o%d)) : (mix_mode%d == 2) ? (o%d * o%d);", mix_out, mix_id, o1, o2, mix_id, o1, o2, mix_id, o1, o2);
+      printf(
+        "o%d = (mix_mode%d == 0) ? (o%d + o%d) 
+        : (mix_mode%d == 1) ? (o%d * (1.0 + o%d)) 
+        : (mix_mode%d == 2) ? (o%d * o%d) 
+        : (mix_mode%d == 3) ? (min(max(o%d, o%d), min(o%d, o%d))) 
+        : (mix_mode%d == 4) ? (t1 = o%d + o%d; t2 = o%d - o%d; min(max(t1, t2), -min(t1, t2))) 
+        : (mix_mode%d == 5) ? (mix%d.process_stft_mixer(o%d, o%d); mix%d.out_left);",
+        mix_out, 
+        mix_id, o1, o2, 
+        mix_id, o1, o2, 
+        mix_id, o1, o2, 
+        mix_id, o1, o2, o1, o2, 
+        mix_id, o1, o2, o1, o2,
+        mix_id, mix_id, o1, o2, mix_id, mix_id
+      );
     );
   ?>
-
+  
   o1 = osc1.dsf_step() * g1;
   o2 = osc2.dsf_step() * g2;
   <?gen_mixer(1, 1, 1, 2);?>
@@ -312,6 +360,7 @@ instance(
 
   //l = r = 0.2 * osc1.dsf_step() + 0.2 * osc2.dsf_step() + 0.13 * osc3.dsf_step() + 0.15 * osc4.dsf_step() + 0.14 * osc5.dsf_step() + 0.15 * osc6.dsf_step() + 0.05 * osc7.dsf_step() + 0.05 * osc8.dsf_step();
   //l = r = 0.2 * osc1.dsf_step() * (1 + osc2.dsf_step())
+  <?loop(i=1;8, printf("g%d += dg%d;\n", i, i); i += 1);?>
 );
   
 function stop_voice()
@@ -340,7 +389,7 @@ instance()
 
 function process_midi(note_idx, active, vel, state, ref_pitch)
 local()
-global(initialize_envelopes)
+global(initialize_envelopes, modulator_mem)
 instance(on, freq, pressed, current_sample, midi_idx)
 (
   midi_idx = note_idx;
@@ -428,26 +477,59 @@ local(
 freemem = 0;
 freemem = midi.init_midi(freemem);
 
-freemem = v0.init_voice(freemem);
-freemem = v1.init_voice(freemem);
-freemem = v2.init_voice(freemem);
-freemem = v3.init_voice(freemem);
-freemem = v4.init_voice(freemem);
-freemem = v5.init_voice(freemem);
-freemem = v6.init_voice(freemem);
-freemem = v7.init_voice(freemem);
-freemem = v8.init_voice(freemem);
-freemem = v9.init_voice(freemem);
-freemem = v10.init_voice(freemem);
-freemem = v11.init_voice(freemem);
+MAX_FFT_SIZE = 32768;
+freemem = (shared_window_buffer = freemem) + MAX_FFT_SIZE;
+freemem = (shared_fft_buffer = freemem) + MAX_FFT_SIZE;
+
+<?
+  loop(i=0;8,
+    par = i * 6 + 1;
+    printf("gain_slider%d.serialize(version);\n", i + 1);
+    printf("tune_slider%d.serialize(version);\n", i + 1);
+    printf("spacing_slider%d.serialize(version);\n", i + 1);
+    printf("brightness_slider%d.serialize(version);\n", i + 1);
+    printf("spacing_offset_slider%d.serialize(version);\n", i + 1);
+    i += 1;
+  );
+?>
+
+<?
+  loop(i=0;MAX_VOICES, printf("freemem = v%d.init_voice(freemem);\n", i); i += 1;);
+  loop(i=0;MAX_VOICES, printf("freemem = v%d.init_voice_mixers(freemem, shared_fft_buffer, shared_window_buffer);\n", i); i += 1;);
+?>
 
 midi.reset_midi();
 
-version = 1;
+CURRENT_VERSION = 2;
+version = CURRENT_VERSION;
 
 @serialize
 file_var(0, version);
 
+<?
+  loop(i=0;8,
+    par = i * 6 + 1;
+    printf("gain_slider%d.serialize(version);\n", i + 1);
+    printf("tune_slider%d.serialize(version);\n", i + 1);
+    printf("spacing_slider%d.serialize(version);\n", i + 1);
+    printf("brightness_slider%d.serialize(version);\n", i + 1);
+    printf("spacing_offset_slider%d.serialize(version);\n", i + 1);
+    i += 1;
+  );
+?>
+
+<?
+  loop(i=0;8,
+    par = i * 5 + 49;
+    printf("env_attack_slider%d.serialize(version);\n", i + 1);
+    printf("env_decay_slider%d.serialize(version);\n", i + 1);
+    printf("env_sustain_slider%d.serialize(version);\n", i + 1);
+    printf("env_release_slider%d.serialize(version);\n", i + 1);
+    i += 1;
+  );
+?>
+
+version = CURRENT_VERSION;
 
 @slider
 
@@ -503,8 +585,8 @@ v9.has_output ? v9.play_voice() : (v9.l = v9.r = 0);
 v10.has_output ? v10.play_voice() : (v10.l = v10.r = 0);
 v11.has_output ? v11.play_voice() : (v11.l = v11.r = 0);
 
-spl0 = v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
-spl1 = v0.r + v1.r + v2.r + v3.r + v4.r + v5.r + v6.r + v7.r + v8.r + v9.r + v10.r + v11.r;
+spl0 += v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
+spl1 += v0.r + v1.r + v2.r + v3.r + v4.r + v5.r + v6.r + v7.r + v8.r + v9.r + v10.r + v11.r;
 
 last_gain += d_gain;
 
@@ -547,23 +629,28 @@ cy = 0;
 //osc1_enabled.choice_toggle(cx, cy, toggle_size, 0, 10, "Enable Oscillator 1", "Enable OSC1"); cx += toggle_size + 2;
 
 <?
+  function uuid()
+  (
+    next_uuid += 1
+  );
+  
   loop(i=0;8,
     printf("cx = side_pad;\n");
     printf("osc%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, 1, \"Enable Oscillator %d\", \"Enable OSC%d\");\ncx += toggle_size + 2;", i + 1, i + 1);
     printf("txt_blit(\"OSC%d\", cx, cy + 2); cx += 25;", i + 1);
     
-    printf("gain_slider%d.modulator_field(cx, cy, 8, 1, \"Gain envelope to apply\", \"OSC Envelope\", 1, 8, 0);\n cx += 10;", i + 1, i + 1);
-    printf("gain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", osc%d_gain), \"Gain\", \"Gain\"); cx += 5 * toggle_size + 4 + 1;", i + 1, i + 49, i + 1);
-    printf("gain_slider%d.modulator_field(cx, cy, 8, 1, \"Gain envelope to apply\", \"OSC Envelope\", 1, 8, 1);\n cx += 10;", i + 1, i + 1);
+    printf("gain_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Gain envelope to apply\", \"OSC Envelope\", 1, 8, 0);\n cx += 10;", i + 1, uuid());
+    printf("gain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", osc%d_gain), \"Gain\", \"Gain\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+    printf("gain_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Gain envelope to apply\", \"OSC Envelope\", 0, 8, 1);\n cx += 10;", i + 1, uuid());
     
-    printf("tune_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", osc%d_tune), \"Tuning\", \"Tuning\"); cx += 5 * toggle_size + 4 + 1;", i + 1, i + 1, i + 1);
-    printf("tune_slider%d.modulator_field(cx, cy, 8, 1, \"Tuning modulator to apply\", \"Tune Modulation\", 1, 14, 1);\n cx += 10;", i + 1, i + 1);
+    printf("tune_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", osc%d_tune), \"Tuning\", \"Tuning\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+    printf("tune_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Tuning modulator to apply\", \"Tune Modulation\", 0, 14, 1);\n cx += 10;", i + 1, uuid());
     
-    printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", osc%d_spacing), \"Partial spacing\", \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, i + 17, i + 1);
-    printf("spacing_slider%d.modulator_field(cx, cy, 8, 1, \"Spacing modulator to apply\", \"Spacing Modulation\", 1, 14, 1);\n cx += 10;", i + 1, i + 1);
+    printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", osc%d_spacing), \"Partial spacing\", \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+    printf("spacing_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Spacing modulator to apply\", \"Spacing Modulation\", 0, 14, 1);\n cx += 10;", i + 1, uuid());
     
-    printf("brightness_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", osc%d_brightness), \"Brightness\", \"Brightness\"); cx += 5 * toggle_size + 4 + 1;", i + 1, i + 33, i + 1);
-    printf("brightness_slider%d.modulator_field(cx, cy, 8, 1, \"Brightness modulator to apply\", \"Brightness Modulation\", 1, 14, 1);\n cx += 10;", i + 1, i + 1);
+    printf("brightness_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", osc%d_brightness), \"Brightness\", \"Brightness\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+    printf("brightness_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Brightness modulator to apply\", \"Brightness Modulation\", 0, 14, 1);\n cx += 10;", i + 1, uuid());
     
     printf("cy += 8;");
     i += 1;
@@ -576,10 +663,10 @@ cy += 5;
     printf("env%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, 1, \"Enable Envelope %d\", \"Enable ENV%d\");\ncx += toggle_size + 2;", i + 1, i + 1);
     printf("env%d_enabled.color=0.5;\n", i + 1);
     printf("txt_blit(\"ENV%d\", cx, cy + 2); cx += 25;", i + 1);
-    printf("env_attack_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_attack), \"Attack\", \"Attack\"); cx += 5 * toggle_size + 4 + 2;", i + 1, i + 80, i + 1);
-    printf("env_decay_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_decay), \"Decay\", \"Decay\"); cx += 5 * toggle_size + 4 + 2;", i + 1, i + 88, i + 1);
-    printf("env_sustain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * env%d_sustain), \"Sustain\", \"Sustain\"); cx += 5 * toggle_size + 4 + 2;", i + 1, i + 96, i + 1);
-    printf("env_release_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_release), \"Release\", \"Release\"); cx += 5 * toggle_size + 4 + 2;", i + 1, i + 104, i + 1);
+    printf("env_attack_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_attack), \"Attack\", \"Attack\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_decay_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_decay), \"Decay\", \"Decay\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_sustain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * env%d_sustain), \"Sustain\", \"Sustain\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_release_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_release), \"Release\", \"Release\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
     printf("cy += 8;");
     i += 1;
   );
@@ -594,28 +681,59 @@ cy += 4;
 function node(x, y, w, h)
 instance(_x, _y, _w, _h, x_from, x_to, y_from, y_to)
 (
+  gfx_set(0.2, 0.2, 0.3, 1.0); gfx_a = 1;
   _x = x; _y = y; _w = w; _h = h;
-  gfx_rect(x, y, w, h);
+  gfx_a = 1.0;
+  gfx_rect(x, y, w, h, 0);
   x_from = x + w;
   y_from = y + 0.5 * h;
   x_to = x;
   y_to = y + 0.5 * h;
 );
 
-function cline(x1, y1, x2, y2)
+function mix_node(x, y, w, h, slider_idx)
+instance()
+local(value, text, mouse_nx, mouse_ny, over, ix)
+global(gfx_a, gfx_x, gfx_y, mouse_x, mouse_y, x_offset, y_offset, blit_scale, cap_mode, last_cap, mouse_cap)
 (
-  gfx_a = 1;
-  gfx_line(floor(x1), floor(y1), floor(x2), floor(y2));
-  gfx_line(floor(x1), floor(y1) + 1, floor(x2), floor(y2) + 1);
-  
-  //gfx_a = 0.5;
-  //gfx_line(floor(x1) - 1, floor(y1), floor(x2) - 1, floor(y2));
-  //gfx_line(floor(x1) - 1, floor(y1), floor(x2) + 1, floor(y2));
+  this.node(x, y, w, h);
+  value = slider(slider_idx);
+  text = (value == 0) ? "ADD"
+  : (value == 1) ? "AMP"
+  : (value == 2) ? "MUL"
+  : (value == 3) ? "XOR"
+  : (value == 4) ? "XOD"
+  : (value == 5) ? "CON";
+
+  mouse_nx = (mouse_x - x_offset) / blit_scale;
+  mouse_ny = (mouse_y - y_offset) / blit_scale;
+  over = ((mouse_nx > x) && (mouse_nx < (x + w)) && (mouse_ny > y) && (mouse_ny < (y + w)) && (cap_mode == 0));
+
+  ((last_cap == 0) && over) ? (
+    (mouse_cap == 2) ? (
+      gfx_x = mouse_x;
+      gfx_y = mouse_y;
+      ix = gfx_showmenu("Additive mixing|Amplitude modulation|Ring modulation (multiply signals)|XOR|XOR on diff|Convolve");
+      (ix > 0) ? (
+        slider(slider_idx) = ix - 1;
+      );
+    );
+  );
+
+  gfx_set(1, 1, 1, 1);
+  gfx_a = 0.5;
+  txt_blit(text, x + 2, y + 2);
 );
 
-gfx_set(1, 1, 1, 1);
+function cline(x1, y1, x2, y2)
+(
+  gfx_line(floor(x1), floor(y1) - 0.5, floor(x2), floor(y2) - 0.5, 1);
+  gfx_line(floor(x1), floor(y1), floor(x2), floor(y2), 0);
+  gfx_line(floor(x1), floor(y1) + 0.5, floor(x2), floor(y2) + 0.5, 1);
+);
+
 block_size = 8;
-spacing = 5;
+spacing = 10;
 left_side = 10;
 start = cy;
 cx = left_side;
@@ -634,10 +752,12 @@ cx = left_side + block_size + spacing;
 cy = start + 0.5 * (block_size + 2);
 
 <?
+  current_slider = 128; /* First mix slider */
   loop(i=0;4,
-    printf("n2%d.node(cx, cy, 2 * block_size, block_size);", i);
+    printf("n2%d.mix_node(cx, cy, 2 * block_size + 2, block_size, %d);", i, current_slider);
     printf("cy += 2 * (block_size + 2);");
     i += 1;
+    current_slider += 1;
   );
 ?>
 
@@ -646,9 +766,10 @@ cy = start + 0.5 * 3 * (block_size + 2);
 
 <?
   loop(i=0;2,
-    printf("n3%d.node(cx, cy, 2 * block_size, block_size);", i);
+    printf("n3%d.mix_node(cx, cy, 2 * block_size + 2, block_size, %d);", i, current_slider);
     printf("cy += 4 * (block_size + 2);");
     i += 1;
+    current_slider += 1;
   );
 ?>
 
@@ -665,7 +786,8 @@ cy = start + 0.5 * 3 * (block_size + 2);
 
 cx = left_side + 7 * block_size + 4 * spacing;
 cy = start + 3.5 * (block_size + 2);
-n5.node(cx, cy, 2 * block_size, block_size);
+n5.mix_node(cx, cy, 2 * block_size + 2, block_size, 134);
+
 cy += 4 * (block_size + 2);
 cx += 2 * block_size + spacing;
 cy = start + 3.5 * (block_size + 2);
