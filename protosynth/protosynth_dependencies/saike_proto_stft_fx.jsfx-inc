@@ -397,6 +397,7 @@ instance(
   diffusion,
   time_constant,
   buffer_mode,
+  tot_nrg, ref_nrg,
 )
 local(
   pi_two_diff,
@@ -405,7 +406,7 @@ local(
   left_real, left_imag, right_real, right_imag,
   mL, phaseL,  /* Output variables */
   ts, k, one_min_k, /* Swell dynamics related */
-  tfft_bin,
+  tfft_bin, tot_mag
 )
 (
   fft_bin = 0; // FFT bin number
@@ -416,9 +417,24 @@ local(
   one_min_k = 1.0 - k;
   pi_two_diff = 2.0 * $pi * diffusion;
   
-  a = 0;
+  
   tfft_bin = 0;
-  loop(fft_size/2,
+  tot_nrg = 1;
+  ref_nrg = 1;
+  
+  fft_buffer[fft_size] = 0;
+  fft_buffer[fft_size - 1] = 0;
+  fft_buffer[fft_size - 2] = 0;
+  fft_buffer[fft_size - 3] = 0;
+  
+  
+  a = 0;
+  loop(300,
+    nrg[fft_size - a] = 0;
+    a += 1;
+  );
+  
+  loop(fft_size / 2,
     tfft_bin2 = fft_bin ? 2 * (fft_size - fft_bin) : 0;
 
     // Unfold complex spectrum into two real spectra
@@ -427,16 +443,16 @@ local(
     right_real = fft_buffer[tfft_bin + 1] + fft_buffer[tfft_bin2 + 1];
     right_imag = -fft_buffer[tfft_bin] + fft_buffer[tfft_bin2];
     
-    magnitude_left = 5 * sqrt(left_real * left_real + left_imag * left_imag);
-    magnitude_right = 5 * sqrt(right_real * right_real + right_imag * right_imag);
+    magnitude_left = sqrt(left_real * left_real + left_imag * left_imag);
+    magnitude_right = sqrt(right_real * right_real + right_imag * right_imag);
     
-    nrg[tfft_bin]   = max(one_min_k * nrg[tfft_bin], sqrt(magnitude_left * magnitude_right));
+    tot_mag = max(one_min_k * nrg[fft_bin], sqrt(magnitude_left * magnitude_right));
+    nrg[fft_bin] = tot_mag;
     
-    (a < fft_size) ? (
-      mL = 0.5 * nrg[a];
-    ) : (
-      mL = 0.5 * nrg[tfft_bin];
-    );
+    mL = fft_bin < (fft_size / 2 - 2) ? 0.5 * tot_mag : 0;
+    
+    tot_nrg += mL;
+    ref_nrg += max(magnitude_left, magnitude_right);
     
     //phaseL = 2.0 * $pi * rand();
     phaseL = (atan2(left_imag, left_real) + atan2(right_imag, right_real)) * 0.5 + 0.1 * rand();
@@ -451,7 +467,6 @@ local(
 
     fft_bin += 1;
     tfft_bin += 2;
-    a += 2;
   );
 );
 
@@ -473,6 +488,8 @@ instance(
   fft_scaling_factor,
   out_left,
   out_right,
+  ref_nrg, tot_nrg,
+  gain_scaling,
   )
 (
   input_buffer[buffer_index * 2] = in0;
@@ -491,11 +508,12 @@ instance(
     // Add to output
     bi = buffer_index - fft_size + 1;
     i = 0;
+    gain_scaling = fft_scaling_factor * ref_nrg / tot_nrg;
     loop(fft_size,
       i2 = bi + i;
       (i2 < 0) ? i2 += buffer_length;
-      output_buffer[2 * i2] += fft_buffer[2 * i] * window_buffer[i] * fft_scaling_factor;
-      output_buffer[2 * i2 + 1] += fft_buffer[2 * i + 1] * window_buffer[i] * fft_scaling_factor;
+      output_buffer[2 * i2] += fft_buffer[2 * i] * window_buffer[i] * gain_scaling;
+      output_buffer[2 * i2 + 1] += fft_buffer[2 * i + 1] * window_buffer[i] * gain_scaling;
       i += 1;
     );
   );
