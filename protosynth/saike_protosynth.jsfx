@@ -38,11 +38,11 @@ provides:
 <?
   loop(i=0;4,
     par = i * 5 + 90;
-    printf("slider%d:mod%d_type=0<0,1,16>-mod%d_type\n", par, i + 1, i + 1);
+    printf("slider%d:mod%d_type=0<0,18,1>-mod%d_type\n", par, i + 1, i + 1);
     printf("slider%d:mod%d_freq=0.0<0.0,20.0.0001:log>-mod%d freq\n", par + 1, i + 1, i + 1);
     printf("slider%d:mod%d_phase=0<0.0,1.0,0.0001>-mod%d phase\n", par + 2, i + 1, i + 1);
     printf("slider%d:mod%d_lr=0.0<0.0,1.0,0.0001>-mod%d lr\n", par + 3, i + 1, i + 1);
-    printf("slider%d:mod%d_amount=0.0<0.0,1.0,0.0001>-mod%d amount\n", par + 3, i + 1, i + 1);
+    printf("slider%d:mod%d_amount=0.0<0.0,1.0,0.0001>-mod%d amount\n", par + 4, i + 1, i + 1);
     
     i += 1;
   );
@@ -105,6 +105,11 @@ env_color = 0.5;
 mod_color = 0.7;
 SLOW_UPDATE_FACTOR = 16;
 MAX_VOICES = 12;
+<?
+  N_MODULATORS = 6;
+  N_ENVELOPES = 6;
+?>
+
 <?MAX_VOICES = 12;?>
 INV_SLOW_UPDATE_FACTOR = 1.0 / SLOW_UPDATE_FACTOR;
 
@@ -123,7 +128,7 @@ model = 5;
 ?>
 
 <?
-  loop(i=0;8,
+  loop(i=0;N_ENVELOPES,
     par = i * 5 + 49;
     printf("env_attack_slider%d.init_slider_ui(%d, 3.0, 3000.0, 1);\n", i + 1, par);
     printf("env_decay_slider%d.init_slider_ui(%d, 30.0, 3000.0, 1);\n", i + 1, par + 1);
@@ -136,6 +141,25 @@ model = 5;
     printf("env_release_slider%d.color=env_color;\n", i + 1, par + 3);
     
     printf("(gain_slider%d.gain_mod_target == 0) ? gain_slider%d.gain_mod_target = 1;\n cx += 10;", i + 1, i + 1);
+    i += 1;
+  );
+?>
+
+<?
+  loop(i=0;N_MODULATORS,
+    par = i * 5 + 90;
+    printf("mod_type_slider%d.init_slider_ui(%d, 0, 18, 0);\n", i + 1, par);
+    printf("mod_freq_slider%d.init_slider_ui(%d, 0.0, 20.0, 0);\n", i + 1, par + 1);
+    printf("mod_phase_slider%d.init_slider_ui(%d, 0.0, 1.0, 0);\n", i + 1, par + 2);
+    printf("mod_lr_slider%d.init_slider_ui(%d, 0.0, 1.0, 0);\n", i + 1, par + 3);
+    printf("mod_amount_slider%d.init_slider_ui(%d, 0.0, 1.0, 0);\n", i + 1, par + 4);
+    
+    printf("mod_type_slider%d.color=mod_color;\n", i + 1);
+    printf("mod_freq_slider%d.color=mod_color;\n", i + 1);
+    printf("mod_phase_slider%d.color=mod_color;\n", i + 1, par + 2);
+    printf("mod_lr_slider%d.color=mod_color;\n", i + 1, par + 3);
+    printf("mod_amount_slider%d.color=mod_color;\n", i + 1, par + 4);
+    
     i += 1;
   );
 ?>
@@ -187,10 +211,69 @@ instance(mix1, mix2, mix3, mix4, mix21, mix22, mix31)
   freemem
 );
 
+twopi = 2 * $pi;
+
+function lfo_modulator(shape, dt)
+instance(state, lt, ct, y, t)
+global(twopi)
+local()
+(
+  shape = floor(shape);
+  t += dt;
+  y = ( shape == 0 ) ? .5 + .5 * sin(twopi*t)
+  : ( shape==1 )  ? ( abs(cos($pi*t)) )
+  : ( shape==2 )  ? ( abs(sin($pi*t)) )
+  : ( shape==3 )  ? ( t-floor(t) )
+  : ( shape==4 )  ? ( 1-t+floor(t) )
+  : ( shape==5 )  ? ( exp(-4*(t-floor(t))) )
+  : ( shape==6 )  ? ( min((15*(t-floor(t))),1)*exp(-4*(t-floor(t))) )
+  : ( shape==7 )  ? ( 1-exp(-4*(t-floor(t))) )
+  : ( shape==8 ) ? ( exp(-t) )    
+  : ( shape==9 ) ? ( min((15*t),1)*exp(-t) )
+  : ( shape==10 ) ? ( 1-2*abs(t-floor(t)-0.5) )
+  : ( shape==11 ) ? ( sin(twopi*t)*.3+.5 + sin(2*twopi*t)*.2 )
+  : ( shape==12 ) ? ( sin(twopi*t)*.2+.5 + sin(2*twopi*t)*.2 + sin(4*twopi*t)*.1 )
+  : ( shape==13 ) ? ( (t-floor(t)) < .0625 )
+  : ( shape==14 ) ? ( (t-floor(t)) < .125 )
+  : ( shape==15 ) ? ( (t-floor(t)) < .25 )
+  : ( shape==16 ) ? ( (t-floor(t)) < .5 )
+  : ( shape==17 ) ? ( (t-floor(t)) < (lt-floor(lt)) ? ct = rand(); lt = t; ct )
+  : ( shape==18 ) ? ( rand() );
+  
+  t == 0 ? state = y;
+  state = .98 * state + .02 * y
+);
+
+
+function lfo_type(type)
+(
+  type = floor(type);
+  (type == 0) ? "sine"
+  : (type == 1) ? "abscos"
+  : (type == 2) ? "abssin"
+  : (type == 3) ? "rampup"
+  : (type == 4) ? "rampdn"
+  : (type == 5) ? "expdwn"
+  : (type == 6) ? "exp"
+  : (type == 7) ? "expup"
+  : (type == 8) ? "1expdn"
+  : (type == 9) ? "1exp"  // Exp up and down
+  : (type == 10) ? "tri"
+  : (type == 11) ? "harm2"
+  : (type == 12) ? "harm3"
+  : (type == 13) ? "16th"
+  : (type == 14) ? "8th"
+  : (type == 15) ? "4th"
+  : (type == 16) ? "2th"
+  : (type == 17) ? "S&H"
+  : (type == 18) ? "noise"
+);
+
 function update_voice()
 local(cur_freq, cur_spacing, cur_brightness, cfreq, noise_factor, atk, gain, f_cutoff, f_reso, f_morph, m1, m2)
 global(
   INV_SLOW_UPDATE_FACTOR,
+  slow_update_srate,
   midi.active_note_mem, midi.active_note_vel,
   rel_spacing, freq_atten, n_update,
   
@@ -200,11 +283,11 @@ global(
   <?loop(i=1;8, printf("osc%d_spacing,", i); i += 1);?>,
   <?loop(i=1;8, printf("osc%d_spacing_offset,", i); i += 1);?>,
   noise,
-  <?loop(i=1;8, printf("env%d_atk_samples,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_k_atk,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_k_decay,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_k_release,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_sustain,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_atk_samples,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_k_atk,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_k_decay,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_k_release,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_sustain,", i); i += 1);?>
   
   <?loop(i=1;8, printf("gain_slider%d.gain_mod_target,", i); i += 1);?>
   <?loop(i=1;8, printf("gain_slider%d.mod_target1,", i); i += 1);?>
@@ -218,6 +301,8 @@ global(
   <?loop(i=1;3, printf("f_cutoff_slider%d.mod_target1, f_cutoff_slider%d.mod_amount1, f_cutoff_slider%d.mod_target2, f_cutoff_slider%d.mod_amount2, f_cutoff_slider%d.get_modulated_value1, f_cutoff_slider%d.sl, f_cutoff_slider%d.sl_max, f_cutoff_slider%d.sl_min,", i, i, i, i, i, i, i, i); i += 1);?>
   <?loop(i=1;3, printf("f_reso_slider%d.mod_target1, f_reso_slider%d.mod_amount1, f_reso_slider%d.mod_target2, f_reso_slider%d.mod_amount2, f_reso_slider%d.get_modulated_value1, f_reso_slider%d.sl, f_reso_slider%d.sl_max, f_reso_slider%d.sl_min,", i, i, i, i, i, i, i, i); i += 1);?>
   <?loop(i=1;3, printf("f_morph_slider%d.mod_target1, f_morph_slider%d.mod_amount1, f_morph_slider%d.mod_target2, f_morph_slider%d.mod_amount2, f_morph_slider%d.get_modulated_value1, f_morph_slider%d.sl, f_morph_slider%d.sl_max, f_morph_slider%d.sl_min,", i, i, i, i, i, i, i, i); i += 1);?>
+  
+  <?loop(i=1;N_MODULATORS, printf("mod%d_type, mod%d_freq, mod%d_phase, mod%d_lr, mod%d_amount,", i, i, i, i, i); i += 1; );?>
 )
 instance(
   midi_idx,
@@ -228,10 +313,12 @@ instance(
   on,
   current_sample, pressed, has_played,
   modulator_mem,
+  <?loop(i=1;N_MODULATORS, printf("mod%d_lfo,", i); i += 1; );?>
 )
 (
   // Update envelopes and modulators
-  <?loop(i=1;8, printf("atk = current_sample < env%d_atk_samples; modulator_mem[%d] += (atk ? env%d_k_atk : pressed ? env%d_k_decay : env%d_k_release) * (max(atk, env%d_sustain * pressed) - modulator_mem[%d]);\n", i, i, i, i, i, i, i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("atk = current_sample < env%d_atk_samples; modulator_mem[%d] += (atk ? env%d_k_atk : pressed ? env%d_k_decay : env%d_k_release) * (max(atk, env%d_sustain * pressed) - modulator_mem[%d]);\n", i, i, i, i, i, i, i); i += 1);?>
+  <?loop(i=1;N_MODULATORS, printf("modulator_mem[%d] = mod%d_lfo.lfo_modulator(mod%d_type, slow_update_srate * mod%d_freq);\n", i + N_ENVELOPES, i, i, i); i += 1);?>
   
   has_output = max(max(max(max(max(max(max(max(g1, g2), g3), g4), g5), g6), g7), g8), pressed) > 0.0001;
   (!has_output) ? (
@@ -335,15 +422,15 @@ local(to_samples, sample_rate, log001, log001tds)
 global(
   srate,
   SLOW_UPDATE_FACTOR,
-  <?loop(i=1;8, printf("env%d_attack,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_decay,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_sustain,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_release,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_attack,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_decay,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_sustain,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_release,", i); i += 1);?>
   
-  <?loop(i=1;8, printf("env%d_atk_samples,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_k_atk,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_k_decay,", i); i += 1);?>
-  <?loop(i=1;8, printf("env%d_k_release,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_atk_samples,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_k_atk,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_k_decay,", i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("env%d_k_release,", i); i += 1);?>
 )
 instance(current_sample, has_played)
 (
@@ -355,7 +442,7 @@ instance(current_sample, has_played)
   has_played = 1;
   
   <?
-    loop(i=1;8,
+    loop(i=1;N_ENVELOPES,
       printf("env%d_atk_samples = env%d_attack * to_samples;\n", i, i);
       printf("env%d_k_atk = - log001 / env%d_atk_samples;\n", i, i);
       printf("env%d_k_decay = - log001tds / env%d_decay;\n", i, i);
@@ -577,7 +664,7 @@ freemem = chorus.init_chorus(freemem, 340);
 
 midi.reset_midi();
 
-CURRENT_VERSION = 3;
+CURRENT_VERSION = 4;
 version = CURRENT_VERSION;
 
 @serialize
@@ -585,7 +672,6 @@ file_var(0, version);
 
 <?
   loop(i=0;8,
-    par = i * 6 + 1;
     printf("gain_slider%d.serialize(version);\n", i + 1);
     printf("tune_slider%d.serialize(version);\n", i + 1);
     printf("spacing_slider%d.serialize(version);\n", i + 1);
@@ -595,20 +681,25 @@ file_var(0, version);
   );
 ?>
 
+version <= 3 ? (
+  stored_envelopes = 8;
+) : (
+  stored_envelopes = 6;
+);
 <?
   loop(i=0;8,
-    par = i * 5 + 49;
+    printf("(%d < stored_envelopes) ? (", i);
     printf("env_attack_slider%d.serialize(version);\n", i + 1);
     printf("env_decay_slider%d.serialize(version);\n", i + 1);
     printf("env_sustain_slider%d.serialize(version);\n", i + 1);
     printf("env_release_slider%d.serialize(version);\n", i + 1);
+    printf(");", i);
     i += 1;
   );
 ?>
 
 <?
   loop(i=1;3,
-    par = i * 5 + 49;
     printf("f_cutoff_slider%d.serialize(version);\n", i);
     printf("f_reso_slider%d.serialize(version);\n", i);
     printf("f_morph_slider%d.serialize(version);\n", i);
@@ -624,11 +715,23 @@ file_var(0, version);
   filter1_enabled = filter2_enabled = filter3_enabled = 0;
 );
 
+(version > 3) ? (
+  loop(i=0;N_MODULATORS,
+    printf("mod_type_slider%d.serialize(version);\n", i + 1);
+    printf("mod_freq_slider%d.serialize(version);\n", i + 1);
+    printf("mod_phase_slider%d.serialize(version);\n", i + 1);
+    printf("mod_lr_slider%d.serialize(version);\n", i + 1);
+    printf("mod_amount_slider%d.serialize(version);\n", i + 1);
+    i += 1;
+  );
+);
+
 version = CURRENT_VERSION;
 
 @slider
 
 @block
+slow_update_srate = SLOW_UPDATE_FACTOR / srate;
 
 (last_srate != srate) ? (
   init_freq_shift_modulator();
@@ -771,7 +874,7 @@ cy = 0;
 cy += 5;
 cy_ref = cy;
 <?
-  loop(i=0;6,
+  loop(i=0;N_ENVELOPES,
     printf("cx = side_pad;\n");
     printf("env%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, 1, \"Enable Envelope %d\", \"Enable ENV%d\");\ncx += toggle_size + 2;", i + 1, i + 1);
     printf("env%d_enabled.color=env_color;\n", i + 1);
@@ -792,10 +895,12 @@ cy += 5;
     printf("mod%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, 1, \"Enable Modulator %d\", \"Enable MOD%d\");\ncx += toggle_size + 2;", i + 1, i + 1);
     printf("mod%d_enabled.color=mod_color;\n", i + 1);
     printf("txt_blit(\"MOD%d\", cx, cy + 2); cx += 25;", i + 1);
-    //printf("env_attack_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_attack), \"Attack\", \"Attack\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
-    //printf("env_decay_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_decay), \"Decay\", \"Decay\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
-    //printf("env_sustain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * env%d_sustain), \"Sustain\", \"Sustain\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
-    //printf("env_release_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env%d_release), \"Release\", \"Release\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    
+    printf("mod_type_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%s\", lfo_type(mod%d_type)), \"Type\", \"Type\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("mod_freq_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\dHz\", mod%d_freq), \"Frequency\", \"Frequency\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("mod_phase_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * mod%d_phase), \"Phase\", \"Phase\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("mod_lr_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", 100 * mod%d_lr), \"Spread\", \"Spread\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("mod_amount_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", 100 * mod%d_amount), \"Amount\", \"Amount\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
     printf("cy += 8;");
     i += 1;
   );
@@ -978,18 +1083,18 @@ cy = 200;
     printf("center = 0.5 * sampling_ratio * srate * exp((1.0 - min(f_cutoff_slider%d.display_value, 0.99999)) * log(20/22050));\n", i + 1);
     printf("f_cutoff_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
     printf("f_cutoff_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, center < 1000 ? sprintf(1, \"%%dHz\", center) : sprintf(1, \"%%.1fk\", center/1000), \"Filter %d cutoff\", \"F%d Cutoff\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
-    printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Cutoff envelope to apply\", \"F%d Cutoff Env\", 0, 8, 1);\n cx += 8;", i + 1, uuid(), i + 1);
-    printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Cutoff envelope to apply\", \"F%d Cutoff Env\", 0, 8, 2);\n cx += 10;", i + 1, uuid(), i + 1);
+    printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Cutoff envelope to apply\", \"F%d Cutoff Env\", 0, 10, 1);\n cx += 8;", i + 1, uuid(), i + 1);
+    printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Cutoff envelope to apply\", \"F%d Cutoff Env\", 0, 10, 2);\n cx += 10;", i + 1, uuid(), i + 1);
 
     printf("f_reso_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
     printf("f_reso_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\d\", 100 * f%d_reso), \"Filter %d resonance\", \"F%d Resonance\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
-    printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Reso envelope to apply\", \"F%d Reso Env\", 0, 8, 1);\n cx += 8;", i + 1, uuid(), i + 1);
-    printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Reso envelope to apply\", \"F%d Reso Env\", 0, 8, 2);\n cx += 10;", i + 1, uuid(), i + 1);
+    printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Reso envelope to apply\", \"F%d Reso Env\", 0, 10, 1);\n cx += 8;", i + 1, uuid(), i + 1);
+    printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Reso envelope to apply\", \"F%d Reso Env\", 0, 10, 2);\n cx += 10;", i + 1, uuid(), i + 1);
     
     printf("f_morph_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
     printf("f_morph_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, morph_level(f%d_morph), \"Filter %d morph\\n\\nMorphs between LP, \\nBP, HP, BR and LP\\n\", \"F%d Morph\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
-    printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Morph envelope to apply\", \"F%d Morph Env\", 0, 8, 1);\n cx += 8;", i + 1, uuid(), i + 1);
-    printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Morph envelope to apply\", \"F%d Morph Env\", 0, 8, 2);\n cx += 10;", i + 1, uuid(), i + 1);
+    printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Morph envelope to apply\", \"F%d Morph Env\", 10, 8, 1);\n cx += 8;", i + 1, uuid(), i + 1);
+    printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Morph envelope to apply\", \"F%d Morph Env\", 10, 8, 2);\n cx += 10;", i + 1, uuid(), i + 1);
     
     printf("cy += 8;");
     i += 1;
