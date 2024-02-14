@@ -122,6 +122,7 @@ model = 5;
   loop(i=0;8,
     par = i * 6 + 1;
     printf("gain_slider%d.init_slider_ui(%d, -72, 0, 0);\n", i + 1, par);
+    printf("osc_type_slider%d.init_slider_ui(-1, 0, 1, 0);\n", i + 1);
     printf("tune_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 1);
     printf("spacing_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 2);
     printf("brightness_slider%d.init_slider_ui(%d, 0.0, 0.95, 0);\n", i + 1, par + 3);
@@ -271,6 +272,13 @@ function lfo_type(type)
   : (type == 18) ? "noise"
 );
 
+function osc_type(type)
+(
+  type = floor(type);
+  (type == 0) ? "Harm"
+  : (type == 1) ? "ssaw"
+);
+
 function update_voice()
 local(cur_freq, cur_spacing, cur_brightness, cfreq, noise_factor, atk, gain, f_cutoff, f_reso, f_morph, m1, m2, c_mod_freq)
 global(
@@ -308,6 +316,7 @@ global(
   <?loop(i=1;N_MODULATORS, printf("mod_freq_slider%d.mod_target1, mod_freq_slider%d.mod_amount1_clamped, mod_freq_slider%d.sl, mod_freq_slider%d.sl_max, mod_freq_slider%d.sl_min,", i, i, i, i, i); i += 1);?>
   
   <?loop(i=1;N_MODULATORS, printf("mod%d_type, mod%d_freq, mod%d_phase, mod%d_lr, mod%d_amount,", i, i, i, i, i); i += 1; );?>
+  <?loop(i=1;N_OSCS, printf("osc%d_type, ", i); i += 1; );?>
 )
 instance(
   midi_idx,
@@ -319,6 +328,8 @@ instance(
   current_sample, pressed, has_played,
   modulator_mem,
   <?loop(i=1;N_MODULATORS, printf("mod%d_lfo,", i); i += 1; );?>
+  <?loop(i=1;N_OSCS, printf("mod%d_lfo,", i); i += 1; );?>
+  <?loop(i=1;N_OSCS, printf("osc%d_wave, ", i); i += 1; );?>
 )
 (
   // Modulator handling
@@ -389,11 +400,13 @@ instance(
   
   // Update envelopes and modulators
   <?loop(i=1;N_ENVELOPES, printf("atk = current_sample < env%d_atk_samples; modulator_mem[%d] += (atk ? env%d_k_atk : pressed ? env%d_k_decay : env%d_k_release) * (max(atk, env%d_sustain * pressed) - modulator_mem[%d]);\n", i, i, i, i, i, i, i); i += 1);?>
-  <?loop(i=1;N_MODULATORS, 
-    get_modulated_value1_preproc_ranged("c_mod_freq", "mod_freq_slider", i);
-    printf("modulator_mem[%d] = mod%d_lfo.lfo_modulator(mod%d_type, slow_update_srate * c_mod_freq);\n", i + N_ENVELOPES, i, i);
-    i += 1);
-  ?>
+  has_output ? (
+    <?loop(i=1;N_MODULATORS, 
+      get_modulated_value1_preproc_ranged("c_mod_freq", "mod_freq_slider", i);
+      printf("modulator_mem[%d] = mod%d_lfo.lfo_modulator(mod%d_type, slow_update_srate * c_mod_freq);\n", i + N_ENVELOPES, i, i);
+      i += 1);
+    ?>
+  );
   
   has_output = max(max(max(max(max(max(max(max(g1, g2), g3), g4), g5), g6), g7), g8), pressed) > 0.0001;
   (!has_output) ? (
@@ -412,7 +425,7 @@ instance(
   
   // Update oscillators
   <?
-    loop(i=1;8,
+    loop(i=1;N_OSCS,
       printf("osc%d_enabled ? (", i);
         printf("gain = min(0, osc%d_gain + (gain_slider%d.mod_target1 ? 72 * gain_slider%d.mod_amount1_clamped * modulator_mem[gain_slider%d.mod_target1] : 0));", i, i, i, i);
         printf("dg%d = INV_SLOW_UPDATE_FACTOR * (10^(0.05 * gain) * modulator_mem[gain_slider%d.gain_mod_target] - g%d);", i, i, i);
@@ -422,8 +435,13 @@ instance(
         get_modulated_value1_preproc_ranged("cur_spacing", "spacing_slider", i);
         get_modulated_value1_preproc("cur_brightness", "brightness_slider", i);
       
-        printf("osc%d.update_dsf_osc(cur_freq, cur_spacing * cur_freq + osc%d_spacing_offset, cur_brightness, 0);\n", i, i);
-        //printf("osc%d.update_ssaw_osc(cur_freq, cur_spacing, cur_brightness, 0);\n", i);
+        printf("osc%d_wave = floor(osc%d_type);", i, i);
+        
+        printf("(osc%d_wave == 0) ? (\n", i);
+          printf("osc%d.update_dsf_osc(cur_freq, cur_spacing * cur_freq + osc%d_spacing_offset, cur_brightness, 0);\n", i, i);
+        printf(") : (\n");
+          printf("osc%d.update_ssaw_osc(cur_freq, cur_spacing, cur_brightness, 0);\n", i);
+        printf(");\n");
       printf(") : (");
         printf("g%d = 0; dg%d = 0;", i, i);
       printf(");");
@@ -505,6 +523,7 @@ instance(
   osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, l, r
   g1, g2, g3, g4, g5, g6, g7, g8,
   dg1, dg2, dg3, dg4, dg5, dg6, dg7, dg8,
+  <?loop(i=1;N_OSCS, printf("osc%d_wave, ", i); i += 1; );?>
 )
 (
   <?
@@ -530,20 +549,27 @@ instance(
     );
   ?>
   
-  o1 = g1 ? osc1.dsf_step() * g1;
-  o2 = g2 ? osc2.dsf_step() * g2;
+  <?
+    function gen_osc(i)
+    (
+      printf("o%d = g%d ? (osc%d_wave ? osc%d.ssaw_step() : osc%d.dsf_step()) * g%d;", i, i, i, i, i, i);
+    );
+  ?>
+  
+  <?gen_osc(1)?>
+  <?gen_osc(2)?>
   <?gen_mixer(1, 1, 1, 2);?>
   
-  o3 = g3 ? osc3.dsf_step() * g3;
-  o4 = g4 ? osc4.dsf_step() * g4;
+  <?gen_osc(3)?>
+  <?gen_osc(4)?>
   <?gen_mixer(2, 2, 3, 4);?>
 
-  o5 = g5 ? osc5.dsf_step() * g5;
-  o6 = g6 ? osc6.dsf_step() * g6;
+  <?gen_osc(5)?>
+  <?gen_osc(6)?>
   <?gen_mixer(3, 3, 5, 6);?>
   
-  o7 = g7 ? osc7.dsf_step() * g7;
-  o8 = g8 ? osc8.dsf_step() * g8;
+  <?gen_osc(7)?>
+  <?gen_osc(8)?>
   <?gen_mixer(4, 4, 7, 8);?>
   
   <?gen_mixer(1, 21, 1, 2);?>
@@ -768,15 +794,17 @@ version <= 3 ? (
 
 (version > 4) ? (
   <?
-    loop(i=0;N_OSCS,
-      printf("file_var(0, osc%d_enabled);", i + 1);
+    loop(i=1;N_OSCS,
+      printf("file_var(0, osc%d_enabled);", i);
+      printf("file_var(0, osc%d_type);", i);
       i += 1;
     );
   ?>
 ) : (
   <?
-    loop(i=0;N_OSCS,
-      printf("osc%d_enabled = 0;", i + 1);
+    loop(i=1;N_OSCS,
+      printf("osc%d_enabled = 0;", i);
+      printf("osc%d_type = 0;", i);
       i += 1;
     );
     printf("osc1_enabled = 1;");
@@ -910,6 +938,10 @@ cy = 0;
     printf("cx = side_pad;\n");
     printf("osc%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, osc%d_enabled, \"Enable Oscillator %d\", \"Enable OSC%d\") ? (osc%d_enabled = 1 - osc%d_enabled;);\ncx += toggle_size + 2;", i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
     printf("txt_blit(\"OSC%d\", cx, cy + 2); cx += 25;", i + 1);
+    
+    printf("osc_type_slider%d.current_value = osc%d_type;", i + 1, i + 1);
+    printf("osc_type_slider%d.text_slider_ui(%d, cx, cy, 4 * toggle_size + 4, 8, sprintf(9, \"%%s\", osc_type(osc%d_type)), \"Type\", \"Type\"); cx += 4 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("osc%d_type = osc_type_slider%d.current_value;", i + 1, i + 1);
     
     printf("gain_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Gain envelope to apply\", \"OSC Envelope\", 1, 6, 0);\n cx += 10;", i + 1, uuid());
     printf("gain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", osc%d_gain), \"Gain\", \"Gain\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
