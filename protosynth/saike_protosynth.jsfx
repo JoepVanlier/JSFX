@@ -84,9 +84,9 @@ slider154:f3_morph=0<0,1,0.000001>-Output Filter Morph
 
 slider155:f3_type=0<0,16,1>Output Filter Type
 
-slider254:output_gain=0<-72,0,0,0.0001>Output Gain
-slider255:chorus_amount=0<0,1,0.0001>Chorus amount
-slider256:noise=0<0,1,0.0001:log>Noise
+slider254:output_gain=0<-72,0,0,0.0001>-Output Gain
+slider255:chorus_amount=0<0,1,0.0001>-Chorus amount
+slider256:noise=0<0.0001,0.4,0.0001:log>-Noise
 
 in_pin:left input
 in_pin:right input
@@ -120,6 +120,39 @@ INV_SLOW_UPDATE_FACTOR = 1.0 / SLOW_UPDATE_FACTOR;
 
 model = 5;
 
+
+osc_downsample_factor = 16;
+osc_skipfactor = 2;
+osc_buffer = img_w * osc_downsample_factor;
+function draw_oscilloscope(x, y, w, h)
+global(
+  gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, gfx_mode, color_model,
+  audio_buffer, x_step, osc_buffer, osc_downsample_factor, osc_skipfactor
+)
+local(ix, yc, hh, phh, y_top, y_bottom)
+instance()
+(
+  gfx_x = x;
+  ix = 0;
+  colormodel(0.4);
+  gfx_mode = 1;
+  gfx_a = 0.4;
+  hh = 0.5 * h;
+  phh = 0.5 * h;
+  yc = y + hh;
+  y_top = y + h - 2;
+  y_bottom = y + 2;
+  x_step = w / (osc_buffer / osc_skipfactor);
+  loop(osc_buffer / osc_skipfactor,
+    gfx_y = yc + audio_buffer[ix] * phh;
+    (gfx_y < y_top) && (gfx_y > y_bottom) ? (
+      gfx_setpixel(gfx_r, gfx_g, gfx_b);
+    );
+    ix += osc_skipfactor;
+    gfx_x += x_step;
+  );
+);
+
 <?
   loop(i=0;8,
     par = i * 6 + 1;
@@ -137,7 +170,7 @@ model = 5;
 
 output_slider1.init_slider_ui(254, -72, 0.0, 0);
 chorus_slider1.init_slider_ui(255, 0.0, 1.0, 0);
-noise_slider1.init_slider_ui(256, 0.0, 1.0, 0);
+noise_slider1.init_slider_ui(256, 0.0001, 0.4, 1);
 
 <?
   loop(i=0;N_ENVELOPES,
@@ -352,7 +385,7 @@ function osc_type(type)
 ?>
 
 function update_voice()
-local(cur_freq, cur_spacing, cur_brightness, cfreq, noise_factor, atk, gain, f_cutoff, f_reso, f_morph, m1, m2, c_mod_freq)
+local(cur_freq, cur_spacing, cur_brightness, cfreq, noise_factor, atk, gain, f_cutoff, f_reso, f_morph, m1, m2, c_mod_freq, z_noise)
 global(
   INV_SLOW_UPDATE_FACTOR,
   slow_update_srate,
@@ -432,7 +465,8 @@ instance(
   );
   
   rand_src = 0.9 * rand_src + 0.1 * rand();
-  noise_factor = (1 - noise) + (noise + noise) * rand_src;
+  z_noise = max(0, noise - 0.0001);
+  noise_factor = (1 - z_noise) + (z_noise + z_noise) * rand_src;
   cfreq = freq * noise_factor;
   
   // Update oscillators
@@ -756,7 +790,7 @@ freemem = (shared_fft_buffer = freemem) + MAX_FFT_SIZE;
 ?>
 
 freemem = chorus.init_chorus(freemem, 340);
-
+freemem = (audio_buffer = freemem) + 2 * osc_buffer;
 
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(0, 0, 0, -1, 0);", i); i += 1);?>
@@ -971,6 +1005,9 @@ instance(xm1, ym1)
 spl0 = ldc.cheapo_block(spl0);
 spl1 = rdc.cheapo_block(spl1);
 
+audio_buffer[audio_buffer_idx] = 0.5 * (spl0 + spl1);
+audio_buffer_idx += 1;
+audio_buffer_idx > osc_buffer ? audio_buffer_idx = 0;
 
 @gfx
 loaded = 0;
@@ -985,7 +1022,7 @@ function reset_color()
   gfx_mode = 1;
 );
 
-img_w = 320;
+img_w = 350;
 img_h = 245;
 
 /* Background color */
@@ -1095,7 +1132,9 @@ cx = side_pad;
 cy += 4;
 
 function node(x, y, w, h, text, text_offset)
-instance(_x, _y, _w, _h, x_from, x_to, y_from, y_to)
+instance(_x, _y, _w, _h, x_from, x_to, y_from, y_to, over)
+local(mouse_nx, mouse_ny)
+global(x_offset, y_offset, blit_scale, mouse_cap, gfx_x, gfx_y, mouse_x, mouse_y, cap_mode)
 (
   gfx_set(0.2, 0.2, 0.3, 1.0);
   _x = x; _y = y; _w = w; _h = h;
@@ -1104,6 +1143,10 @@ instance(_x, _y, _w, _h, x_from, x_to, y_from, y_to)
   y_from = y + 0.5 * h;
   x_to = x;
   y_to = y + 0.5 * h;
+  
+  mouse_nx = (mouse_x - x_offset) / blit_scale;
+  mouse_ny = (mouse_y - y_offset) / blit_scale;
+  over = ((mouse_nx > x) && (mouse_nx < (x + w)) && (mouse_ny > y) && (mouse_ny < (y + w)) && (cap_mode == 0));
   
   text ? (
     txt_blit(text, x + text_offset, y + 2);
@@ -1155,6 +1198,8 @@ start = cy;
 cx = left_side;
 cy = start;
 
+over_filter = 0;
+
 //input_size = 
 <?
   loop(i=0;8,
@@ -1195,6 +1240,7 @@ cy = start + 0.5 * 3 * (block_size + 2);
 <?
   loop(i=0;2,
     printf("n4%d.node(cx, cy, 2 * block_size - 1, block_size, \"F%d\", 3);", i, i + 1);
+    printf("n4%d.over ? (over_filter = %d; (last_cap == 0 && mouse_cap == 1) ? filter%d_enabled = 1 - filter%d_enabled; );", i, i + 1, i + 1, i + 1);
     printf("!filter%d_enabled ? ( gfx_set(0, 0, 0, 0.7); gfx_rect(cx, cy, 2 * block_size - 1, block_size, 1); );", i + 1);
     printf("cy += 4 * (block_size + 2);");
     i += 1;
@@ -1209,8 +1255,22 @@ cy += 4 * (block_size + 2);
 cx += 2 * block_size + spacing;
 cy = start + 3.5 * (block_size + 2);
 n6.node(cx, cy, 2 * block_size - 1, block_size, "F3", 3);
+n6.over ? (
+  over_filter = 3;
+  (last_cap == 0 && mouse_cap == 1) ? filter3_enabled = 1 - filter3_enabled;
+);
 !filter3_enabled ? ( gfx_set(0, 0, 0, 0.7); gfx_rect(cx, cy, 2 * block_size - 1, block_size, 1); );
 
+
+gfx_set(0.2, 0.2, 0.3, 1.0);
+gfx_a = 0.2;
+gfx_rect(right_side, 163, 180, 30);
+gfx_a = 1.0;
+gfx_r = 0.5 * gfx_r;
+gfx_g = 0.5 * gfx_g;
+gfx_b = 0.5 * gfx_b;
+gfx_rect(right_side - 1, 163 - 1, 182, 32, 0);
+draw_oscilloscope(right_side, 162, 180, 30);
 
 gfx_a = 1.0;
 
@@ -1254,11 +1314,14 @@ function morph_level(morph)
   )
 );
 
-cx = 120;
+right_side = 155;
 cy = 208-5;
 <?
   loop(i=0;3,
-    printf("cx = 130;\n");//side_pad;\n");
+    printf("cx = right_side;\n");
+    printf("_filt%d_alpha = 0.7 * _filt%d_alpha + 0.2 * 0.3 * (over_filter == %d);", i + 1, i + 1, i + 1);
+    printf("gfx_set(1.0, 1.0, 1.0, _filt%d_alpha);", i + 1);
+    printf("gfx_rect(right_side - 1, cy, 181, 8, 1);");
     printf("filt%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, filter%d_enabled, \"Enable Filter %d\", \"Enable F%d\") ? (filter%d_enabled = 1 - filter%d_enabled);\ncx += toggle_size + 2;", i + 1, i + 1, i + 1, i+1, i + 1, i + 1, i + 1);
     printf("txt_blit(\"F%d\", cx, cy + 2); cx += 15;", i + 1);
     
@@ -1291,12 +1354,16 @@ cy = 208-5;
 //slider255:chorus_amount=0<0,1,0.0001>Chorus amount
 //slider256:noise=0<0,1,0.0001:log>Noise
 
-cx = 153;
+txt_blit("FX", right_side + 8, cy + 3);
+cx = right_side + 23;
 cy += 1;
 chorus_slider1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%d", 100 * chorus_amount), "Widener", "Widener");
 cx += 8 * toggle_size + 5;
+
+//txt_blit("A", cx - 8 , cy + 2);
 noise_slider1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%0.1f", 100 * noise), "Broken", "Broken");
 cx += 8 * toggle_size + 5;
+//txt_blit("G", cx - 8 , cy + 2);
 output_slider1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%0.1f", output_gain), "Output Gain", "Output Gain");
 
 hinter.draw_hints();
@@ -1368,6 +1435,7 @@ mouse_ny = (mouse_y - y_offset) / blit_scale;
 );
 */
 
+/*
   gfx_x = 0;
   gfx_y = 0;
   gfx_set(1, 1, 1, 1);
@@ -1376,4 +1444,4 @@ mouse_ny = (mouse_y - y_offset) / blit_scale;
     gfx_printf("%f  ", fff[]);
     fff += 1;
   );
-
+*/
