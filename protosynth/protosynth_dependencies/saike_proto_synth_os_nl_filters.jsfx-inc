@@ -1,0 +1,998 @@
+@init
+epsilon = 0.00000001;
+//maxiter_svf = 26;
+maxiter_svf = 6;
+
+function tanh(x)
+local()
+global()
+instance()
+(
+  (2/(1+exp(-2*x)) - 1)
+);
+
+function elliptic_2x(x)
+local()
+global()
+instance(s1, s2, s3, s4, s5, s6, y)
+(
+  y = 0.03851260969347568 * x + s1;
+  s1 = 0.07917433005447011 * x - -1.8465480149702582 * y + s2;
+  s2 = 0.1448318280102846 * x - 3.085415375328384 * y + s3;
+  s3 = 0.15947402363472882 * x - -2.9173159325651126 * y + s4;
+  s4 = 0.14483182801028455 * x - 2.1600701985167765 * y + s5;
+  s5 = 0.07917433005447012 * x - -0.9894349416880517 * y + s6;
+  s6 = 0.038512609693475676 * x - 0.27584791692890615 * y;
+
+  y
+);
+
+function elliptic_4x(x)
+local()
+global()
+instance(ss1, ss2, ss3, ss4, ss5, ss6, sy)
+(
+  sy = 0.008468922117243878 * x + ss1;
+  ss1 = -0.019462386781351294 * x - -4.693138348960238 * sy + ss2;
+  ss2 = 0.03252284776764872 * x - 9.820163714210157 * sy + ss3;
+  ss3 = -0.03405093434418795 * x - -11.58857973879957 * sy + ss4;
+  ss4 = 0.03252284776764873 * x - 8.100872972866496 * sy + ss5;
+  ss5 = -0.0194623867813513 * x - -3.1752300192471665 * sy + ss6;
+  ss6 = 0.008468922117243876 * x - 0.546018373513739 * sy;
+  
+  sy
+);
+
+function init_lad2(cutoff, resonance, morph)
+local(fs, fc, g, p0s, nmp, gN, kgN, p0g, tmp, acc, m4)
+global(srate, sampling_factor)
+instance(VT2, rg1, rg2, qg1, qg2, si1, sf1, sg1, si2, sf2, sg2, k0g, k0s, VT2i, q0s, r1s, k, choice, choice_frac)
+(
+  m4 = morph + morph + morph + morph;
+  choice = floor(m4);
+  choice_frac = m4 - choice;
+  
+  k    = resonance * 120;
+
+  sampling_factor = srate / 11025;  // fixed 4x oversampling
+  fs   = srate * sampling_factor;
+  fc   = 0.5 * srate * exp( (1-cutoff) * log(20/22050) );
+  g    = tan($pi / fs * fc) / sqrt(1 + k);
+  
+  VT2  = 0.052;
+  VT2i = 19.23076923076923;
+
+  // Ladder stages
+  p0s = 1.0 / (1.0 + g);
+  q0s = 1.0 - g;
+  r1s = -g;
+  k0s = VT2 * g * p0s;
+
+  // Global filter
+  nmp = (1.0 - p0s);
+  gN  = nmp * nmp;
+  kgN = k * gN;
+  p0g = 1.0 / (1.0 + kgN);
+  k0g = -VT2i * p0g;
+
+  rg1 = -2.0*kgN;
+  rg2 = -1.0*kgN;
+  acc = tmp = p0s*(g - 1.0);
+  qg1 = -2.0*(kgN + acc);
+  acc = acc*tmp;
+  qg2 = -1.0*(kgN + acc);
+);
+
+function _eval_lad2(x)
+local(yi, yd, yf)
+global()
+instance(yo, y, A, B, rg1, rg2, qg1, qg2, si1, sf1, sg1, si2, sf2, sg2, k0g, k0s, VT2i, q0s, r1s, k)
+(
+  yo = tanh(k0g * (x + sg1));
+  A    = yo;
+
+  yi   = yo;
+  yd   = k0s * (yi + sf1);
+  y    = yd + si1;
+  yo   = tanh(VT2i * y);
+  B    = yo;
+
+  si1 = yd + y;
+  sf1 = r1s * yi - q0s * yo;
+
+  yi   = yo;
+  yd   = k0s * (yi + sf2);
+  y    = yd + si2;
+  yo   = tanh(VT2i * y);
+
+  si2 = yd + y;
+  sf2 = r1s * yi - q0s * yo;
+
+  yf = k * y;
+
+  sg1 = rg1 * x + qg1 * yf + sg2;
+  sg2 = rg2 * x + qg2 * yf;
+);
+
+function _mix_lad2(x, choice, frac)
+local()
+global()
+instance(VT, VT2, VT2i, A, B, y, yo, k, f1, f2)
+(
+  this._eval_lad2(x*VT2);
+  
+  (choice == 0) ? (
+    f1 = y * (1 + k); // LP
+    f2 = VT2 * (2*B - 2*yo)*8; // BP
+  ) : (choice == 1) ? (
+    f1 = VT2 * (2*B - 2*yo)*8; // BP
+    f2 = VT2 * (A - B); // HP
+  ) : (choice == 2) ? (
+    frac = frac * frac;
+    frac = frac * frac;
+    f1 = VT2 * (A - B); // HP
+    f2 = -VT2 * (2*B-yo*(2+k)-A); // BR
+  ) : (choice == 3) ? (
+    f1 = -VT2 * (2*B-yo*(2+k)-A); // BR
+    f2 = y * (1 + k); // LP
+  ) : (
+    f1 = y * (1 + k); // LP
+    f2 = VT2 * (2*B - 2*yo)*8; // BP
+  );
+  
+  (f2 * frac + f1 * (1.0-frac))*VT2i;
+);
+
+function run_lad2(x)
+local(y, frac)
+global()
+instance(last_x, choice, choice_frac)
+(
+  this.elliptic_4x(this._mix_lad2(last_x, choice, choice_frac));
+  this.elliptic_4x(this._mix_lad2(last_x * 0.75 + x * 0.25, choice, choice_frac));
+  this.elliptic_4x(this._mix_lad2(last_x * 0.5 + x * 0.5, choice, choice_frac));
+  y = this.elliptic_4x(this._mix_lad2(last_x * 0.25 + x * 0.75, choice, choice_frac));
+  
+  last_x = x;
+  y
+);
+
+function init_lad4(cutoff, resonance, morph)
+local(fs, fc, g, p0s, nmp, gN, kgN, p0g, tmp, acc, m4, sampling_factor)
+global(srate)
+instance(VT2, rg1, rg2, rg3, rg4, qg1, qg2, qg3, qg4, si1, sf1, sg1, si2, sf2, sg2, si3, sf3, sg3, si4, sf4, sg4, k0g, k0s, VT2i, q0s, r1s, k, choice, choice_frac)
+(
+  m4 = morph + morph + morph + morph;
+  choice = floor(m4);
+  choice_frac = m4 - choice;
+
+  k    = resonance* 3.9999999999999987;
+  sampling_factor = srate / 11025;  // fixed 4x oversampling
+  fc   = .5 * srate * exp( (1-cutoff) * log(20/22050) );
+  fs   = srate * sampling_factor;
+  g    = tan($pi * fc / fs) / sqrt(1.0 + sqrt(k) - 2 * pow(k, 0.25) * 0.7071067811865476);
+  VT2  = 0.052;
+  VT2i = 19.23076923076923;
+
+  // Ladder stages
+  p0s = 1.0 / (1.0 + g);
+  q0s = 1.0 - g;
+  r1s = -g;
+  k0s = VT2 * g * p0s;
+
+  // Global filter
+  nmp = (1.0 - p0s);
+  gN  = nmp * nmp * nmp * nmp;
+  kgN = k * gN;
+  p0g = 1.0 / (1.0 + kgN);
+  k0g = -VT2i * p0g;
+  
+  rg1 = -4.0*kgN;
+  rg2 = -6.0*kgN;
+  rg3 = -4.0*kgN;
+  rg4 = -1.0*kgN;
+  acc = tmp = p0s*(g - 1.0);
+  qg1 = -4.0*(kgN + acc);
+  acc = acc*tmp;
+  qg2 = -6.0*(kgN + acc);
+  acc = acc*tmp;
+  qg3 = -4.0*(kgN + acc);
+  acc = acc*tmp;
+  qg4 = -1.0*(kgN + acc);
+);
+
+function _eval_lad4(x)
+local(yi, yd, yf, vty, vty2)
+global()
+instance(
+  rg1, rg2, rg3, rg4, 
+  qg1, qg2, qg3, qg4, 
+  si1, sf1, sg1, 
+  si2, sf2, sg2, 
+  si3, sf3, sg3, 
+  si4, sf4, sg4, 
+  k0g, k0s, VT2i, 
+  q0s, r1s, k,
+  A, B, C, D, y, yo)
+(
+  //yo = tanh(k0g * (x + sg1));
+  vty = k0g * (x + sg1);
+  vty2 = vty * vty;
+  yo = (vty < -3) ? -1 : (vty > 3) ? 1 : vty * (27.0 + vty2) / (27.0 + 9.0 * vty2);
+  
+  A = yo;
+
+  yi   = yo;
+  yd   = k0s * (yi + sf1);
+  y    = yd + si1;
+  
+  //yo   = tanh(VT2i * y);
+  vty = VT2i * y;
+  vty2 = vty * vty;
+  yo -= 0.1;
+  yo = (vty < -3) ? -1 : (vty > 3) ? 1 : vty * (27.0 + vty2) / (27.0 + 9.0 * vty2);
+  yo += 0.09970468807;
+  
+  B = yo;
+
+  si1 = yd + y;
+  sf1 = r1s * yi - q0s * yo;
+
+  yi   = yo;
+  yd   = k0s * (yi + sf2);
+  y    = yd + si2;
+  
+  //yo   = tanh(VT2i * y);
+  vty = VT2i * y;
+  vty2 = vty * vty;
+  yo = (vty < -3) ? -1 : (vty > 3) ? 1 : vty * (27.0 + vty2) / (27.0 + 9.0 * vty2);
+  
+  C = yo;
+
+  si2 = yd + y;
+  sf2 = r1s * yi - q0s * yo;
+
+  yi   = yo;
+  yd   = k0s * (yi + sf3);
+  y    = yd + si3; 
+  
+  //yo   = tanh(VT2i * y);
+  vty = VT2i * y;
+  vty2 = vty * vty;
+  yo = (vty < -3) ? -1 : (vty > 3) ? 1 : vty * (27.0 + vty2) / (27.0 + 9.0 * vty2);
+  
+  D = yo;
+
+  si3 = yd + y;
+  sf3 = r1s * yi - q0s * yo;
+
+  yi   = yo;
+  yd   = k0s * (yi + sf4);
+  y    = yd + si4;
+  
+  //yo   = tanh(VT2i * y);
+  vty = VT2i * y;
+  vty2 = vty * vty;
+  yo = (vty < -3) ? -1 : (vty > 3) ? 1 : vty * (27.0 + vty2) / (27.0 + 9.0 * vty2);
+
+  si4 = yd + y;
+  sf4 = r1s * yi - q0s * yo;
+  yf = k * y;
+
+  sg1 = rg1 * x + qg1 * yf + sg2;
+  sg2 = rg2 * x + qg2 * yf + sg3;
+  sg3 = rg3 * x + qg3 * yf + sg4;
+  sg4 = rg4 * x + qg4 * yf;
+);
+
+function _mix_lad4(x)
+local(frac)
+global()
+instance(VT, VT2, VT2i, A, B, C, D, y, yo, k, f1, f2, choice, choice_frac)
+(
+  this._eval_lad4(x*VT2);
+  
+  (choice == 0) ? (
+    f1 = y * (1 + k); // LP
+    f2 = VT2 * (2*C - 2*B); // BP
+  ) : (choice == 1) ? (
+    f1 = VT2 * (2*C - 2*B); // BP
+    //f1 = VT2 * (4*C - 8*B + 4*yo)/6; // BP
+    f2 = VT2 * (A - 4 * B + 6 * C - 4 * D + yo); // HP
+  ) : (choice == 2) ? (
+    frac = choice_frac * choice_frac; /* Make sure the HP gets some space */
+    frac = choice_frac * choice_frac;
+    f1 = VT2 * (A - 4 * B + 6 * C - 4 * D + yo); // HP
+    f2 = VT2 * (A - 4 * B + 6 * C - 4 * D); // Notch
+  ) : (choice == 3) ? (
+    f1 = VT2 * (A - 4 * B + 6 * C - 4 * D); // Notch
+    f2 = y * (1 + k); // LP
+  ) : (
+    f1 = y * (1 + k); // LP
+    f2 = VT2 * (2*C - 2*B); // BP
+  );
+  
+  (f2 * choice_frac + f1 * (1.0 - choice_frac)) * VT2i
+);
+
+function run_lad4(x)
+local(y)
+global()
+instance(last_x)
+(
+  this.elliptic_4x(this._mix_lad4(last_x));
+  this.elliptic_4x(this._mix_lad4(last_x * 0.75 + x * 0.25));
+  this.elliptic_4x(this._mix_lad4(last_x * 0.5 + x * 0.5));
+  y = this.elliptic_4x(this._mix_lad4(last_x * 0.25 + x * 0.75));
+  
+  last_x = x;
+  y
+);
+
+function f_g(s)
+local()
+global()
+instance()
+(
+  max(-1,min(1,s))
+  //tanh(s)
+);
+
+function f_dg(s)
+local(c)
+global()
+instance()
+(
+  1 - 1 * (abs(s)>1)
+  //c = tanh(s);
+  //1 - c * c
+);
+
+function _ms20_lp(x)
+global(epsilon, maxiter)
+local(iter, res, gd2k, ky2, gky2, dgky2,
+      f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+instance(i, y1, y2, d1, d2, h, hh, k, obs)
+(
+  gd2k = f_g(d2*k);
+  tanhterm1 = tanh(-d1 + x - gd2k);
+  tanhterm2 = tanh(d1 - d2 + gd2k);
+  
+  iter = 0;
+  while(
+    iter += 1;
+    ky2 = k*y2;
+    gky2 = f_g(ky2);
+    dgky2 = f_dg(ky2);
+  
+    sig1 = x - y1 - gky2;
+    thsig1 = tanh(sig1);
+    thsig1sq = thsig1 * thsig1;
+  
+    sig2 = y1 - y2 + gky2;
+    thsig2 = tanh(sig2);
+    thsig2sq = thsig2 * thsig2;
+    hhthsig1sqm1 = hh*(thsig1sq - 1);
+    hhthsig2sqm1 = hh*(thsig2sq - 1);
+  
+    f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+    f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+    res = abs(f1) + abs(f2);
+    
+    a = -hhthsig1sqm1 + 1;
+    b = -k*hhthsig1sqm1*dgky2;
+    c = hhthsig2sqm1;
+    d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+    
+    norm = 1 / ( a*d - b*c );
+    y1 = y1 - ( d*f1 - b*f2 ) * norm;
+    y2 = y2 - ( a*f2 - c*f1 ) * norm;
+  (res > epsilon) && (iter < maxiter);
+  );
+  
+  d1 = y1;
+  d2 = y2;
+);
+
+
+function _ms20_bp(x)
+global(epsilon, maxiter)
+local(iter, res, gd2k, ky2, gky2, dgky2, kc,
+      f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+instance(i, y1, y2, d1, d2, h, hh, k, obs)
+(
+  kc = .95*k;
+  gd2k = f_g(d2*kc);
+  tanhterm1 = tanh(-d1 - x - gd2k);
+  tanhterm2 = tanh(d1 - d2 + x + gd2k);
+  
+  iter = 0;
+  while(
+    iter += 1;
+    ky2 = kc*y2;
+    gky2 = f_g(ky2);
+    dgky2 = f_dg(ky2);
+  
+    sig1 = -x - y1 - gky2;
+    thsig1 = tanh(sig1);
+    thsig1sq = thsig1 * thsig1;
+  
+    sig2 = x + y1 - y2 + gky2;
+    thsig2 = tanh(sig2);
+    thsig2sq = thsig2 * thsig2;
+  
+    hhthsig1sqm1 = hh*(thsig1sq - 1);
+    hhthsig2sqm1 = hh*(thsig2sq - 1);
+  
+    f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+    f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+    res = abs(f1) + abs(f2);
+    
+    a = 1 - hhthsig1sqm1;
+    b = -kc*hhthsig1sqm1*dgky2;
+    c = hhthsig2sqm1;
+    d = (kc*dgky2 - 1)*hhthsig2sqm1 + 1;
+  
+    norm = 1 / ( a*d - b*c );
+    y1 = y1 - ( d*f1 - b*f2 ) * norm;
+    y2 = y2 - ( a*f2 - c*f1 ) * norm;
+  (res > epsilon) && (iter < maxiter);
+  );
+  
+  d1 = y1;
+  d2 = y2;
+);
+  
+function _ms20_br(x)
+global(epsilon, maxiter)
+local(iter, res, gd2k, ky2, gky2, dgky2,
+      f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+instance(i, y1, y2, d1, d2, h, hh, k, obs)
+(
+  gd2k = f_g(d2*k);
+  tanhterm1 = tanh(-d1 - x - gd2k);
+  tanhterm2 = tanh(d1 - d2 + x + gd2k);
+  
+  iter = 0;
+  while(
+    iter += 1;
+    ky2 = k*y2;
+    gky2 = f_g(ky2);
+    dgky2 = f_dg(ky2);
+  
+    sig1 = -x - y1 - gky2;
+    thsig1 = tanh(sig1);
+    thsig1sq = thsig1 * thsig1;
+  
+    sig2 = x + y1 - y2 + gky2;
+    thsig2 = tanh(sig2);
+    thsig2sq = thsig2 * thsig2;
+  
+    hhthsig1sqm1 = hh*(thsig1sq - 1);
+    hhthsig2sqm1 = hh*(thsig2sq - 1);
+  
+    f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+    f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+    res = abs(f1) + abs(f2);
+    
+    a = 1 - hhthsig1sqm1;
+    b = -k*hhthsig1sqm1*dgky2;
+    c = hhthsig2sqm1;
+    d = (k*dgky2 - 1)*hhthsig2sqm1 + 1;
+  
+    norm = 1 / ( a*d - b*c );
+    y1 = y1 - ( d*f1 - b*f2 ) * norm;
+    y2 = y2 - ( a*f2 - c*f1 ) * norm;
+  (res > epsilon) && (iter < maxiter);
+  );
+  
+  d1 = y1;
+  d2 = y2;
+  x - y2;
+);     
+  
+function _ms20_hp(x)
+global(epsilon, maxiter)
+local(iter, res, gkd2px, kxpy2, gkxpy2, dgky2px, kc,
+      f1, f2, a, b, c, d, norm, sig1, thsig1, thsig1sq, sig2, thsig2, thsig2sq, tanhterm1, tanhterm2, hhthsig1sqm1, hhthsig2sqm1 )
+instance(i, y1, y2, d1, d2, h, hh, k, obs)
+(
+  kc = .85*k;
+  gkd2px = f_g(kc*(d2 + x));
+  tanhterm1 = tanh(-d1 - gkd2px);
+  tanhterm2 = tanh(d1 - d2 - x + gkd2px);
+  
+  iter = 0;
+  while(
+    iter += 1;
+    kxpy2 = kc*(x + y2);
+    gkxpy2 = f_g(kxpy2);
+    dgky2px = f_dg(kxpy2);
+  
+    sig1 = -y1 - gkxpy2;
+    thsig1 = tanh(sig1);
+    thsig1sq = thsig1 * thsig1;
+  
+    sig2 = -x + y1 - y2 + gkxpy2;
+    thsig2 = tanh(sig2);
+    thsig2sq = thsig2 * thsig2;
+  
+    hhthsig1sqm1 = (thsig1sq - 1);
+    hhthsig2sqm1 = (thsig2sq - 1);
+  
+    f1 = y1 - d1 - hh*(tanhterm1 + thsig1);
+    f2 = y2 - d2 - hh*(tanhterm2 + thsig2);
+    res = abs(f1) + abs(f2);
+    
+    a = -hhthsig1sqm1 + 1;
+    b = -kc*hhthsig1sqm1*dgky2px;
+    c = hhthsig2sqm1;
+    d = (kc*dgky2px - 1)*hhthsig2sqm1 + 1;
+    
+    norm = 1 / ( a*d - b*c );
+    y1 = y1 - ( d*f1 - b*f2 ) * norm;
+    y2 = y2 - ( a*f2 - c*f1 ) * norm;
+  (res > epsilon) && (iter < maxiter);
+  );
+    
+  d1 = y1;
+  d2 = y2;
+  
+  y2 + x
+);
+
+function _run_ms20(s, choice)
+local()
+instance(BP, HP, BR, LP)
+global()
+(
+  (choice == 1) ? (
+    BP._ms20_bp(s)  
+  ) : (choice == 2) ? (
+    HP._ms20_hp(s)
+  ) : (choice == 3) ? (
+    BR._ms20_br(s)
+  ) : (
+    // LP is last and first
+    LP._ms20_lp(s)
+  );
+);
+
+
+function init_ms20(freq, reso, morph)
+global(sampling_factor, isampling_factor, srate)
+local(f0, h, hh, k, m4)
+instance(LP, BP, HP, BR, choice, choice_frac)
+(
+  m4 = morph + morph + morph + morph;
+  choice = floor(m4);
+  choice_frac = m4 - choice;
+
+  //isampling_factor = 44100 / (srate * oversampling);
+  sampling_factor = srate / 22050;  // fixed 2x oversampling
+  isampling_factor = 22050 / srate; // fixed 2x oversampling
+  f0 = exp( (1-freq) * log(20/22050) ) * $pi * isampling_factor;
+  h = tan(f0 / (2.1 * sampling_factor)) * 2.1 * sampling_factor;
+  hh = 0.5 * h;
+  k  = 2*reso;
+  
+  HP.hh = BR.hh = BP.hh = LP.hh = hh;
+  HP.h = BR.h = BP.h = LP.h = h;
+  HP.k = BR.k = BP.k = LP.k = k;
+);
+
+function run_ms20(x)
+local(epsilon, y, s)
+global()
+instance(last_x, choice, choice_frac)
+(
+  epsilon = 0.00001;
+
+  s = this._run_ms20(last_x, choice) * (1.0 - choice_frac);
+  
+  (choice_frac > epsilon) ? (
+    s += this._run_ms20(last_x, choice + 1) * choice_frac;
+  );
+  
+  this.elliptic_2x(s);
+  
+  s = this._run_ms20(0.5 * (last_x + x), choice) * (1.0 - choice_frac);
+  
+  (choice_frac > epsilon) ? (
+    s += this._run_ms20(0.5 * (last_x + x), choice + 1) * choice_frac;
+  );
+  
+  y = this.elliptic_2x(s);
+  
+  last_x = x;
+  
+  y
+);
+
+function f_g_s(s)
+local()
+global()
+instance()
+(
+  max(-0.95,min(0.95,s))
+);
+
+function f_dg_s(s)
+local()
+global()
+instance()
+(
+  0.95 - 0.95 * (abs(s)>0.95)
+);
+
+function _eval_steiner_rav_stacc(xn)
+global(maxiter_svf)
+local(
+  res, f1, f2, x_xn, hp_xn,
+  a, b, c, d, norm, s1, s2, s1_fixed, s2_fixed,
+  xn, v1n, v2n, iter, ss1, ss2
+  fb, fb_s1, fb_clipped, kp1,
+  ds1, ds2, nl_st, denom1, denom2, tmp, dg,
+  s1sq, s2sq, sf, eps
+)
+instance(
+  x,
+  v1, v2, h, hsq, K, Kh, 
+  normalizing_const, alpha, vref, beta,
+  lp, hp, bp, env_est
+)
+(
+  x_xn = x + xn;
+  hp_xn = hp * xn;
+
+  // Linear prediction is so bad for this one that it doesn't help
+  //v1n = (-Kh*v1 + (bp-hp)*h*x_xn + hsq*((lp - hp) * x_xn - v1) + 2*h*v2 + v1) * normalizing_const;
+  //v2n = (Kh*((bp-hp) * x_xn + v2 - 2.0 * v1)+ (lp-bp)*hsq*x_xn + (lp-bp)*h*x_xn - hsq*v2 + v2) * normalizing_const;
+  
+  Kp1 = K + 1.0;
+  
+  env_est = min(1.0, max(abs(xn + xn + xn + xn), 0.9999 * env_est));
+  Kp1 *= env_est;
+  
+  fb = max(-0.95, min(0.95, (K + 1) * (hp * x + v1)));  // f_g_s((K + 1)*(hp*x + v1));
+  s1_fixed = 2.0 * bp * x - hp * x - v1 + v2 + fb - hp_xn;
+  s2_fixed = - 4.0 * bp * x + hp * x - 2.0 * (v2 + fb) + v1 + lp*x + hp_xn + lp * xn;
+  
+  iter = 0;
+  eps = 0.00000001;
+  eps = 0.001;
+  while(
+    iter += 1;
+    
+    // System update
+    fb_s1 = Kp1 * (hp_xn + v1n);
+    fb_clipped = max(-0.95, min(0.95,fb_s1));  // f_g_s(fb_s1);
+    
+    dg = 0.95 - 0.95 * (abs(fb_s1) > 0.95);  // f_dg_s(fb_s1);
+    s1 = s1_fixed - v1n + v2n + fb_clipped;
+    s2 = s2_fixed + v1n - 2.0 * (v2n + fb_clipped);
+    
+    sf = 0.125;
+    
+    /* Note: Written in this form to reuse the division */
+    denom1 = 1.0 / (s1 * s1 + abs(s1) + sf);
+    denom2 = 1.0 / (s2 * s2 + abs(s2) + sf);
+    
+    // Evaluate Jacobian
+    ds1 = (abs(s1) + sf + sf) * abs(s1) * denom1 * denom1;
+    ds2 = (abs(s2) + sf + sf) * abs(s2) * denom2 * denom2;
+    
+    /* State non-linearity */
+    //s1 = s1 / (1.0 + abs(s1 + 0.25 / s1));
+    //s2 = s2 / (1.0 + abs(s2 + 0.25 / s2));
+    s1sq = s1 * s1; s1 = s1sq / (s1 + sign(s1) * (s1sq + sf));
+    s2sq = s2 * s2; s2 = s2sq / (s2 + sign(s2) * (s2sq + sf));
+    
+    f1 = - v1n + v1 + h * s1;
+    f2 = - v2n + v2 + h * s2;
+    
+    res = abs(f1) + abs(f2);
+     
+    a = h * ( Kp1 * dg - 1.0 ) * ds1 - 1.0;
+    b = h * ds1;
+    c = h * ( 1.0 - 2.0 * (K + 1.0) * dg ) * ds2;
+    d = -2.0 * h * ds2 - 1.0;
+    
+    norm = 1.0 / ( a*d - b*c );
+    norm = max(-1.0, min(1.0, norm));  // Don't let the inverse blow up
+    
+    v1n -= ( d*f1 - b*f2 ) * norm;
+    v2n -= ( a*f2 - c*f1 ) * norm;
+    
+  (res > eps) && (iter < maxiter_svf);
+  );
+  
+  x = xn;
+  v1 = v1n;
+  v2 = v2n;
+  
+  (v1n + hp * xn)
+);
+
+function _init_steiner(cutoff, reso, morph)
+instance(h, hsq, k, Kh, normalizing_const, vref, alpha, beta, lp, bp, hp)
+local(f0, isampling_factor)
+global(srate)
+(
+  isampling_factor = 22050 / srate;  // hardcoded for 2x oversampling
+  f0 = exp( (1.0 - cutoff) * log(20/22050) ) * isampling_factor;
+  h = tan(0.5 * $pi * f0);
+  K = 3.98*reso;
+  hsq = h*h;
+  Kh = K*h;
+  normalizing_const = 1.0 / (-Kh + hsq + 2*h + 1);
+  
+  morph < 0.25 ? (
+    lp = 1.0 - morph*4;
+    bp = morph * 4;
+    hp = 0;
+  ) : ( morph < 0.5 ) ? (
+    hp = (morph - 0.25) * 4;    
+    bp = 1.0 - (morph - 0.25) * 4;
+    lp = 0;
+  ) : ( morph < 0.75 ) ? (
+    hp = 1.0;
+    bp = -2.0 * (morph - 0.5) * 4;
+    lp = (morph - 0.5) * 4;
+  ) : (
+    hp = 1.0 - (morph - 0.75) * 4;
+    bp = -2.0 * ( 1 - (morph - 0.75) * 4 );
+    lp = 1;
+  );
+);
+
+function init_pl4(cutoff, reso, morph)
+local()
+instance(F, F2)
+(
+  F._init_steiner(cutoff, reso * 0.15, morph);
+  F2._init_steiner(cutoff * (0.93 + 0.07 * cutoff), reso * 0.5, morph);
+);
+
+function run_pl4(x)
+instance(F, F2, last_x)
+local(y)
+global()
+(
+  /*this.elliptic_2x(F2._eval_steiner_rav_stacc(F._eval_steiner_rav_stacc(last_x)));
+  y = this.elliptic_2x(F2._eval_steiner_rav_stacc(F._eval_steiner_rav_stacc(0.5 * (last_x + x))));
+  */
+  this.elliptic_4x(F2._eval_steiner_rav_stacc(F._eval_steiner_rav_stacc(last_x)));
+  this.elliptic_4x(F2._eval_steiner_rav_stacc(F._eval_steiner_rav_stacc(0.75 * last_x + 0.25 * x)));
+  this.elliptic_4x(F2._eval_steiner_rav_stacc(F._eval_steiner_rav_stacc(0.5 * (last_x + x))));
+  y = this.elliptic_4x(F2._eval_steiner_rav_stacc(F._eval_steiner_rav_stacc(0.25 * last_x + 0.75 * x)));
+  
+  last_x = x;
+  y;
+);
+
+function init_shriek(cutoff, reso, morph)
+instance(k, wc, mo0, mo1, mo2)
+local(rm, isampling_factor, c4)
+global(srate, f0)
+(
+  isampling_factor = 22050 / srate; // fixed 2x oversampling
+  f0 = exp( (1.0 - cutoff) * log(20/22050) ) * isampling_factor;
+  wc = tan(0.5 * $pi * f0);
+  
+  c4 = cutoff * cutoff;
+  c4 = c4 * c4;
+  k = 1.0 - (1.5 / (1.0 + c4 + c4 + c4)) * reso;
+ 
+  // The different modes can be obtained from the outputs as follows:
+  //       x   y1   y2
+  // LP    0    0    1   0
+  // BP    0    2    0   0.25
+  // HP    1    0   -1   0.5
+  // BR    1   -2    0   0.75
+  ( morph < 0.25 ) ? (
+    mo0 = 0;
+    mo1 = 8 * morph;
+    mo2 = 1.0 - 4 * morph;
+  ) : ( morph < 0.5 ) ? (
+    rm = morph - 0.25;
+    mo0 = rm * 4;
+    mo1 = 2.0 - rm * 8;
+    mo2 = - rm * 4;
+  ) : ( morph < 0.75 ) ? (
+    rm = morph - 0.5;
+    mo0 = 1.0;
+    mo1 = - rm * 8;
+    mo2 = -1.0 + rm * 4;
+  ) : ( morph < 1.0 ) ? (
+    rm = morph - 0.75;
+    mo0 = 1.0 - rm * 4;
+    mo1 = rm * 8 - 2.0;
+    mo2 = rm * 4;
+  ) : (
+    mo0 = 0;
+    mo1 = 0;
+    mo2 = 1.0;
+  );
+  
+  mo0 *= 0.3333333333;
+  mo1 *= 0.3333333333;
+  mo2 *= 0.333333333;
+);
+
+function c_svf2(x)
+local()
+global()
+instance()
+(
+  1.25 * x + 3.75 * x * x / (1 + abs(5 * x))
+);
+
+function dc_svf2(x)
+local(ax)
+global()
+instance()
+(
+  ax = 1.0 / (5 * abs(x) + 1);
+  7.5 * x * ax - 18.75 * x * x * sign(x) * ax * ax + 1.25
+);
+
+function g_svf2(s)
+local()
+global()
+instance()
+(
+  s / (1 + abs(s));
+);
+
+function dg_svf2(q)
+local(qsq)
+global()
+instance()
+(
+  qsq = q * q;
+  (abs(q) > 0.00001) ? abs(q) / (qsq * abs(q) + 2 * qsq + abs(q)) : 1
+);
+
+/* Soft clipper */
+function f_svf2(s)
+local()
+global()
+instance()
+(
+  2.4 * s / (1 + abs(6 * s)) + 0.6 * s
+);
+
+function df_svf2(q)
+local(qsq)
+global()
+instance()
+(
+  q = 3 * q;
+  qsq = q * q;
+  (abs(q) > 0.00001) ? 0.8 * abs(q) / (4 * qsq * abs(q) + 4 * qsq + abs(q)) + 0.2 : 1
+);
+
+function _eval_svf2(v0)
+global(epsilon, maxiter_svf, preamp)
+local(
+  f1, f2, fh1, fh2,
+  f1_const, f2_const,  /* Constant part of the implicit equation */
+  norm,
+  a, b, c, d, /* Jacobian elements */
+  dg_v1, cterm,
+  k_factor, k_dim, qsq,
+)
+instance(res, iter, v0n, v1, v2, k, wc, g_v1, mo0, mo1, mo2, env_est)
+(
+  v0 = v0 + v0 + v0;
+  env_est = min(1.0, max(abs(v0 + v0), 0.9998 * env_est));
+  k_factor = 1.0 + preamp * (1.0 - k) * 0.2;
+  k_dim = (k - k_factor) * env_est + (1 - env_est);
+  
+  /* Calculate fixed stuff from previous iteration */
+  f1_const = wc * c_svf2(v0n - v2 - 2 * (v1 + f_svf2(g_v1 * k_dim))) + v1;
+  f2_const = wc * g_v1 + v2;
+
+  v0n = v0;
+
+  iter = 0;
+  while(
+    iter += 1;
+    
+    g_v1 = v1 / (1.0 + abs(v1)); //g_svf2(v1);
+    dg_v1 = dg_svf2(v1);
+    
+    // Residual
+    cterm = v0 - v2 - 2 * (v1 + f_svf2(g_v1 * k_dim));
+    f1 = wc * c_svf2(cterm) - v1 + f1_const;
+    f2 = wc * g_v1 - v2 + f2_const;
+    
+    a = -2 * wc * ((k - 1) * dg_v1 * df_svf2(k_dim * g_v1) + 1.0) * dc_svf2(cterm) - 1.0;
+    b = - wc;
+    c = wc * dg_v1;
+    d = -1;
+    
+    res = abs(f1) + abs(f2);
+    
+    norm = 1.0 / ( a * d - b * c );
+    v1 = v1 - ( d*f1 - b*f2 ) * norm;
+    v2 = v2 - ( a*f2 - c*f1 ) * norm;
+    
+    (res > epsilon) && (iter < maxiter_svf);
+  );
+  
+  mo0 * v0 + mo1 * v1 + mo2 * v2
+);
+
+
+function run_shriek(x)
+instance(last_x)
+local(y)
+global()
+(
+  this.elliptic_2x(this._eval_svf2(last_x));
+  y = this.elliptic_2x(this._eval_svf2(0.5 * (last_x + x)));
+
+  /*this.elliptic_4x(this._eval_svf2(last_x)));
+  this.elliptic_4x(this._eval_svf2(0.75 * last_x + 0.25 * x));
+  this.elliptic_4x(this._eval_svf2(0.5 * (last_x + x)));
+  y = this.elliptic_4x(this._eval_svf2(0.25 * last_x + 0.75 * x));*/
+  
+
+  last_x = x;
+  y;
+);
+
+
+function init_linear(freq, res, morph)
+global(srate)
+local(isampling_factor, frac)
+instance(f0, ic1eq, ic2eq, g, k, a1, a2, a3, m0, m1, m2)
+(
+  isampling_factor = 44100 / srate;
+  f0 = exp( (1-freq) * log(20/22050) ) * isampling_factor;
+  g = tan(.5 * $pi * f0);
+  k = 2 - 2*res;
+  
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+  
+  morph *= 4.0;
+  frac = morph - floor(morph);
+  morph < 1 ? (
+    // LP to BP
+    m0 = 0.0;
+    m1 = frac;
+    m2 = (1.0 - frac);
+  ) : ( morph < 2 ) ? (
+    // BP to HP
+    m0 = frac;
+    m1 = (1.0 - frac) - k * frac;
+    m2 = -frac;
+  ) : ( morph < 3 ) ? (
+    // HP to BR
+    m0 = (1.0 - frac) + frac;
+    m1 = -k * (1.0 - frac) - frac;
+    m2 = -(1.0 - frac);
+  ) : (
+    m0 = (1.0 - frac);
+    m1 = -(1.0 - frac);
+    m2 = frac;
+  );
+);
+
+function eval_linear_2p(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2, k)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3 * v3;
+  ic1eq = 2.0 * v1 - ic1eq;
+  ic2eq = 2.0 * v2 - ic2eq;
+  (m0 * v0 + m1 * v1 + m2 * v2)
+);
+
