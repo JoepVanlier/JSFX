@@ -83,13 +83,13 @@ slider153:f3_reso=0<0,1,0.000001>-F3 Filter Resonance
 slider154:f3_morph=0<0,1,0.000001>-F3 Filter Morph
 slider155:f3_type=0<0,1,5{LIN,MS,L2,L4,SHRK,PL>-F3 Type
 slider156:f3_drive=0<-6,48,0.00001>-F3 Drive
+slider157:keyfollow=0<0,1,0.00001>-Key follow
 
-
-slider157:f4_cutoff=1<0,1,0.000001>-Output Filter Cutoff
-slider158:f4_reso=0<0,1,0.000001>-Output Filter Resonance
-slider159:f4_morph=0<0,1,0.000001>-Output Filter Morph
-slider160:f4_type=0<0,5,1{LIN,MS,L2,L4,SHRK,PL>-Output Filter Type
-slider161:f4_drive=0<-6,24,0.00001>-F4 Drive
+slider158:f4_cutoff=1<0,1,0.000001>-Output Filter Cutoff
+slider159:f4_reso=0<0,1,0.000001>-Output Filter Resonance
+slider160:f4_morph=0<0,1,0.000001>-Output Filter Morph
+slider161:f4_type=0<0,5,1{LIN,MS,L2,L4,SHRK,PL>-Output Filter Type
+slider162:f4_drive=0<-6,24,0.00001>-F4 Drive
 
 slider254:output_gain=0<-24,24,0,0.0001>-Output Gain
 slider255:chorus_amount=0<0,1,0.0001>-Chorus amount
@@ -166,6 +166,7 @@ instance()
 
 filter_type_slider1.init_slider_ui(-1, 0, 5, 0);
 filter_gain_slider3.init_slider_ui(156, -24, 24, 0);
+filter_keyfollow1.init_slider_ui(157, 0, 1, 0);
 
 <?
   loop(i=0;8,
@@ -407,6 +408,29 @@ function filt_type(type)
       slider_name, idx
     )
   );
+  
+  function get_modulated_value2_preproc_noclamp(target, slider_name, idx)
+  (
+    printf("
+      %s = (%s%d.mod_target1 || %s%d.mod_target2) ? (
+          m1 = %s%d.mod_target1 ? %s%d.mod_amount1_clamped * modulator_mem[%s%d.mod_target1] : 0;
+          m2 = %s%d.mod_target2 ? %s%d.mod_amount2_clamped * modulator_mem[%s%d.mod_target2] : 0;
+          (slider(%s%d.sl) + m1 + m2)
+        ) : slider(%s%d.sl);
+      ",
+      target,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx,
+      slider_name, idx
+    )
+  );
 ?>
 
 function update_voice()
@@ -417,6 +441,7 @@ global(
   midi.active_note_mem, midi.active_note_vel,
   rel_spacing, freq_atten, n_update,
   midi.modwheel,
+  keyfollow,
   <?loop(i=1;8, printf("osc%d_enabled,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_gain,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_tune,", i); i += 1);?>
@@ -455,6 +480,7 @@ instance(
   modulator_mem,
   velocity,
   current_f3_type,
+  keyfollow_mod,
   <?loop(i=1;N_MODULATORS, printf("mod%d_lfo,", i); i += 1; );?>
   <?loop(i=1;N_OSCS, printf("mod%d_lfo,", i); i += 1; );?>
   <?loop(i=1;N_OSCS, printf("osc%d_wave, ", i); i += 1; );?>
@@ -544,10 +570,12 @@ instance(
     
     filter3_enabled ? (
       <?
-        get_modulated_value2_preproc("f_cutoff", "f_cutoff_slider", 3);
+        get_modulated_value2_preproc_noclamp("f_cutoff", "f_cutoff_slider", 3);
         get_modulated_value2_preproc("f_reso", "f_reso_slider", 3);
         get_modulated_value2_preproc("f_morph", "f_morph_slider", 3);
       ?>
+      
+      f_cutoff = min(1, max(0, f_cutoff - keyfollow * keyfollow_mod));
       
       current_f3_type = floor(f3_type);
       (current_f3_type == 0) ? (
@@ -760,13 +788,15 @@ instance()
 function process_midi(note_idx, active, vel, state, ref_pitch)
 local()
 global(initialize_envelopes, modulator_mem)
-instance(on, freq, pressed, current_sample, midi_idx, velocity)
+instance(on, freq, pressed, current_sample, midi_idx, velocity, keyfollow_mod)
 (
   midi_idx = note_idx;
   (state == 1) ? (
     // Note on
     on = 1; 
     freq = pitch_to_freq(active + ref_pitch);
+    //keyfollow_mod = (log(freq) - log(440)) / log(20/22050);
+    keyfollow_mod = - 0.14274833584774144 * (log(freq) - 6.0867747269123065);
     pressed = 1;
     velocity = vel;
     
@@ -1506,7 +1536,7 @@ cy = 208-5-7;
     printf("cx = right_side;\n");
     printf("_filt%d_alpha = 0.7 * _filt%d_alpha + 0.2 * 0.3 * (over_filter == %d);", i + 1, i + 1, i + 1);
     printf("gfx_set(1.0, 1.0, 1.0, _filt%d_alpha);", i + 1);
-    printf("gfx_rect(right_side - 1, cy, 181, 8, 1);");
+    printf("gfx_rect(right_side - 1, cy, 181, 8 %s, 1);", i == 2 ? "+ 8" : "");
     printf("filt%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, filter%d_enabled, \"Enable Filter %d\", \"Enable F%d\") ? (filter%d_enabled = 1 - filter%d_enabled);\ncx += toggle_size + 2;", i + 1, i + 1, i + 1, i+1, i + 1, i + 1, i + 1);
     printf("txt_blit(\"F%d\", cx, cy + 2); cx += 15;", i + 1);
     
@@ -1542,12 +1572,16 @@ filter_type_slider1.active = filter3_enabled;
 filter_type_slider1.current_value = f3_type;
 filter_type_slider1.text_slider_ui(<?printf("%d", uuid());?>, cx, cy, 5 * toggle_size + 4, 8, filt_type(f3_type), "Filter Type", "F3 Type");
 
-
 cx += 8 * toggle_size + 5;
 f3_type = filter_type_slider1.current_value;
 
 filter_gain_slider3.active = filter3_enabled && f3_type > 0;
 filter_gain_slider3.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%0.1f", f3_drive), "F3 Drive", "F3 Drive");
+cx += 8 * toggle_size + 5;
+
+filter_keyfollow1.active = filter3_enabled;
+filter_keyfollow1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%d", 100 * keyfollow), "Key follow", "Key follow");
+
 
 cy += 8;
 
