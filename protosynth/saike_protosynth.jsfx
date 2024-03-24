@@ -1,5 +1,5 @@
 desc:Protosynth
-options:maxmem=20000000
+options:maxmem=33000000
 tags: instrument
 version: 0.01
 author: Joep Vanlier
@@ -92,6 +92,13 @@ slider161:f4_type=0<0,5,1{LIN,MS,L2,L4,SHRK,PL>-Output Filter Type
 slider162:f4_drive=0<-6,24,0.00001>-Output Drive
 slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
 
+slider248:time_ms=900<5,2800,1>Verb Time [ms]
+slider249:verb_mix=0.4<0, 1, 0.01>Verb Mix
+slider250:side_cut_freq=120<20,22050,0.001:log>Side low cut frequency
+slider251:low_cut_freq=20<20,22050,0.001:log>Low cut frequency
+slider252:high_cut_freq=22050<20,22050,0.001:log>High cut frequency
+slider253:damping_freq=22050<20,22050,0.001:log>Damping frequency
+
 slider254:output_gain=-12<-24,6,0,0.0001>-Output Gain
 slider255:chorus_amount=0<0,1,0.0001>-Chorus amount
 slider256:noise=0<0.0001,0.4,0.0001:log>-Noise
@@ -107,10 +114,13 @@ import saike_proto_synth_oscillators.jsfx-inc
 import saike_proto_synth_kp_midi.jsfx-inc
 import saike_proto_synth_pixel_gfx.jsfx-inc
 import saike_proto_stft_fx.jsfx-inc
-//import saike_proto_pitchlib.jsfx-inc
+import saike_proto_diffusion.jsfx-inc
 import saike_proto_synth_fx.jsfx-inc
 
 @init
+verb_enabled = 1;
+brightness_boost.init_linearSVF_shelf_absolute(970, 1.41, 8);  // 6 dB boost
+
 pitchbend_range = 2;
 env_color = 0.5;
 mod_color = 0.08;
@@ -132,32 +142,74 @@ INV_SLOW_UPDATE_FACTOR = 1.0 / SLOW_UPDATE_FACTOR;
 
 model = 5;
 
+// Reverb related
+side_freq = side_cut_freq;
+lp_freq = high_cut_freq;
+hp_freq = low_cut_freq;
+current_verb_mix = verb_mix;
 
 img_w = 350;
 img_h = 256;
-osc_downsample_factor = 16;
+osc_downsample_factor = osc_downsample_factor ? osc_downsample_factor : 16;
+max_osc_downsample_factor = 128;
 osc_skipfactor = 2;
-osc_buffer = img_w * osc_downsample_factor;
+osc_buffer = img_w * max_osc_downsample_factor;
+
 function draw_oscilloscope(x, y, w, h)
 global(
   gfx_x, gfx_y, gfx_r, gfx_g, gfx_b, gfx_a, gfx_mode, color_model,
-  audio_buffer, x_step, osc_buffer, osc_downsample_factor, osc_skipfactor
+  audio_buffer, x_step, osc_downsample_factor, osc_skipfactor,
+  img_w, current_osc_buffer,
+  mouse_x, mouse_y, mouse_cap, last_cap,
+  x_offset, y_offset, blit_scale,
 )
-local(ix, yc, hh, phh, y_top, y_bottom)
+local(ix, yc, hh, phh, y_top, y_bottom, mouse_nx, mouse_ny)
 instance()
 (
+  mouse_nx = (mouse_x - x_offset) / blit_scale;
+  mouse_ny = (mouse_y - y_offset) / blit_scale;
+  
+  ((mouse_cap == 2) && (last_cap == 2)) ? (
+    ((mouse_nx > x) && (mouse_nx < (x + w)) && (mouse_ny > y) && (mouse_ny < (y + h))) ? (
+      gfx_x = mouse_x;
+      gfx_y = mouse_y;
+      ix = gfx_showmenu(
+        sprintf(
+          9, "%s8|%s16|%s32|%s48|%s64|%s128",
+          osc_downsample_factor==8 ? "!" : "",
+          osc_downsample_factor==16 ? "!" : "",
+          osc_downsample_factor==32 ? "!" : "",
+          osc_downsample_factor==48 ? "!" : "",
+          osc_downsample_factor==64 ? "!" : "",
+          osc_downsample_factor==128 ? "!" : ""
+        )
+      );
+      (ix > 0) ? (
+        osc_downsample_factor = 
+          (ix == 1) ? ( 8 )
+          : (ix == 2) ? ( 16 )
+          : (ix == 3) ? ( 32 )
+          : (ix == 4) ? ( 48 )
+          : (ix == 5) ? ( 64 )
+          : (ix == 6) ? ( 128 );
+      );
+    );
+  );
+  
+  current_osc_buffer = img_w * osc_downsample_factor;
   gfx_x = x;
   ix = 0;
   colormodel(0.4);
   gfx_mode = 1;
-  gfx_a = 0.4;
+  //gfx_a = 0.4;
+  gfx_a = min(1, 5 / osc_downsample_factor);
   hh = 0.5 * h;
   phh = 0.5 * h;
   yc = y + hh;
   y_top = y + h - 2;
   y_bottom = y + 2;
-  x_step = w / (osc_buffer / osc_skipfactor);
-  loop(osc_buffer / osc_skipfactor,
+  x_step = w / (current_osc_buffer / osc_skipfactor);
+  loop(current_osc_buffer / osc_skipfactor,
     gfx_y = yc + audio_buffer[ix] * phh;
     (gfx_y < y_top) && (gfx_y > y_bottom) ? (
       gfx_setpixel(gfx_r, gfx_g, gfx_b);
@@ -921,6 +973,8 @@ freemem = (shared_fft_buffer = freemem) + MAX_FFT_SIZE;
 freemem = chorus.init_chorus(freemem, 340);
 freemem = (audio_buffer = freemem) + 2 * osc_buffer;
 
+freemem = verb.initialize_verb_memory(freemem);
+
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
@@ -1056,6 +1110,12 @@ inv_samplesblock = 1 / samplesblock;
 df3_gain = (pow(10, 0.05 * f3_drive) - current_f3_gain) * inv_samplesblock;
 df4_gain = (pow(10, 0.05 * f4_drive) - current_f4_gain) * inv_samplesblock;
 d_gain = (pow(10, 0.05 * output_gain) - current_gain) * inv_samplesblock;
+
+// Reverb related
+d_side = (side_cut_freq - side_freq) * inv_samplesblock;
+d_lp = (high_cut_freq - lp_freq) * inv_samplesblock;
+d_hp = (low_cut_freq - hp_freq) * inv_samplesblock;
+d_verb = (verb_mix - current_verb_mix) * inv_samplesblock;
 
 (last_srate != srate) ? (
   init_freq_shift_modulator();
@@ -1285,12 +1345,35 @@ instance(xm1, ym1)
 spl0 = ldc.cheapo_block(spl0);
 spl1 = rdc.cheapo_block(spl1);
 
+verb_enabled ? (
+  side_freq += d_side;
+  lp_freq += d_lp;
+  hp_freq += d_hp;
+  current_verb_mix += d_verb;
+  
+  verb.update_verb_filters(damping_freq, lp_freq, hp_freq, side_freq);
+  
+  current_time = 0.9995 * current_time + 0.0005 * time_ms;
+  ((current_time != last_time) || (current_seed != seed) || (current_mode != mode)) ? (
+    verb.update_verb_settings(current_time, current_seed, current_mode);
+    current_seed = seed;
+    last_time = current_time;
+  );
+  verb.verb_tick(spl0, spl1);
+  
+  spl0 = spl0 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_left;
+  spl1 = spl1 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_right;
+);
+
+spl0 = brightness_boost.eval_linearSVF_shelf(spl0);
+spl1 = brightness_boost.eval_linearSVF_shelf2(spl1);
+
 spl0 *= current_gain;
 spl1 *= current_gain;
 
 audio_buffer[audio_buffer_idx] = 0.5 * (spl0 + spl1);
 audio_buffer_idx += 1;
-audio_buffer_idx > osc_buffer ? audio_buffer_idx = 0;
+audio_buffer_idx > current_osc_buffer ? audio_buffer_idx = 0;
 
 current_f3_gain += df3_gain;
 current_f4_gain += df4_gain;
