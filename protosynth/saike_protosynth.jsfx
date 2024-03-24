@@ -1,4 +1,5 @@
 desc:Protosynth
+//options:maxmem=20000000
 options:maxmem=33000000
 tags: instrument
 version: 0.01
@@ -92,12 +93,14 @@ slider161:f4_type=0<0,5,1{LIN,MS,L2,L4,SHRK,PL>-Output Filter Type
 slider162:f4_drive=0<-6,24,0.00001>-Output Drive
 slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
 
-slider248:time_ms=900<5,2800,1>Verb Time [ms]
-slider249:verb_mix=0.4<0, 1, 0.01>Verb Mix
-slider250:side_cut_freq=120<20,22050,0.001:log>Side low cut frequency
-slider251:low_cut_freq=20<20,22050,0.001:log>Low cut frequency
-slider252:high_cut_freq=22050<20,22050,0.001:log>High cut frequency
-slider253:damping_freq=22050<20,22050,0.001:log>Damping frequency
+slider247:poisson_freq=500<20, 10000, 0.01:log>-poisson_freq
+
+slider248:time_ms=900<5,2800,1>-Verb Time [ms]
+slider249:verb_mix=0.4<0, 1, 0.01>-Verb Mix
+slider250:side_cut_freq=120<20,22050,0.001:log>-Side low cut frequency
+slider251:low_cut_freq=20<20,22050,0.001:log>-Low cut frequency
+slider252:high_cut_freq=22050<20,22050,0.001:log>-High cut frequency
+slider253:damping_freq=22050<20,22050,0.001:log>-Damping frequency
 
 slider254:output_gain=-12<-24,6,0,0.0001>-Output Gain
 slider255:chorus_amount=0<0,1,0.0001>-Chorus amount
@@ -118,7 +121,6 @@ import saike_proto_diffusion.jsfx-inc
 import saike_proto_synth_fx.jsfx-inc
 
 @init
-verb_enabled = 1;
 brightness_boost.init_linearSVF_shelf_absolute(970, 1.41, 8);  // 6 dB boost
 
 pitchbend_range = 2;
@@ -226,6 +228,11 @@ filter_keyfollow1.init_slider_ui(157, 0, 1, 0);
 filter_type_slider2.init_slider_ui(-1, 0, 5, 0);
 filter_gain_slider4.init_slider_ui(162, -24, 24, 0);
 filter_keyfollow2.init_slider_ui(163, 0, 1, 0);
+
+poisson_slider.init_slider_ui(247, 20, 10000, 1);
+
+time_slider.init_slider_ui(248, 5, 2800, 1);
+verb_mix_slider.init_slider_ui(249, 0, 1, 0);
 
 <?
   loop(i=0;8,
@@ -771,32 +778,36 @@ instance(
     <?gen_osc(2)?>
     <?gen_mixer(1, 1, 1, 2);?>
   ) : (
-    o1 = o2 = 0;
+    o1 = 0;
   );
+  o2 = 0;
   
   (osc3_enabled || osc4_enabled) ? (
     <?gen_osc(3)?>
     <?gen_osc(4)?>
     <?gen_mixer(2, 2, 3, 4);?>
   ) : (
-    o3 = o4 = 0;
+    o2 = 0;
   );
+  o3 = o4 = 0;
 
   (osc5_enabled || osc6_enabled) ? (
     <?gen_osc(5)?>
     <?gen_osc(6)?>
     <?gen_mixer(3, 3, 5, 6);?>
   ) : (
-    o5 = o6 = 0;
+    o3 = 0;
   );
+  o5 = o6 = 0;
   
   (osc7_enabled || osc8_enabled) ? (
     <?gen_osc(7)?>
     <?gen_osc(8)?>
     <?gen_mixer(4, 4, 7, 8);?>
   ) : (
-    o7 = o8 = 0;
+    o4 = 0;
   );
+  o7 = o8 = 0;
   
   <?gen_mixer(1, 21, 1, 2);?>
   o1 = filter1_enabled ? this.filter1.L.eval_linearSVF_all(o1) : o1;
@@ -978,10 +989,12 @@ freemem = verb.initialize_verb_memory(freemem);
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 8;
+CURRENT_VERSION = 9;
 version = CURRENT_VERSION;
 
 @serialize
+verb.reset_verb();
+
 update_ticker = 0;
 file_var(0, version);
 
@@ -1098,6 +1111,14 @@ version <= 3 ? (
 f_cutoff_slider4.serialize_if(version, 8);
 f_reso_slider4.serialize_if(version, 8);
 f_morph_slider4.serialize_if(version, 8);
+
+(version > 8) ? (
+  file_var(0, verb_enabled);
+  file_var(0, poisson_enabled);
+) : (
+  verb_enabled = 0;
+  poisson_enabled = 0;
+);
 
 version = CURRENT_VERSION;
 
@@ -1368,6 +1389,12 @@ verb_enabled ? (
 spl0 = brightness_boost.eval_linearSVF_shelf(spl0);
 spl1 = brightness_boost.eval_linearSVF_shelf2(spl1);
 
+poisson_enabled ? (
+  poisson.poisson_noise(spl0, spl1, poisson_freq, 0);
+  spl0 = poisson.out_left;
+  spl1 = poisson.out_right;
+);
+
 spl0 *= current_gain;
 spl1 *= current_gain;
 
@@ -1380,11 +1407,63 @@ current_f4_gain += df4_gain;
 current_gain += d_gain;
 
 @gfx
-loaded = 0;
+function scolor(c)
+local(frac)
+global()
+(
+  (c < 0.5) ? (
+    frac = c + c;
+    gfx_set(
+      0.098 * frac + 0.038 * (1 - frac),
+      0.0863 * frac + 0.0601 * (1 - frac),
+      0.0472 * frac + 0.064 * (1 - frac),
+      0.05
+    )
+  ) : (
+    frac = c + c - 1;
+    gfx_set(
+      0.038 * frac + 0.012 * (1 - frac),
+      0.0601 * frac + 0.017 * (1 - frac),
+      0.064 * frac + 0.0273 * (1 - frac),
+      0.05
+    );
+  );
+);
+
+//loaded = 0;
 !loaded ? (
   loaded = gfx_loadimg(12, "./protosynth_dependencies/font.png");
   gfx_setimgdim(13, img_w, img_h);
+  gfx_setimgdim(10, img_w, img_h);
+  
+  gfx_dest = 10; gfx_mode = 0;
+  scolor(0); gfx_a = 1.0;
+  gfx_rect(0, 0, img_w, img_h);
+  
+  _ix = img_w / 2;
+  _iy = img_h / 2;
+  gfx_dest = 10;
+  gfx_mode = 5;
+  _s = 1;
+  loop(5000,
+    //scolor(abs(sin(ix)));
+    model = 1;
+    colormodel(0.3 + 0.6 * abs(sin(ix))); gfx_a = 0.1;
+    
+    _ic = max(0.0, min(1.0, _ic + 0.1 * rand() - 0.05));
+    _ix = _ix + 30 * (rand() - 0.5) + 0.001 * (0.5 * img_w - _ix);
+    _iy = _iy + 20 * (rand() - 0.5) + 0.001 * (0.5 * img_h - _iy);
+    //gfx_circle(_ix, _iy, 25 + 200 * ix, 0);
+    gfx_line(_ix, _iy, _ix + _s, _iy + _s, 0);
+    gfx_line(_ix + 1, _iy + 1, _ix + _s + 1, _iy + _s + 1, 0);
+    gfx_line(_ix + 2, _iy + 1, _ix + _s + 1, _iy + _s + 2, 1);
+    ix += 0.001;
+    _s += 0.001;
+  );
+
 );
+
+model = 1;
 
 function reset_color()
 (
@@ -1397,7 +1476,24 @@ gfx_dest = 13;
 gfx_clear = 0;
 gfx_set(0, 0, 0, 1);
 gfx_rect(0, 0, img_w, img_h);
+gfx_mode = 4;
+gfx_x = gfx_y = 0; gfx_a = 0.6;
+gfx_blit(10, 1, 0);
+gfx_mode = 0;
+
+
 reset_color();
+
+/*
+gfx_loadimg(4, "./data/13.jpg");
+gfx_mode = 4;
+gfx_x = 0;
+gfx_y = 0;
+gfx_set(1, 1, 1, 1);
+gfx_a = 0.4;
+gfx_blit(4, 0.35, 0);
+*/
+
 
 gfx_a = 0.1;
 pad_width = 70;
@@ -1728,7 +1824,7 @@ function morph_level(morph)
 );
 
 right_side = 155;
-cy = 208-5-7;
+cy = 208 - 10;
 <?
   j = 1;
   loop(i=0;N_FILTERS,
@@ -1799,20 +1895,63 @@ cy = 208-5-7;
 //slider255:chorus_amount=0<0,1,0.0001>Chorus amount
 //slider256:noise=0<0,1,0.0001:log>Noise
 
-txt_blit("FX", right_side + 8, cy + 3);
-cx = right_side + 23;
-cy += 1;
-chorus_slider1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%d", 100 * chorus_amount), "Widener", "Widener");
-chorus_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(chorus_slider1.sl) = max(chorus_slider1.sl_min, min(chorus_slider1.sl_max, text_box.result / 100)); );
-cx += 8 * toggle_size + 5;
+fx_width = 80;
+cy = 2;
 
-//txt_blit("A", cx - 8 , cy + 2);
-noise_slider1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%0.1f", 100 * noise), "Pitch noise", "Pitch noise");
+fx_origin = img_w - fx_width - side_pad;
+
+verb_enable_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, verb_enabled, "Enable Reverb", "Enable Verb") ? (
+  verb_enabled = 1 - verb_enabled;
+);
+
+txt_blit("REVERB", fx_origin + 8, cy + 2);
+
+cy += 8;
+
+time_slider.active = verb_enabled;
+hw = fx_width / 2;
+time_slider.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprintf(9, "%d", time_ms), "Reverb time in\nmilliseconds", "Verb Time");
+
+verb_mix_slider.active = verb_enabled;
+verb_mix_slider.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(9, "%d", 100 * verb_mix), "Verb mix", "Verb Mix");
+
+cy += 8;
+filters.active = verb_enabled;
+filters.multi_slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, fx_width + 1, 8, 20, 22050, 1);
+verb_enabled ? (
+  _qq1 = <?printf("%d", uuid(););?>; filters.multi_slider_notch_nearest(_qq1, 250);
+  _qq2 = <?printf("%d", uuid(););?>; filters.multi_slider_notch_nearest(_qq2, 251);
+  _qq3 = <?printf("%d", uuid(););?>; filters.multi_slider_notch_nearest(_qq3, 252);
+  _qq4 = <?printf("%d", uuid(););?>; filters.multi_slider_notch_nearest(_qq4, 253);
+  filters.multi_slider_notch_ui(_qq1, 250, "Side cut frequency", 0.5, 0.6, 1.0, "Verb Side cut");
+  filters.multi_slider_notch_ui(_qq2, 251, "Low cut frequency", 1.0, 0.5, 0.5, "Verb Low cut");
+  filters.multi_slider_notch_ui(_qq4, 253, "Damping factor", 0.5, 0.6, 1.0, "Verb Damping");
+  filters.multi_slider_notch_ui(_qq3, 252, "High cut frequency", 1.0, 0.5, 0.5, "Verb High cut");
+);
+
+cy += 10;
+
+poisson_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, poisson_enabled, "Enable Noise", "Enable Noise") ? (
+  poisson_enabled = 1 - poisson_enabled;
+);
+
+txt_blit("ANALOG", fx_origin + 8, cy + 2);
+cx = right_side + 23;
+cy += 8;
+poisson_slider.active = poisson_enabled;
+poisson_slider.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(9, "%d", poisson_freq), "Poisson noise", "Noisiness");
+
+noise_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprintf(1, "%0.1f", 100 * noise), "Pitch noise", "Pitch noise");
 noise_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(noise_slider1.sl) = max(noise_slider1.sl_min, min(noise_slider1.sl_max, text_box.result / 100)); );
 
-cx += 8 * toggle_size + 5;
-//txt_blit("G", cx - 8 , cy + 2);
-output_slider1.text_slider_ui(<?printf("%d", uuid(););?>, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, "%0.1f", output_gain), "Output Gain", "Output Gain");
+cy += 10;
+
+txt_blit("OUTPUT", fx_origin, cy + 3);
+cy += 8;
+chorus_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprintf(1, "%d", 100 * chorus_amount), "Widener", "Widener");
+chorus_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(chorus_slider1.sl) = max(chorus_slider1.sl_min, min(chorus_slider1.sl_max, text_box.result / 100)); );
+
+output_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(1, "%0.1f", output_gain), "Output Gain", "Output Gain");
 output_slider1.check_text_input_defaults();
 
 hinter.draw_hints();
