@@ -93,6 +93,7 @@ slider161:f4_type=0<0,5,1{LIN,MS,L2,L4,SHRK,PL>-Output Filter Type
 slider162:f4_drive=0<-6,24,0.00001>-Output Drive
 slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
 
+slider246:glide_time=0<3,3000,0.001:log>-glide time
 slider247:poisson_freq=500<20, 10000, 0.01:log>-poisson_freq
 
 slider248:time_ms=900<5,2800,1>-Verb Time [ms]
@@ -269,6 +270,8 @@ noise_slider1.init_slider_ui(256, 0.0001, 0.4, 1);
     i += 1;
   );
 ?>
+
+glide_slider.init_slider_ui(246, 3.0, 3000.0, 1);
 
 <?
   loop(i=0;N_MODULATORS,
@@ -668,10 +671,11 @@ instance(
 );
 
 function initialize_envelopes()
-local(to_samples, sample_rate, log001, log001tds, current_value)
+local(sample_rate, current_value)
 global(
   srate,
   SLOW_UPDATE_FACTOR,
+  log001, log001tds, to_samples,
   <?
     loop(i=1;N_ENVELOPES,
       printf("env_attack_slider%d.mod_target1, env_attack_slider%d.mod_amount1_clamped, env_attack_slider%d.sl, env_attack_slider%d.sl_max, env_attack_slider%d.sl_min,", i, i, i, i, i);
@@ -696,10 +700,6 @@ instance(
   ?>
 )
 (
-  sample_rate = srate / SLOW_UPDATE_FACTOR;
-  to_samples = 0.001 * sample_rate;  // Since times were specified in ms
-  log001 = log(0.01);
-  log001tds = log001 / to_samples;
   current_sample = 0;
   has_played = 1;
   
@@ -859,13 +859,13 @@ instance()
 );
 
 function process_midi(me, note_idx, active, vel, state, ref_pitch)
-local()
+local(new_freq)
 global(
   initialize_envelopes, modulator_mem, force_filter4_update, latest_voice,
   <?loop(i=1;N_MODULATORS, printf("mod%d_restart, mod%d_phase, ", i, i); i += 1; );?>
 )
 instance(
-  on, freq, pressed, current_sample, midi_idx, velocity, keyfollow_mod,
+  on, freq, pressed, current_sample, midi_idx, velocity, keyfollow_mod, target_freq,
   <?loop(i=1;N_MODULATORS, printf("mod%d_lfo, ", i); i += 1; );?>
 )
 (
@@ -894,13 +894,24 @@ instance(
     // Release
     pressed = 0;
     current_sample = 100000000000000000; // Make sure we are beyond the attack
+  ) : (
+    target_freq = pitch_to_freq(active + ref_pitch);
   );
+);
+
+function update_glide()
+instance(freq, target_freq, keyfollow_mod)
+global(k_glide)
+local()
+(
+  freq = (1 - k_glide) * freq + k_glide * target_freq;
+  keyfollow_mod = - 0.14274833584774144 * (log(freq) - 6.0867747269123065);
 );
 
 function update_notes()
 instance(
   notes_on, active_note_mem, active_note_vel, active_note_state, note_history,
-  last_count
+  last_count, last_notes_on
 )
 global(
   midi.pitchbend, midi.last_vel,
@@ -926,10 +937,11 @@ local(
     v1.on = v2.on = v3.on = v4.on = v5.on = v6.on = v7.on = v8.on = v9.on = v10.on = v11.on = 0;
     
     (notes_on > 0) ? (
-      v0.process_midi(0, latest_note, active_note_mem[latest_note], active_note_vel[latest_note], active_note_state[latest_note], ref_pitch);
+      v0.process_midi(0, latest_note, active_note_mem[latest_note], active_note_vel[latest_note], last_notes_on == 0, ref_pitch);
     ) : (
       v0.process_midi(0, latest_note, active_note_mem[latest_note], active_note_vel[latest_note], -1, ref_pitch);
     );
+    last_notes_on = notes_on;
   ) : (
     <?
       loop(i=0;MAX_VOICES,
@@ -989,7 +1001,7 @@ freemem = verb.initialize_verb_memory(freemem);
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 9;
+CURRENT_VERSION = 10;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1120,12 +1132,23 @@ f_morph_slider4.serialize_if(version, 8);
   poisson_enabled = 0;
 );
 
+(version > 9) ? (
+  file_var(0, glide);
+) : (
+  glide = 0;
+);
+
 version = CURRENT_VERSION;
 
 @slider
 
 @block
 slow_update_srate = SLOW_UPDATE_FACTOR / srate;
+
+sample_rate = srate / SLOW_UPDATE_FACTOR;
+to_samples = 0.001 * sample_rate;  // Since times were specified in ms
+log001 = log(0.01);
+log001tds = log001 / to_samples;
 
 inv_samplesblock = 1 / samplesblock;
 df3_gain = (pow(10, 0.05 * f3_drive) - current_f3_gain) * inv_samplesblock;
@@ -1240,19 +1263,25 @@ big_tick ? (
 
 voice_update = (n_update % SLOW_UPDATE_FACTOR) == 0;
 voice_update ? (
-  pitchbend_modifier = 2 ^ (pitchbend_range * midi.pitchbend / 12);
-  v0.update_voice();
-  v1.update_voice();
-  v2.update_voice();
-  v3.update_voice();
-  v4.update_voice();
-  v5.update_voice();
-  v6.update_voice();
-  v7.update_voice();
-  v8.update_voice();
-  v9.update_voice();
-  v10.update_voice();
-  v11.update_voice();
+  !glide ? (
+    pitchbend_modifier = 2 ^ (pitchbend_range * midi.pitchbend / 12);
+    v0.update_voice();
+    v1.update_voice();
+    v2.update_voice();
+    v3.update_voice();
+    v4.update_voice();
+    v5.update_voice();
+    v6.update_voice();
+    v7.update_voice();
+    v8.update_voice();
+    v9.update_voice();
+    v10.update_voice();
+    v11.update_voice();
+  ) : (
+    v0.update_voice();
+    k_glide = - log001tds / glide_time;
+    v0.update_glide();
+  );
 );
 (filter4_enabled) ? (
   (voice_update || force_filter4_update) ? (
@@ -1310,19 +1339,24 @@ voice_update ? (
 );
 
 v0.has_output ? v0.play_voice() : (v0.l = v0.r = 0);
-v1.has_output ? v1.play_voice() : (v1.l = v1.r = 0);
-v2.has_output ? v2.play_voice() : (v2.l = v2.r = 0);
-v3.has_output ? v3.play_voice() : (v3.l = v3.r = 0);
-v4.has_output ? v4.play_voice() : (v4.l = v4.r = 0);
-v5.has_output ? v5.play_voice() : (v5.l = v5.r = 0);
-v6.has_output ? v6.play_voice() : (v6.l = v6.r = 0);
-v7.has_output ? v7.play_voice() : (v7.l = v7.r = 0);
-v8.has_output ? v8.play_voice() : (v8.l = v8.r = 0);
-v9.has_output ? v9.play_voice() : (v9.l = v9.r = 0);
-v10.has_output ? v10.play_voice() : (v10.l = v10.r = 0);
-v11.has_output ? v11.play_voice() : (v11.l = v11.r = 0);
 
-spl0 += v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
+!glide ? (
+  v1.has_output ? v1.play_voice() : (v1.l = v1.r = 0);
+  v2.has_output ? v2.play_voice() : (v2.l = v2.r = 0);
+  v3.has_output ? v3.play_voice() : (v3.l = v3.r = 0);
+  v4.has_output ? v4.play_voice() : (v4.l = v4.r = 0);
+  v5.has_output ? v5.play_voice() : (v5.l = v5.r = 0);
+  v6.has_output ? v6.play_voice() : (v6.l = v6.r = 0);
+  v7.has_output ? v7.play_voice() : (v7.l = v7.r = 0);
+  v8.has_output ? v8.play_voice() : (v8.l = v8.r = 0);
+  v9.has_output ? v9.play_voice() : (v9.l = v9.r = 0);
+  v10.has_output ? v10.play_voice() : (v10.l = v10.r = 0);
+  v11.has_output ? v11.play_voice() : (v11.l = v11.r = 0);
+  spl0 += v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
+) : (
+  spl0 = v0.l;
+);
+
 
 spl0 = filter4_enabled ? (
   (current_f4_type == 0) ? (
@@ -1946,7 +1980,8 @@ noise_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(noise_slid
 
 cy += 10;
 
-txt_blit("OUTPUT", fx_origin, cy + 3);
+txt_blit("OUTPUT", fx_origin + 1, cy + 2);
+
 cy += 8;
 chorus_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprintf(1, "%d", 100 * chorus_amount), "Widener", "Widener");
 chorus_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(chorus_slider1.sl) = max(chorus_slider1.sl_min, min(chorus_slider1.sl_max, text_box.result / 100)); );
@@ -1954,7 +1989,20 @@ chorus_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(chorus_sl
 output_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(1, "%0.1f", output_gain), "Output Gain", "Output Gain");
 output_slider1.check_text_input_defaults();
 
+cy += 10;
+
+glide_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, glide, "Monophonic", "Monophonic mode") ? (
+  glide = 1 - glide;
+);
+
+txt_blit("MONO", fx_origin + 8, cy + 2);
+
+glide_slider.active = glide;
+glide_slider.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(9, "%.1f", glide_time), "Glide time", "Glide time");
+
 hinter.draw_hints();
+
+txt_blit(".", side_pad + 60 + 5 * midi.note_history[midi.notes_on - 1], img_h - 12);
 
 i = 0;
 str = sprintf(1, "");
