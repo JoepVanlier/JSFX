@@ -1,6 +1,5 @@
 desc:Protosynth
-//options:maxmem=20000000
-options:maxmem=33000000
+options:maxmem=32000000
 tags: instrument
 version: 0.01
 author: Joep Vanlier
@@ -49,13 +48,13 @@ provides:
   );
 ?>
 
-slider128:mix_mode1=0<0,2,1>-Mix mode 1
-slider129:mix_mode2=0<0,2,1>-Mix mode 2
-slider130:mix_mode3=0<0,2,1>-Mix mode 3
-slider131:mix_mode4=0<0,2,1>-Mix mode 4
-slider132:mix_mode21=0<0,2,1>-Mix mode 21
-slider133:mix_mode22=0<0,2,1>-Mix mode 22
-slider134:mix_mode31=0<0,2,1>-Mix mode 31
+slider128:mix_mode1=0<0,7,1>-Mix mode 1
+slider129:mix_mode2=0<0,7,1>-Mix mode 2
+slider130:mix_mode3=0<0,7,1>-Mix mode 3
+slider131:mix_mode4=0<0,7,1>-Mix mode 4
+slider132:mix_mode21=0<0,7,1>-Mix mode 21
+slider133:mix_mode22=0<0,7,1>-Mix mode 22
+slider134:mix_mode31=0<0,7,1>-Mix mode 31
 
 slider135:cutoff21=0<0,1,0.001>-Cutoff Mix 21
 slider136:resonance21=0<0,1,0.001>-Resonance Mix 21
@@ -93,7 +92,7 @@ slider161:f4_type=0<0,5,1{LIN,MS,L2,L4,SHRK,PL>-Output Filter Type
 slider162:f4_drive=0<-6,24,0.00001>-Output Drive
 slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
 
-slider246:glide_time=0<3,3000,0.001:log>-glide time
+slider246:glide_time=100<3,3000,0.001:log>-glide time
 slider247:poisson_freq=500<20, 10000, 0.01:log>-poisson_freq
 
 slider248:time_ms=900<5,2800,1>-Verb Time [ms]
@@ -336,6 +335,14 @@ instance(mix1, mix2, mix3, mix4, mix21, mix22, mix31)
   freemem = mix21.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
   freemem = mix22.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
   freemem = mix31.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  
+  freemem = mix1.init_phasemod_mem(freemem);
+  freemem = mix2.init_phasemod_mem(freemem);
+  freemem = mix3.init_phasemod_mem(freemem);
+  freemem = mix4.init_phasemod_mem(freemem);
+  freemem = mix21.init_phasemod_mem(freemem);
+  freemem = mix22.init_phasemod_mem(freemem);
+  freemem = mix31.init_phasemod_mem(freemem);
   
   freemem
 );
@@ -753,7 +760,9 @@ instance(
         : (mix_mode%d == 3) ? (min(max(o%d, o%d), min(o%d, o%d))) 
         : (mix_mode%d == 4) ? (t1 = o%d + o%d; t2 = o%d - o%d; min(max(t1, t2), -min(t1, t2))) 
         : (mix_mode%d == 5) ? (mix%d.process_stft_mixer(o%d, o%d); mix%d.out_left)
-        : (mix_mode%d == 6) ? (this.ofs%d.freq_shift_audio_rate(o%d, 16 * this.freq * o%d));",
+        : (mix_mode%d == 6) ? (this.ofs%d.freq_shift_audio_rate(o%d, 16 * this.freq * o%d))
+        : (mix_mode%d == 7) ? (mix%d.process_phasemod(o%d, o%d));
+        ",
         mix_out, 
         mix_id, o1, o2, 
         mix_id, o1, o2, 
@@ -761,6 +770,7 @@ instance(
         mix_id, o1, o2, o1, o2, 
         mix_id, o1, o2, o1, o2,
         mix_id, mix_id, o1, o2, mix_id,
+        mix_id, mix_id, o1, o2,
         mix_id, mix_id, o1, o2
       );
     );
@@ -861,7 +871,7 @@ instance()
 function process_midi(me, note_idx, active, vel, state, ref_pitch)
 local(new_freq)
 global(
-  initialize_envelopes, modulator_mem, force_filter4_update, latest_voice,
+  initialize_envelopes, modulator_mem, force_filter4_update, latest_voice, force_glide,
   <?loop(i=1;N_MODULATORS, printf("mod%d_restart, mod%d_phase, ", i, i); i += 1; );?>
 )
 instance(
@@ -875,7 +885,9 @@ instance(
     on = 1;
     <?loop(i=1;N_MODULATORS, printf("mod%d_restart ? mod%d_lfo.t = mod%d_phase;", i, i, i); i += 1; );?>
     
-    freq = pitch_to_freq(active + ref_pitch);
+    (!force_glide) ? (
+      freq = pitch_to_freq(active + ref_pitch);
+    );
     //keyfollow_mod = (log(freq) - log(440)) / log(20/22050);
     keyfollow_mod = - 0.14274833584774144 * (log(freq) - 6.0867747269123065);
     pressed = 1;
@@ -997,6 +1009,7 @@ freemem = chorus.init_chorus(freemem, 340);
 freemem = (audio_buffer = freemem) + 2 * osc_buffer;
 
 freemem = verb.initialize_verb_memory(freemem);
+verb.reset_verb();
 
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
@@ -1005,8 +1018,6 @@ CURRENT_VERSION = 10;
 version = CURRENT_VERSION;
 
 @serialize
-verb.reset_verb();
-
 update_ticker = 0;
 file_var(0, version);
 
@@ -1134,8 +1145,11 @@ f_morph_slider4.serialize_if(version, 8);
 
 (version > 9) ? (
   file_var(0, glide);
+  file_var(0, force_glide);
 ) : (
   glide = 0;
+  force_glide = 0;
+  glide_time = 100;
 );
 
 version = CURRENT_VERSION;
@@ -1143,6 +1157,7 @@ version = CURRENT_VERSION;
 @slider
 
 @block
+external_os_factor = srate / 44100;
 slow_update_srate = SLOW_UPDATE_FACTOR / srate;
 
 sample_rate = srate / SLOW_UPDATE_FACTOR;
@@ -1356,7 +1371,6 @@ v0.has_output ? v0.play_voice() : (v0.l = v0.r = 0);
 ) : (
   spl0 = v0.l;
 );
-
 
 spl0 = filter4_enabled ? (
   (current_f4_type == 0) ? (
@@ -1694,7 +1708,8 @@ global(gfx_a, gfx_x, gfx_y, mouse_x, mouse_y, x_offset, y_offset, blit_scale, ca
   : (value == 3) ? "XOR"
   : (value == 4) ? "XOD"
   : (value == 5) ? "CON"
-  : (value == 6) ? "FrS";
+  : (value == 6) ? "FrS"
+  : (value == 7) ? "PhM";
   this.node(x, y, w, h, text, 2);
 
   mouse_nx = (mouse_x - x_offset) / blit_scale;
@@ -1705,7 +1720,7 @@ global(gfx_a, gfx_x, gfx_y, mouse_x, mouse_y, x_offset, y_offset, blit_scale, ca
     (mouse_cap == 2) ? (
       gfx_x = mouse_x;
       gfx_y = mouse_y;
-      ix = gfx_showmenu("Additive mixing|Amplitude modulation|Ring modulation (multiply signals)|XOR|XOR on diff|Convolve|Freq Shift");
+      ix = gfx_showmenu("Additive mixing|Ampli0tude modulation|Ring modulation (multiply signals)|XOR|XOR on diff|Convolve|Freq Shift|Phase Mod");
       (ix > 0) ? (
         slider(slider_idx) = ix - 1;
       );
@@ -1997,8 +2012,14 @@ glide_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, glide, "Mon
 
 txt_blit("MONO", fx_origin + 8, cy + 2);
 
+force_glide_toggle.blocked = 1 - glide;
+force_glide_toggle.simple_serialize_toggle(fx_origin + 32, cy + 1, toggle_size, force_glide, "Glide every note\n\nNormally only legato notes glide\nbetween them. This toggle forces\nall notes to glide.", "Force glide") ? (
+  force_glide = 1 - force_glide;
+);
+
 glide_slider.active = glide;
 glide_slider.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(9, "%.1f", glide_time), "Glide time", "Glide time");
+
 
 hinter.draw_hints();
 
@@ -2084,3 +2105,17 @@ mouse_ny = (mouse_y - y_offset) / blit_scale;
   );
 */
 
+(external_os_factor > 4) ? (
+  gfx_set(0, 0, 0, 1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+  gfx_set(1, 1, 1, 1);
+  gfx_printf("WARNING:\n\nThis plugin only supports samplerates up to 192 kHz");
+);
+
+
+(freemem > 32000000) ? (
+  gfx_set(0, 0, 0, 1);
+  gfx_rect(0, 0, gfx_w, gfx_h);
+  gfx_set(1, 1, 1, 1);
+  gfx_printf("WARNING:\n\nYou've gone off the deep end with your memory use lad.");
+);
