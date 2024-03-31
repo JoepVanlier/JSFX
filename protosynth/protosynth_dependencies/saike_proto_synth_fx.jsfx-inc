@@ -66,6 +66,24 @@ instance(read_ptr, write_ptr, buffer, buffer_max)
   ((id3*frac+id2)*frac+id1)*frac+id0;
 );
 
+
+function read_cheapo(offset)
+local(last, new, frac)
+global()
+instance(read_ptr, write_ptr, buffer, buffer_max)
+(
+  read_ptr = write_ptr - offset - 1;
+  
+  frac = read_ptr - floor(read_ptr);
+  read_ptr = floor(read_ptr);
+  read_ptr < buffer ? read_ptr += (buffer_max - buffer + 1);    
+
+  last = read_ptr[];
+  read_ptr += 1; read_ptr > buffer_max ? read_ptr = buffer;
+  
+  last * (1 - frac) + frac * read_ptr[];
+);
+
 function init_chorus(freemem, crossover_freq) // 340
 local()
 global()
@@ -247,33 +265,69 @@ global()
 function init_phasemod_mem(freemem)
 local()
 global()
-instance()
+instance(lpf, lpf2, lpf3, lpf4, lpf5)
 (
-  this.simple_buffer(freemem, freemem + 4094 * 4); freemem += 4096 * 4;
+  this.buf1.simple_buffer(freemem, freemem + 4094 * 4); freemem += 4096 * 4;
+  this.buf2.simple_buffer(freemem, freemem + 4094 * 4); freemem += 4096 * 4;
+  
+  lpf.init_linearSVF_absolute(5000, 0);
+  lpf2.init_linearSVF_absolute(8000, 0);
   freemem
 );
 
 <?
   function input(sample2)
   (
-    printf("this.read_simple_buffer(qfactor * (2 + %s))", sample2);
+    printf("this.buf1.read_simple_buffer(qfactor * (1 + %s))", sample2);
+  );
+  
+  function input2(sample2)
+  (
+    printf("this.buf1.read_simple_buffer(qfactor * abs(%s))", sample2);
   );
 ?>
 
 function process_phasemod(x1, x2)
-local(y, oversampled, qfactor)
+local(y, oversampled, qfactor, y1, y2, y3, y4)
 global(external_os_factor)
-instance(last_x1, last_x2, write_ptr)
+instance(last_x1, last_x2, write_ptr, lpf, lpf2)
 (
-  this.write_simple_buffer(x1);
+  this.buf1.write_simple_buffer(x1);
+  this.buf2.write_simple_buffer(lpf2.eval_linearSVF_LP(lpf.eval_linearSVF_LP(x2)));
   qfactor = 1024 * external_os_factor;
-  this.elliptic_4x(    <?input("last_x2")?>);
-  this.elliptic_4x(    <?input("last_x2 * 0.75 + x2 * 0.25")?>);
-  this.elliptic_4x(    <?input("last_x2 * 0.50 + x2 * 0.50")?>);
-  y = this.elliptic_4x(<?input("last_x2 * 0.25 + x2 * 0.75")?>);
+  
+  y1 = <?input("this.buf2.read_simple_buffer(qfactor + 1)")?>;
+  y2 = <?input("this.buf2.read_simple_buffer(qfactor + 0.75)")?>;
+  y3 = <?input("this.buf2.read_simple_buffer(qfactor + 0.5)")?>;
+  y4 = <?input("this.buf2.read_simple_buffer(qfactor + 0.25)")?>;
+  
+  this.elliptic_4x(y1);
+  this.elliptic_4x(y2);
+  this.elliptic_4x(y3);
+  y = this.elliptic_4x(y4);
     
   last_x1 = x1;
   last_x2 = x2;
+  
+  y
+);
+
+function process_phasemod2(x1, x2)
+local(y, oversampled, qfactor, xx2)
+global(external_os_factor)
+instance(last_x1, last_x2, write_ptr, lpf, lpf2)
+(
+  this.buf1.write_simple_buffer(x1);
+  qfactor = 1024 * external_os_factor;
+  xx2 = lpf2.eval_linearSVF_LP(lpf.eval_linearSVF_LP(x2));
+  
+  this.elliptic_4x(    <?input2("last_x2")?>);
+  this.elliptic_4x(    <?input2("last_x2 * 0.75 + xx2 * 0.25")?>);
+  this.elliptic_4x(    <?input2("last_x2 * 0.5 + xx2 * 0.5")?>);
+  y = this.elliptic_4x(<?input2("last_x2 * 0.25 + xx2 * 0.75")?>);
+    
+  last_x1 = x1;
+  last_x2 = xx2;
   
   y
 );
