@@ -286,4 +286,147 @@ instance(
   nom / denom;
 );
 
+function dsf_step_peak()
+local(nom, denom, ry5, tn)
+global()
+instance(
+  a, a2, asq, an1,
+  x, y, coeff, coeff_re,
+  x2, y2, coeff2, coeff_re2,
+  x3, y3, coeff3, coeff_re3,
+  x4, y4, coeff4, coeff_re4,
+  x5, y5, coeff5, coeff_re5,
+  norm_factor,
+  
+  phase_inc3,
+  phase_inc4,
+  t3, t4,
+)
+(
+  // Complex stepper
+  t3 += phase_inc3;
+  t4 += phase_inc4;
+  
+  tn = x * coeff_re - y * coeff;
+  y = x * coeff + y * coeff_re;
+  x = tn;
+  
+  tn = x2 * coeff_re2 - y2 * coeff2;
+  y2 = x2 * coeff2 + y2 * coeff_re2;
+  x2 = tn;
+  
+  tn = x3 * coeff_re3 - y3 * coeff3;
+  y3 = x3 * coeff3 + y3 * coeff_re3;
+  x3 = tn;
+  
+  tn = x4 * coeff_re4 - y4 * coeff4;
+  y4 = x4 * coeff4 + y4 * coeff_re4;
+  x4 = tn;
+  
+  tn = x5 * coeff_re5 - y5 * coeff5;
+  y5 = x5 * coeff5 + y5 * coeff_re5;
+  x5 = tn;
+  
+  //nom = norm_factor * (x - a * x2 - an1 * (x3 - a * x4));
+  nom = norm_factor * x * (1.0 - asq - (an1 + an1) * (y3 - a * y4));   // Peak variant
+  
+  denom = 1.0 + asq - a2 * y5;
+  nom / denom;
+);
+
+function update_dsf_osc_peak(freq, beta, attenuation, n)
+local(
+  phase_inc,
+  phase_inc2,
+  phase_inc5,
+  beta_factor,
+  
+  delta_step, desired_rotation,
+  re, im, tn,
+  
+  beta_prime, freq_prime,
+)
+global(tpiT, max_frequency)
+instance(
+  a, a2, asq, an1,
+  coeff, coeff2, coeff3, coeff4, coeff5,
+  coeff_re, coeff_re2, coeff_re3, coeff_re4, coeff_re5,
+  norm_factor,
+  x, y,
+  x2, y2,
+  x3, y3,
+  x4, y4,
+  x5, y5,
+  
+  last_n,
+  last_beta,
+  last_freq,
+  last_a,
+  
+  phase_inc3,
+  phase_inc4,
+  t3, t4,
+  
+  current_ifreq,
+)
+(
+  (n == 0) ? (
+    n = max(1, floor((max_frequency - freq) / beta));
+  ) : (n < 0) ? (
+    n = max(1, floor((max_frequency - (freq - n)) / beta));
+  );
+
+  ((last_freq != freq) || (last_beta != beta) || (n != last_n)) ? (
+    phase_inc  = freq * tpiT;
+    beta_factor = beta * tpiT;
+    phase_inc2 = phase_inc - beta_factor;
+    phase_inc3 = (N + 1) * beta_factor;
+    phase_inc4 = N * beta_factor;
+    phase_inc5 = beta_factor;
+  
+    coeff = -sin(phase_inc);
+    coeff2 = -sin(phase_inc2);
+    coeff3 = -sin(phase_inc3);
+    coeff4 = -sin(phase_inc4);
+    coeff5 = -sin(phase_inc5);
+  
+    coeff_re = cos(phase_inc);
+    coeff_re2 = cos(phase_inc2);
+    coeff_re3 = cos(phase_inc3);
+    coeff_re4 = cos(phase_inc4);
+    coeff_re5 = cos(phase_inc5);
+  );
+
+  ((attenuation != last_a) || (n != last_n)) ? (
+    a = attenuation;
+    asq = a * a;
+    a2 = a + a;
+    norm_factor = sqrt((1 - asq) / (1 - pow(a, 2 * N + 2)));
+    an1 = pow(a, N + 1);
+  );
+
+  // Did the number of partials change, do some phase catch-up
+  ((last_n != n) && (last_n > 0)) ? (
+    delta_step = t3 - t4;
+    desired_rotation = delta_step * (n - last_n);
+    
+    re = cos(desired_rotation);
+    im = -sin(desired_rotation);
+    tn = x3 * re - y3 * im;
+    y3 = x3 * im + y3 * re;
+    x3 = tn;
+    
+    tn = x4 * re - y4 * im;
+    y4 = x4 * im + y4 * re;
+    x4 = tn;
+    
+    //this.renormalize();
+  );
+  
+  last_freq = freq;
+  last_n = n;
+  last_beta = beta;
+  last_a = attenuation;
+  current_ifreq = 1.0/freq;
+);
 
