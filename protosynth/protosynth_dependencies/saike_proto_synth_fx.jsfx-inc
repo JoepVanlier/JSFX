@@ -215,18 +215,18 @@ global(
 );
 
 
-function freq_shift_audio_rate(in, shift)
+function freq_shift_audio_rate(in, shift, fb)
 instance(
-  fs_l1, fs_r1, fs_l2, fs_r2,
+  fs_l1, fs_r1, fs_l2, fs_r2, ly,
   dt2, t2,
 )
 local(ct2, st2)
 global(tpiT, fs.ct1, fs.st1)
 (
-  t2 += 1.5771 + tpiT * shift; // oscillating at srate / 4 (2.0 * $pi * 0.251)
+  t2 += 1.5771 + tpiT * (shift + fb * ly); // oscillating at srate / 4 (2.0 * $pi * 0.251)
   (t2 > 628.32) ? t2 -= 628.32; // 200 * $pi;
   
-  fs_l1.quick_ellip(in * fs.ct1) * cos(t2) + fs_l2.quick_ellip(in * fs.st1) * sin(t2)
+  ly = fs_l1.quick_ellip(in * fs.ct1) * cos(t2) + fs_l2.quick_ellip(in * fs.st1) * sin(t2)
 );
 
 function poisson_noise(in_left, in_right, freq, polarity)
@@ -278,7 +278,7 @@ instance(lpf, lpf2, lpf3, lpf4, lpf5)
 <?
   function input(sample2)
   (
-    printf("this.buf1.read_cheapo(fm_offset + (max(-fm_offset, fm_factor * %s)))", sample2);
+    printf("this.buf1.read_cheapo(fm_offset + (max(-fm_offset, fm_factor * (%s))))", sample2);
   );
   
   function input2(sample2, sample3)
@@ -292,7 +292,7 @@ instance(lpf, lpf2, lpf3, lpf4, lpf5)
   );
 ?>
 
-function process_phasemod(x1, x2, ifreq)
+function process_phasemod(x1, x2, ifreq, feedback)
 local(y, y1, y2, y3, fm_factor)
 global(osc_feedback1, fm_offset, fm_scaling)
 instance(last_x1, last_x2, write_ptr, lpf, lpf2, y4)
@@ -302,13 +302,14 @@ instance(last_x1, last_x2, write_ptr, lpf, lpf2, y4)
   
   fm_factor = fm_scaling * ifreq;
   
-  y1 = <?input("this.buf2.read_cheapo(fm_offset + 1) + osc_feedback1 * y4")?>;
-  y2 = <?input("this.buf2.read_cheapo(fm_offset + 0.75) + osc_feedback1 * y1")?>;
-  y3 = <?input("this.buf2.read_cheapo(fm_offset + 0.5) + osc_feedback1 * y2")?>;
-  y4 = <?input("this.buf2.read_cheapo(fm_offset + 0.25) + osc_feedback1 * y3")?>;
+  y1 = <?input("this.buf2.read_cheapo(fm_offset + 1) + feedback * y4")?>;
+  y2 = <?input("this.buf2.read_cheapo(fm_offset + 0.75) + feedback * y1")?>;
+  y3 = <?input("this.buf2.read_cheapo(fm_offset + 0.5) + feedback * y2")?>;
+  y4 = <?input("this.buf2.read_cheapo(fm_offset + 0.25) + feedback * y3")?>;
   
   this.elliptic_4x(y1);
   this.elliptic_4x(y2);
+  this.elliptic_4x(y3);
   this.elliptic_4x(y3);
   y = this.elliptic_4x(y4);
     
@@ -318,9 +319,9 @@ instance(last_x1, last_x2, write_ptr, lpf, lpf2, y4)
   y
 );
 
-function process_phasemod2(x1, x2, ifreq)
+function process_phasemod2(x1, x2, ifreq, feedback)
 local(y, fm_factor, xx2, y1, y2, y3)
-global(osc_feedback1, fm_offset, fm_scaling)
+global(fm_offset, fm_scaling)
 instance(last_x1, last_x2, write_ptr, lpf, lpf2, lifreq, y4)
 (
   this.buf1.write_simple_buffer(x1);
@@ -328,10 +329,10 @@ instance(last_x1, last_x2, write_ptr, lpf, lpf2, lifreq, y4)
   
   xx2 = lpf2.eval_linearSVF_LP(lpf.eval_linearSVF_LP(x2));
   
-  y1 = <?input2("last_x2", "osc_feedback1 * y4")?>;
-  y2 = <?input2("last_x2 * 0.75 + xx2 * 0.25", "osc_feedback1 * y1")?>;
-  y3 = <?input2("last_x2 * 0.5 + xx2 * 0.5", "osc_feedback1 * y2")?>;
-  y4 = <?input2("last_x2 * 0.25 + xx2 * 0.75", "osc_feedback1 * y3")?>;
+  y1 = <?input2("last_x2", "feedback * y4")?>;
+  y2 = <?input2("last_x2 * 0.75 + xx2 * 0.25", "feedback * y1")?>;
+  y3 = <?input2("last_x2 * 0.5 + xx2 * 0.5", "feedback * y2")?>;
+  y4 = <?input2("last_x2 * 0.25 + xx2 * 0.75", "feedback * y3")?>;
   
   this.elliptic_4x(y1);
   this.elliptic_4x(y2);
@@ -344,7 +345,7 @@ instance(last_x1, last_x2, write_ptr, lpf, lpf2, lifreq, y4)
   y
 );
 
-function process_phasemod3(x1, x2, ifreq)
+function process_phasemod3(x1, x2, ifreq, feedback)
 local(y, fm_factor, xx2, y1, y2, y3)
 global(osc_feedback1, fm_offset, fm_scaling)
 instance(last_x1, last_x2, write_ptr, lpf, lpf2, lifreq, y4)
@@ -354,10 +355,10 @@ instance(last_x1, last_x2, write_ptr, lpf, lpf2, lifreq, y4)
   
   xx2 = lpf2.eval_linearSVF_LP(lpf.eval_linearSVF_LP(x2));
   
-  y1 = <?input3("last_x2", "osc_feedback1 * y4")?>;
-  y2 = <?input3("last_x2 * 0.75 + xx2 * 0.25", "osc_feedback1 * y1")?>;
-  y3 = <?input3("last_x2 * 0.5 + xx2 * 0.5", "osc_feedback1 * y2")?>;
-  y4 = <?input3("last_x2 * 0.25 + xx2 * 0.75", "osc_feedback1 * y3")?>;
+  y1 = <?input3("last_x2", "feedback * y4")?>;
+  y2 = <?input3("last_x2 * 0.75 + xx2 * 0.25", "feedback * y1")?>;
+  y3 = <?input3("last_x2 * 0.5 + xx2 * 0.5", "feedback * y2")?>;
+  y4 = <?input3("last_x2 * 0.25 + xx2 * 0.75", "feedback * y3")?>;
   
   this.elliptic_4x(y1);
   this.elliptic_4x(y2);
