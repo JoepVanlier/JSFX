@@ -77,6 +77,22 @@ Non-linear filter demo (Steiner): https://raw.githubusercontent.com/JoepVanlier/
 
 Non-linear filter demo (Steiner asym): https://raw.githubusercontent.com/JoepVanlier/Audio_Demos/main/Yutani/more_controlled.mp3
 
+## Protosynth
+![image](https://github.com/JoepVanlier/JSFX/assets/19836026/a646c99e-9c32-4659-b5b2-b7287b1c5a34)
+
+Polyphonic synthesizer
+
+Features:
+- 8 oscillators
+- 4 anti-aliased oscillator types (Harmonic DSF, SuperSaw, Formant DSF, Noise)
+- Customizable signal mix nodes (Additive, Amplitude modulation, Ring modulation, XOR, XOR-diff, STFT convolution, audio rate frequency shifter, and 3 flavors of phase modulation with feedback).
+- Two nonlinear filter modules with filters ranging from clean to dirty.
+- Stereo widening effect.
+- Basic reverb module.
+- Pitch noise.
+- Glide.
+- Modwheel, MIDI velocity and pitch bend support.
+
 ## FM Filter 2
 ![lights_fmfilter](https://user-images.githubusercontent.com/19836026/110242715-998d7900-7f57-11eb-8c6e-48b825b8f47e.gif)
 
