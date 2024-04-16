@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.05
+version: 0.06
 author: Joep Vanlier
-changelog: don't terminate MIDI whenever CC is received
+changelog: click osc with right mouse to solo
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -159,6 +159,19 @@ N_SELECTABLE_MODULATORS = 12;
 
 <?MAX_VOICES = 12;?>
 INV_SLOW_UPDATE_FACTOR = 1.0 / SLOW_UPDATE_FACTOR;
+
+<?
+  printf("function update_solo() (\n");
+    printf("any_solo = ");
+    loop(i=0;N_OSCS,
+      printf("+ osc%d_solo", i + 1);
+      i += 1;
+    );
+    printf(";\n");
+  printf(");\n");
+?>
+
+update_solo();
 
 model = 5;
 
@@ -556,7 +569,7 @@ global(
   midi.modwheel,
   keyfollow,
   pitchbend_modifier,
-  <?loop(i=1;8, printf("osc%d_enabled,", i); i += 1);?>
+  <?loop(i=1;8, printf("osc%d_active,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_gain,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_tune,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_brightness,", i); i += 1);?>
@@ -640,7 +653,7 @@ instance(
   // Update oscillators
   <?
     loop(i=1;N_OSCS,
-      printf("osc%d_enabled ? (", i);
+      printf("osc%d_active ? (", i);
         printf("gain = min(0, osc%d_gain + (gain_slider%d.mod_target1 ? 72 * gain_slider%d.mod_amount1_clamped * modulator_mem[gain_slider%d.mod_target1] : 0));", i, i, i, i);
         printf("dg%d = INV_SLOW_UPDATE_FACTOR * (10^(0.05 * gain) * modulator_mem[gain_slider%d.gain_mod_target] - g%d);", i, i, i);
       
@@ -782,7 +795,7 @@ global(
   fb1, fb2, fb3, fb4, fb21, fb22, fb31,
   filter1_enabled, filter2_enabled, filter3_enabled,
   current_f3_gain,
-  <?loop(i=1;N_OSCS, printf("osc%d_enabled, ", i); i += 1; );?>
+  <?loop(i=1;N_OSCS, printf("osc%d_active, ", i); i += 1; );?>
 )
 instance(
   current_f3_type,
@@ -830,7 +843,7 @@ instance(
     );
   ?>
   
-  (osc1_enabled || osc2_enabled) ? (
+  (osc1_active || osc2_active) ? (
     <?gen_osc(1)?>
     <?gen_osc(2)?>
     <?gen_mixer(1, 1, 1, 2);?>
@@ -839,7 +852,7 @@ instance(
   );
   o2 = 0;
   
-  (osc3_enabled || osc4_enabled) ? (
+  (osc3_active || osc4_active) ? (
     <?gen_osc(3)?>
     <?gen_osc(4)?>
     <?gen_mixer(2, 2, 3, 4);?>
@@ -848,7 +861,7 @@ instance(
   );
   o3 = o4 = 0;
 
-  (osc5_enabled || osc6_enabled) ? (
+  (osc5_active || osc6_active) ? (
     <?gen_osc(5)?>
     <?gen_osc(6)?>
     <?gen_mixer(3, 3, 5, 6);?>
@@ -857,7 +870,7 @@ instance(
   );
   o5 = o6 = 0;
   
-  (osc7_enabled || osc8_enabled) ? (
+  (osc7_active || osc8_active) ? (
     <?gen_osc(7)?>
     <?gen_osc(8)?>
     <?gen_mixer(4, 4, 7, 8);?>
@@ -1139,7 +1152,6 @@ version <= 3 ? (
       printf("osc%d_type = 0;", i);
       i += 1;
     );
-    //printf("osc1_enabled = 1;");
   ?>
 );
 
@@ -1200,11 +1212,20 @@ f_morph_slider4.serialize_if(version, 8);
   fb1 = fb2 = fb3 = fb4 = fb21 = fb22 = fb31 = 0;
 );
 
+update_solo();
 version = CURRENT_VERSION;
 
 @slider
 
 @block
+update_solo();
+
+any_solo ? (
+  <?loop(i=0;N_OSCS, printf("osc%d_active = osc%d_solo;", i + 1, i + 1); i += 1;);?>
+) : (
+  <?loop(i=0;N_OSCS, printf("osc%d_active = osc%d_enabled;", i + 1, i + 1); i += 1;);?>
+);
+
 external_os_factor = srate / 44100;
 fm_scaling = 133120 * external_os_factor;
 fm_offset = 1024 * external_os_factor;
@@ -1609,7 +1630,6 @@ toggle_size = 6;
 gfx_set(0.7, 0.5, 0.2, 0.3);
 cx = side_pad;
 cy = 2;
-//osc1_enabled.choice_toggle(cx, cy, toggle_size, 0, 10, "Enable Oscillator 1", "Enable OSC1"); cx += toggle_size + 2;
 
 MODULATOR_STRING=34;
 sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator source.\nLeft click and drag to change modulation depth.");
@@ -1632,7 +1652,11 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
     printf("gfx_set(1.0, 1.0, 1.0, _osc%d_alpha);", i + 1);
     printf("gfx_rect(cx - 1, cy, 252, 8, 1);");
     
-    printf("osc%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, osc%d_enabled, \"Enable Oscillator %d\", \"Enable OSC%d\") ? (osc%d_enabled = 1 - osc%d_enabled;);\ncx += toggle_size + 2;", i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
+    printf("osc%d_enabled.color = any_solo ? (osc%d_solo ? 101 : 100) : 0;", i + 1, i + 1);
+    printf("osc_click = osc%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, osc%d_enabled || osc%d_solo, \"Enable Oscillator %d\", \"Enable OSC%d\");\n", i + 1, i + 1, i + 1, i + 1, i + 1);
+    printf("(osc_click == 1) ? (osc%d_enabled = 1 - osc%d_enabled;);\n", i + 1, i + 1);
+    printf("(osc_click == 2) ? (osc%d_solo = 1 - osc%d_solo;);\n", i + 1, i + 1);
+    printf("cx += toggle_size + 2;\n");
     printf("txt_blit(\"OSC%d\", cx, cy + 2); cx += 25;", i + 1);
     
     printf("osc_type_slider%d.current_value = osc%d_type;", i + 1, i + 1);
@@ -1836,13 +1860,32 @@ over_filter = 0;
 over_osc = 0;
 
 mnode = 1;
-//input_size = 
+
+function active_color(enabled, solo)
+(
+  any_solo ? (
+    solo ? (
+      gfx_set(0.4, 1.0, 0.4, 0.5);
+      gfx_rect(cx, cy, block_size, block_size);
+    ) : (
+      gfx_set(0.0, 0.0, 0.0, 0.6);
+      gfx_rect(cx, cy, block_size, block_size);
+      gfx_set(0.1, 0.1, 0.1, 1.0);
+      enabled ? gfx_rect(cx, cy, block_size, block_size);
+    );
+  ) : (
+    gfx_set(0.2, 0.2, 0.3, 1.0);
+    enabled ? gfx_rect(cx, cy, block_size, block_size);
+  );
+);
+
 <?
-  loop(i=0;8,
+  loop(i=0;N_OSCS,
     printf("n1%d.node(cx, cy, block_size, block_size, 0, 0);", i);
     printf("n1%d.over ? (over_osc = %d; (last_cap == 0 && mouse_cap == 1) ? osc%d_enabled = 1 - osc%d_enabled; );", i, i + 1, i + 1, i + 1);
+    printf("n1%d.over ? (over_osc = %d; (last_cap == 0 && mouse_cap == 2) ? osc%d_solo = 1 - osc%d_solo; );", i, i + 1, i + 1, i + 1);
  
-    printf("osc%d_enabled ? gfx_rect(cx, cy, block_size, block_size);", i + 1);
+    printf("active_color(osc%d_enabled, osc%d_solo);", i + 1, i + 1);
     printf("cy += block_size + 2;");
     i += 1;
   );
