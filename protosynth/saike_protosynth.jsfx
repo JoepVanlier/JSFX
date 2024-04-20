@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.06
+version: 0.07
 author: Joep Vanlier
-changelog: click osc with right mouse to solo
+changelog: added global tuning, pitch bend customization and microtuning (drag ,TUN file into plugin for microtuning)
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -102,6 +102,9 @@ slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
   );
 ?>
 
+slider237:pitchbend_range=0<0,24,0.001>-Pitch bend range
+slider238:global_tuning=0<-24,24,0.001>-Global tuning
+
 slider239:fb1=0<-0.999,0.999,.0001>-fb1
 slider240:fb2=0<-0.999,0.999,.0001>-fb2
 slider241:fb3=0<-0.999,0.999,.0001>-fb3
@@ -139,9 +142,9 @@ import saike_proto_diffusion.jsfx-inc
 import saike_proto_synth_fx.jsfx-inc
 
 @init
+DROPPED_FILE_STR = 52;
 brightness_boost.init_linearSVF_shelf_absolute(970, 1.41, 8);  // 6 dB boost
 
-pitchbend_range = 2;
 env_color = 0.5;
 mod_color = 0.08;
 SLOW_UPDATE_FACTOR = 32;
@@ -293,6 +296,8 @@ verb_mix_slider.init_slider_ui(249, 0, 1, 0);
   );
 ?>
 
+global_tuning_slider1.init_slider_ui(238, -24, 24, 0);
+pitch_bend_slider.init_slider_ui(237, 0, 24, 0);
 output_slider1.init_slider_ui(254, -24, 24.0, 0);
 chorus_slider1.init_slider_ui(255, 0.0, 1.0, 0);
 noise_slider1.init_slider_ui(256, 0.0001, 0.4, 1);
@@ -1055,13 +1060,15 @@ freemem = (shared_fft_buffer = freemem) + MAX_FFT_SIZE;
 freemem = chorus.init_chorus(freemem, 340);
 freemem = (audio_buffer = freemem) + 2 * osc_buffer;
 
+freemem = (tuning_memory = freemem) + 256;
+
 freemem = verb.initialize_verb_memory(freemem);
 verb.reset_verb();
 
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 12;
+CURRENT_VERSION = 13;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1212,6 +1219,24 @@ f_morph_slider4.serialize_if(version, 8);
   fb1 = fb2 = fb3 = fb4 = fb21 = fb22 = fb31 = 0;
 );
 
+(version < 13) ? (
+  pitchbend_range = 2;
+  global_tuning = 0;
+);
+
+global_tuning_slider1.serialize_if(version, 13);
+
+(version < 13) ? (
+  microtuned = 0;
+  has_microtuning = 0;
+);
+
+file_var(0, microtuned);
+microtuned ? (
+  file_mem(0, tuning_memory, 128);
+  has_microtuning = 1;
+);
+
 update_solo();
 version = CURRENT_VERSION;
 
@@ -1310,6 +1335,7 @@ d_verb = (verb_mix - current_verb_mix) * inv_samplesblock;
   );
 ?>
 
+global_tuning_slider1.text_slider_block();
 
 
 // Fixes stuck notes
@@ -1349,7 +1375,27 @@ big_tick ? (
 
 voice_update = (n_update % SLOW_UPDATE_FACTOR) == 0;
 voice_update ? (
-  pitchbend_modifier = 2 ^ (pitchbend_range * midi.pitchbend / 12);
+  global_tuning_slider1.mod_target1 ? (
+    modulator_mem = 
+      (latest_voice == 0) ? v0.modulator_mem
+      : (latest_voice == 1) ? v1.modulator_mem
+      : (latest_voice == 2) ? v2.modulator_mem
+      : (latest_voice == 3) ? v3.modulator_mem
+      : (latest_voice == 4) ? v4.modulator_mem
+      : (latest_voice == 5) ? v5.modulator_mem
+      : (latest_voice == 6) ? v6.modulator_mem
+      : (latest_voice == 7) ? v7.modulator_mem
+      : (latest_voice == 8) ? v8.modulator_mem
+      : (latest_voice == 9) ? v9.modulator_mem
+      : (latest_voice == 10) ? v10.modulator_mem
+      : (latest_voice == 11) ? v11.modulator_mem;
+  
+    <?get_modulated_value1_preproc_ranged("current_global_tuning", "global_tuning_slider", 1);?>
+  ) : (
+    current_global_tuning = global_tuning;
+  );
+
+  pitchbend_modifier = 2 ^ ((pitchbend_range * midi.pitchbend + current_global_tuning) / 12);
   !glide ? (
     <?
     loop(i=0;MAX_VOICES,
@@ -1363,6 +1409,7 @@ voice_update ? (
     v0.update_glide();
   );
 );
+
 (filter4_enabled) ? (
   (voice_update || force_filter4_update) ? (
     modulator_mem = 
@@ -2106,15 +2153,6 @@ cy = 208 - 10;
   );
 ?>
 
-
-//  output_slider.serialize(version);
-//  chorus_slider.serialize(version);
-//  noise_slider.serialize(version);
-
-//slider254:output_gain=0<-72,0,0,0.0001>Output Gain
-//slider255:chorus_amount=0<0,1,0.0001>Chorus amount
-//slider256:noise=0<0,1,0.0001:log>Noise
-
 fx_width = 80;
 cy = 2;
 
@@ -2181,6 +2219,29 @@ noise_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprint
 noise_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(noise_slider1.sl) = max(noise_slider1.sl_min, min(noise_slider1.sl_max, text_box.result / 100)); );
 
 cy += 10;
+
+txt_blit("TUNING", fx_origin + 1, cy + 2);
+
+txt_blit("MICRO", fx_origin + 55, cy + 2);
+microtuned_enable_toggle.simple_serialize_toggle(fx_origin + 47, cy + 1, toggle_size, microtuned && has_microtuning, "Toggle microtuning\n\nTo enable microtuning\ndrag a TUN file onto\nplugin.", "Microtune") ? (
+  microtuned = 1 - microtuned;
+  (!has_microtuning) ? microtuned = 0;
+);
+
+cy += 8;
+global_tuning_slider1.color = 2;
+cx = fx_origin;
+cw = 5 * toggle_size + 11 - 1;
+global_tuning_slider1.text_slider_ui(<?printf("%d", uuid())?>, cx, cy, cw, 8, sprintf(9, "%.2f", global_tuning_slider1.display_value), "Global Tuning", "Tuning");
+cx += cw + 1;
+global_tuning_slider1.modulator_field(<?printf("%d", uuid())?>, cx, cy, 8, 1, MODULATOR_STRING, "Tune Mod", 0, N_SELECTABLE_MODULATORS, 1);
+cx += 9;
+global_tuning_slider1.check_text_input_defaults();
+
+pitch_bend_slider.color = 2;
+pitch_bend_slider.text_slider_ui(<?printf("%d", uuid())?>, cx, cy, 5 * toggle_size + 4 - 3, 8, sprintf(9, "%.1f", pitch_bend_slider.display_value), "Pitch bend range", "Bend range");
+pitch_bend_slider.check_text_input_defaults();
+cy += 9;
 
 txt_blit("OUTPUT", fx_origin + 1, cy + 2);
 
@@ -2307,3 +2368,7 @@ mouse_ny = (mouse_y - y_offset) / blit_scale;
   gfx_printf("WARNING:\n\nYou've gone off the deep end with your memory use lad.");
 );
 
+handle_dropped_files_microtuning(tuning_memory);
+
+/* Reset dropped file status */
+gfx_getdropfile(-1);

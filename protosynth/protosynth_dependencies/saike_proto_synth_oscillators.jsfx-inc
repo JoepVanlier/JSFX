@@ -453,3 +453,105 @@ instance(f1, sc)
   r1 = r1 + r1;
   sc * f1.eval_linearSVF_all(r1);
 );
+
+function handle_dropped_files_microtuning(tuning_memory)
+local(file_handle, note_index, frequency, found_tuning, cent_scaling)
+global(
+  DROPPED_FILE_STR, PARSE_STR, microtuned, base_freq, reading_tuning, has_microtuning
+)
+instance()
+(
+  DROPPED_FILE_STR = 80;
+  PARSE_STR = 88;
+  
+  // Scaling to convert from 2^(x/1200) to exp(cent_scaling * x)
+  cent_scaling = log(2) / 1200;
+  gfx_getdropfile(0, DROPPED_FILE_STR) ? (
+    (matchi("*.TUN", 80) == 1) ? (
+      microtuned = 0;
+      file_handle = file_open(DROPPED_FILE_STR);
+      file_handle >= 0 ? (
+        memset(tuning_memory, 0, 128);
+        file_rewind(file_handle);
+        
+        /* Prefer exact if possible */
+        found_tuning = 0;
+        base_freq = 8.17579891564371;
+        while(file_avail(file_handle) && (!found_tuning))
+        (
+          file_string(file_handle, PARSE_STR);
+          (strnicmp("[Exact Tuning]", PARSE_STR, 13) == 0) ? (
+            found_tuning = 1;
+          );
+        );
+        
+        /* Read the tuning */
+        (found_tuning == 1) ? (
+        
+          found_tuning = 0;
+          while(file_avail(file_handle) && (found_tuning < 2))
+          (
+            file_string(file_handle, PARSE_STR);
+            matchi("basefreq*?=*?%f*", PARSE_STR, base_freq);
+            matchi("note %d*?=*?%f*", PARSE_STR, note_index, frequency) ? (
+              ((note_index > 0) && (note_index < 128)) ? (
+                tuning_memory[note_index] = base_freq * exp(cent_scaling * frequency);
+                found_tuning = 1;
+              );
+            );
+            
+            // Other section starts
+            matchi("[*", PARSE_STR) ? (
+              found_tuning = 2;
+            );
+          );
+        );
+        
+        /* We didn't find an exact tuning, see if we can find a sloppy one */
+        (found_tuning == 0) ? (
+          /* Prefer exact if possible */
+          found_tuning = 0;
+          file_rewind(file_handle);
+          while(file_avail(file_handle) && (!found_tuning))
+          (
+            file_string(file_handle, PARSE_STR);
+            (strnicmp("[Tuning]", PARSE_STR, 7) == 0) ? (
+              found_tuning = 1;
+            );
+          );
+          
+          /* Read the tuning */
+          (found_tuning == 1) ? (
+            found_tuning = 0;
+            while(file_avail(file_handle) && (found_tuning == 0))
+            (
+              file_string(file_handle, PARSE_STR);
+              matchi("note %d*?=*?%d*", PARSE_STR, note_index, frequency) ? (
+                ((note_index > 0) && (note_index < 128)) ? (
+                  tuning_memory[note_index] = base_freq * exp(cent_scaling * frequency);
+                  found_tuning = 1;
+                );
+              );
+              
+              // Other section starts
+              matchi("[*", PARSE_STR) ? (
+                found_tuning = 1;
+              );
+            );
+          );
+        );
+        
+      
+      );
+      file_close(file_handle);
+    );
+    
+    found_tuning ? (
+      microtuned = 1;
+      has_microtuning = 1;
+    );
+  );
+  
+  DROPPED_FILE_STR = 0;
+);
+
