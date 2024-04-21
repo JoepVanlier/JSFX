@@ -51,7 +51,7 @@ instance(a_0, a_1, a_2, a_3, a_4, a_5, a_6, a_7, a_8, a_9, a_10, a_11, a_12, a_1
   a_15 = seed * 0.000000000465661287958260561303802660404471680521965026855469;
 );
 
-function set_sample_position(duration, seed, smooth)
+function set_sample_position(duration, seed)
 global(srate)
 local(td, interval, im1, ip1)
 instance(scaling_factor, max_loc,
@@ -60,7 +60,7 @@ instance(scaling_factor, max_loc,
 )
 (
   this.seed_random(seed);
-  interval = (1 + 15 * smooth) * floor(duration * srate / 16);
+  interval = floor(duration * srate / 16);
   im1 = 16 * interval - 1;
   td = -1;
   loc0 = td - 16 * floor((interval - 1) * a_0);
@@ -101,7 +101,7 @@ instance(scaling_factor, max_loc,
   scaling_factor = 0.25;
 );
 
-function set_sample_position_8(duration, seed, smooth)
+function set_sample_position_8(duration, seed)
 global(srate)
 local(td, interval, im1, ip1)
 instance(scaling_factor, max_loc,
@@ -110,7 +110,7 @@ instance(scaling_factor, max_loc,
 )
 (
   this.seed_random(seed);
-  interval = (1 + 7 * smooth) * floor(duration * srate / 8);
+  interval = floor(duration * srate / 8);
   im1 = 8 * interval - 1;
   td = -1;
   loc0 = td - 8 * floor((interval - 1) * a_0);
@@ -135,7 +135,7 @@ instance(scaling_factor, max_loc,
   scaling_factor = 0.3535533905932738;
 );
 
-function set_sample_position_8_exp(duration, seed, smooth)
+function set_sample_position_8_exp(duration, seed)
 global(srate)
 local(td, interval, im1, ip1, scale)
 instance(scaling_factor, max_loc,
@@ -296,30 +296,28 @@ instance(damping_factor, lp, hp, side, lp_last, hp_last, side_last, last_damping
 );
 
 function update_verb_settings(time_ms, seed, mode, low_feedback)
-local(smooth)
+local()
 global()
 instance(in, current_mode, fb)
 (
-  smooth = 0;
-  
   current_mode = mode;
   fb = low_feedback ? 0.3 : 0.999;
   
   (mode == 0) ? (
-    in.in.in.set_sample_position_8(0.25 * time_ms / 1000, seed, smooth);
-    in.in.set_sample_position_8(0.5 * time_ms / 1000, seed + seed, smooth);
-    in.set_sample_position_8(0.75 * time_ms / 1000, seed + seed + seed, smooth);
-    this.set_sample_position_8(time_ms / 1000, seed + seed + seed + seed, smooth);
+    in.in.in.set_sample_position_8(0.25 * time_ms / 1000, seed);
+    in.in.set_sample_position_8(0.5 * time_ms / 1000, seed + seed);
+    in.set_sample_position_8(0.75 * time_ms / 1000, seed + seed + seed);
+    this.set_sample_position_8(time_ms / 1000, seed + seed + seed + seed);
   ) : (mode == 1) ? (
-    in.in.in.set_sample_position(0.25 * time_ms / 1000, seed, smooth);
-    in.in.set_sample_position(0.5 * time_ms / 1000, seed + seed, smooth);
-    in.set_sample_position(0.75 * time_ms / 1000, seed + seed + seed, smooth);
-    this.set_sample_position(time_ms / 1000, seed + seed + seed + seed, smooth);
+    in.in.in.set_sample_position(0.25 * time_ms / 1000, seed);
+    in.in.set_sample_position(0.5 * time_ms / 1000, seed + seed);
+    in.set_sample_position(0.75 * time_ms / 1000, seed + seed + seed);
+    this.set_sample_position(time_ms / 1000, seed + seed + seed + seed);
   ) : (mode == 2) ? (
-    in.in.in.set_sample_position_8_exp(time_ms / 1000, seed, smooth);
-    in.in.set_sample_position_8_exp(0.125 * time_ms / 1000, seed + seed, smooth);
-    in.set_sample_position_8_exp(0.1, seed + seed + seed, smooth);
-    this.set_sample_position_8_exp(0.05, seed + seed + seed + seed, smooth);
+    in.in.in.set_sample_position_8_exp(0.5 * time_ms / 1000, seed);
+    in.in.set_sample_position_8_exp(0.125 * time_ms / 1000, seed + seed);
+    in.set_sample_position_8_exp(0.1, seed + seed + seed);
+    this.set_sample_position_8_exp(0.05, seed + seed + seed + seed);
   );
 );
 
@@ -420,15 +418,33 @@ instance(in, damping_factor)
 );
 
 function initialize_verb_memory(freemem)
-local()
+local(chunk)
 global()
 instance(in, brightness_boost)
 (
+  // This thing is a big memory hog
+  // max reverb time is 2800 ms, max srate is 96000 Hz
+  // each reverb "sample" takes 16 slots for the dense verb, and 8 slots for the sparse ones
+  // max counts on the first buffer are [0.25*8, 0.25*16,   0.5*8] => 4 * duration * srate
+  // max on the second buffer is        [ 0.5*8,  0.5*16, 0.125*8] => 8 * duration * srate
+  // third                              [0.75*8, 0.75*16,   0.1*8] => 12 * duration * srate
+  // fourth                             [ 1.0*8,  1.0*16,  0.05*8] => 16 * duration * srate
+ 
   in.in.in.in.tip = 1;
-  freemem = in.in.in.init_decorrelator(freemem, 32768);
-  freemem = in.in.init_decorrelator(freemem, 2*32768);
-  freemem = in.init_decorrelator(freemem, 4*32768);
-  freemem = this.init_decorrelator(freemem, 4*32768);
+  // Note that the decorrelator already allocates the value * 16
+  // Therefore we need:
+  //    0.25 * duration * srate
+  //    0.50 * duration * srate
+  //    0.75 * duration * srate
+  //     1.0 * duration * srate
+  //
+  // 2.8s * 96 kHz is 268.000 samples, is approx 270.000 s
+  
+  chunk = 270000;
+  freemem = in.in.in.init_decorrelator(freemem, chunk * 0.25);
+  freemem = in.in.init_decorrelator(freemem, chunk * 0.5);
+  freemem = in.init_decorrelator(freemem, chunk * 0.75);
+  freemem = this.init_decorrelator(freemem, chunk);
   
   freemem
 );
