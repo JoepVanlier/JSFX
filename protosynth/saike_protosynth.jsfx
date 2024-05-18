@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.18
+version: 0.20
 author: Joep Vanlier
-changelog: Remove invalid tooltip for envelopes and modulators indicating that they can be disabled as they are always active.
+changelog: Add allpass smear effect
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -101,6 +101,11 @@ slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
     par += 1; i += 1;
   );
 ?>
+
+
+slider234:ap_freq=241<20, 22000, 0.0001:log>-AP frequency
+slider235:ap_feedback=0.0<-0.999, 0.999, 0.001>-AP Feedback
+slider236:ap_sat=0.01<0.01, 0.25, 0.001>-AP saturation
 
 slider237:pitchbend_range=0<0,24,0.001>-Pitch bend range
 slider238:global_tuning=0<-24,24,0.001>-Global tuning
@@ -301,6 +306,10 @@ pitch_bend_slider.init_slider_ui(237, 0, 24, 0);
 output_slider1.init_slider_ui(254, -24, 24.0, 0);
 chorus_slider1.init_slider_ui(255, 0.0, 1.0, 0);
 noise_slider1.init_slider_ui(256, 0.0001, 0.4, 1);
+
+ap_freq_slider1.init_slider_ui(234, 20, 22000, 1);
+ap_feedback_slider1.init_slider_ui(235, -0.999, 0.999, 0);
+ap_sat_slider1.init_slider_ui(236, 0.01, 0.25, 0);
 
 <?
   loop(i=0;N_ENVELOPES,
@@ -1073,7 +1082,7 @@ verb.reset_verb();
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 14;
+CURRENT_VERSION = 15;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1252,6 +1261,21 @@ global_tuning_slider1.serialize_if(version, 13);
   ?>
 );
 
+(version > 14) ? (
+  ap_freq_slider1.serialize(version);
+  ap_feedback_slider1.serialize(version);
+  ap_sat_slider1.serialize(version);
+  file_var(0, allpass);
+) : (
+  ap_freq_slider1.defaults();
+  ap_feedback_slider1.defaults();
+  ap_sat_slider1.defaults();
+  ap_freq = 241;
+  ap_feedback = -.206;
+  ap_sat = 0.1;
+  allpass = 0;
+);
+
 update_solo();
 version = CURRENT_VERSION;
 
@@ -1287,12 +1311,18 @@ d_lp = (high_cut_freq - lp_freq) * inv_samplesblock;
 d_hp = (low_cut_freq - hp_freq) * inv_samplesblock;
 d_verb = (verb_mix - current_verb_mix) * inv_samplesblock;
 
+d_ap_freq = (ap_freq - current_ap_freq) * inv_samplesblock;
+d_ap_fb = (ap_feedback - current_ap_fb) * inv_samplesblock;
+d_ap_sat = (ap_sat - current_ap_sat) * inv_samplesblock;
+
+
 (last_srate != srate) ? (
   init_freq_shift_modulator();
   oversampling = 1;
   last_srate = srate;
   israte = 1.0 / srate;
   tpiT = 2.0 * $pi / srate;
+  piT = $pi / srate;
   sampling_ratio = legacy_mode ? 1 : 44100 / srate;
   sampling_factor = oversampling / sampling_ratio;
   isampling_factor = 1 / sampling_factor;
@@ -1568,6 +1598,18 @@ poisson_enabled ? (
   spl1 = poisson.out_right;
 );
 
+// Allpass processing
+allpass ? (
+  ap_coeff_last = ap_coeff;
+  ap_coeff = allpass_coeff(current_ap_freq);
+  spl0 += current_ap_fb * ap_lspl0;
+  spl1 += current_ap_fb * ap_lspl1;
+  spl0 = a1.allpass32(spl0, ap_coeff, ap_coeff_last, current_ap_sat);
+  spl1 = a2.allpass32(spl1, ap_coeff, ap_coeff_last, current_ap_sat);
+  ap_lspl0 = spl0;
+  ap_lspl1 = spl1;
+);
+
 spl0 *= current_gain;
 spl1 *= current_gain;
 
@@ -1578,6 +1620,10 @@ audio_buffer_idx > current_osc_buffer ? audio_buffer_idx = 0;
 current_f3_gain += df3_gain;
 current_f4_gain += df4_gain;
 current_gain += d_gain;
+
+current_ap_freq += d_ap_freq;
+current_ap_fb += d_ap_fb;
+current_ap_sat += d_ap_sat;
 
 @gfx 1050 768
 (!active_text_input) ? (
@@ -2274,8 +2320,28 @@ global_tuning_slider1.check_text_input_defaults();
 pitch_bend_slider.color = 2;
 pitch_bend_slider.text_slider_ui(<?printf("%d", uuid())?>, cx, cy, 5 * toggle_size + 4 - 3, 8, sprintf(9, "%.1f", pitch_bend_slider.display_value), "Pitch bend range", "Bend range");
 pitch_bend_slider.check_text_input_defaults();
-cy += 9;
+cy += 10;
 
+allpass_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, allpass, "Enable Smear\n\nEnable allpass stack that\nsmears the audio.", "Smear") ? (
+  allpass = 1 - allpass;
+);
+
+txt_blit("SMEAR", fx_origin + 8, cy + 2);
+cy += 8;
+ap_freq_slider1.active = allpass;
+ap_freq_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, fx_width + 1, 8, sprintf(1, "%d", ap_freq), "Allpass Frequency", "AP Freq");
+ap_freq_slider1.check_text_input_defaults();
+
+cy += 9;
+ap_feedback_slider1.active = allpass;
+ap_feedback_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprintf(1, "%d%%", 100 * ap_feedback), "Allpass Feedback", "AP FB");
+ap_feedback_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(ap_feedback_slider1.sl) = max(ap_feedback_slider1.sl_min, min(ap_feedback_slider1.sl_max, text_box.result / 100)); );
+
+ap_sat_slider1.active = allpass;
+ap_sat_slider1.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(1, "%d%%", 100 * ap_sat), "Allpass Saturation", "AP Sat");
+ap_sat_slider1.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(ap_sat_slider1.sl) = max(ap_sat_slider1.sl_min, min(ap_sat_slider1.sl_max, text_box.result / 100)); );
+
+cy += 10;
 txt_blit("OUTPUT", fx_origin + 1, cy + 2);
 
 cy += 8;
