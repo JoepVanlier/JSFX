@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.24
+version: 0.25
 author: Joep Vanlier
-changelog: Extra preset.
+changelog: Add wavetable support.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -145,6 +145,7 @@ import saike_proto_synth_pixel_gfx.jsfx-inc
 import saike_proto_stft_fx.jsfx-inc
 import saike_proto_diffusion.jsfx-inc
 import saike_proto_synth_fx.jsfx-inc
+import saike_proto_synth_wt.jsfx-inc
 
 @init
 DROPPED_FILE_STR = 52;
@@ -288,7 +289,7 @@ verb_mix_slider.init_slider_ui(249, 0, 1, 0);
   loop(i=0;8,
     par = i * 6 + 1;
     printf("gain_slider%d.init_slider_ui(%d, -72, 0, 0);\n", i + 1, par);
-    printf("osc_type_slider%d.init_slider_ui(-1, 0, 3, 0);\n", i + 1);
+    printf("osc_type_slider%d.init_slider_ui(-1, 0, 4, 0);\n", i + 1);
     printf("tune_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 1);
     printf("spacing_slider%d.init_slider_ui(%d, 0.25, 8.0, 0);\n", i + 1, par + 2);
     printf("brightness_slider%d.init_slider_ui(%d, 0.0, 0.95, 0);\n", i + 1, par + 3);
@@ -471,6 +472,7 @@ function osc_type(type)
   : (type == 1) ? "ssaw"
   : (type == 2) ? "peak"
   : (type == 3) ? "nois"
+  : (type == 4) ? "wt"
 );
 
 function filt_type(type)
@@ -583,6 +585,7 @@ global(
   rel_spacing, freq_atten, n_update,
   midi.modwheel,
   keyfollow,
+  israte,
   pitchbend_modifier,
   <?loop(i=1;8, printf("osc%d_active,", i); i += 1);?>
   <?loop(i=1;8, printf("osc%d_gain,", i); i += 1);?>
@@ -695,6 +698,9 @@ instance(
           printf("osc%d.peak.update_dsf_osc_peak(f_prime + osc%d_hz_tune, b_prime + osc%d_spacing_offset, cur_brightness, 0);\n", i, i, i);
         printf(") : (osc%d_wave == 3) ? (", i);
           printf("osc%d.update_noise_settings(cur_freq + osc%d_hz_tune, cur_spacing, cur_brightness, 0);\n", i, i, i);
+        printf(") : (osc%d_wave == 4) ? (", i);
+          // Don't ask :(
+          printf("osc%d.wt.select_mipmap(israte * (cur_freq + osc%d_hz_tune), 0.9032258064516129032258064516129 * (cur_spacing - 0.25));", i, i);
         printf(");");
       printf(") : (");
         printf("g%d = 0; dg%d = 0;", i, i);        
@@ -860,7 +866,7 @@ instance(
   <?
     function gen_osc(i)
     (
-      printf("o%d = g%d ? ((osc%d_wave == 1) ? osc%d.ssaw_step() : (osc%d_wave == 0) ? osc%d.dsf_step() : (osc%d_wave == 2) ? osc%d.peak.dsf_step_peak() : osc%d.noise_step()) * g%d;", i, i, i, i, i, i, i, i, i, i);
+      printf("o%d = g%d ? ((osc%d_wave == 1) ? osc%d.ssaw_step() : (osc%d_wave == 0) ? osc%d.dsf_step() : (osc%d_wave == 2) ? osc%d.peak.dsf_step_peak() : (osc%d_wave == 3) ? osc%d.noise_step() : osc%d.wt.wt_step()) * g%d;", i, i, i, i, i, i, i, i, i, i, i, i);
     );
   ?>
   
@@ -1082,6 +1088,22 @@ freemem = (audio_buffer = freemem) + 2 * osc_buffer;
 freemem = (tuning_memory = freemem) + 256;
 
 freemem = verb.initialize_verb_memory(freemem);
+
+// Store instance variables such that every osc has access to this memory
+OSC_STEP = 2;
+printf("osc%d.init_dsf_osc();\n", i);
+<?
+  loop(i2=1;8,
+    printf("wt%d.create_wavetable();", i2);
+    loop(i=0;MAX_VOICES,
+      printf("v%d.osc%d.wt.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);\n", i, i2); 
+      i += 1;
+    );
+    printf("freemem = wt%d.allocate_wavetable(freemem, WT_LENGTH, 0, 128, OSC_STEP);", i2);
+    i2 += 1;
+  );
+?>
+
 verb.reset_verb();
 
 midi.reset_midi();
@@ -1092,6 +1114,13 @@ version = CURRENT_VERSION;
 
 @serialize
 update_ticker = 0;
+
+write_mode = file_avail(0) < 0;
+
+(!write_mode) ? (
+  <?loop(i2=1;8, printf("memset(wt%d.sample_mem_start, 0, 8 * SAMPLES_PER_WT * WT_LENGTH);", i2); i2 += 1;);?>
+);
+
 file_var(0, version);
 
 <?
@@ -1279,6 +1308,15 @@ global_tuning_slider1.serialize_if(version, 13);
   ap_feedback = -.206;
   ap_sat = 0.1;
   allpass = 0;
+);
+
+(version < 15) ? (
+  has_wavetable_data = 0;
+);
+
+file_var(0, has_wavetable_data);
+has_wavetable_data ? (
+  <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH);", i2); i2 += 1;);?>
 );
 
 update_solo();
@@ -1809,6 +1847,10 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
       printf("  );");
     printf(");");
     
+    printf("osc_type_slider%d.over ? (\n", i + 1);
+      printf("wt%d.handle_dropped_files() ? ( wt%d.create_wavetable(); osc_type_slider%d.current_value = 4;);\n", i + 1, i + 1, i + 1);
+    printf(");\n");
+    
     printf("osc%d_type = osc_type_slider%d.current_value;", i + 1, i + 1);
     
     printf("gain_slider%d.modulator_field(%d, cx, cy, 8, 1, \"Gain envelope to apply\", \"OSC Envelope\", 1, 6, 0);\n cx += 10;", i + 1, uuid());
@@ -1828,7 +1870,7 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
       printf("spacing_offset_slider%d.check_text_input_defaults();", i + 1);
     printf(") : (\n");
       printf("show_semitones ? (\n");
-        printf("tune_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%+\.1f\", log(tune_slider%d.display_value) * 12 / log(2)), \"Tuning (semitones)\", \"Tuning (St)\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+        printf("tune_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%+\.2f\", log(tune_slider%d.display_value) * 12 / log(2)), \"Tuning (semitones)\", \"Tuning (St)\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
         printf("tune_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Tune Mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
         printf("tune_slider%d.check_text_input(%d) ? ( slider(tune_slider%d.sl) = max(tune_slider%d.sl_min, min(tune_slider%d.sl_max, pow(2, text_box.result/12))); );", i + 1, uuid(), i + 1, i + 1, i + 1);
       printf(") : (\n");

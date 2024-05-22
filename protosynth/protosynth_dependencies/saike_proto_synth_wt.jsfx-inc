@@ -1,0 +1,529 @@
+@init
+base_frequency = 440 * pow(2, -5.75);  // f_0
+SAMPLES_PER_WT = 8;
+WT_LENGTH = 2048;
+
+
+function auto_alignment_td(offset)
+local(
+  ix, source_ptr, target_ptr, window_len, diff, ref_value, norm_len, min_val, next, lag_range, y1, y2, y3, y4, y5, a, b
+  start_position,
+  lag,
+)
+global(SAMPLES_PER_WT, WT_LENGTH)
+instance(
+  sample_mem_start, scratch_start, length, sample_data_length, min_idx, minimum_found
+)
+(
+  // Wipe scratch memory before we begin
+  memset(scratch_start, 0, SAMPLES_PER_WT * length);
+
+  start_position = sample_mem_start + offset;
+
+  window_len = sample_data_length * 0.25;//length;
+  lag_range = sample_data_length * 0.5;
+
+  // Find maximum
+  source_ptr = start_position;
+  target_ptr = scratch_start;
+  
+  loop(window_len,
+    lag = 1;
+    ref_value = source_ptr[];
+    target_ptr = scratch_start;
+    loop(lag_range,
+      diff = ref_value - source_ptr[lag];
+      target_ptr[] += diff * diff;
+    
+      lag += 1;
+      target_ptr += 1;
+    );
+    
+    source_ptr += 1;
+  );
+  
+  
+  // Normalization
+  // We start from the end, since the normalization overwrites the buffer
+  // and we need data 1 : tau.
+  target_ptr = scratch_start + lag_range;
+  
+  loop(lag_range,
+    ref_value = 0;
+    source_ptr = target_ptr;
+    norm_len = source_ptr - scratch_start;
+    loop(norm_len,
+      ref_value += source_ptr[];
+      source_ptr -= 1;
+    );
+    target_ptr[] /= (ref_value / norm_len);
+    
+    // Going backwards, to not overwrite data we still need.
+    target_ptr -= 1;
+  );
+  
+  // Find absolute minimum as reference point
+  ix = 0; min_val = 1000000000;
+  loop(lag_range - 15,
+    ref_value = scratch_start[ix];
+    (ref_value < min_val) ? (
+      min_val = ref_value;
+    );
+    
+    ix += 1;
+  );
+  
+  ix = 5; minimum_found = 0;
+  while((!minimum_found) && (ix < lag_range)) (
+    ref_value = scratch_start[ix];
+    
+    (ref_value < (min_val + 0.1)) ? (
+      minimum_found = 1;
+      min_idx = ix;
+    );
+    
+    ix += 1;
+  );
+  
+  next = scratch_start[ix + 1];
+  while(next < ref_value) (
+    ix += 1;
+    ref_value = next;
+    next = scratch_start[ix + 1];
+  );
+  min_idx = ix;
+  
+  // Now we do a parabolic refinement at min_idx
+  // With a * x^2 + b * x + c a local parabolic fit the peak can be found at:  - b / (2 * a)
+  y1 = scratch_start[min_idx - 1];
+  y2 = scratch_start[min_idx];
+  y3 = scratch_start[min_idx + 1];
+  a = 0.5 * (y1 + y3) - y2;
+  b = 0.5 * (y3 - y1);
+  
+  min_idx -= b / (2 * a);
+  
+  min_idx + 1
+);
+
+function auto_alignment_fd()
+local(ix, max_bin, max_val, i0, i1, val, y1, y2, y3, y4, y5, a, b)
+global(SAMPLES_PER_WT)
+instance(sample_mem_start, scratch_start, length, min_idx)
+(
+  // Copy the sample back into the scratch memory
+  memset(scratch_start, 0, SAMPLES_PER_WT * length);
+  memcpy(scratch_start, sample_mem_start, SAMPLES_PER_WT * length);
+  
+  // Try and figure out the frequency
+  fft_real(scratch_start, SAMPLES_PER_WT * length);
+  fft_permute(scratch_start, SAMPLES_PER_WT * length / 2);
+  
+  // Find maximum
+  ix = scratch_start + 8; /* Skip DC and LF */
+  max_val = -100000;
+  loop(SAMPLES_PER_WT * length / 2,
+    i0 = ix[0];
+    i1 = ix[1];
+    val = i0 * i0 + i1 * i1;
+    (val > max_val) ? (
+      max_bin = ix - scratch_start;
+      max_val = val;
+    );
+    ix += 2;
+  );
+  
+  y1 = scratch_start[max_bin - 1];
+  y2 = scratch_start[max_bin];
+  y3 = scratch_start[max_bin + 1];
+  a = 0.5 * (y1 + y3) - y2;
+  b = 0.5 * (y3 - y1);
+  
+  min_idx = 2 * SAMPLES_PER_WT * length / (max_bin - b / (2 * a));
+);
+
+function normalize(ptr, length)
+local(ix, mx)
+global()
+instance()
+(
+  mx = -1000000; ix = 0;
+  loop(length,
+    mx = max(mx, abs(ptr[ix]));
+    ix += 1;
+  );
+  
+  loop(length,
+    ptr[ix] /= mx;
+    ix += 1;
+  );
+);
+
+function read_now(file_handle, num_channels, short)
+local(ix, reading_length, to_ptr, mx, sample)
+global(SAMPLES_PER_WT, wanted_size)
+instance(length, scratch_start, sample_mem_start, sample_data_length)
+(
+  // Read a sample from an open file handle into the sample buffer
+  wanted_size = 2 * SAMPLES_PER_WT * length;
+  reading_length = min(file_avail(file_handle), wanted_size);
+  
+  reading_length ? (
+    file_mem(file_handle, scratch_start, reading_length);
+    
+    (short > 0) ? (
+      to_ptr = scratch_start;
+      loop(SAMPLES_PER_WT - 1,
+        memcpy(to_ptr + length, to_ptr, length);
+        to_ptr += length;
+      );
+      reading_length = wanted_size;
+
+      // Prenormalize the short ones, since we also use these for interpolation.
+      // In that case, we don't want one of the two to have more weight.
+      normalize(scratch_start, SAMPLES_PER_WT * length);
+    );
+    
+    file_mem(file_handle, scratch_start, reading_length);
+    
+    ix = 0; mx = 0;
+    (short != 2) ? memset(sample_mem_start, 0, SAMPLES_PER_WT * length);
+    to_ptr = sample_mem_start;
+    sample = 0;
+    loop(SAMPLES_PER_WT,
+      loop(length,
+        (short == 2) ? (
+          to_ptr[] = to_ptr[] * (1.0 - sample / SAMPLES_PER_WT) + scratch_start[ix] * sample / SAMPLES_PER_WT
+        ) : (
+          to_ptr[] = scratch_start[ix];
+        );
+        mx = max(mx, abs(scratch_start[ix]));
+        ix += num_channels;
+        to_ptr += 1;
+      );
+      sample += 1;
+    );
+    
+    to_ptr = sample_mem_start;
+    loop(SAMPLES_PER_WT * length,
+      to_ptr[] /= mx;
+      to_ptr += 1;
+    );
+    
+    sample_data_length = to_ptr - sample_mem_start;
+  );
+  
+  reading_length > 0
+);
+
+function handle_dropped_files()
+local(file_handle, num_channels, samplerate, did_drop, min_idx, len)
+global(DROPPED_FILE_STR, SAMPLES_PER_WT, has_wavetable_data, nch, sr, WT_LENGTH, estimate_pitch)
+instance(resampling_factor, short)
+(
+  /* Has the user dropped a file? */
+  DROPPED_FILE_STR = 80;
+  
+  did_drop = 0;
+  gfx_getdropfile(0, DROPPED_FILE_STR) ? (
+  
+    file_handle = file_open(DROPPED_FILE_STR);
+    file_handle >= 0 ? (
+      file_rewind(file_handle);
+      
+      len = file_avail(file_handle);
+      len < 2048 ? (
+        // Support very short files (as single wavetable element
+        file_riff(file_handle, num_channels, samplerate);
+        file_rewind(file_handle);
+        resampling_factor = WT_LENGTH / len / num_channels;
+        file_riff(file_handle, nch='rqsr', sr=samplerate * resampling_factor);
+        this.read_now(file_handle, num_channels, short + 1) ? (
+          did_drop = 1;
+          has_wavetable_data = 1;
+          short = short + 1;
+          (short > 1) ? short = 0;
+        );
+        file_close(file_handle);
+      ) : (
+        file_riff(file_handle, num_channels, samplerate);
+  
+        this.read_now(file_handle, num_channels, 0) ? (
+          did_drop = 1;
+          has_wavetable_data = 1;
+        );
+        
+        file_close(file_handle);
+        
+        estimate_pitch ? (
+          //min_idx = 10 * this.auto_alignment_fd();
+          min_idx = this.auto_alignment_td(0);
+          
+          file_handle = file_open(DROPPED_FILE_STR);
+          file_handle >= 0 ? (
+            // Min_idx has to end up at ...
+            file_rewind(file_handle);
+            resampling_factor = WT_LENGTH / min_idx / num_channels;
+            file_riff(file_handle, nch='rqsr', sr=samplerate * resampling_factor);
+            this.read_now(file_handle, num_channels, 0);
+            file_close(file_handle);
+          );
+        );
+      );
+    );
+  );
+  
+  DROPPED_FILE_STR = 0;
+  
+  did_drop
+);
+
+
+function allocate_wavetable(freemem, osc_length, min_note, max_note, step)
+local(scratch_length, wavetable_length)
+instance(
+  num_mipmaps,
+  sample_mem_start, scratch_start, wave_table_mem_start,
+  length,
+  min_table, max_table, step_table
+  min_pitch, log_min_pitch, f_lookup_norm,
+  mipmap_size_per_sample,
+  wt_position,
+)
+global(base_frequency, srate, SAMPLES_PER_WT)
+(
+  // Midi note 69 = 440 Hz
+  // 69 / 12 = 5.75
+  // 440 * 2^(-5.75) is the base note
+  wt_position = freemem;
+  
+  sample_mem_start = freemem + 2;
+  scratch_start = sample_mem_start + SAMPLES_PER_WT * osc_length;
+  
+  num_mipmaps = (max_note - min_note) / step;
+  length = osc_length;
+  wave_table_mem_start = ceil((scratch_start + 2 * SAMPLES_PER_WT * osc_length) / 65536) * 65536;
+  mipmap_size_per_sample = num_mipmaps * osc_length;
+  wavetable_length = mipmap_size_per_sample * SAMPLES_PER_WT;
+  
+  min_table = min_note;
+  max_table = max_note;
+  step_table = step;
+  
+  min_pitch = base_frequency * pow(2, min_table / 12);
+  log_min_pitch = log(srate / min_pitch);
+  f_lookup_norm = 12.0 / (log(2) * step_table);
+  
+  wave_table_mem_start + wavetable_length
+);
+
+function draw_table(cx, cy, w, h)
+local(sample_pos, step, ds, q_offset, ccx, ccy, offset, ix)
+instance(sample_mem_start, length, wt_position)
+global(gfx_x, gfx_y, scaling)
+(
+  gfx_set(1.0, 1.0, 1.0, 0.2);
+  sample_pos = sample_mem_start;
+  ccx = cx - 0.5 * w;
+  
+  offset = -9 * (1+scaling);
+  ix = 0;
+  loop(8,
+    ccx = cx - 0.5 * w + offset;
+    ccy = cy - offset;
+    gfx_x = ccx;
+    gfx_y = ccy + 0.15 * sample_pos[] * h;
+    ds = 10;
+    step = w / length * ds;
+    
+    gfx_set(0.7, 1.0, 0.7, 0.05 + 0.3 * exp(-abs(ix - wt_position[])));
+    loop(length / ds,
+      gfx_lineto(ccx, ccy + 0.15 * sample_pos[] * h);
+      
+      ccx += step;
+      sample_pos += ds;
+    );
+    offset += 2.9 * (1 + scaling);
+    ix += 1;
+  );
+);
+
+function create_wavetable()
+local(wavetable_element_loc, ptr, pitch, step, num_partials, scaling, sample_idx)
+instance(
+  sample_mem_start, length,
+  wave_table_mem_start,
+  num_mipmaps, min_table, max_table, step_table, min_pitch,
+  mipmap_size_per_sample,
+)
+global(srate, base_frequency, SAMPLES_PER_WT, block_wt_audio)
+(
+  block_wt_audio = 1;
+  step = pow(2, step_table / 12);
+  scaling = 1.0 / length;
+  sample_idx = 0;
+  loop(8,
+    wavetable_element_loc = wave_table_mem_start + mipmap_size_per_sample * sample_idx;
+    pitch = min_pitch;
+    loop(num_mipmaps,
+      // Highest allowed frequency is 0.5 * srate
+      // Bin 1 will be at f0, 2 at 2 times the f0 and so forth.
+      //
+      // Highest bin allowed is: alpha <= 0.5 * srate / f0
+      // 2 * (floor(0.5 * srate / f0)) + 1 (1 is DC component)
+    
+      // Gotta clear num_partials + 1 : f_max bins from the wavetable element
+      num_partials = 2 * floor((0.5 * srate - step * pitch) / pitch);
+       
+      // Copy sample chunk into this wavetable element
+      memcpy(wavetable_element_loc, sample_mem_start + sample_idx * length, length);
+      
+      fft_real(wavetable_element_loc, length);
+      fft_permute(wavetable_element_loc, length / 2);
+      
+      // Clear the partials that would end up above nyquist
+      memset(wavetable_element_loc + num_partials + 2, 0, length - num_partials - 2); // + 100
+      
+      wavetable_element_loc[0] = 0;
+      wavetable_element_loc[1] = 0;
+      
+      fft_ipermute(wavetable_element_loc, length / 2);
+      ifft_real(wavetable_element_loc, length);
+      ptr = wavetable_element_loc;
+      loop(length,
+        ptr[] *= scaling;
+        ptr += 1;
+      );
+      
+      pitch *= step;
+      wavetable_element_loc += length;
+    );
+    sample_idx += 1;
+  );
+  block_wt_audio = 0;
+);
+
+function select_mipmap(dt_new, wt_position)
+local(element)
+global()
+instance(
+  dt,
+  wavetable_element_loc, wavetable_element_loc2,
+  f_lookup_norm,
+  mipmap_size_per_sample,
+  pos, log_min_pitch,
+  num_mipmaps,
+  wave_table_mem_start, length,
+  element,
+  wave_frac,
+)
+(
+  // fn is the base frequency for wavetable element n:
+  //
+  //   fn = f_minimum_pitch * 2 ^ ((step * n) / 12)
+  //
+  // or:
+  //   
+  //   12 * (log2(fn) - log2(f_minimum_pitch)) / step = n
+  // 
+  // We want to find which element from the advance per sample (dt)
+  // so we need to convert dt to an actual frequency.
+  //
+  //   dt = srate * dt;
+  //
+  //
+  //  
+  //   log2(fn) = log2(srate * dt) = log2(srate) + log2(dt)
+  //
+  //   n = 12 * (log2(srate) + log2(dt) - log2(f_minimum_pitch)) / step
+  //     = 12 * (log(dt) - log(f_minimum_pitch)) / step / log(2)
+  //
+  // We precomputed some of these things.
+  //
+  //   f_lookup_norm = 12 / (log(2) * step)
+  //
+  // Hence we get:
+  //
+  //   (log(dt) + log(srate / f_minimum_pitch)) * f_lookup_norm
+  element = min(num_mipmaps - 1, max(0, floor((log(dt) + log_min_pitch) * f_lookup_norm)));
+  
+  dt = dt_new;
+  pos = wt_position;
+  wavetable_element_loc = wave_table_mem_start + length * element + floor(pos) * mipmap_size_per_sample;
+  wavetable_element_loc2 = wavetable_element_loc + mipmap_size_per_sample;
+  wave_frac = pos - floor(pos);
+);
+
+function wt_step()
+local(
+  y1, y2, frac, idx,
+)
+instance(
+  dt,
+  pos,
+  wavetable_element_loc, wavetable_element_loc2, wave_frac,
+  t, length,
+  ism1, is0, is1, is2,
+  ism1b, is0b, is1b, is2b,
+  id0, id1, id2, id3,
+)
+global()
+(
+  t += dt;
+  (t < 0.0) ? (
+    t -= floor(1.0)
+  ) : (t >= 1.0) ? (
+    t -= floor(t);
+  );
+  
+  // Interpolate a bit, because otherwise it sounds awful
+  idx = t * length;
+  idx < 0 ? idx += length;
+  
+  frac = idx - floor(idx);
+  ism1 = wavetable_element_loc[idx];
+  ism1b = wavetable_element_loc2[idx];
+  idx += 1;
+  idx >= length ? idx -= length;
+  is0 = wavetable_element_loc[idx];
+  is0b = wavetable_element_loc2[idx];
+  idx += 1;
+  idx >= length ? idx -= length;
+  is1 = wavetable_element_loc[idx];
+  is1b = wavetable_element_loc2[idx];
+  idx += 1;
+  idx >= length ? idx -= length;
+  is2 = wavetable_element_loc[idx];
+  is2b = wavetable_element_loc2[idx];
+  
+  id0 = is0;
+  id1 = 0.5 * (is1 - ism1);
+  id2 = ism1 - 2.5 * is0 + 2 * is1 - 0.5 * is2;
+  id3 = 0.5 * (is2 - ism1) + 1.5 * (is0 - is1);
+  
+  y1 = ((id3*frac+id2)*frac+id1)*frac+id0;
+
+  id0 = is0b;
+  id1 = 0.5 * (is1b - ism1b);
+  id2 = ism1b - 2.5 * is0b + 2 * is1b - 0.5 * is2b;
+  id3 = 0.5 * (is2b - ism1b) + 1.5 * (is0b - is1b);
+  
+  y2 = ((id3*frac+id2)*frac+id1)*frac+id0;
+
+  y1 * (1.0 - wave_frac) + y2 * wave_frac;
+);
+
+function serialize_sample(samples_per_wt, length)
+local()
+global()
+instance(sample_mem_start, sample_data_length)
+(
+  file_var(0, sample_data_length);
+  (sample_data_length > 0) ? (
+    file_var(0, samples_per_wt);
+    file_var(0, length);
+    file_mem(0, sample_mem_start, sample_data_length);
+  );
+  this.create_wavetable();
+);
+
