@@ -465,14 +465,14 @@ function lfo_type(type)
   : (type == 18) ? "noise"
 );
 
-function osc_type(type)
+function osc_type(type, sample_length)
 (
   type = floor(type);
   (type == 0) ? "Harm"
   : (type == 1) ? "ssaw"
   : (type == 2) ? "peak"
   : (type == 3) ? "nois"
-  : (type == 4) ? "wt"
+  : (type == 4) ? (sample_length > 0) ? "wt" : "[wt]"
 );
 
 function filt_type(type)
@@ -700,7 +700,7 @@ instance(
           printf("osc%d.update_noise_settings(cur_freq + osc%d_hz_tune, cur_spacing, cur_brightness, 0);\n", i, i, i);
         printf(") : (osc%d_wave == 4) ? (", i);
           // Don't ask :(
-          printf("osc%d.wt.select_mipmap(israte * (cur_freq + osc%d_hz_tune), 0.9032258064516129032258064516129 * (cur_spacing - 0.25));", i, i);
+          printf("osc%d.wt.select_mipmap(cur_freq + osc%d_hz_tune, 0.9032258064516129032258064516129 * (cur_spacing - 0.25), cur_brightness);", i, i);
         printf(");");
       printf(") : (");
         printf("g%d = 0; dg%d = 0;", i, i);        
@@ -1109,7 +1109,7 @@ verb.reset_verb();
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 15;
+CURRENT_VERSION = 16;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1312,11 +1312,12 @@ global_tuning_slider1.serialize_if(version, 13);
 
 (version < 15) ? (
   has_wavetable_data = 0;
+  <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH, 0);", i2); i2 += 1;);?>
 );
 
 file_var(0, has_wavetable_data);
 has_wavetable_data ? (
-  <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH);", i2); i2 += 1;);?>
+  <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH, osc%d_type == 4);", i2, i2); i2 += 1;);?>
 );
 
 update_solo();
@@ -1835,13 +1836,18 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
     printf("cx += toggle_size + 2;\n");
     printf("txt_blit(\"OSC%d\", cx, cy + 2); cx += 25;", i + 1);
     
+    printf("osc_type_slider%d.sl_max = wt%d.sample_data_length ? 4 : 3;", i + 1, i + 1, i + 1);
     printf("osc_type_slider%d.current_value = osc%d_type;", i + 1, i + 1);
-    printf("osc_type_slider%d.text_slider_ui(%d, cx, cy, 4 * toggle_size + 4, 8, sprintf(9, \"%%s\", osc_type(osc%d_type)), \"Type\", \"Type\"); cx += 4 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("osc_type_slider%d.text_slider_ui(%d, cx, cy, 4 * toggle_size + 4, 8, sprintf(9, \"%%s\", osc_type(osc%d_type, wt%d.sample_data_length)), \"Type\n\nHARM  - Harmonic series with customizable spacing\nSSAW  - SuperSaw with customizable detune\nPeak  - Formant-like filtering\nNoise - Noise with customizable resonance\nWT    - Wavetable (drag and drop sample here).\", \"Type\"); cx += 4 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1, i + 1);
     
     printf("(osc_type_slider%d.over && (mouse_cap == 2) && (last_cap == 0)) ? (\n", i + 1);
       printf("gfx_x = mouse_x;");
       printf("gfx_y = mouse_y;");
-      printf("ix = gfx_showmenu(\"Harmonic series|Super saw|Formant/Peak|Noise\");");
+      printf("wt%d.sample_data_length ? (", i + 1);
+        printf("ix = gfx_showmenu(\"Harmonic series|Super saw|Formant/Peak|Noise|Wavetable\");");
+      printf(") : (");
+        printf("ix = gfx_showmenu(\"Harmonic series|Super saw|Formant/Peak|Noise\");");
+      printf(");");
       printf("  (ix > 0) ? (");
         printf("    osc_type_slider%d.current_value = ix - 1;", i + 1);
       printf("  );");
@@ -1883,9 +1889,16 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
         printf("spacing_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Spacing Mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
         printf("spacing_slider%d.check_text_input(%d) ? ( slider(spacing_slider%d.sl) = max(spacing_slider%d.sl_min, min(spacing_slider%d.sl_max, pow(2, (text_box.result - 12)/12))); );", i + 1, uuid(), i + 1, i + 1, i + 1);
       printf(") : (\n");
-        printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", spacing_slider%d.display_value), (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Partial spacing\", (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
-        printf("spacing_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Spacing Mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
-        printf("spacing_slider%d.check_text_input_defaults();", i + 1);
+        printf("osc%d_type == 4 ? (\n", i + 1);
+          printf("spacing_slider%d.active = !(wt%d.short);", i + 1, i + 1);
+          printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", (spacing_slider%d.display_value - 0.25) / 7.75), (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Partial spacing\", (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
+          printf("spacing_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Spacing Mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
+          printf("spacing_slider%d.check_text_input_defaults();", i + 1);
+        printf(") : (\n");
+          printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", spacing_slider%d.display_value), (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Partial spacing\", (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
+          printf("spacing_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Spacing Mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
+          printf("spacing_slider%d.check_text_input_defaults();", i + 1);
+        printf(");\n");
       printf(");\n");
     printf(");\n");
       

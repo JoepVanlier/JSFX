@@ -403,9 +403,9 @@ global(srate, base_frequency, SAMPLES_PER_WT, block_wt_audio)
   block_wt_audio = 0;
 );
 
-function select_mipmap(dt_new, wt_position)
-local(element)
-global()
+function select_mipmap(freq, wt_position, brightness)
+local(element, filter_freq)
+global(israte, srate)
 instance(
   dt,
   wavetable_element_loc, wavetable_element_loc2,
@@ -447,11 +447,14 @@ instance(
   //   (log(dt) + log(srate / f_minimum_pitch)) * f_lookup_norm
   element = min(num_mipmaps - 1, max(0, floor((log(dt) + log_min_pitch) * f_lookup_norm)));
   
-  dt = dt_new;
+  dt = israte * freq;
   pos = wt_position;
   wavetable_element_loc = wave_table_mem_start + length * element + floor(pos) * mipmap_size_per_sample;
   wavetable_element_loc2 = wavetable_element_loc + mipmap_size_per_sample;
   wave_frac = pos - floor(pos);
+  
+  filter_freq = min(0.5 * srate, freq * exp(7.4 * brightness));
+  this.init_linearSVF_absolute(filter_freq - 1, 0);
 );
 
 function wt_step()
@@ -509,20 +512,25 @@ global()
   id3 = 0.5 * (is2b - ism1b) + 1.5 * (is0b - is1b);
   
   y2 = ((id3*frac+id2)*frac+id1)*frac+id0;
-
-  y1 * (1.0 - wave_frac) + y2 * wave_frac;
+ 
+  this.eval_linearSVF_LP(y1 * (1.0 - wave_frac) + y2 * wave_frac)
 );
 
-function serialize_sample(samples_per_wt, length)
+function serialize_sample(samples_per_wt, length, active)
 local()
 global()
-instance(sample_mem_start, sample_data_length)
+instance(sample_mem_start, sample_data_length, short)
 (
+  sample_data_length *= active;
   file_var(0, sample_data_length);
+  (!active) ? (
+    sample_data_length = 0;
+  );
   (sample_data_length > 0) ? (
     file_var(0, samples_per_wt);
     file_var(0, length);
     file_mem(0, sample_mem_start, sample_data_length);
+    file_var(0, short);
   );
   this.create_wavetable();
 );
