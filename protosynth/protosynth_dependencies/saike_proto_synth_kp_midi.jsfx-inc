@@ -14,18 +14,20 @@ global(CUSTOM_SLIDER)
 
 function init_midi(freemem)
 instance(note_mem,
-         active_note_mem, active_note_vel, active_note_state, note_history, sustaining, sustain_history, num_sustain,
+         active_note_mem, active_note_vel, active_note_state, note_history, sustaining, sustain_history, num_sustain, note_release_mem,
          max_notes, notes_on, pitchbend, modwheel)
 global()
 (
   max_notes = 12;
   freemem = (note_mem = freemem) + 32768;
-  freemem = (active_note_mem = freemem) + 4096;
+  freemem = (active_note_mem = freemem) + 2048;
+  freemem = (note_release_mem = freemem) + 2048;
   freemem = (active_note_vel = freemem) + 4096;
   freemem = (active_note_state = freemem) + 4096;
   freemem = (note_history = freemem) + 4096;
   freemem = (sustain_history = freemem) + 4096;
   memset(active_note_mem, 0, 128);
+  memset(note_release_mem, 0, 128);
   memset(sustain_history, 0, 128);
   memset(note_mem, 0, 32768);
   notes_on = 0;
@@ -161,7 +163,7 @@ local(offset, msg1, msg2, msg3, note_on, note_off, mwCC, pb, lastpb, idx, found)
 
 function midi_clear_notes()
 local(i)
-instance(notes_on, active_note_mem, active_note_state, active_note_vel, note_history, max_notes)
+instance(notes_on, active_note_mem, active_note_state, active_note_vel, note_history, max_notes, note_release_mem, release_idx)
 global()
 (
   // Terminate all notes
@@ -174,6 +176,8 @@ global()
       active_note_state[i] = -1;
       //active_note_vel[i] = 0;
       note_history[i] = 0;
+      release_idx += 1;
+      note_release_mem[i] = release_idx;
     );
     i += 1;
   );
@@ -183,7 +187,7 @@ global()
 // midi.notes_remain
 function midi_sample(respond_to_notes)
 instance(note_next, curSample, note_ptr, notes_remain, notes_on, note, velocity,
-         active_note_mem, active_note_vel, active_note_state, note_history,
+         active_note_mem, active_note_vel, active_note_state, note_history, note_release_mem, release_idx,
          cur_cc, cc_target, max_notes, modwheel, pitchbend, last_vel, last_slot)
 local(i, i2, found, current_item, change, not_released)
 global(MAX_STRING, voice_thievery, glide)
@@ -223,11 +227,11 @@ global(MAX_STRING, voice_thievery, glide)
           found = 1337;
           
           i = last_slot + 1;
-          (i >= MAX_STRING) ? i = 0;
+          (i >= MAX_NOTES) ? i = 0;
           
           !voice_thievery ? (
             // Try just cycling first.
-            while((found == 1337) && (i < MAX_STRING))
+            while((found == 1337) && (i < MAX_NOTES))
             (
               (active_note_mem[i] == 0) ? found = i;
               i += 1;
@@ -235,7 +239,7 @@ global(MAX_STRING, voice_thievery, glide)
           );
           
           i = 0;
-          while((found == 1337) && (i < max_notes))
+          while((found == 1337) && (i < MAX_NOTES))
           (
             (active_note_mem[i] == 0) ? found = i;
             i += 1;
@@ -243,11 +247,28 @@ global(MAX_STRING, voice_thievery, glide)
           
           // Try cycling through released notes next
           (found > MAX_NOTES) ? (
-            i = 0;
-            while((found == 1337) && (i < max_notes))
-            (
-              (active_note_mem[i] < 0) ? found = i;
+            i = 0; 
+            i2 = 90071992547409;  // 9007199254740992;
+            
+            // Find the oldest one to recycle
+            loop(MAX_NOTES,
+              (active_note_mem[i] < 0) ? (
+                (note_release_mem[i] < i2) ? (
+                  i2 = note_release_mem[i];
+                  found = i;
+                );
+              );
               i += 1;
+            );
+            
+            // We are about to recycle an existing one, so we need to drop the old one from the note history
+            (found < MAX_NOTES) ? (
+              i2 = found;
+              loop(max_notes,
+                note_history[i2] = note_history[i2 + 1];
+                i2 += 1;
+              );
+              notes_on -= 1;
             );
           );
           
@@ -295,6 +316,10 @@ global(MAX_STRING, voice_thievery, glide)
           );
         );
         active_note_mem[i] = -abs(active_note_mem[i]);  // Released
+        
+        release_idx += 1;
+        note_release_mem[i] = release_idx;
+        
         //active_note_vel[i] = 0;
         active_note_state[i] = -1; /* Release state */
         change = 1;

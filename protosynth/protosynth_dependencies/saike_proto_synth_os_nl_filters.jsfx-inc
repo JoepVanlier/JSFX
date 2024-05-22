@@ -886,7 +886,7 @@ local(
 instance(res, iter, v0n, v1, v2, k, wc, g_v1, mo0, mo1, mo2, env_est)
 (
   v0 = v0 + v0 + v0;
-  env_est = max(0.5, min(1.0, max(abs(v0 + v0), 0.9998 * env_est)));
+  env_est = max(0.5, min(1.0, max(abs(v0 + v0), 0.9998 * env_est)));  // TODO: make this samplerate independent
   k_factor = 1.0 + preamp * (1.0 - k) * 0.2;
   k_dim = (k - k_factor) * env_est + (1 - env_est);
   
@@ -925,6 +925,94 @@ instance(res, iter, v0n, v1, v2, k, wc, g_v1, mo0, mo1, mo2, env_est)
   mo0 * v0 + mo1 * v1 + mo2 * v2
 );
 
+function c_svf3(x)
+local()
+global()
+instance()
+(
+  x / (1 + abs(0.1 * x))
+);
+
+function dc_svf3(x)
+local(ax)
+global()
+instance()
+(
+  ax = 1.0 / (0.1 * abs(x) + 1);
+  ax * ax
+);
+
+function f_svf3(x)
+local()
+global()
+instance()
+(
+  x / (1 + abs(0.1 * x))
+);
+
+function df_svf3(x)
+local(ax)
+global()
+instance()
+(
+  ax = 1.0 / (0.1 * abs(x) + 1);
+  ax * ax
+);
+
+function _eval_svf3(v0)
+global(epsilon, maxiter_svf, preamp)
+local(
+  f1, f2, fh1, fh2,
+  f1_const, f2_const,  /* Constant part of the implicit equation */
+  norm,
+  a, b, c, d, /* Jacobian elements */
+  dg_v1, cterm,
+  k_factor, k_dim, qsq,
+)
+instance(res, iter, v0n, v1, v2, k, wc, g_v1, mo0, mo1, mo2, env_est, wcm, v_lp)
+(
+  v0 = v0 + v0 + v0;
+  env_est = max(0.5, min(1.5, max(abs(v0 + v0), 0.9998 * env_est)));  // TODO: make this samplerate independent
+  k_factor = 1.0 + preamp * (1.0 - k) * 0.2;
+  k_dim = (k - k_factor) * env_est + (1 - env_est);
+  
+  v_lp = v_lp * 0.999 + 0.001 * (v2 - 0.01 * rand());  // TODO: make this samplerate independent
+  wcm = min(wc * (0.9 + 0.3 * abs(v_lp)), 0.98);
+  
+  /* Calculate fixed stuff from previous iteration */
+  f1_const = wcm * c_svf3(v0n - v2 - 2 * (v1 + f_svf3(g_v1 * k_dim))) + v1;
+  f2_const = wcm * g_v1 + v2;
+
+  v0n = v0;
+
+  iter = 0;
+  while(
+    iter += 1;
+    
+    g_v1 = v1 / (1.0 + abs(v1));
+    dg_v1 = dg_svf2(v1);
+    
+    // Residual
+    cterm = v0 - v2 - 2 * (v1 + f_svf3(g_v1 * k_dim));
+    f1 = wcm * c_svf3(cterm) - v1 + f1_const;
+    f2 = wcm * g_v1 - v2 + f2_const;
+    
+    a = -2 * wcm * ((k - 1) * dg_v1 * df_svf3(k_dim * g_v1) + 1.0) * dc_svf3(cterm) - 1.0;
+    b = - wcm;
+    c = wcm * dg_v1;
+    d = -1;
+    
+    res = abs(f1) + abs(f2);
+    
+    norm = 1.0 / ( a * d - b * c );
+    v1 = v1 - ( d*f1 - b*f2 ) * norm;
+    v2 = v2 - ( a*f2 - c*f1 ) * norm;
+    
+    (res > epsilon) && (iter < maxiter_svf);
+  );
+  
+  mo0 * v0 + mo1 * v1 + mo2 * v2
+);
 
 function run_shriek(x)
 instance(last_x)
@@ -933,17 +1021,20 @@ global()
 (
   this.elliptic_2x(this._eval_svf2(last_x));
   y = this.elliptic_2x(this._eval_svf2(0.5 * (last_x + x)));
-
-  /*this.elliptic_4x(this._eval_svf2(last_x)));
-  this.elliptic_4x(this._eval_svf2(0.75 * last_x + 0.25 * x));
-  this.elliptic_4x(this._eval_svf2(0.5 * (last_x + x)));
-  y = this.elliptic_4x(this._eval_svf2(0.25 * last_x + 0.75 * x));*/
-  
-
   last_x = x;
   y;
 );
 
+function run_mj(x)
+instance(last_x)
+local(y)
+global()
+(
+  this.elliptic_2x(this._eval_svf3(last_x));
+  y = this.elliptic_2x(this._eval_svf3(0.5 * (last_x + x)));
+  last_x = x;
+  y;
+);
 
 function init_linear(freq, res, morph)
 global(srate)
