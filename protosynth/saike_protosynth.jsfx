@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.29
+version: 0.30
 author: Joep Vanlier
-changelog: Add snapping option for some of the sliders. Start dragging with left mouse, but then hold right mouse in addition to snap to nearest.
+changelog: Added option to modulate envelope amount. Fix small issue regarding hint overlay on high res font modes.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -318,11 +318,13 @@ ap_sat_slider1.init_slider_ui(236, 0.01, 0.25, 0, 0.01);
     printf("env_decay_slider%d.init_slider_ui(%d, 30.0, 3000.0, 1, 30.0);\n", i + 1, par + 1);
     printf("env_sustain_slider%d.init_slider_ui(%d, 0, 1.0, 0, 0.7);\n", i + 1, par + 2);
     printf("env_release_slider%d.init_slider_ui(%d, 30, 3000.0, 1, 300.0);\n", i + 1, par + 3);
+    printf("env_amount_slider%d.init_slider_ui(%d, 0, 1.0, 0, 1.0);\n", i + 1, par + 4);
     
     printf("env_attack_slider%d.color=env_color;\n", i + 1);
     printf("env_decay_slider%d.color=env_color;\n", i + 1);
     printf("env_sustain_slider%d.color=env_color;\n", i + 1, par + 2);
     printf("env_release_slider%d.color=env_color;\n", i + 1, par + 3);
+    printf("env_amount_slider%d.color=env_color;\n", i + 1, par + 4);
     
     i += 1;
   );
@@ -633,13 +635,13 @@ instance(
   <?loop(i=1;N_OSCS, printf("osc%d_wave, ", i); i += 1; );?>
   
   <?loop(i=1;N_ENVELOPES,
-    printf("env%d_atk_samples, env%d_k_atk, env%d_k_decay, env%d_k_release, env%d_current_sustain,", i, i, i, i, i);
+    printf("env%d_atk_samples, env%d_k_atk, env%d_k_decay, env%d_k_release, env%d_current_sustain, env%d_amount, env%d_state, ", i, i, i, i, i, i, i);
     i += 1
   );?>
 )
 (
   // Update envelopes and modulators
-  <?loop(i=1;N_ENVELOPES, printf("atk = current_sample < env%d_atk_samples; modulator_mem[%d] += (atk ? env%d_k_atk : pressed ? env%d_k_decay : env%d_k_release) * (max(atk, env%d_current_sustain * pressed) - modulator_mem[%d]);\n", i, i, i, i, i, i, i); i += 1);?>
+  <?loop(i=1;N_ENVELOPES, printf("atk = current_sample < env%d_atk_samples; env%d_state += (atk ? env%d_k_atk : pressed ? env%d_k_decay : env%d_k_release) * (max(atk, env%d_current_sustain * pressed) - env%d_state);\nmodulator_mem[%d] = env%d_amount * env%d_state;\n", i, i, i, i, i, i, i, i, i, i); i += 1);?>
   
   has_output ? (
     <?loop(i=1;N_VISIBLE_MODULATORS, 
@@ -770,6 +772,7 @@ global(
       printf("env_decay_slider%d.mod_target1, env_decay_slider%d.mod_amount1_clamped, env_decay_slider%d.sl, env_decay_slider%d.sl_max, env_decay_slider%d.sl_min,", i, i, i, i, i);
       printf("env_sustain_slider%d.mod_target1, env_sustain_slider%d.mod_amount1_clamped, env_sustain_slider%d.sl, env_sustain_slider%d.sl_max, env_sustain_slider%d.sl_min,", i, i, i, i, i);
       printf("env_release_slider%d.mod_target1, env_release_slider%d.mod_amount1_clamped, env_release_slider%d.sl, env_release_slider%d.sl_max, env_release_slider%d.sl_min,", i, i, i, i, i);
+      printf("env_amount_slider%d.mod_target1, env_amount_slider%d.mod_amount1_clamped, env_amount_slider%d.sl, env_amount_slider%d.sl_max, env_amount_slider%d.sl_min,", i, i, i, i, i);
       i += 1
     );
   ?>
@@ -782,6 +785,7 @@ instance(
       printf("env%d_k_atk,", i);
       printf("env%d_k_decay,", i);
       printf("env%d_k_release,", i);
+      printf("env%d_amount,", i);
       printf("env%d_current_sustain,", i);
       i += 1;
     );
@@ -805,6 +809,9 @@ instance(
       
       get_modulated_value1_preproc_ranged("current_value", "env_release_slider", i);
       printf("env%d_k_release = - log001tds / current_value;\n", i, i);
+      
+      get_modulated_value1_preproc_ranged("current_value", "env_amount_slider", i);
+      printf("env%d_amount = current_value;\n", i, i);
       i += 1;
     );
   ?>
@@ -1108,7 +1115,7 @@ verb.reset_verb();
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 16;
+CURRENT_VERSION = 17;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1319,6 +1326,15 @@ has_wavetable_data ? (
   <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH, osc%d_type == 4, !write_mode);", i2, i2); i2 += 1;);?>
 );
 
+<?
+  loop(i=0;8,
+    printf("(%d < stored_envelopes) ? (", i);
+    printf("env_amount_slider%d.serialize_if(version, 17);\n", i + 1);
+    printf(");", i);
+    i += 1;
+  );
+?>
+
 update_solo();
 version = CURRENT_VERSION;
 
@@ -1388,6 +1404,7 @@ d_ap_sat = (ap_sat - current_ap_sat) * inv_samplesblock;
     printf("env_decay_slider%d.text_slider_block();", i + 1);
     printf("env_sustain_slider%d.text_slider_block();", i + 1);
     printf("env_release_slider%d.text_slider_block();", i + 1);
+    printf("env_amount_slider%d.text_slider_block();", i + 1);
     i += 1;
   );
 ?>
@@ -1918,28 +1935,41 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
 cy += 5;
 cy_ref = cy;
 
+function print_time(value)
+local()
+global()
+instance()
+(
+  value < 100 ? sprintf(9, "%.1f", value) : sprintf(9, "%d", value + 0.000000001)
+);
+
 <?
   loop(i=0;N_ENVELOPES,
+    printf("slider_width = 4 * toggle_size + 1;");
     printf("cx = side_pad;\n");
     printf("env%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, 1, \"Envelope %d\\n(always active)\", \"ENVELOPE %d\");\ncx += toggle_size + 2;", i + 1, i + 1, i + 1);
     printf("env%d_enabled.color=env_color;\n", i + 1);
     printf("txt_blit(\"ENV%d\", cx, cy + 2); cx += 25;", i + 1);
-    printf("env_attack_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env_attack_slider%d.display_value), \"Attack\", \"Attack\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_attack_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, print_time(env_attack_slider%d.display_value), \"Attack\", \"Attack\"); cx += slider_width + 4 + 2;", i + 1, uuid(), i + 1);
     printf("env_attack_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Attack mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
     printf("env_attack_slider%d.check_text_input_defaults();", i + 1);
     
-    printf("env_decay_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env_decay_slider%d.display_value), \"Decay\", \"Decay\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_decay_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, print_time(env_decay_slider%d.display_value), \"Decay\", \"Decay\"); cx += slider_width + 4 + 2;", i + 1, uuid(), i + 1);
     printf("env_decay_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Decay mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
     printf("env_decay_slider%d.check_text_input_defaults();", i + 1);
     
-    printf("env_sustain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * env_sustain_slider%d.display_value), \"Sustain\", \"Sustain\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_sustain_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, sprintf(9, \"%%d\", 100 * env_sustain_slider%d.display_value), \"Sustain\", \"Sustain\"); cx += slider_width + 4 + 2;", i + 1, uuid(), i + 1);
     printf("env_sustain_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Sustain mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
     printf("env_sustain_slider%d.check_text_input(%d) ? ( slider(env_sustain_slider%d.sl) = max(env_sustain_slider%d.sl_min, min(env_sustain_slider%d.sl_max, text_box.result / 100)); );", i + 1, uuid(), i + 1, i + 1, i + 1);
     //printf("env_sustain_slider%d.check_text_input_defaults();", i + 1);
     
-    printf("env_release_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", env_release_slider%d.display_value), \"Release\", \"Release\"); cx += 5 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_release_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, print_time(env_release_slider%d.display_value), \"Release\", \"Release\"); cx += slider_width + 4 + 2;", i + 1, uuid(), i + 1);
     printf("env_release_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Release mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
     printf("env_release_slider%d.check_text_input_defaults();", i + 1);
+    
+    printf("env_amount_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, sprintf(9, \"%%d\", 100 * env_amount_slider%d.display_value), \"Amount\n\nCan be useful to make envelopes\nvelocity dependent for instance.\", \"Amount\"); cx += slider_width + 4 + 2;", i + 1, uuid(), i + 1);
+    printf("env_amount_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Amount mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
+    printf("env_amount_slider%d.check_text_input_defaults();", i + 1);
     
     printf("cy += 8;");
     i += 1;
@@ -2454,7 +2484,6 @@ force_glide_toggle.simple_serialize_toggle(fx_origin + 32, cy + 1, toggle_size, 
 glide_slider.active = glide;
 glide_slider.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(9, "%.1f", glide_time), "Glide time", "Glide time");
 
-
 hinter.draw_hints();
 
 txt_blit(".", side_pad + 60 + 5 * midi.note_history[midi.notes_on - 1], img_h - 12);
@@ -2564,3 +2593,4 @@ handle_dropped_files_microtuning(tuning_memory);
 
 /* Reset dropped file status */
 gfx_getdropfile(-1);
+
