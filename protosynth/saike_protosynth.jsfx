@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.32
+version: 0.33
 author: Joep Vanlier
-changelog: Add focus mechanism for last clicked slider. Once a slider is focused, you can go up and down in increments with left/right arrow.
+changelog: Added FFT reverb option
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -141,8 +141,8 @@ import saike_proto_synth_os_nl_filters.jsfx-inc
 import saike_proto_synth_oscillators.jsfx-inc
 import saike_proto_synth_kp_midi.jsfx-inc
 import saike_proto_synth_pixel_gfx.jsfx-inc
-import saike_proto_stft_fx.jsfx-inc
 import saike_proto_diffusion.jsfx-inc
+import saike_proto_stft_fx.jsfx-inc
 import saike_proto_synth_fx.jsfx-inc
 import saike_proto_synth_wt.jsfx-inc
 
@@ -245,7 +245,7 @@ instance()
   //gfx_a = 0.4;
   gfx_a = min(1, 5 / osc_downsample_factor);
   hh = 0.5 * h;
-  phh = 0.5 * h;
+  phh = h;//0.5 * h;
   yc = y + hh;
   y_top = y + h - 2;
   y_bottom = y + 2;
@@ -389,13 +389,13 @@ local()
 global()
 instance(mix1, mix2, mix3, mix4, mix21, mix22, mix31)
 (
-  freemem = mix1.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
-  freemem = mix2.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
-  freemem = mix3.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
-  freemem = mix4.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
-  freemem = mix21.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
-  freemem = mix22.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
-  freemem = mix31.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer);
+  freemem = mix1.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
+  freemem = mix2.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
+  freemem = mix3.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
+  freemem = mix4.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
+  freemem = mix21.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
+  freemem = mix22.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
+  freemem = mix31.init_stft_mix_mem(freemem, shared_fft_buffer, window_buffer, 3);
   
   freemem = mix1.init_phasemod_mem(freemem);
   freemem = mix2.init_phasemod_mem(freemem);
@@ -636,7 +636,7 @@ instance(
   
   <?loop(i=1;N_ENVELOPES,
     printf("env%d_atk_samples, env%d_k_atk, env%d_k_decay, env%d_k_release, env%d_current_sustain, env%d_amount, env%d_state, ", i, i, i, i, i, i, i);
-    i += 1
+    i += 1 
   );?>
 )
 (
@@ -1112,6 +1112,10 @@ printf("osc%d.init_dsf_osc();\n", i);
 
 verb.reset_verb();
 
+//freemem = (fft_verb_window_buffer = freemem) + MAX_FFT_SIZE;
+//freemem = (fft_verb_fft_buffer = freemem) + MAX_FFT_SIZE;
+freemem = fft_verb.init_stft_verb_mem(freemem, 6); //, fft_verb_fft_buffer, fft_verb_window_buffer, 6);
+
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
@@ -1341,6 +1345,24 @@ version = CURRENT_VERSION;
 @slider
 
 @block
+shimmer = 0;
+drops = 0;
+shift_mode = 0;
+shift_freq = 0;
+fft_verb.stft_reverb_settings(1, time_ms, 0, side_cut_freq, damping_freq, high_cut_freq, low_cut_freq, shimmer, drops, shift_mode, shift_freq);
+
+//1/time_ms
+
+/*
+  slider248:time_ms=900<5,2800,1>-Verb Time [ms]
+  slider249:verb_mix=0.4<0, 1, 0.01>-Verb Mix
+  slider250:side_cut_freq=120<20,22050,0.001:log>-Side low cut frequency
+  slider251:low_cut_freq=20<20,22050,0.001:log>-Low cut frequency
+  slider252:high_cut_freq=22050<20,22050,0.001:log>-High cut frequency
+  slider253:damping_freq=22050<20,22050,0.001:log>-Damping frequency
+*/
+
+
 update_solo();
 
 any_solo ? (
@@ -1637,17 +1659,24 @@ verb_enabled ? (
   hp_freq += d_hp;
   current_verb_mix += d_verb;
   
-  verb.update_verb_filters(damping_freq, lp_freq, hp_freq, side_freq);
-  
-  current_time = 0.9995 * current_time + 0.0005 * time_ms;
-  ((current_time != last_time) || (current_seed != seed) || (current_reverb_algorithm != reverb_algorithm) || (current_feedback != low_feedback)) ? (
-    current_seed = seed;
-    last_time = current_time;
-    current_feedback = low_feedback;
-    current_reverb_algorithm = reverb_algorithm;
-    verb.update_verb_settings(current_time, current_seed, current_reverb_algorithm, low_feedback);
+  (reverb_algorithm != 3) ? (
+    verb.update_verb_filters(damping_freq, lp_freq, hp_freq, side_freq);
+    
+    current_time = 0.9995 * current_time + 0.0005 * time_ms;
+    ((current_time != last_time) || (current_seed != seed) || (current_reverb_algorithm != reverb_algorithm) || (current_feedback != low_feedback)) ? (
+      current_seed = seed;
+      last_time = current_time;
+      current_feedback = low_feedback;
+      current_reverb_algorithm = reverb_algorithm;
+      verb.update_verb_settings(current_time, current_seed, current_reverb_algorithm, low_feedback);
+    );
+    verb.verb_tick(spl0, spl1);
+  ) : (
+    fft_verb.process_stft_verb(spl0, spl1);
+    verb.out_left = fft_verb.out_left;
+    verb.out_right = fft_verb.out_right;
   );
-  verb.verb_tick(spl0, spl1);
+  
   
   spl0 = spl0 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_left;
   spl1 = spl1 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_right;
@@ -2006,7 +2035,7 @@ cy += 5;
     
     printf("mod%d_restart.simple_serialize_toggle_big(cx, cy, 8, mod%d_restart, \"Reset phase %d on note on\", \"Phase init%d\") ? (mod%d_restart = 1 - mod%d_restart;);\ncx += toggle_size + 3;", i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
     printf("mod_phase_slider%d.rounding_increment = 0.1;\n", i + 1);
-    printf("mod_phase_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%d\", 100 * mod_phase_slider%d.display_value), \"Phase\", \"Phase\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+    printf("mod_phase_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, sprintf(9, \"%%d\", 100 * mod_phase_slider%d.display_value), \"Phase\", \"Phase\"); cx += slider_width + 4 + 1;", i + 1, uuid(), i + 1);
     printf("mod_phase_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Envelope\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
     printf("mod_phase_slider%d.check_text_input(%d) ? ( slider(mod_phase_slider%d.sl) = max(mod_phase_slider%d.sl_min, min(mod_phase_slider%d.sl_max, text_box.result / 100)); );", i + 1, uuid(), i + 1, i + 1, i + 1);
     
@@ -2016,7 +2045,7 @@ cy += 5;
     */
     
     printf("mod_amount_slider%d.rounding_increment = 0.1;\n", i + 1);
-    printf("mod_amount_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.1f\", 100 * mod%d_amount), \"Amount\", \"Amount\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1);
+    printf("mod_amount_slider%d.text_slider_ui(%d, cx, cy, slider_width + 4, 8, sprintf(9, \"%%\d\", 100 * mod%d_amount), \"Amount\", \"Amount\"); cx += slider_width + 4 + 1;", i + 1, uuid(), i + 1);
     printf("mod_amount_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"Amount\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid());
     printf("mod_amount_slider%d.check_text_input(%d) ? ( slider(mod_amount_slider%d.sl) = max(mod_amount_slider%d.sl_min, min(mod_amount_slider%d.sl_max, text_box.result / 100)); );", i + 1, uuid(), i + 1, i + 1, i + 1);
     
@@ -2370,20 +2399,24 @@ verb_enable_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, verb_
 
 txt_blit("VERB", fx_origin + 8, cy + 2);
 
-fb_toggle.simple_serialize_toggle(fx_origin + 45, cy + 1, toggle_size, 1 - low_feedback, "Metallic\n\nAllows longer ringing, but sounds more metallic", "Metallic") ? (
+fb_toggle.simple_serialize_toggle(fx_origin + 38, cy + 1, toggle_size, 1 - low_feedback, "Metallic\n\nAllows longer ringing, but sounds more metallic", "Metallic") ? (
   low_feedback = 1 - low_feedback;
 );
 
-reverb_algo1.simple_serialize_toggle(fx_origin + 60, cy + 1, toggle_size, reverb_algorithm == 0, "Sparse Verb", "Sparse") ? (
+reverb_algo1.simple_serialize_toggle(fx_origin + 53, cy + 1, toggle_size, reverb_algorithm == 0, "Sparse Verb", "Sparse") ? (
   reverb_algorithm = 0;
 );
 
-reverb_algo2.simple_serialize_toggle(fx_origin + 67, cy + 1, toggle_size, reverb_algorithm == 1, "Dense Verb", "Dense") ? (
+reverb_algo2.simple_serialize_toggle(fx_origin + 60, cy + 1, toggle_size, reverb_algorithm == 1, "Dense Verb", "Dense") ? (
   reverb_algorithm = 1;
 );
 
-reverb_algo3.simple_serialize_toggle(fx_origin + 74, cy + 1, toggle_size, reverb_algorithm == 2, "Diffuse Delay", "Delay") ? (
+reverb_algo3.simple_serialize_toggle(fx_origin + 67, cy + 1, toggle_size, reverb_algorithm == 2, "Diffuse Delay", "Delay") ? (
   reverb_algorithm = 2;
+);
+
+reverb_algo4.simple_serialize_toggle(fx_origin + 74, cy + 1, toggle_size, reverb_algorithm == 3, "FFT Verb", "FFT") ? (
+  reverb_algorithm = 3;
 );
 
 cy += 8;
