@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.33
+version: 0.35
 author: Joep Vanlier
-changelog: Added FFT reverb option
+changelog: Disable processing if audio is not running. Clear reverb memory when toggling.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -1345,6 +1345,11 @@ version = CURRENT_VERSION;
 @slider
 
 @block
+(reverb_algorithm != last_reverb_algo) ? (
+  last_reverb_algo = reverb_algorithm;
+  verb.reset_verb();
+);
+
 shimmer = 0;
 drops = 0;
 shift_mode = 0;
@@ -1475,169 +1480,6 @@ pass_through = 1;
 midi.midi_block(pass_through);
 
 @sample
-freq_shift_modulator_sample();
-
-midi.curSample += 1;
-midi.notes_remain ? (
-  // Reset if MIDI stuff updated
-  midi_input = 1;
-  midi.midi_sample(midi_input) ? (
-    settings_changed = 1;
-  );
-);
-
-big_tick = update_ticker == 0;
-update_ticker += 1;
-(update_ticker > 128) ? (
-  update_ticker = 0;
-);
-
-big_tick ? (
-  midi.update_notes();
-);
-
-voice_update = (n_update % SLOW_UPDATE_FACTOR) == 0;
-voice_update ? (
-  global_tuning_slider1.mod_target1 ? (
-    modulator_mem = 
-      (latest_voice == 0) ? v0.modulator_mem
-      : (latest_voice == 1) ? v1.modulator_mem
-      : (latest_voice == 2) ? v2.modulator_mem
-      : (latest_voice == 3) ? v3.modulator_mem
-      : (latest_voice == 4) ? v4.modulator_mem
-      : (latest_voice == 5) ? v5.modulator_mem
-      : (latest_voice == 6) ? v6.modulator_mem
-      : (latest_voice == 7) ? v7.modulator_mem
-      : (latest_voice == 8) ? v8.modulator_mem
-      : (latest_voice == 9) ? v9.modulator_mem
-      : (latest_voice == 10) ? v10.modulator_mem
-      : (latest_voice == 11) ? v11.modulator_mem;
-  
-    <?get_modulated_value1_preproc_ranged("current_global_tuning", "global_tuning_slider", 1);?>
-  ) : (
-    current_global_tuning = global_tuning;
-  );
-
-  pitchbend_modifier = 2 ^ ((pitchbend_range * midi.pitchbend + current_global_tuning) / 12);
-  !glide ? (
-    <?
-    loop(i=0;MAX_VOICES,
-      printf("v%d.has_output ? v%d.update_voice();", i, i);
-      i += 1;
-    );
-    ?>
-  ) : (
-    v0.update_voice();
-    k_glide = - log001tds / glide_time;
-    v0.update_glide();
-  );
-);
-
-(filter4_enabled) ? (
-  (voice_update || force_filter4_update) ? (
-    modulator_mem = 
-      (latest_voice == 0) ? v0.modulator_mem
-      : (latest_voice == 1) ? v1.modulator_mem
-      : (latest_voice == 2) ? v2.modulator_mem
-      : (latest_voice == 3) ? v3.modulator_mem
-      : (latest_voice == 4) ? v4.modulator_mem
-      : (latest_voice == 5) ? v5.modulator_mem
-      : (latest_voice == 6) ? v6.modulator_mem
-      : (latest_voice == 7) ? v7.modulator_mem
-      : (latest_voice == 8) ? v8.modulator_mem
-      : (latest_voice == 9) ? v9.modulator_mem
-      : (latest_voice == 10) ? v10.modulator_mem
-      : (latest_voice == 11) ? v11.modulator_mem;
-
-    keyfollow_mod = 
-      (latest_voice == 0) ? v0.keyfollow_mod
-      : (latest_voice == 1) ? v1.keyfollow_mod
-      : (latest_voice == 2) ? v2.keyfollow_mod
-      : (latest_voice == 3) ? v3.keyfollow_mod
-      : (latest_voice == 4) ? v4.keyfollow_mod
-      : (latest_voice == 5) ? v5.keyfollow_mod
-      : (latest_voice == 6) ? v6.keyfollow_mod
-      : (latest_voice == 7) ? v7.keyfollow_mod
-      : (latest_voice == 8) ? v8.keyfollow_mod
-      : (latest_voice == 9) ? v9.keyfollow_mod
-      : (latest_voice == 10) ? v10.keyfollow_mod
-      : (latest_voice == 11) ? v11.keyfollow_mod;
-
-    <?
-      get_modulated_value2_preproc_noclamp("f_cutoff", "f_cutoff_slider", 4);
-      get_modulated_value2_preproc("f_reso", "f_reso_slider", 4);
-      get_modulated_value2_preproc("f_morph", "f_morph_slider", 4);
-    ?>
-    
-    f_cutoff = min(1, max(0, f_cutoff - f4_keyfollow * keyfollow_mod));
-    
-    current_f4_type = floor(f4_type);
-    (current_f4_type == 0) ? (
-      this.filter4.lin.init_linear(f_cutoff, f_reso, f_morph);
-    ) : (current_f4_type == 1) ? (
-      this.filter4.ms20.init_ms20(f_cutoff, f_reso, f_morph);
-    ) : (current_f4_type == 2) ? (
-      this.filter4.la2.init_lad2(f_cutoff, f_reso, f_morph);
-    ) : (current_f4_type == 3) ? (
-      this.filter4.la4.init_lad4(f_cutoff, f_reso, f_morph);
-    ) : (current_f4_type == 4) ? (
-      this.filter4.shriek.init_shriek(f_cutoff, f_reso, f_morph);
-    ) : (current_f4_type == 5) ? (
-      this.filter4.pl4.init_pl4(f_cutoff, f_reso, f_morph);
-    ) : (current_f4_type == 6) ? (
-      this.filter4.shriek.init_shriek(f_cutoff, f_reso, f_morph);      
-    );
-  );
-);
-
-v0.has_output ? v0.play_voice() : (v0.l = v0.r = 0);
-
-!glide ? (
-  v1.has_output ? v1.play_voice() : (v1.l = v1.r = 0);
-  v2.has_output ? v2.play_voice() : (v2.l = v2.r = 0);
-  v3.has_output ? v3.play_voice() : (v3.l = v3.r = 0);
-  v4.has_output ? v4.play_voice() : (v4.l = v4.r = 0);
-  v5.has_output ? v5.play_voice() : (v5.l = v5.r = 0);
-  v6.has_output ? v6.play_voice() : (v6.l = v6.r = 0);
-  v7.has_output ? v7.play_voice() : (v7.l = v7.r = 0);
-  v8.has_output ? v8.play_voice() : (v8.l = v8.r = 0);
-  v9.has_output ? v9.play_voice() : (v9.l = v9.r = 0);
-  v10.has_output ? v10.play_voice() : (v10.l = v10.r = 0);
-  v11.has_output ? v11.play_voice() : (v11.l = v11.r = 0);
-  spl0 += v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
-) : (
-  spl0 = v0.l;
-);
-
-spl0 = filter4_enabled ? (
-  (current_f4_type == 0) ? (
-    this.filter4.lin.eval_linear_2p(spl0)
-  ) : (current_f4_type == 1) ? (
-    this.filter4.ms20.run_ms20(spl0 * current_f4_gain) / current_f4_gain
-  ) : (current_f4_type == 2) ? (
-    this.filter4.la2.run_lad2(spl0 * current_f4_gain) / current_f4_gain;
-  ) : (current_f4_type == 3) ? (
-    this.filter4.la4.run_lad4(spl0 * current_f4_gain) / current_f4_gain;
-  ) : (current_f4_type == 4) ? (
-    this.filter4.shriek.run_shriek(spl0 * current_f4_gain) / current_f4_gain;
-  ) : (current_f4_type == 5) ? (
-    this.filter4.pl4.run_pl4(spl0 * current_f4_gain) / current_f4_gain;
-  ) : (current_f4_type == 6) ? (
-    this.filter4.shriek.run_mj(spl0 * current_f4_gain) / current_f4_gain;
-  )
-) : spl0;
-
-
-// Internal engine is still mono
-spl1 = spl0;
-//spl1 += v0.r + v1.r + v2.r + v3.r + v4.r + v5.r + v6.r + v7.r + v8.r + v9.r + v10.r + v11.r;
-
-chorus.apply_chorus(chorus_amount);
-
-last_gain += d_gain;
-
-n_update += 1;
-
 function cheapo_block(x)
 local(y)
 global()
@@ -1650,73 +1492,244 @@ instance(xm1, ym1)
   y
 );
 
-spl0 = ldc.cheapo_block(spl0);
-spl1 = rdc.cheapo_block(spl1);
+freq_shift_modulator_sample();
 
-verb_enabled ? (
-  side_freq += d_side;
-  lp_freq += d_lp;
-  hp_freq += d_hp;
-  current_verb_mix += d_verb;
-  
-  (reverb_algorithm != 3) ? (
-    verb.update_verb_filters(damping_freq, lp_freq, hp_freq, side_freq);
-    
-    current_time = 0.9995 * current_time + 0.0005 * time_ms;
-    ((current_time != last_time) || (current_seed != seed) || (current_reverb_algorithm != reverb_algorithm) || (current_feedback != low_feedback)) ? (
-      current_seed = seed;
-      last_time = current_time;
-      current_feedback = low_feedback;
-      current_reverb_algorithm = reverb_algorithm;
-      verb.update_verb_settings(current_time, current_seed, current_reverb_algorithm, low_feedback);
-    );
-    verb.verb_tick(spl0, spl1);
-  ) : (
-    fft_verb.process_stft_verb(spl0, spl1);
-    verb.out_left = fft_verb.out_left;
-    verb.out_right = fft_verb.out_right;
+midi.curSample += 1;
+midi.notes_remain ? (
+  // Reset if MIDI stuff updated
+  midi_input = 1;
+  midi.midi_sample(midi_input) ? (
+    settings_changed = 1;
+  );
+);
+
+m_state = max(0.9999 * m_state, max(midi.notes_on, m_out_last));
+audio_running = m_state > 0.00000000001;
+
+audio_running ? (
+
+  big_tick = update_ticker == 0;
+  update_ticker += 1;
+  (update_ticker > 128) ? (
+    update_ticker = 0;
   );
   
+  big_tick ? (
+    midi.update_notes();
+  );
   
-  spl0 = spl0 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_left;
-  spl1 = spl1 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_right;
+  voice_update = (n_update % SLOW_UPDATE_FACTOR) == 0;
+  voice_update ? (
+    global_tuning_slider1.mod_target1 ? (
+      modulator_mem = 
+        (latest_voice == 0) ? v0.modulator_mem
+        : (latest_voice == 1) ? v1.modulator_mem
+        : (latest_voice == 2) ? v2.modulator_mem
+        : (latest_voice == 3) ? v3.modulator_mem
+        : (latest_voice == 4) ? v4.modulator_mem
+        : (latest_voice == 5) ? v5.modulator_mem
+        : (latest_voice == 6) ? v6.modulator_mem
+        : (latest_voice == 7) ? v7.modulator_mem
+        : (latest_voice == 8) ? v8.modulator_mem
+        : (latest_voice == 9) ? v9.modulator_mem
+        : (latest_voice == 10) ? v10.modulator_mem
+        : (latest_voice == 11) ? v11.modulator_mem;
+    
+      <?get_modulated_value1_preproc_ranged("current_global_tuning", "global_tuning_slider", 1);?>
+    ) : (
+      current_global_tuning = global_tuning;
+    );
+  
+    pitchbend_modifier = 2 ^ ((pitchbend_range * midi.pitchbend + current_global_tuning) / 12);
+    !glide ? (
+      <?
+      loop(i=0;MAX_VOICES,
+        printf("v%d.has_output ? v%d.update_voice();", i, i);
+        i += 1;
+      );
+      ?>
+    ) : (
+      v0.update_voice();
+      k_glide = - log001tds / glide_time;
+      v0.update_glide();
+    );
+  );
+  
+  (filter4_enabled) ? (
+    (voice_update || force_filter4_update) ? (
+      modulator_mem = 
+        (latest_voice == 0) ? v0.modulator_mem
+        : (latest_voice == 1) ? v1.modulator_mem
+        : (latest_voice == 2) ? v2.modulator_mem
+        : (latest_voice == 3) ? v3.modulator_mem
+        : (latest_voice == 4) ? v4.modulator_mem
+        : (latest_voice == 5) ? v5.modulator_mem
+        : (latest_voice == 6) ? v6.modulator_mem
+        : (latest_voice == 7) ? v7.modulator_mem
+        : (latest_voice == 8) ? v8.modulator_mem
+        : (latest_voice == 9) ? v9.modulator_mem
+        : (latest_voice == 10) ? v10.modulator_mem
+        : (latest_voice == 11) ? v11.modulator_mem;
+  
+      keyfollow_mod = 
+        (latest_voice == 0) ? v0.keyfollow_mod
+        : (latest_voice == 1) ? v1.keyfollow_mod
+        : (latest_voice == 2) ? v2.keyfollow_mod
+        : (latest_voice == 3) ? v3.keyfollow_mod
+        : (latest_voice == 4) ? v4.keyfollow_mod
+        : (latest_voice == 5) ? v5.keyfollow_mod
+        : (latest_voice == 6) ? v6.keyfollow_mod
+        : (latest_voice == 7) ? v7.keyfollow_mod
+        : (latest_voice == 8) ? v8.keyfollow_mod
+        : (latest_voice == 9) ? v9.keyfollow_mod
+        : (latest_voice == 10) ? v10.keyfollow_mod
+        : (latest_voice == 11) ? v11.keyfollow_mod;
+  
+      <?
+        get_modulated_value2_preproc_noclamp("f_cutoff", "f_cutoff_slider", 4);
+        get_modulated_value2_preproc("f_reso", "f_reso_slider", 4);
+        get_modulated_value2_preproc("f_morph", "f_morph_slider", 4);
+      ?>
+      
+      f_cutoff = min(1, max(0, f_cutoff - f4_keyfollow * keyfollow_mod));
+      
+      current_f4_type = floor(f4_type);
+      (current_f4_type == 0) ? (
+        this.filter4.lin.init_linear(f_cutoff, f_reso, f_morph);
+      ) : (current_f4_type == 1) ? (
+        this.filter4.ms20.init_ms20(f_cutoff, f_reso, f_morph);
+      ) : (current_f4_type == 2) ? (
+        this.filter4.la2.init_lad2(f_cutoff, f_reso, f_morph);
+      ) : (current_f4_type == 3) ? (
+        this.filter4.la4.init_lad4(f_cutoff, f_reso, f_morph);
+      ) : (current_f4_type == 4) ? (
+        this.filter4.shriek.init_shriek(f_cutoff, f_reso, f_morph);
+      ) : (current_f4_type == 5) ? (
+        this.filter4.pl4.init_pl4(f_cutoff, f_reso, f_morph);
+      ) : (current_f4_type == 6) ? (
+        this.filter4.shriek.init_shriek(f_cutoff, f_reso, f_morph);      
+      );
+    );
+  );
+  
+  v0.has_output ? v0.play_voice() : (v0.l = v0.r = 0);
+  
+  !glide ? (
+    v1.has_output ? v1.play_voice() : (v1.l = v1.r = 0);
+    v2.has_output ? v2.play_voice() : (v2.l = v2.r = 0);
+    v3.has_output ? v3.play_voice() : (v3.l = v3.r = 0);
+    v4.has_output ? v4.play_voice() : (v4.l = v4.r = 0);
+    v5.has_output ? v5.play_voice() : (v5.l = v5.r = 0);
+    v6.has_output ? v6.play_voice() : (v6.l = v6.r = 0);
+    v7.has_output ? v7.play_voice() : (v7.l = v7.r = 0);
+    v8.has_output ? v8.play_voice() : (v8.l = v8.r = 0);
+    v9.has_output ? v9.play_voice() : (v9.l = v9.r = 0);
+    v10.has_output ? v10.play_voice() : (v10.l = v10.r = 0);
+    v11.has_output ? v11.play_voice() : (v11.l = v11.r = 0);
+    spl0 += v0.l + v1.l + v2.l + v3.l + v4.l + v5.l + v6.l + v7.l + v8.l + v9.l + v10.l + v11.l;
+  ) : (
+    spl0 = v0.l;
+  );
+  
+  spl0 = filter4_enabled ? (
+    (current_f4_type == 0) ? (
+      this.filter4.lin.eval_linear_2p(spl0)
+    ) : (current_f4_type == 1) ? (
+      this.filter4.ms20.run_ms20(spl0 * current_f4_gain) / current_f4_gain
+    ) : (current_f4_type == 2) ? (
+      this.filter4.la2.run_lad2(spl0 * current_f4_gain) / current_f4_gain;
+    ) : (current_f4_type == 3) ? (
+      this.filter4.la4.run_lad4(spl0 * current_f4_gain) / current_f4_gain;
+    ) : (current_f4_type == 4) ? (
+      this.filter4.shriek.run_shriek(spl0 * current_f4_gain) / current_f4_gain;
+    ) : (current_f4_type == 5) ? (
+      this.filter4.pl4.run_pl4(spl0 * current_f4_gain) / current_f4_gain;
+    ) : (current_f4_type == 6) ? (
+      this.filter4.shriek.run_mj(spl0 * current_f4_gain) / current_f4_gain;
+    )
+  ) : spl0;
+  
+  
+  // Internal engine is still mono
+  spl1 = spl0;
+  //spl1 += v0.r + v1.r + v2.r + v3.r + v4.r + v5.r + v6.r + v7.r + v8.r + v9.r + v10.r + v11.r;
+  
+  chorus.apply_chorus(chorus_amount);
+  
+  last_gain += d_gain;
+  
+  n_update += 1;
+  
+  spl0 = ldc.cheapo_block(spl0);
+  spl1 = rdc.cheapo_block(spl1);
+  
+  verb_enabled ? (
+    side_freq += d_side;
+    lp_freq += d_lp;
+    hp_freq += d_hp;
+    current_verb_mix += d_verb;
+    
+    (reverb_algorithm != 3) ? (
+      verb.update_verb_filters(damping_freq, lp_freq, hp_freq, side_freq);
+      
+      current_time = 0.9995 * current_time + 0.0005 * time_ms;
+      ((current_time != last_time) || (current_seed != seed) || (current_reverb_algorithm != reverb_algorithm) || (current_feedback != low_feedback)) ? (
+        current_seed = seed;
+        last_time = current_time;
+        current_feedback = low_feedback;
+        current_reverb_algorithm = reverb_algorithm;
+        verb.update_verb_settings(current_time, current_seed, current_reverb_algorithm, low_feedback);
+      );
+      verb.verb_tick(spl0, spl1);
+    ) : (
+      fft_verb.process_stft_verb(spl0, spl1);
+      verb.out_left = fft_verb.out_left;
+      verb.out_right = fft_verb.out_right;
+    );
+    
+    
+    spl0 = spl0 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_left;
+    spl1 = spl1 * (1.0 - current_verb_mix) + current_verb_mix * verb.out_right;
+  );
+  
+  spl0 = brightness_boost.eval_linearSVF_shelf(spl0);
+  spl1 = brightness_boost.eval_linearSVF_shelf2(spl1);
+  
+  poisson_enabled ? (
+    poisson.poisson_noise(spl0, spl1, poisson_freq, 0);
+    spl0 = poisson.out_left;
+    spl1 = poisson.out_right;
+  );
+  
+  // Allpass processing
+  allpass ? (
+    ap_coeff_last = ap_coeff;
+    ap_coeff = allpass_coeff(current_ap_freq);
+    spl0 += current_ap_fb * ap_lspl0;
+    spl1 += current_ap_fb * ap_lspl1;
+    spl0 = a1.allpass32(spl0, ap_coeff, ap_coeff_last, current_ap_sat);
+    spl1 = a2.allpass32(spl1, ap_coeff, ap_coeff_last, current_ap_sat);
+    ap_lspl0 = spl0;
+    ap_lspl1 = spl1;
+  );
+  
+  spl0 *= current_gain;
+  spl1 *= current_gain;
+  
+  audio_buffer[audio_buffer_idx] = 0.5 * (spl0 + spl1);
+  audio_buffer_idx += 1;
+  audio_buffer_idx > current_osc_buffer ? audio_buffer_idx = 0;
+  
+  current_f3_gain += df3_gain;
+  current_f4_gain += df4_gain;
+  current_gain += d_gain;
+  
+  current_ap_freq += d_ap_freq;
+  current_ap_fb += d_ap_fb;
+  current_ap_sat += d_ap_sat;
 );
 
-spl0 = brightness_boost.eval_linearSVF_shelf(spl0);
-spl1 = brightness_boost.eval_linearSVF_shelf2(spl1);
-
-poisson_enabled ? (
-  poisson.poisson_noise(spl0, spl1, poisson_freq, 0);
-  spl0 = poisson.out_left;
-  spl1 = poisson.out_right;
-);
-
-// Allpass processing
-allpass ? (
-  ap_coeff_last = ap_coeff;
-  ap_coeff = allpass_coeff(current_ap_freq);
-  spl0 += current_ap_fb * ap_lspl0;
-  spl1 += current_ap_fb * ap_lspl1;
-  spl0 = a1.allpass32(spl0, ap_coeff, ap_coeff_last, current_ap_sat);
-  spl1 = a2.allpass32(spl1, ap_coeff, ap_coeff_last, current_ap_sat);
-  ap_lspl0 = spl0;
-  ap_lspl1 = spl1;
-);
-
-spl0 *= current_gain;
-spl1 *= current_gain;
-
-audio_buffer[audio_buffer_idx] = 0.5 * (spl0 + spl1);
-audio_buffer_idx += 1;
-audio_buffer_idx > current_osc_buffer ? audio_buffer_idx = 0;
-
-current_f3_gain += df3_gain;
-current_f4_gain += df4_gain;
-current_gain += d_gain;
-
-current_ap_freq += d_ap_freq;
-current_ap_fb += d_ap_fb;
-current_ap_sat += d_ap_sat;
+m_out_last = max(abs(spl0), abs(spl1));
 
 @gfx 1050 768
 (!active_text_input) ? (
