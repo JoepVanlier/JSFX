@@ -1,8 +1,8 @@
 desc:bric-a-brac (Saike)
 tags: texture adder
-version: 0.45
+version: 0.46
 author: Joep Vanlier
-changelog: Show last touched correctly.
+changelog: Add option to use global threshold (right click on the threshold line)
 license: MIT
 provides:
   bab_dependencies/*
@@ -77,6 +77,10 @@ slider58:pan4=0<-1,1,1>-Pan 4
 slider63:drywet=0<-1,1,.00001>-Dry/Wet
 slider64:c_palette=0<0,10,1>palette
 
+slider65:single_threshold=0<0,1,1{Off,On}>-Use only a single set of thresholds
+slider66:global_min=-36<-48,3,0.0001>-Global Minimum / Threshold 1
+slider67:global_max=3<-48,3,0.0001>-Global Maximum 1
+
 in_pin:left input
 in_pin:right input
 out_pin:left output
@@ -92,7 +96,7 @@ import saike_bab_LFOs.jsfx-inc
 import saike_bab_settings.jsfx-inc
 
 @init
-version = 1;
+version = 2;
 last_selected_sample = -1;
 preview_channel.chan_default(0);
 chan1.chan_default(1);
@@ -443,10 +447,17 @@ env_follower_f4.init_follower_absolute(atk, dec);
 
 function update_followers()
 (
-  env1_follower.init_follower(settings1.env, atk1, decay1, hold_percent1, hold_time1, min1, max1);
-  env2_follower.init_follower(settings2.env, atk2, decay2, hold_percent2, hold_time2, min2, max2);
-  env3_follower.init_follower(settings3.env, atk3, decay3, hold_percent3, hold_time3, min3, max3);
-  env4_follower.init_follower(settings4.env, atk4, decay4, hold_percent4, hold_time4, min4, max4);
+  single_threshold ? (
+    env1_follower.init_follower(settings1.env, atk1, decay1, hold_percent1, hold_time1, global_min, global_max);
+    env2_follower.init_follower(settings2.env, atk2, decay2, hold_percent2, hold_time2, global_min, global_max);
+    env3_follower.init_follower(settings3.env, atk3, decay3, hold_percent3, hold_time3, global_min, global_max);
+    env4_follower.init_follower(settings4.env, atk4, decay4, hold_percent4, hold_time4, global_min, global_max);  
+  ) : (
+    env1_follower.init_follower(settings1.env, atk1, decay1, hold_percent1, hold_time1, min1, max1);
+    env2_follower.init_follower(settings2.env, atk2, decay2, hold_percent2, hold_time2, min2, max2);
+    env3_follower.init_follower(settings3.env, atk3, decay3, hold_percent3, hold_time3, min3, max3);
+    env4_follower.init_follower(settings4.env, atk4, decay4, hold_percent4, hold_time4, min4, max4);
+  );
 );
 
 // Memory layout
@@ -513,6 +524,12 @@ update_followers();
 
 @serialize
 file_var(0, version);
+
+(version < 2) ? (
+  single_threshold = 0;
+  global_min = -36;
+  global_max = 3;
+);
 
 writing = file_avail(0) < 0;
 serialize_all_samples(writing);
@@ -770,11 +787,11 @@ SELECT_COLOR = 13;
 gfx_setfont(SELECT_COLOR, "Arial", 14 * (1 + fontscaling));
 
 function ui_vertical_thresh(x, w, ymin, ymax, slider_idx, smin, smax, drag_mode, thresh)
-local(yc, new)
+local(yc, new, menu)
 global(thresh_r, thresh_g, thresh_b, 
        thresh2_r, thresh2_g, thresh2_b,
-       qqt, scale,
-       gfx_mouse_r, gfx_a,
+       qqt, scale, single_threshold,
+       gfx_mouse_r, gfx_x, gfx_y, gfx_a, mouse_x, mouse_y,
        captured, DRAG_THRESH,
        mouse_dy)
 (
@@ -796,6 +813,14 @@ global(thresh_r, thresh_g, thresh_b,
       
       mouse_press(1) ? (
         captured = drag_mode;
+      );
+      mouse_press(2) ? (
+        gfx_x = mouse_x;
+        gfx_y = mouse_y;
+        menu = gfx_showmenu(single_threshold ? "!Use global thresholds" : "Use global thresholds");
+        menu ? (
+          single_threshold = 1 - single_threshold;
+        );
       );
     );
    ) : (
@@ -847,7 +872,9 @@ local(x_fraction, y_fraction,
       xs, ys, ws, hs,
       meter_space,
       button_width, button_height,
-      y_buttons, h_buttons, toggle_advanced)
+      y_buttons, h_buttons, toggle_advanced,
+      min_slider_idx, max_slider_idx,
+)
 global(samplelocs, loaded_sample, advanced,
        gfx_x, gfx_y, gfx_w, gfx_h,
        input_buffer.draw_buffer_db,
@@ -867,6 +894,7 @@ global(samplelocs, loaded_sample, advanced,
        THRESH_SLIDER_MIN
        THRESH_SLIDER_MAX,
        SLIDERS_PER_SAMPLE,
+       single_threshold,
        settings1.draw_buttons,
        settings2.draw_buttons,
        settings3.draw_buttons,
@@ -939,7 +967,15 @@ global(samplelocs, loaded_sample, advanced,
   
   toggle_advanced = quick_toggle(xs + ws - 1, ys + hs - 1.5 * button_height, 2 * button_width, button_height, "Advanced", advanced, "Show advanced options");
   
-  ui_vertical_thresh(xs, ws, ys + hs, ys, SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN, floorLevel, ceilLevel, DRAG_THRESH_MIN, 0);
+  single_threshold ? (
+    min_slider_idx = 66;
+    max_slider_idx = 67;
+  ) : (
+    min_slider_idx = SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN;
+    max_slider_idx = SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX;
+  );
+  
+  ui_vertical_thresh(xs, ws, ys + hs, ys, min_slider_idx, floorLevel, ceilLevel, DRAG_THRESH_MIN, 0);
   
   currently_selected_env_mode = (selected_sample == 0) ? (
     settings1.env
@@ -952,17 +988,17 @@ global(samplelocs, loaded_sample, advanced,
   );
   
   (currently_selected_env_mode == 0) ? (
-    ui_vertical_thresh(xs, ws, ys + hs, ys, SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX, floorLevel, ceilLevel, DRAG_THRESH_MAX, 1); 
+    ui_vertical_thresh(xs, ws, ys + hs, ys, max_slider_idx, floorLevel, ceilLevel, DRAG_THRESH_MAX, 1); 
   );
   /* Make sure max stays above min */
   
   (captured == DRAG_THRESH_MAX) ? (
-    slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX) < slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN) ? (
-      slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN) = slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX);
+    slider(max_slider_idx) < slider(min_slider_idx) ? (
+      slider(min_slider_idx) = slider(max_slider_idx);
     );
   ) : (
-    slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX) < slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN) ? (
-      slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MAX) = slider(SLIDERS_PER_SAMPLE * selected_sample + THRESH_SLIDER_MIN);
+    slider(max_slider_idx) < slider(min_slider_idx) ? (
+      slider(max_slider_idx) = slider(min_slider_idx);
     );
   );
   
