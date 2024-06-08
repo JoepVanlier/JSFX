@@ -85,28 +85,31 @@ function evaluateFade()
 function grainRead_LQ()
   local(out, frac,
         id0, id1, id2, id3,
-        ism1, is0, is1, is2)
+        ism1, is0, is1, is2, floc)
   instance(ptr, 
            nTransition, N2, N3, idx,
            y0, y1, y2, b1, lOut, rOut, outL, outR,
            loc, hloc, ptrMin, ptrMax, 
            advance, hadvance, lmul, rmul)
-  global()
+  global(_G_L, _G_R, _G_GL, _G_GR, ACTIVE_GRAINS)
   (
     ( idx < N3 ) ? (
-      ptr = 2*loc - floor(2*loc) + floor(loc)*2;
-      frac = loc - floor(loc);
-      ptr = floor(ptr);
-    
+      floc = floor(loc);
+      frac = loc - floc;
+      ptr = floc + floc;
+      
       /* Evaluate the cosine grain windowing function */
       idx < nTransition ? (
         // Continue the window
         y0 = b1 * y1 - y2;
         y2 = y1;
         y1 = y0;
-        out = .5*(y0+1);
+        out = 0.5 * (y0 + 1);
+        outL = out * lmul;
+        outR = out * rmul;
       ) : ( idx < N2 ) ? (
-        out = 1;
+        outL = lmul;
+        outR = rmul;
       ) : (
         ( idx == N2 ) ? (
           this.grainPrepFall(nTransition);
@@ -116,11 +119,10 @@ function grainRead_LQ()
         y0 = b1 * y1 - y2;
         y2 = y1;
         y1 = y0;
-        out = .5*(y0+1);
+        out = 0.5 * (y0+1);
+        outL = out * lmul;
+        outR = out * rmul;
       );
-      
-      outL = out * lmul;
-      outR = out * rmul;
       
       // Simple linear interpolation to keep CPU cost in check
       // Big step up from sample & hold, but not nearly as expensive as AA filters.
@@ -133,7 +135,13 @@ function grainRead_LQ()
       loc > .5*ptrMax ? (
         loc -= .5*(ptrMax - ptrMin);
       );
-    ) : ( lOut = 0; rOut = 0; outL = 0; outR = 0; idx += 1; );
+      
+      ACTIVE_GRAINS += 1;
+      _G_L += lOut;
+      _G_R += rOut;
+      _G_GL += outL;
+      _G_GR += outR;
+    ) : ( idx += 1; );
   );
 
 function grainRead_HQ()
@@ -145,7 +153,7 @@ function grainRead_HQ()
            y0, y1, y2, b1, lOut, rOut, outL, outR,
            loc, hloc, ptrMin, ptrMax, 
            advance, hadvance, lmul, rmul)
-  global()
+  global(_G_L, _G_R, _G_GL, _G_GR, ACTIVE_GRAINS)
   (
     ( idx < N3 ) ? (
       ptr = 2*loc - floor(2*loc) + floor(loc)*2;
@@ -158,7 +166,7 @@ function grainRead_HQ()
         y0 = b1 * y1 - y2;
         y2 = y1;
         y1 = y0;
-        out = .5*(y0+1);
+        out = 0.5 * (y0 + 1);
       ) : ( idx < N2 ) ? (
         out = 1;
       ) : (
@@ -170,7 +178,7 @@ function grainRead_HQ()
         y0 = b1 * y1 - y2;
         y2 = y1;
         y1 = y0;
-        out = .5*(y0+1);
+        out = 0.5 * (y0 + 1);
       );
       
       outL = out * lmul;
@@ -205,7 +213,14 @@ function grainRead_HQ()
       loc > .5*ptrMax ? (
         loc -= .5*(ptrMax - ptrMin);
       );
-    ) : ( lOut = 0; rOut = 0; outL = 0; outR = 0; idx += 1; );
+      
+      ACTIVE_GRAINS += 1;
+      _G_L += lOut;
+      _G_R += rOut;
+      _G_GL += outL;
+      _G_GR += outR;
+      
+    ) : ( idx += 1; );
   );
 
 function granulator_init()
@@ -246,32 +261,69 @@ function grainDrawHead(x, y, w, h, wb)
     );
   );
 
+<?
+function draw_heads(count)
+local(i)
+global()
+instance()
+(
+  loop(i=0;count,
+    printf("this.grain%d.grainDrawHead(x, y, w, h, wb);", i);
+    i += 1
+  );
+)
+?>
+
 function grainDrawHeads(x, y, w, h, wb)
   local()
-  global()
+  global(max_grain)
   instance()
   (
-    this.grain0.grainDrawHead(x, y, w, h, wb);
-    this.grain1.grainDrawHead(x, y, w, h, wb);
-    this.grain2.grainDrawHead(x, y, w, h, wb);
-    this.grain3.grainDrawHead(x, y, w, h, wb);
-    this.grain4.grainDrawHead(x, y, w, h, wb);
-    this.grain5.grainDrawHead(x, y, w, h, wb);
-    this.grain6.grainDrawHead(x, y, w, h, wb);
-    this.grain7.grainDrawHead(x, y, w, h, wb);
-    this.grain8.grainDrawHead(x, y, w, h, wb);
-    this.grain9.grainDrawHead(x, y, w, h, wb);
-    this.grain10.grainDrawHead(x, y, w, h, wb);
-    this.grain11.grainDrawHead(x, y, w, h, wb);
-    this.grain12.grainDrawHead(x, y, w, h, wb);
-    this.grain13.grainDrawHead(x, y, w, h, wb);
-    this.grain14.grainDrawHead(x, y, w, h, wb);
+    (max_grain == 0) ? (
+      <?draw_heads(15);?>
+    ) : (max_grain == 1) ? (
+      <?draw_heads(30);?>
+    ) : (max_grain == 2) ? (
+      <?draw_heads(45);?>
+    ) : (
+      <?draw_heads(60);?>
+    );
   );
+
+<?
+function write_grain_processors(mode, count)
+local(i)
+global()
+instance()
+(
+  loop(i=0;count,
+    printf("this.grain%d.grainRead_%s();", i, mode);
+    i += 1
+  );
+)
+?>
+
+
+<?
+function write_grain_init(count)
+local(i)
+global()
+instance()
+(
+  loop(i=0;count,
+    printf("this.grain%d.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) ", i);
+    (i < (count - 1)) ? ( printf(":"); );
+    
+    i += 1
+  );
+)
+?>
+
 
 function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist, overlapOrDist, spd, spdSpread, panSpread, reverseProbability, playing, readBufCur, readBufMin, readBufMax, writeBufCur, relPosition, pitchTimeInvariance, updateBuffer)
   local(grainVar, N, ptr, pan, dist, safetyFactor, lostBuffer, total, reverse, lowLatencyCompensation, cpan, cpan_l, cpan_r)
-  global(GRAINDISTMIN, GRAINDISTMAX, OVERLAPMAX, VARIANCEMIN, VARIANCEMAX, srate, oversamplingMode)
-  instance(nextGrain, L, R, GL, GR, normalize, fixedGrainSize)
+  global(GRAINDISTMIN, GRAINDISTMAX, OVERLAPMAX, VARIANCEMIN, VARIANCEMAX, srate, oversamplingMode, _G_L, _G_R, _G_GL, _G_GR, max_grain, ACTIVE_GRAINS, igrain)
+  instance(nextGrain, L, R, normalize, fixedGrainSize)
   (
     fixedGrainSize = 1;
     nextGrain -= 1;
@@ -282,14 +334,14 @@ function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist,
       /* Detune */
       spd = spd + spdSpread * (rand()-.5);
       pitchTimeInvariance ? grainLength = grainLength * spd;
-      N = floor(grainLength*.3333333333333333333333);      
+      N = floor(grainLength*.3333333333333333333333);
       
       useAbsoluteVar ? (
         grainVar = .001 * srate * exp(VARIANCEMIN + .001*(VARIANCEMAX-VARIANCEMIN)*jitter);
       ) : (
         grainVar = .01 * jitter * grainLength;
       );
-      reverse = reverseProbability > rand();      
+      reverse = reverseProbability > rand();
       
       pan = .5 + panSpread*(rand()-.5);
       
@@ -299,7 +351,7 @@ function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist,
         useAbsoluteDist ? (
           nextGrain = .001*srate*exp(GRAINDISTMIN + .01075268*(GRAINDISTMAX-GRAINDISTMIN)*overlapOrDist);
         ) : (
-          nextGrain = 3*N*(1-.01*overlapOrDist);
+          nextGrain = 3*N*igrain*(1-.01*overlapOrDist);
         );
         
         total = readBufMax - readBufMin;
@@ -330,64 +382,52 @@ function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist,
       cpan_l = cos(cpan);
       cpan_r = sin(cpan);
       
-      this.grain0.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain1.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain2.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain3.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain4.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain5.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain6.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain7.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain8.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain9.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) 
-      : this.grain10.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 )
-      : this.grain11.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 )
-      : this.grain12.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 )
-      : this.grain13.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 )
-      : this.grain14.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 )
+      (max_grain == 0) ? (
+        <?write_grain_init(15);?>
+      ) : (max_grain == 1) ? (
+        <?write_grain_init(30);?>
+      ) : (max_grain == 2) ? (
+        <?write_grain_init(45);?>
+      ) : (
+        <?write_grain_init(60);?>
+      );
     );
     
-    oversamplingMode == 0 ? (
-      this.grain0.grainRead_LQ();
-      this.grain1.grainRead_LQ();
-      this.grain2.grainRead_LQ();
-      this.grain3.grainRead_LQ();
-      this.grain4.grainRead_LQ();
-      this.grain5.grainRead_LQ();
-      this.grain6.grainRead_LQ();
-      this.grain7.grainRead_LQ();
-      this.grain8.grainRead_LQ();
-      this.grain9.grainRead_LQ();
-      this.grain10.grainRead_LQ();
-      this.grain11.grainRead_LQ();
-      this.grain12.grainRead_LQ();
-      this.grain13.grainRead_LQ();
-      this.grain14.grainRead_LQ();
+    // Messy global sum passing
+    _G_L = _G_R = _G_GL = _G_GR = ACTIVE_GRAINS = 0;
+    
+    
+    (max_grain == 0) ? (
+      oversamplingMode == 0 ? (
+        <?write_grain_processors("LQ", 15);?>
+      ) : (
+        <?write_grain_processors("HQ", 15);?>
+      );
+    ) : (max_grain == 1) ? (
+      oversamplingMode == 0 ? (
+        <?write_grain_processors("LQ", 30);?>
+      ) : (
+        <?write_grain_processors("HQ", 30);?>
+      );
+    ) : (max_grain == 2) ? (
+      oversamplingMode == 0 ? (
+        <?write_grain_processors("LQ", 45);?>
+      ) : (
+        <?write_grain_processors("HQ", 45);?>
+      );
     ) : (
-      this.grain0.grainRead_HQ();
-      this.grain1.grainRead_HQ();
-      this.grain2.grainRead_HQ();
-      this.grain3.grainRead_HQ();
-      this.grain4.grainRead_HQ();
-      this.grain5.grainRead_HQ();
-      this.grain6.grainRead_HQ();
-      this.grain7.grainRead_HQ();
-      this.grain8.grainRead_HQ();
-      this.grain9.grainRead_HQ();
-      this.grain10.grainRead_HQ();
-      this.grain11.grainRead_HQ();
-      this.grain12.grainRead_HQ();
-      this.grain13.grainRead_HQ();
-      this.grain14.grainRead_HQ();
-    );
+      oversamplingMode == 0 ? (
+        <?write_grain_processors("LQ", 60);?>
+      ) : (
+        <?write_grain_processors("HQ", 60);?>
+      );
+    );;
     
-    L = this.grain0.lOut + this.grain1.lOut + this.grain2.lOut + this.grain3.lOut + this.grain4.lOut + this.grain5.lOut + this.grain6.lOut + this.grain7.lOut + this.grain8.lOut + this.grain9.lOut + this.grain10.lOut  + this.grain11.lOut;  + this.grain12.lOut;  + this.grain13.lOut;  + this.grain14.lOut;
-    R = this.grain0.rOut + this.grain1.rOut + this.grain2.rOut + this.grain3.rOut + this.grain4.rOut + this.grain5.rOut + this.grain6.rOut + this.grain7.rOut + this.grain8.rOut + this.grain9.rOut + this.grain10.rOut  + this.grain11.rOut   + this.grain12.rOut   + this.grain13.rOut   + this.grain14.rOut;
-
+    L = _G_L;
+    R = _G_R;
+    
     normalize ? (
-      GL = this.grain0.outL + this.grain1.outL + this.grain2.outL + this.grain3.outL + this.grain4.outL + this.grain5.outL + this.grain6.outL + this.grain7.outL + this.grain8.outL + this.grain9.outL + this.grain10.outL + this.grain11.outL + this.grain12.outL + this.grain13.outL + this.grain14.outL;
-      GR = this.grain0.outR + this.grain1.outR + this.grain2.outR + this.grain3.outR + this.grain4.outR + this.grain5.outR + this.grain6.outR + this.grain7.outR + this.grain8.outR + this.grain9.outR + this.grain10.outR + this.grain11.outR + this.grain12.outR + this.grain13.outR + this.grain14.outR;    
-      L/=max(1,GL);
-      R/=max(1,GR);
+      L /= max(1,_G_GL);
+      R /= max(1,_G_GR);
     );
   );
