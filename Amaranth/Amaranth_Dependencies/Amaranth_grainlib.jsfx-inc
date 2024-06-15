@@ -31,9 +31,9 @@ function grainPrepFall(N)
     y2 = sin( ip - 2.0*w );
   );
 
-function initGrain(_ptr, _nTransition, nHold, _ptrMin, _ptrMax, speed, _lmul, _rmul)
+function initGrain(_ptr, _nTransition, nHold, _nTransition2, _ptrMin, _ptrMax, speed, _lmul, _rmul)
   local()
-  instance(advance, loc, ptrMin, ptrMax, nTransition, N2, N3, idx, ds, lmul, rmul)
+  instance(advance, loc, ptrMin, ptrMax, nTransition, nTransition2, N2, N3, idx, ds, lmul, rmul)
   global()  
   (
     ( idx <= N3 ) ? ( 0 ) : (
@@ -43,8 +43,9 @@ function initGrain(_ptr, _nTransition, nHold, _ptrMin, _ptrMax, speed, _lmul, _r
       lmul = _lmul;
       rmul = _rmul;
       nTransition = _nTransition;
+      nTransition2 = _nTransition2;
       N2 = nTransition + nHold;
-      N3 = N2 + nHold;
+      N3 = N2 + _nTransition2;
       advance = speed;
       idx = 0;
       loc < .5*ptrMin ? (
@@ -87,7 +88,7 @@ function grainRead_LQ()
         id0, id1, id2, id3,
         ism1, is0, is1, is2, floc)
   instance(ptr, 
-           nTransition, N2, N3, idx,
+           nTransition, nTransition2, N2, N3, idx,
            y0, y1, y2, b1, lOut, rOut, outL, outR,
            loc, hloc, ptrMin, ptrMax, 
            advance, hadvance, lmul, rmul)
@@ -111,8 +112,8 @@ function grainRead_LQ()
         outL = lmul;
         outR = rmul;
       ) : (
-        ( idx == N2 ) ? (
-          this.grainPrepFall(nTransition);
+        ( idx < (N2 + 1) ) ? (
+          this.grainPrepFall(nTransition2);
         );
         
         // Continue the window
@@ -149,7 +150,7 @@ function grainRead_HQ()
         id0, id1, id2, id3,
         ism1, is0, is1, is2)
   instance(ptr, 
-           nTransition, N2, N3, idx,
+           nTransition, nTransition2, N2, N3, idx,
            y0, y1, y2, b1, lOut, rOut, outL, outR,
            loc, hloc, ptrMin, ptrMax, 
            advance, hadvance, lmul, rmul)
@@ -170,8 +171,8 @@ function grainRead_HQ()
       ) : ( idx < N2 ) ? (
         out = 1;
       ) : (
-        ( idx == N2 ) ? (
-          this.grainPrepFall(nTransition);
+        ( idx < (N2 + 1) ) ? (
+          this.grainPrepFall(nTransition2);
         );
         
         // Continue the window
@@ -304,25 +305,45 @@ instance()
 ?>
 
 
+
+
 <?
-function write_grain_init(count)
+function write_gain_func(count, phase_sizes)
 local(i)
 global()
 instance()
 (
   loop(i=0;count,
-    printf("this.grain%d.initGrain(ptr, N, N, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) ", i);
+    printf("this.grain%d.initGrain(ptr, %s, readBufMin, readBufMax, spd, cpan_l, cpan_r) ? ( 0 ) ", i, phase_sizes);
     (i < (count - 1)) ? ( printf(":"); );
-    
     i += 1
   );
-)
+);
+
+
+function write_grain_init(count)
+local()
+global()
+instance()
+(
+  printf("(grain_type < 1) ? (");
+    write_gain_func(count, "N, N, N");
+  printf(") : (grain_type < 2) ? (");
+    write_gain_func(count, "N * 1.5, 1, N * 1.5");
+  printf(") : (grain_type < 3) ? (");
+    write_gain_func(count, "N * 0.75, 1, N * 0.75");
+  printf(") : (grain_type < 4) ? (");
+    write_gain_func(count, "N * 2.5 - 1, 1, 0.5 * N");
+  printf(") : (");
+    write_gain_func(count, "N * 0.5, 1, N + N * 2.5 - 1");
+  printf(");");
+);
 ?>
 
 
 function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist, overlapOrDist, spd, spdSpread, panSpread, reverseProbability, playing, readBufCur, readBufMin, readBufMax, writeBufCur, relPosition, pitchTimeInvariance, updateBuffer)
-  local(grainVar, N, ptr, pan, dist, safetyFactor, lostBuffer, total, reverse, lowLatencyCompensation, cpan, cpan_l, cpan_r)
-  global(GRAINDISTMIN, GRAINDISTMAX, OVERLAPMAX, VARIANCEMIN, VARIANCEMAX, srate, oversamplingMode, _G_L, _G_R, _G_GL, _G_GR, max_grain, ACTIVE_GRAINS, igrain)
+  local(grainVar, N, ptr, pan, dist, safetyFactor, lostBuffer, total, reverse, lowLatencyCompensation, cpan, cpan_l, cpan_r, stoich_interval)
+  global(GRAINDISTMIN, GRAINDISTMAX, OVERLAPMAX, VARIANCEMIN, VARIANCEMAX, srate, oversamplingMode, _G_L, _G_R, _G_GL, _G_GR, max_grain, ACTIVE_GRAINS, igrain, grain_type, stochasticity)
   instance(nextGrain, L, R, normalize, fixedGrainSize)
   (
     fixedGrainSize = 1;
@@ -375,6 +396,14 @@ function granulator_update(grainLength, useAbsoluteVar, jitter, useAbsoluteDist,
         reverse ? (
           spd = -spd;
           ptr = ptr + 4 * grainLength * ( 1 - relPosition ) * updateBuffer + 2*grainLength * (1-updateBuffer);
+        );
+      
+        stochasticity ? (
+          stoich_interval = - nextGrain * log(rand());
+          stoich_interval > (5 * nextGrain) ? (
+            stoich_interval = (5 * nextGrain);
+          );
+          nextGrain = stochasticity * stoich_interval + (1.0 - stochasticity) * nextGrain;
         );
       );
       
