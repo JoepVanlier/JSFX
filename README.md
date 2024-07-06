@@ -34,8 +34,12 @@ Note that everything is permissively licensed, but if you use some of the code i
 
 1. There is a great project named [ysfx](https://github.com/jpcima/ysfx) which provides a custom implementation of JSFX.
 I've had very good experiences using the VST3 they provide as a JSFX host for the plugins in this repo, but please report any issues you may encounter.
+Unfortunately, it seems that the original author is no longer active and the latest plugins don't work anymore.
+I have since forked the project and tried to update it a little bit to support the latest plugins.
+You can find my fork [here](https://github.com/JoepVanlier/ysfx) or if you just want the releases [here](https://github.com/JoepVanlier/ysfx/releases).
 
-2. If you're on Windows, another alternative is ReaJS: https://www.reaper.fm/reaplugs/
+
+3. If you're on Windows, another alternative is ReaJS: https://www.reaper.fm/reaplugs/
 This is the official Cockos JSFX implementation, but it hasn't been updated in a while. Some plugins will just work in ReaJS, but for some others you have to install their ReaJS compatibility version. For this, look here: https://github.com/JoepVanlier/reajs_compatibility. These plugins generally end in `_compat`. Note that they require the regular plugin to be installed as well, since they use the same dependencies.
 
 # Tips
