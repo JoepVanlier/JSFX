@@ -1,0 +1,222 @@
+desc:Super Spreader
+tags: chorus pitch shifting supersaw
+version: 0.02
+author: Original code by lkjb, basic port by Saike (Joep Vanlier)
+changelog: Added envelope reconstruction
+
+slider1:spread_slider=0.5<0, 1, 0.0001>Spread
+slider2:mix=100<0, 200, 0.01>Mix
+slider3:reconstruct_envelope=0<0, 1, 1>Reconstruct Envelope
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+function _init_spreader_buffer(freemem, in_buffer_size, window_in)
+instance(buf, p0, p2, buffer_size, half_buffer, window)
+global()
+local()
+(
+  buffer_size = in_buffer_size;
+  half_buffer = in_buffer_size / 2;
+  window = window;
+  p0 = 0;
+  p2 = floor(rand() * (buffer_size - 1));
+  buf = freemem;
+  
+  buf + buffer_size
+);
+
+function spreader_update_parameters(spread_slider, mix)
+local()
+global()
+instance(
+  <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
+  detune_fade, detuned_gain, dry_gain, spread_gain, total_gain, spread,
+)
+(
+  // Wrangle input parameters
+  detune_fade = min(10.0 * spread_slider, 1.0);
+  detuned_gain = (mix >= 100.0) ? 1.0 : 0.01 * mix;
+  dry_gain = (mix <= 100.0) ? 1.0 : (detune_fade < 1.0) ? max(0.5 * (1.0 - detune_fade), (200.0 - mix) / 100.0) : (200.0 - mix) / 100.0;
+  spread_gain = detuned_gain * detune_fade;
+  total_gain = (spread_gain == 0.0) ? 1.0 : (1.41 / (1.0 + sqrt(6.0) * spread_gain));
+  spread = 0.5 * spread_slider * spread_slider;
+  
+  // Set individual pitch shifter pitches
+  shifter0.out_delta = pow(0.893, spread);
+  shifter1.out_delta = pow(0.939, spread);
+  shifter2.out_delta = pow(0.98, spread);
+  shifter3.out_delta = pow(1.02, spread);
+  shifter4.out_delta = pow(1.064, spread);
+  shifter5.out_delta = pow(1.11, spread);
+  
+  shifter6.out_delta = pow(1.0 / 0.893, spread);
+  shifter7.out_delta = pow(1.0 / 0.939, spread);
+  shifter8.out_delta = pow(1.0 / 0.98, spread);
+  shifter9.out_delta = pow(1.0 / 1.02, spread);
+  shifter10.out_delta = pow(1.0 / 1.064, spread);
+  shifter11.out_delta = pow(1.0 / 1.11, spread);
+);
+
+function _spreadshifter_tick(data)
+instance(buf, p0, p2)
+global()
+local(p1i, p1f, p2i, x3, x3a, x3b, x4, x4a, x4b, fade34)
+instance(out_delta, test, buffer_size, half_buffer, window)
+(
+  p0 -= 1;
+  (p0 < 0) ? ( p0 += buffer_size; );
+  buf[p0] = data;
+
+  p2 -= out_delta;
+  (p2 < 0) ? ( p2 += buffer_size; );
+
+  p1i = p2;
+  p1f = p2 - floor(p1i);
+  x3a = buf[p1i];
+  
+  p1i += 1;
+  (p1i >= buffer_size) ? ( p1i -= buffer_size; );
+
+  x3b = buf[p1i];
+  x3 = x3a + p1f * (x3b - x3a);
+  
+  p2i = (p1i + half_buffer);
+  (p2i >= buffer_size) ? ( p2i -= buffer_size; );
+  x4a = buf[p2i];
+  
+  p2i += 1;
+  (p2i >= buffer_size) ? ( p2i -= buffer_size; );
+
+  x4b = buf[p2i];
+  x4 = x4a + p1f * (x4b - x4a);
+
+  p2i = (p1i - p0);
+  (p2i < 0) ? ( p2i += buffer_size; );
+  
+  fade34 = window[p2i];
+  
+  x4 + fade34 * (x3 - x4)
+);
+
+function init_follower(atk, release)
+local(csrate)
+instance(at, rt, LPF)
+global(srate)
+(
+  at = ( atk > 0 ) ? exp(-1.0/(.0005*atk*srate)) : 0;
+  rt = exp(-1.0/(.0005*release*srate));
+);
+
+function eval_follower(x)
+local()
+instance(state, at, rt, x)
+global()
+(
+  x > state ? (
+    state = at * state + ( 1.0 - at ) * x;
+  ) : (
+    state = rt * state + ( 1.0 - rt ) * x;
+  );
+  
+  state
+);
+
+function spreader_tick(inL, inR, reconstruct_envelope)
+global()
+local(follower_state, out_state)
+instance(
+  buffer_size, half_buffer,
+  delayL, delayR, delay_ix, read_ix, outL, outR,
+  <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
+  dry_gain, total_gain, spread_gain,
+  
+  env_follower_out, env_follower, env_correction,
+)
+(
+  // Delay the main signal
+  delayL[delay_ix] = inL;
+  delayR[delay_ix] = inR;
+  delay_ix += 1;
+  (delay_ix >= buffer_size) ? delay_ix -= buffer_size;
+  read_ix = delay_ix - half_buffer;
+  (read_ix < 0) ? ( read_ix += buffer_size; );
+  
+  // Process the chorus
+  outL = outR = 0;
+  <?i = 0; loop(6, printf("outL += shifter%d._spreadshifter_tick(inL);", i); i += 1; );?>
+  <?i = 6; loop(6, printf("outR += shifter%d._spreadshifter_tick(inR);", i); i += 1; );?>
+  
+  follower_state = env_follower.eval_follower(max(abs(delayL[read_ix]), abs(delayR[read_ix])));
+  
+  outL = (dry_gain * delayL[read_ix] + outL * spread_gain) * total_gain;
+  outR = (dry_gain * delayR[read_ix] + outR * spread_gain) * total_gain;
+  
+  out_state = env_follower_out.eval_follower(max(abs(outL), abs(outR)));
+  
+  reconstruct_envelope ? (
+    env_correction = follower_state / (0.0001 + out_state);
+    outL *= env_correction;
+    outR *= env_correction;
+  );
+);
+
+function init_spreader(freemem, _buffer_size)
+local(i)
+global()
+instance(
+  <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
+  delayL, delayR, buffer_size, half_buffer, delay_ix, window,
+  
+  env_follower, env_follower_out,
+)
+(
+  buffer_size = _buffer_size;
+  half_buffer = _buffer_size / 2;
+  freemem = (window = freemem) + buffer_size;
+  i = 0;
+  loop(buffer_size,
+    window[i] = 0.5 - 0.5 * cos(2.0 * $PI * i / buffer_size);
+    i += 1;
+  );
+
+  freemem = (delayL = freemem) + buffer_size;
+  freemem = (delayR = freemem) + buffer_size;
+  
+  delay_ix = 0;
+  
+  <?
+    i = 0;
+    loop(12,
+      printf("freemem = shifter%d._init_spreader_buffer(freemem, buffer_size, window);", i);
+      i += 1;
+    );
+  ?>
+  
+  env_follower.init_follower(0.5, 140);
+  env_follower_out.init_follower(0.5, 140);
+);
+
+freemem = 0;
+freemem = spreader.init_spreader(freemem, 2048);
+
+pdc_top_ch = 2;
+pdc_bot_ch = 0;
+pdc_delay = spreader.half_buffer;
+
+spreader.spreader_update_parameters(spread_slider, mix);
+
+@slider
+spreader.spreader_update_parameters(spread_slider, mix);
+
+@gfx 
+
+@block
+
+@sample
+spreader.spreader_tick(spl0, spl1, reconstruct_envelope);
+spl0 = spreader.outL;
+spl1 = spreader.outR;
+
