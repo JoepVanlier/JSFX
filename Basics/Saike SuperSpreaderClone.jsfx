@@ -1,18 +1,103 @@
 desc:Super Spreader
 tags: chorus pitch shifting supersaw
-version: 0.02
+version: 0.03
 author: Original code by lkjb, basic port by Saike (Joep Vanlier)
-changelog: Added envelope reconstruction
+changelog: Revised attack reconstruction
 
 slider1:spread_slider=0.5<0, 1, 0.0001>Spread
 slider2:mix=100<0, 200, 0.01>Mix
-slider3:reconstruct_envelope=0<0, 1, 1>Reconstruct Envelope
+slider3:reconstruct_envelope=0<0, 2, 1{Off,Audio,MIDI}>Reconstruct Attack
 in_pin:left input
 in_pin:right input
 out_pin:left output
 out_pin:right output
 
 @init
+function initialize_midi(freemem)
+local()
+global()
+instance(active_notes, note_mem)
+(
+  active_notes = 0;
+  note_mem = freemem;
+  memset(note_mem, 0, 2048);
+  
+  note_mem + 2048
+);
+
+function midi_block()
+local(offset, msg1, msg2, msg3, note_on, note_off, idx)
+global()
+instance(note_mem, note_ptr, remaining_notes, next_note, current_sample)
+(
+  note_ptr = note_mem;
+  while (midirecv(offset,msg1,msg2,msg3)) (
+    note_on = msg1>$x8F&&msg1<$xA0 && msg3!=0;
+    note_off = (msg1>$x7F&&msg1<$x90) || (msg1>$x89&&msg1<$xA0 && msg3==0);
+      
+    note_on ? (
+      note_ptr[] = offset;
+      note_ptr += 1;
+      note_ptr[] = msg3;
+      note_ptr += 1;
+      note_ptr[] = msg2;
+      note_ptr += 1;
+    ) : ( note_off ) ? (
+      note_ptr[] = offset;
+      note_ptr += 1;
+      note_ptr[] = -1;
+      note_ptr += 1;
+      note_ptr[] = msg2;
+      note_ptr += 1;
+    );
+    
+    midisend(offset, msg1, msg2, msg3); // passthrough MIDI events
+  );
+  note_ptr[]      = -1337;    // Signal end of note buffer
+  note_ptr        = note_mem;
+  current_sample  = 0;        // Current sample in block
+  remaining_notes = 1;        // End of the note buffer?
+  next_note       = note_ptr[];
+);
+
+function midi_sample()
+local()
+global()
+instance(
+  active_notes,
+  remaining_notes, current_sample,
+  note_ptr, next_note, 
+)
+(
+  // Take notes from the stack until we hit the end marker -1
+  (remaining_notes) ? (
+    while(next_note == current_sample) (
+      note_ptr += 1;
+      (note_ptr[] > 0) ? ( // note-on
+        active_notes += 1;
+        //lastVel = note_ptr[]/127;
+        note_ptr += 1;
+        //lastNote = note_ptr[];
+        //newNote = 1;
+      ) : (note_ptr[] == -1) ? ( // note-off
+        active_notes -= 1;
+        active_notes = max(0, active_notes);
+        note_ptr += 1;
+        //note = note_ptr[];
+      );
+      note_ptr += 1;
+      
+      // Avoid constantly dereferencing by picking up the next one
+      next_note = note_ptr[];
+      remaining_notes = next_note != -1337;
+    );
+  );
+  
+  current_sample += 1;
+  
+  active_notes
+);
+
 function _init_spreader_buffer(freemem, in_buffer_size, window_in)
 instance(buf, p0, p2, buffer_size, half_buffer, window)
 global()
@@ -124,16 +209,16 @@ global()
   state
 );
 
-function spreader_tick(inL, inR, reconstruct_envelope)
+function spreader_tick(inL, inR, reconstruct_envelope, reset_env)
 global()
-local(follower_state, out_state)
+local(out_state, delayed_in, total_out)
 instance(
+  window,
   buffer_size, half_buffer,
-  delayL, delayR, delay_ix, read_ix, outL, outR,
+  delayL, delayR, delay_ix, read_ix, read_ix2, outL, outR,
   <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
   dry_gain, total_gain, spread_gain,
-  
-  env_follower_out, env_follower, env_correction,
+  env_follower, env_follower2, env_correction, follower_state, zero_time,
 )
 (
   // Delay the main signal
@@ -149,18 +234,29 @@ instance(
   <?i = 0; loop(6, printf("outL += shifter%d._spreadshifter_tick(inL);", i); i += 1; );?>
   <?i = 6; loop(6, printf("outR += shifter%d._spreadshifter_tick(inR);", i); i += 1; );?>
   
-  follower_state = env_follower.eval_follower(max(abs(delayL[read_ix]), abs(delayR[read_ix])));
-  
-  outL = (dry_gain * delayL[read_ix] + outL * spread_gain) * total_gain;
-  outR = (dry_gain * delayR[read_ix] + outR * spread_gain) * total_gain;
-  
-  out_state = env_follower_out.eval_follower(max(abs(outL), abs(outR)));
-  
-  reconstruct_envelope ? (
-    env_correction = follower_state / (0.0001 + out_state);
-    outL *= env_correction;
-    outR *= env_correction;
+  (reconstruct_envelope == 1) ? (
+    read_ix2 = read_ix - 1;
+    (read_ix2 < 0) ? ( read_ix2 += buffer_size; );
+    delayed_in = max(abs(delayL[read_ix] - delayL[read_ix2]), abs(delayR[read_ix] - delayR[read_ix2]));
+    total_out = follower_state * max(abs(outL), abs(outR));
+    follower_state = env_follower2.eval_follower(env_follower.eval_follower((total_out + delayed_in) > 0.001) > 0.2);
+    env_correction = follower_state;
+  ) : (reconstruct_envelope == 2) ? (
+    reset_env ? (
+      zero_time = 1024;
+    );
+    (zero_time > 0) ? (
+      env_correction = window[zero_time];
+      zero_time -= 1;
+    ) : (
+      env_correction += 0.03 * (1.0 - env_correction);
+    );
+  ) : (
+    env_correction = 1;
   );
+  
+  outL = (dry_gain * delayL[read_ix] + outL * spread_gain * env_correction) * total_gain;
+  outR = (dry_gain * delayR[read_ix] + outR * spread_gain * env_correction) * total_gain;
 );
 
 function init_spreader(freemem, _buffer_size)
@@ -168,9 +264,7 @@ local(i)
 global()
 instance(
   <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
-  delayL, delayR, buffer_size, half_buffer, delay_ix, window,
-  
-  env_follower, env_follower_out,
+  delayL, delayR, buffer_size, half_buffer, delay_ix, window, env_follower, env_follower2,
 )
 (
   buffer_size = _buffer_size;
@@ -195,28 +289,35 @@ instance(
     );
   ?>
   
-  env_follower.init_follower(0.5, 140);
-  env_follower_out.init_follower(0.5, 140);
+  env_follower.init_follower(0, 50);
+  env_follower2.init_follower(1, 50);
+  
+  freemem
 );
 
 freemem = 0;
 freemem = spreader.init_spreader(freemem, 2048);
+freemem = midi.initialize_midi(freemem);
 
 pdc_top_ch = 2;
 pdc_bot_ch = 0;
 pdc_delay = spreader.half_buffer;
 
-spreader.spreader_update_parameters(spread_slider, mix);
+spreader.spreader_update_parameters(spread_slider , mix);
 
 @slider
 spreader.spreader_update_parameters(spread_slider, mix);
 
-@gfx 
+@gfx
 
 @block
+midi.midi_block();
 
 @sample
-spreader.spreader_tick(spl0, spl1, reconstruct_envelope);
+last_active_notes = midi.active_notes;
+midi.midi_sample();
+
+spreader.spreader_tick(spl0, spl1, reconstruct_envelope, (last_active_notes == 0) && midi.active_notes);
 spl0 = spreader.outL;
 spl1 = spreader.outR;
 
