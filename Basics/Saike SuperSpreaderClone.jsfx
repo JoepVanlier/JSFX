@@ -1,8 +1,8 @@
 desc:Super Spreader
 tags: chorus pitch shifting supersaw
-version: 0.04
+version: 0.05
 author: Original code by lkjb, basic port by Saike (Joep Vanlier)
-changelog: Revised attack reconstruction
+changelog: Add some basic parameter interpolation
 
 slider1:spread_slider=0.5<0, 1, 0.0001>Spread
 slider2:mix=100<0, 200, 0.01>Mix
@@ -114,11 +114,11 @@ local()
 );
 
 function spreader_update_parameters(spread_slider, mix)
-local()
+local(detune_fade, detuned_gain, spread)
 global()
 instance(
   <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
-  detune_fade, detuned_gain, dry_gain, spread_gain, total_gain, spread,
+  dry_gain, total_gain, spread_gain
 )
 (
   // Wrangle input parameters
@@ -126,7 +126,7 @@ instance(
   detuned_gain = (mix >= 100.0) ? 1.0 : 0.01 * mix;
   dry_gain = (mix <= 100.0) ? 1.0 : (detune_fade < 1.0) ? max(0.5 * (1.0 - detune_fade), (200.0 - mix) / 100.0) : (200.0 - mix) / 100.0;
   spread_gain = detuned_gain * detune_fade;
-  total_gain = (spread_gain == 0.0) ? 1.0 : (1.41 / (1.0 + sqrt(6.0) * spread_gain));
+  total_gain = (spread_gain == 0.0) ? 1.41 : (1.41 / (1.0 + 2.4494897427831780981972840747059 * spread_gain));
   spread = 0.5 * spread_slider * spread_slider;
   
   // Set individual pitch shifter pitches
@@ -303,14 +303,21 @@ pdc_top_ch = 2;
 pdc_bot_ch = 0;
 pdc_delay = spreader.half_buffer;
 
-spreader.spreader_update_parameters(spread_slider , mix);
+spreader.spreader_update_parameters(spread_slider, mix);
+current_spread = spread_slider;
+current_mix = mix;
 
 @slider
-spreader.spreader_update_parameters(spread_slider, mix);
 
 @gfx
 
 @block
+inv_block = 1.0 / samplesblock;
+
+dspread = (spread_slider - current_spread) * inv_block;
+dmix = (mix - current_mix) * inv_block;
+
+spreader.spreader_update_parameters(current_spread, current_mix);
 midi.midi_block();
 
 @sample
@@ -320,4 +327,11 @@ midi.midi_sample();
 spreader.spreader_tick(spl0, spl1, reconstruct_envelope, (last_active_notes == 0) && midi.active_notes);
 spl0 = spreader.outL;
 spl1 = spreader.outR;
+
+((dspread != 0) || (dmix != 0)) ? (
+  spreader.spreader_update_parameters(current_spread, current_mix);
+);
+
+current_spread += dspread;
+current_mix += dmix;
 
