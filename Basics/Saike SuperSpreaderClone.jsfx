@@ -1,6 +1,6 @@
 desc:Super Spreader
 tags: chorus pitch shifting supersaw
-version: 0.06
+version: 0.07
 author: Original code by lkjb, basic port by Saike (Joep Vanlier)
 changelog: Reintroduce difference at zero gain that was in the original
 
@@ -23,6 +23,26 @@ instance(active_notes, note_mem)
   memset(note_mem, 0, 2048);
   
   note_mem + 2048
+);
+
+function calc_smooth_coeff(cutoff)
+instance()
+global(srate)
+local(g)
+( 
+  g = tan($pi * cutoff / srate);
+  g /(1 + g)
+);
+
+function smooth(target)
+global(smooth_coeff)
+local(y, v)
+instance(s)
+(
+  v = smooth_coeff * (target - s);
+  y = v + s;
+  s = y + v;
+  y
 );
 
 function midi_block()
@@ -105,7 +125,7 @@ local()
 (
   buffer_size = in_buffer_size;
   half_buffer = in_buffer_size / 2;
-  window = window;
+  window = window_in;
   p0 = 0;
   p2 = floor(rand() * (buffer_size - 1));
   buf = freemem;
@@ -118,7 +138,7 @@ local(detune_fade, detuned_gain, spread)
 global()
 instance(
   <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
-  dry_gain, total_gain, spread_gain
+  dry_gain, total_gain, spread_gain,
 )
 (
   // Wrangle input parameters
@@ -191,8 +211,8 @@ local(csrate)
 instance(at, rt, LPF)
 global(srate)
 (
-  at = ( atk > 0 ) ? exp(-1.0/(.0005*atk*srate)) : 0;
-  rt = exp(-1.0/(.0005*release*srate));
+  at = ( atk > 0 ) ? exp(-1.0/(.0005 * atk * srate)) : 0;
+  rt = exp(-1.0/(.0005 * release * srate));
 );
 
 function eval_follower(x)
@@ -218,7 +238,7 @@ instance(
   delayL, delayR, delay_ix, read_ix, read_ix2, outL, outR,
   <?i=0; loop(12, printf("shifter%d, ", i); i += 1;)?>
   dry_gain, total_gain, spread_gain,
-  env_follower, env_follower2, env_correction, follower_state, zero_time,
+  env_follower, env_follower2, env_correction, follower_state, zero_time, smooth_total_gain, smooth_total_gain.smooth, 
 )
 (
   // Delay the main signal
@@ -255,8 +275,10 @@ instance(
     env_correction = 1;
   );
   
-  outL = (dry_gain * delayL[read_ix] + outL * spread_gain * env_correction) * total_gain;
-  outR = (dry_gain * delayR[read_ix] + outR * spread_gain * env_correction) * total_gain;
+  smooth_total_gain = smooth_total_gain.smooth(total_gain);
+  
+  outL = (dry_gain * delayL[read_ix] + outL * spread_gain * env_correction) * smooth_total_gain;
+  outR = (dry_gain * delayR[read_ix] + outR * spread_gain * env_correction) * smooth_total_gain;
 );
 
 function init_spreader(freemem, _buffer_size)
@@ -303,7 +325,8 @@ pdc_top_ch = 2;
 pdc_bot_ch = 0;
 pdc_delay = spreader.half_buffer;
 
-spreader.spreader_update_parameters(spread_slider, mix);
+smooth_coeff = calc_smooth_coeff(1000.0 / 25.0);
+
 current_spread = spread_slider;
 current_mix = mix;
 
@@ -312,10 +335,8 @@ current_mix = mix;
 @gfx
 
 @block
-inv_block = 1.0 / samplesblock;
-
-dspread = (spread_slider - current_spread) * inv_block;
-dmix = (mix - current_mix) * inv_block;
+dspread = spread_slider - current_spread;
+dmix = mix - current_mix;
 
 spreader.spreader_update_parameters(current_spread, current_mix);
 midi.midi_block();
@@ -332,6 +353,6 @@ spl1 = spreader.outR;
   spreader.spreader_update_parameters(current_spread, current_mix);
 );
 
-current_spread += dspread;
-current_mix += dmix;
+current_spread = current_spread.smooth(spread_slider);
+current_mix = current_mix.smooth(mix);
 
