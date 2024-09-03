@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.43
+version: 0.44
 author: Joep Vanlier
-changelog: Make sure hints don't leave UI.
+changelog: Add superspreader.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -101,6 +101,9 @@ slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
   );
 ?>
 
+slider231:spread_slider=0.5<0, 1, 0.0001>-Spread
+slider232:spread_mix=100<0, 200, 0.01>-Mix
+slider233:spread_frequency=20<20,22050,0.01:log>-Filter frequency
 
 slider234:ap_freq=241<20, 22000, 0.0001:log>-AP frequency
 slider235:ap_feedback=0.0<-0.999, 0.999, 0.001>-AP Feedback
@@ -145,6 +148,7 @@ import saike_proto_diffusion.jsfx-inc
 import saike_proto_stft_fx.jsfx-inc
 import saike_proto_synth_fx.jsfx-inc
 import saike_proto_synth_wt.jsfx-inc
+import saike_proto_synth_spreader.jsfx-inc
 
 @init
 DROPPED_FILE_STR = 52;
@@ -318,6 +322,10 @@ noise_slider1.init_slider_ui(256, 0.0001, 0.4, 1, 0);
 ap_freq_slider1.init_slider_ui(234, 20, 22000, 1, 241);
 ap_feedback_slider1.init_slider_ui(235, -0.999, 0.999, 0, 0.0);
 ap_sat_slider1.init_slider_ui(236, 0.01, 0.25, 0, 0.01);
+
+spreader_detune.init_slider_ui(231, 0, 1, 0, 0.5);
+spreader_mix.init_slider_ui(232, 0, 200, 0, 100.0);
+spreader_freq.init_slider_ui(233, 20, 22050, 1, 20);
 
 <?
   loop(i=0;N_ENVELOPES,
@@ -1123,11 +1131,12 @@ verb.reset_verb();
 //freemem = (fft_verb_window_buffer = freemem) + MAX_FFT_SIZE;
 //freemem = (fft_verb_fft_buffer = freemem) + MAX_FFT_SIZE;
 freemem = fft_verb.init_stft_verb_mem(freemem, 6); //, fft_verb_fft_buffer, fft_verb_window_buffer, 6);
+freemem = spreader.init_spreader(freemem + 1024, 2048);
 
 midi.reset_midi();
 <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
 
-CURRENT_VERSION = 17;
+CURRENT_VERSION = 18;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1347,12 +1356,32 @@ has_wavetable_data ? (
   );
 ?>
 
+(version > 17) ? (
+  spreader_detune.serialize(version);
+  spreader_mix.serialize(version);
+  spreader_freq.serialize(version);
+  file_var(0, spreader_active);
+) : (
+  spreader_detune.defaults();
+  spreader_mix.defaults();
+  spreader_freq.defaults();
+  spread_slider = 0.5;
+  spread_mix = 100;
+  spread_frequency = 20;
+  spreader_active = 0;
+);
+
 update_solo();
 version = CURRENT_VERSION;
 
 @slider
 
 @block
+pdc_top_ch = 2;
+pdc_bot_ch = 0;
+pdc_delay = spreader_active ? spreader.half_buffer : 0;
+smooth_coeff = calc_smooth_coeff(1000.0 / 25.0);
+
 must_glide = force_glide && glide;
 
 (reverb_algorithm != last_reverb_algo) ? (
@@ -1365,18 +1394,6 @@ drops = 0;
 shift_mode = 0;
 shift_freq = 0;
 fft_verb.stft_reverb_settings(1, time_ms, 0, side_cut_freq, damping_freq, high_cut_freq, low_cut_freq, shimmer, drops, shift_mode, shift_freq);
-
-//1/time_ms
-
-/*
-  slider248:time_ms=900<5,2800,1>-Verb Time [ms]
-  slider249:verb_mix=0.4<0, 1, 0.01>-Verb Mix
-  slider250:side_cut_freq=120<20,22050,0.001:log>-Side low cut frequency
-  slider251:low_cut_freq=20<20,22050,0.001:log>-Low cut frequency
-  slider252:high_cut_freq=22050<20,22050,0.001:log>-High cut frequency
-  slider253:damping_freq=22050<20,22050,0.001:log>-Damping frequency
-*/
-
 
 update_solo();
 
@@ -1486,10 +1503,26 @@ midi.notes_remain ? (
   );
 );
 
+// Spreader
+spreader_active ? (
+  dspread_slider = spread_slider - current_spread_slider;
+  dspread_mix = spread_mix - current_spread_mix;
+  dspread_slider = spread_frequency - current_spread_frequency;
+  
+  spreader.filt.init_butter2(current_spread_frequency);
+  spreader.spreader_update_parameters(current_spread_slider, current_spread_mix);
+);
+
 pass_through = 1;
 midi.midi_block(pass_through);
 
 @sample
+spreader_active ? (
+  (d_frequency != 0) ? (
+    spreader.filt.init_butter2(current_spread_frequency);
+  );
+);
+
 function cheapo_block(x)
 local(y)
 global()
@@ -1705,6 +1738,13 @@ audio_running ? (
   spl0 = brightness_boost.eval_linearSVF_shelf(spl0);
   spl1 = brightness_boost.eval_linearSVF_shelf2(spl1);
   
+  spreader_active ? (
+    spreader.spreader_tick(spl0, spl1, reconstruct_envelope, (last_active_notes == 0) && midi.active_notes);
+    last_active_notes = midi.active_notes;
+    spl0 = spreader.outL;
+    spl1 = spreader.outR;
+  );
+  
   poisson_enabled ? (
     poisson.poisson_noise(spl0, spl1, poisson_freq, 0);
     spl0 = poisson.out_left;
@@ -1740,6 +1780,16 @@ audio_running ? (
 );
 
 m_out_last = max(abs(spl0), abs(spl1));
+
+spreader_active ? (
+  ((dspread_slider != 0) || (dspread_mix != 0)) ? (
+    spreader.spreader_update_parameters(current_spread_slider, current_spread_mix);
+  );
+
+  current_spread_slider = current_spread.smooth(spread_slider);
+  current_spread_mix = current_spread_mix.smooth(spread_mix);
+  current_spread_frequency = current_spread_frequency.smooth(spread_frequency);
+);
 
 @gfx 1050 768
 (!active_text_input) ? (
@@ -2498,6 +2548,30 @@ pitch_bend_slider.text_slider_ui(<?printf("%d", uuid())?>, cx, cy, 5 * toggle_si
 pitch_bend_slider.check_text_input_defaults();
 cy += 10;
 
+spreader_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, spreader_active, "Enable Spreader\n\nEnable cheap spreader.", "Spread") ? (
+  spreader_active = 1 - spreader_active;
+);
+
+txt_blit("SPREADER", fx_origin + 8, cy + 2);
+
+cy += 8;
+spreader_freq.active = spreader_active;
+spreader_freq.rounding_increment = 1337;
+spreader_freq.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, fx_width + 1, 8, sprintf(1, "%d", spread_frequency + 0.001), "Spreader Frequency", "SP Freq");
+spreader_freq.check_text_input_defaults();
+
+cy += 10;
+spreader_mix.active = spreader_active;
+spreader_mix.rounding_increment = 0.01;
+spreader_mix.slider_ui(<?printf("%d", uuid(););?>, fx_origin, cy, hw, 8, sprintf(1, "%d", spread_mix), "Spreader Mix", "Sp Mix");
+spreader_mix.check_text_input_defaults();
+
+spreader_detune.active = spreader_active;
+spreader_detune.rounding_increment = 0.01;
+spreader_detune.slider_ui(<?printf("%d", uuid(););?>, fx_origin + hw + 1, cy, hw, 8, sprintf(1, "%d%%", 100 * spread_slider), "Spreader Detune", "Sp Detune");
+spreader_detune.check_text_input(<?printf("%d", uuid(););?>) ? ( slider(spreader_detune.sl) = max(spreader_detune.sl_min, min(spreader_detune.sl_max, text_box.result / 100)); );
+
+cy += 10;
 allpass_toggle.simple_serialize_toggle(fx_origin, cy + 1, toggle_size, allpass, "Enable Smear\n\nEnable allpass stack that\nsmears the audio.", "Smear") ? (
   allpass = 1 - allpass;
 );
