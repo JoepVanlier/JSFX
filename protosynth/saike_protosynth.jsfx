@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.44
+version: 0.45
 author: Joep Vanlier
-changelog: Add superspreader.
+changelog: Add pulse width modulated square, pulse and triangle.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -300,7 +300,7 @@ verb_mix_slider.init_slider_ui(249, 0, 1, 0, 0.4);
   loop(i=0;8,
     par = i * 6 + 1;
     printf("gain_slider%d.init_slider_ui(%d, -72, 0, 0, -9);\n", i + 1, par);
-    printf("osc_type_slider%d.init_slider_ui(-1, 0, 4, 0, 0);\n", i + 1);
+    printf("osc_type_slider%d.init_slider_ui(-1, 0, 7, 0, 0);\n", i + 1);
     printf("tune_slider%d.init_slider_ui(%d, 0.25, 8.0, 0, 1.0);\n", i + 1, par + 1);
     printf("spacing_slider%d.init_slider_ui(%d, 0.25, 8.0, 0, 1.0);\n", i + 1, par + 2);
     printf("brightness_slider%d.init_slider_ui(%d, 0.0, 0.95, 0, 0.95);\n", i + 1, par + 3);
@@ -490,6 +490,9 @@ function osc_type(type, sample_length)
   : (type == 2) ? "peak"
   : (type == 3) ? "nois"
   : (type == 4) ? (sample_length > 0) ? "wt" : "[wt]"
+  : (type == 5) ? "sqr"
+  : (type == 6) ? "pul"
+  : (type == 7) ? "tri"
 );
 
 function filt_type(type)
@@ -718,9 +721,13 @@ instance(
         printf(") : (osc%d_wave == 4) ? (", i);
           // Don't ask :(
           printf("osc%d.wt.select_mipmap(cur_freq + osc%d_hz_tune, 0.9032258064516129032258064516129 * (cur_spacing - 0.25), cur_brightness);", i, i);
+        printf(") : (osc%d_wave == 5) ? (", i);
+          printf("osc%d.sqr.update_pulse(cur_freq + osc%d_hz_tune, 0.0645161290322581 * cur_spacing, cur_brightness);", i, i);
+        printf(") : (osc%d_wave < 8) ? (", i);
+          printf("osc%d.sqr.update_tri(cur_freq + osc%d_hz_tune, 0.0625 * cur_spacing, cur_brightness);", i, i);
         printf(");");
       printf(") : (");
-        printf("g%d = 0; dg%d = 0;", i, i);        
+        printf("g%d = 0; dg%d = 0;", i, i);
       printf(");");
       i += 1
     );
@@ -888,7 +895,7 @@ instance(
   <?
     function gen_osc(i)
     (
-      printf("o%d = g%d ? ((osc%d_wave == 1) ? osc%d.ssaw_step() : (osc%d_wave == 0) ? osc%d.dsf_step() : (osc%d_wave == 2) ? osc%d.peak.dsf_step_peak() : (osc%d_wave == 3) ? osc%d.noise_step() : osc%d.wt.wt_step()) * g%d;", i, i, i, i, i, i, i, i, i, i, i, i);
+      printf("o%d = g%d ? ((osc%d_wave == 1) ? osc%d.ssaw_step() : (osc%d_wave == 0) ? osc%d.dsf_step() : (osc%d_wave == 2) ? osc%d.peak.dsf_step_peak() : (osc%d_wave == 3) ? osc%d.noise_step() : (osc%d_wave == 4) ? osc%d.wt.wt_step() : (osc%d_wave == 5) ? osc%d.sqr.pulse() : (osc%d_wave == 6) ? osc%d.sqr.pulse2() : osc%d.sqr.tri()) * g%d;", i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i, i);
     );
   ?>
   
@@ -1344,7 +1351,7 @@ global_tuning_slider1.serialize_if(version, 13);
 
 file_var(0, has_wavetable_data);
 has_wavetable_data ? (
-  <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH, osc%d_type == 4, !write_mode);", i2, i2); i2 += 1;);?>
+  <?loop(i2=1;8, printf("wt%d.serialize_sample(SAMPLES_PER_WT, WT_LENGTH, (osc%d_type|0) == 4, !write_mode);", i2, i2); i2 += 1;);?>
 );
 
 <?
@@ -1942,18 +1949,13 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
     printf("txt_blit(\"OSC%d\", cx, cy + 2); cx += 25;", i + 1);
     
     printf("osc_type_slider%d.rounding_increment = 1;", i + 1);
-    printf("osc_type_slider%d.sl_max = wt%d.sample_data_length ? 4 : 3;", i + 1, i + 1, i + 1);
     printf("osc_type_slider%d.current_value = osc%d_type;", i + 1, i + 1);
     printf("osc_type_slider%d.text_slider_ui(%d, cx, cy, 4 * toggle_size + 4, 8, sprintf(9, \"%%s\", osc_type(osc%d_type, wt%d.sample_data_length)), \"Type\n\nHARM  - Harmonic series with customizable spacing\nSSAW  - SuperSaw with customizable detune\nPeak  - Formant-like filtering\nNoise - Noise with customizable resonance\nWT    - Wavetable (drag and drop sample here).\", \"Type\"); cx += 4 * toggle_size + 4 + 2;", i + 1, uuid(), i + 1, i + 1);
     
     printf("(osc_type_slider%d.over && (mouse_cap == 2) && (last_cap == 0)) ? (\n", i + 1);
       printf("gfx_x = mouse_x;");
       printf("gfx_y = mouse_y;");
-      printf("wt%d.sample_data_length ? (", i + 1);
-        printf("ix = gfx_showmenu(\"Harmonic series|Super saw|Formant/Peak|Noise|Wavetable\");");
-      printf(") : (");
-        printf("ix = gfx_showmenu(\"Harmonic series|Super saw|Formant/Peak|Noise\");");
-      printf(");");
+      printf("ix = gfx_showmenu(\"Harmonic series|Super saw|Formant/Peak|Noise|Wavetable|Pulse|Bipolar Pulse|Triangle\");");
       printf("  (ix > 0) ? (");
         printf("    osc_type_slider%d.current_value = ix - 1;", i + 1);
       printf("  );");
@@ -2008,7 +2010,7 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
           printf("spacing_slider%d.check_text_input_defaults();", i + 1);
         printf(") : (\n");
           printf("spacing_slider%d.rounding_increment = 0.125;", i + 1);
-          printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", spacing_slider%d.display_value), (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Partial spacing\", (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
+          printf("spacing_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\.3f\", spacing_slider%d.display_value), (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : \"Partial spacing\", (floor(osc%d_type) == 3) ? \"Resonance\" : (floor(osc%d_type) == 1) ? \"Detune\" : (floor(osc%d_type) == 2) ? \"Formant\" : ((floor(osc%d_type) > 4) && (floor(osc%d_type) < 8)) ? \"Pulse width\" : \"Freq spacing\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
           printf("spacing_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, (floor(osc%d_type) == 3) ? \"Reso mod\" : (floor(osc%d_type) == 1) ? \"Detune mod\" : (floor(osc%d_type) == 2) ? \"Formant mod\" : \"Spacing Mod\", 0, N_SELECTABLE_MODULATORS, 1);\n cx += 10;", i + 1, uuid(), i + 1, i + 1, i + 1);
           printf("spacing_slider%d.check_text_input_defaults();", i + 1);
         printf(");\n");
