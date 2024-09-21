@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.39
+version: 0.40
 author: Joep Vanlier
-changelog: Still initialize UI when audio is disabled.
+changelog: Allow viewing different pattern than is being played.
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -64,7 +64,7 @@ import saike_midi_arp_gfx_funcs.jsfx-inc
 
 @init
 blocks_in_view = loop_length <= 32 ? 32 : 64;
-file_version = CURRENT_VERSION = 7;
+file_version = CURRENT_VERSION = 8;
 last_sequencer_index = -1;
 
 function init_scaling()
@@ -364,6 +364,17 @@ file_var(0, enable_mod);
   time_mode = 0;
 );
 
+(file_version > 7) ? (
+  file_var(0, viewed_pattern_index);
+  file_var(0, follow_current_pattern);
+  follow_current_pattern ? (
+    viewed_pattern_index = current_pattern_index;
+  );
+) : (
+  viewed_pattern_index = current_pattern_index;
+  follow_current_pattern = 1;
+);
+
 file_version = CURRENT_VERSION;
 
 @slider
@@ -377,6 +388,13 @@ n_segments = blocks_in_view;
 
 function process_sequence(current_pattern_index, block_position)
 local(current_pattern, idx, current_idx, audio_octave, current_row, new_note, mod, vel, to_play)
+instance(
+  modulator1_values,
+  modulator2_values,
+  midi_cc_1, midi_cc_2, midi_cc_3, midi_cc_4,
+  midi_cc_5, midi_cc_6, midi_cc_7, midi_cc_8,
+  speed_values,
+)
 global(
   pattern_buffer,
   extra_octaves,
@@ -388,17 +406,12 @@ global(
   MAX_POLYPHONY,
   notes_in_flight,
   current_arp,
-  modulator1_values,
-  modulator2_values,
-  speed_values,
   min_vel, max_vel,
   min_modwheel, max_modwheel,
   enable_vel, enable_mod,
   cpos,
   enable_cc1, enable_cc2, enable_cc3, enable_cc4,
   enable_cc5, enable_cc6, enable_cc7, enable_cc8,
-  midi_cc_1, midi_cc_2, midi_cc_3, midi_cc_4,
-  midi_cc_5, midi_cc_6, midi_cc_7, midi_cc_8,
   cc1_choice, cc2_choice, cc3_choice, cc4_choice,
   cc5_choice, cc6_choice, cc7_choice, cc8_choice,
   min_cc1, min_cc2, min_cc3, min_cc4,
@@ -542,8 +555,9 @@ function update_time_info()
 );
 
 update_time_info();
-loaded_pattern = -1;
-pattern_update();
+play.loaded_pattern = -1;
+view.loaded_pattern = -1;
+play.pattern_update(current_pattern_index);
 midi.midi_block(_disable_midi);
 
 // Sync to block
@@ -569,7 +583,7 @@ loop(samplesblock,
   );
   
   (time_mode == 1) ? ( reset_playhead ? ( current_sample = 0; reset_playhead = 0; ) );
-  pattern_update();
+  play.pattern_update(current_pattern_index);
   
   current_sample > loop_length ? 
   (
@@ -586,10 +600,10 @@ loop(samplesblock,
   (!enable_speed) ? (
     current_sample += 1;
   ) : (
-    speed_mod = interpret_speed_mod(abs(speed_values[sequencer_index]));
+    speed_mod = interpret_speed_mod(abs(play.speed_values[sequencer_index]));
     current_sample += speed_mod;
   );
-  process_sequence(current_pattern_index, block_position);
+  play.process_sequence(current_pattern_index, block_position);
   block_position += 1; 
 );
 
@@ -597,11 +611,16 @@ midi.curSample += 1;
 midi.notes_remain ? (
   midi.midi_sample();
   midi.assign_notes(current_arp, poly_mode);
-);
+); 
 
 @sample
 
 @gfx 919 302
+follow_current_pattern ? (
+  viewed_pattern_index = current_pattern_index;
+);
+view.pattern_update(viewed_pattern_index);
+
 micro_view = gfx_ext_flags & 1;
 
 setup_theme();
@@ -1077,7 +1096,7 @@ micro_view ? (
   cx += ctrl_spacing;
   full_width = label_width + (block_width + block_spacing) * blocks_in_view - 6;
   cx = pattern_toggle.selection_button(0, grid_origin_x, yc, full_width / 3, button_height - 4, "<", 0.3, 0.1, 0.05, "Decrease pattern index.");
-  cx = pattern_toggle.drag_button(1, grid_origin_x + full_width / 3 + 3, yc, full_width / 3, button_height - 4, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
+  cx = pattern_toggle.drag_button(1, grid_origin_x + full_width / 3 + 3, yc, full_width / 3, button_height - 4, sprintf(3, "%d", viewed_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
   cx = pattern_toggle.selection_button(2, grid_origin_x + 2 * full_width / 3 + 6, yc, full_width / 3, button_height - 4, ">", 0.3, 0.1, 0.05, "Increase pattern index.");
 ) : (
   gfx_setfont(HINT_FONT, "Arial", floor(13 * (1+fontscaling)));
@@ -1105,8 +1124,13 @@ micro_view ? (
   pattern_toggle.value = -1;
   cx += ctrl_spacing;
   cx = pattern_toggle.selection_button(0, cx, yc + 2, 0.8 * block_width, host_toggles, "«", 0.3, 0.1, 0.05, "Decrease pattern index.");
-  cx = pattern_toggle.drag_button(1, cx, yc + 2, 1.2 * block_width, host_toggles, sprintf(3, "%d", current_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
+  cx = pattern_toggle.drag_button(1, cx, yc + 2, 1.2 * block_width, host_toggles, sprintf(3, "%d", viewed_pattern_index), 0.3, 0.1, 0.05, "Current pattern index", DRAG_SETTING);
   cx = pattern_toggle.selection_button(2, cx, yc + 2, 0.8 * block_width, host_toggles, "»", 0.3, 0.1, 0.05, "Increase pattern index.");
+  
+  follow_pattern_toggle.value = follow_current_pattern;
+  cx = follow_pattern_toggle.selection_button(-1, cx, yc + 2, 0.8 * block_width, host_toggles, "↪", 0.3, 0.1, 0.05, "Follow pattern.\n\nDisabling this decouples what you see from what you hear\nand allows moving through patterns while pattern index\nis programmed.");
+  
+  follow_current_pattern = follow_pattern_toggle.value;
   
   cx += ctrl_spacing;
   
@@ -1195,23 +1219,23 @@ with shift + left mouse button.");
 );
 
 pattern_toggle.value == 0 ? ( 
-  current_pattern_index -= 1;
-  current_pattern_index < 0 ? (
-    current_pattern_index = max_stored_patterns - 1;
+  viewed_pattern_index -= 1;
+  viewed_pattern_index < 0 ? (
+    viewed_pattern_index = max_stored_patterns - 1;
   );
   slider_automate(2);  
 ) : ( pattern_toggle.value == 1 ) ? (
-  current_pattern_index = max(min(current_pattern_index += pattern_toggle.change, max_stored_patterns), 0);
+  viewed_pattern_index = max(min(viewed_pattern_index += pattern_toggle.change, max_stored_patterns), 0);
   slider_automate(2);
 ) : ( pattern_toggle.value == 2 ) ? (
-  current_pattern_index += 1;
-  ( current_pattern_index >= max_stored_patterns ) ? (
-    current_pattern_index = 0;
+  viewed_pattern_index += 1;
+  ( viewed_pattern_index >= max_stored_patterns ) ? (
+    viewed_pattern_index = 0;
   );
   slider_automate(2);
 )
-: ( pattern_toggle.value == 3 ) ? ( copy_pattern() ) :
-( pattern_toggle.value == 4 ) ? ( paste_pattern() ) :
+: ( pattern_toggle.value == 3 ) ? ( copy_pattern(viewed_pattern_index) ) :
+( pattern_toggle.value == 4 ) ? ( paste_pattern(viewed_pattern_index) ) :
 ( pattern_toggle.value == 5 ) ? ( loop_point = min(loop_point + 1, 64); ) :
 ( pattern_toggle.value == 6 ) ? ( loop_point = max(min(loop_point + pattern_toggle.change, 64), 2); ) :
 ( pattern_toggle.value == 7 ) ? ( loop_point = max(loop_point - 1, 2); ) :
@@ -1233,9 +1257,9 @@ select_colormap(polyphony * (extra_octaves + 1));
     c_idx = 0;
     current_octave = extra_octaves - octave;
     loop(polyphony,
-      note = current_arp[polyphony - c_idx - 1];
+      note = current_arp[polyphony - c_idx - 1]; 
       label = identify_note(note > 0 ? note + 12 * current_octave : 0);
-      yc = process_effect_row(row_idx, row_idx + 1, current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 15, "", 0);
+      yc = process_effect_row(row_idx, row_idx + 1, view.current_pattern + (MAX_POLYPHONY * current_octave + polyphony - c_idx - 1) * max_segments, x, yc, label, 15, "", 0);
       row_idx += 1;
       c_idx += 1;
     );
@@ -1244,11 +1268,11 @@ select_colormap(polyphony * (extra_octaves + 1));
   );
 );
 
-enable_speed ? yc = process_effect_row((time_mode == 0) ? -1 : row_idx, row_idx + 1, speed_values, x, yc, "Speed", 15, "", 1);
+enable_speed ? yc = process_effect_row((time_mode == 0) ? -1 : row_idx, row_idx + 1, view.speed_values, x, yc, "Speed", 15, "", 1);
 
 select_colormap(enable_vel + enable_mod + enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4 + enable_cc5 + enable_cc6 + enable_cc7 + enable_cc8);
 enable_vel ? (
-  yc = velrow.process_modulation_row(0, 0, 51, modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
+  yc = velrow.process_modulation_row(0, 0, 51, view.modulator2_values, x, yc, 2 * block_width, "Vel", "Note velocity");
   vel_drag.value = -1;
   
   !micro_view ? (
@@ -1299,17 +1323,17 @@ instance(mod_drag, micro_view)
 );
 
 enable_mod ? (
-  yc = mwrow.draw_cc_row(yc, 50, modulator1_values, 8, 9, 93, 94, 0, "Mod", "Mod wheel", enable_vel + 1, 0); 
+  yc = mwrow.draw_cc_row(yc, 50, view.modulator1_values, 8, 9, 93, 94, 0, "Mod", "Mod wheel", enable_vel + 1, 0); 
 );
 
-enable_cc1 ? ( yc = cc1_row.draw_cc_row(yc, 52, midi_cc_1, 11, 12, 95, 96, 103, sprintf(20, "CC %d", cc1_choice), "Custom Control Change", enable_vel + enable_mod + 1, 10); );
-enable_cc2 ? ( yc = cc2_row.draw_cc_row(yc, 53, midi_cc_2, 14, 15, 97, 98, 104, sprintf(20, "CC %d", cc2_choice), "Custom Control Change", enable_vel + enable_mod + 2, 13); );
-enable_cc3 ? ( yc = cc3_row.draw_cc_row(yc, 54, midi_cc_3, 17, 18, 99, 100, 105, sprintf(20, "CC %d", cc3_choice), "Custom Control Change", enable_vel + enable_mod + 3, 16); );
-enable_cc4 ? ( yc = cc4_row.draw_cc_row(yc, 55, midi_cc_4, 20, 21, 101, 102, 106, sprintf(20, "CC %d", cc4_choice), "Custom Control Change", enable_vel + enable_mod + 4, 19); );
-enable_cc5 ? ( yc = cc5_row.draw_cc_row(yc, 56, midi_cc_5, 27, 28, 107, 108, 109, sprintf(20, "CC %d", cc5_choice), "Custom Control Change", enable_vel + enable_mod + 5, 26); );
-enable_cc6 ? ( yc = cc6_row.draw_cc_row(yc, 57, midi_cc_6, 30, 31, 110, 111, 112, sprintf(20, "CC %d", cc6_choice), "Custom Control Change", enable_vel + enable_mod + 6, 29); );
-enable_cc7 ? ( yc = cc7_row.draw_cc_row(yc, 58, midi_cc_7, 33, 34, 113, 114, 115, sprintf(20, "CC %d", cc7_choice), "Custom Control Change", enable_vel + enable_mod + 7, 32); );
-enable_cc8 ? ( yc = cc8_row.draw_cc_row(yc, 59, midi_cc_8, 36, 37, 116, 117, 118, sprintf(20, "CC %d", cc8_choice), "Custom Control Change", enable_vel + enable_mod + 8, 35); );
+enable_cc1 ? ( yc = cc1_row.draw_cc_row(yc, 52, view.midi_cc_1, 11, 12, 95, 96, 103, sprintf(20, "CC %d", cc1_choice), "Custom Control Change", enable_vel + enable_mod + 1, 10); );
+enable_cc2 ? ( yc = cc2_row.draw_cc_row(yc, 53, view.midi_cc_2, 14, 15, 97, 98, 104, sprintf(20, "CC %d", cc2_choice), "Custom Control Change", enable_vel + enable_mod + 2, 13); );
+enable_cc3 ? ( yc = cc3_row.draw_cc_row(yc, 54, view.midi_cc_3, 17, 18, 99, 100, 105, sprintf(20, "CC %d", cc3_choice), "Custom Control Change", enable_vel + enable_mod + 3, 16); );
+enable_cc4 ? ( yc = cc4_row.draw_cc_row(yc, 55, view.midi_cc_4, 20, 21, 101, 102, 106, sprintf(20, "CC %d", cc4_choice), "Custom Control Change", enable_vel + enable_mod + 4, 19); );
+enable_cc5 ? ( yc = cc5_row.draw_cc_row(yc, 56, view.midi_cc_5, 27, 28, 107, 108, 109, sprintf(20, "CC %d", cc5_choice), "Custom Control Change", enable_vel + enable_mod + 5, 26); );
+enable_cc6 ? ( yc = cc6_row.draw_cc_row(yc, 57, view.midi_cc_6, 30, 31, 110, 111, 112, sprintf(20, "CC %d", cc6_choice), "Custom Control Change", enable_vel + enable_mod + 6, 29); );
+enable_cc7 ? ( yc = cc7_row.draw_cc_row(yc, 58, view.midi_cc_7, 33, 34, 113, 114, 115, sprintf(20, "CC %d", cc7_choice), "Custom Control Change", enable_vel + enable_mod + 7, 32); );
+enable_cc8 ? ( yc = cc8_row.draw_cc_row(yc, 59, view.midi_cc_8, 36, 37, 116, 117, 118, sprintf(20, "CC %d", cc8_choice), "Custom Control Change", enable_vel + enable_mod + 8, 35); );
 
 function line_idx(me, cy)
 global(
@@ -1398,7 +1422,7 @@ local(ix, yyo, _start_y, _end_y)
   (yyo == -1) ? _end_y : yyo;
 );
 
-function handle_drag(me, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, max_rows, this_drag_mode)
+function handle_drag(me, current_pattern, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, max_rows, this_drag_mode)
 local(
   block_step, current_x, start_x, start_y, end_x, end_y, sel_ptr, bounce,
   max_val, current_y, block_action,
@@ -1413,7 +1437,7 @@ instance(
 )
 global(mouse_cap, last_cap, gfx_x, gfx_y, mouse_x, mouse_y, 
        drag_mode, DRAG_AREA, n_segments, FIXED_LINES,
-       current_pattern, order_mem, selection_buffer, max_segments,
+       order_mem, selection_buffer, max_segments,
        animate_copy, randomize_block)
 (
   gfx_set(1, 1, 1, 1);
@@ -1557,8 +1581,8 @@ gfx_set(1, 1, 1, .1);
 // current_sample / samples_per_beat
 gfx_rect(grid_origin_x + label_width + (block_width + block_spacing) * floor(sequencer_index), grid_origin_y, block_width, yc - 4 * block_spacing - block_width);
 
-block_selector.handle_drag(2, grid_origin_x, modulator_origin_y, block_width, block_spacing, label_width, enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4 + enable_cc5 + enable_cc6 + enable_cc7 + enable_cc8 + enable_mod + enable_vel, DRAG_MODULATORS);
-block_selector.handle_drag(1, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, polyphony * (extra_octaves + 1), DRAG_AREA);
+block_selector.handle_drag(2, view.current_pattern, grid_origin_x, modulator_origin_y, block_width, block_spacing, label_width, enable_cc1 + enable_cc2 + enable_cc3 + enable_cc4 + enable_cc5 + enable_cc6 + enable_cc7 + enable_cc8 + enable_mod + enable_vel, DRAG_MODULATORS);
+block_selector.handle_drag(1, view.current_pattern, grid_origin_x, grid_origin_y, block_width, block_spacing, label_width, polyphony * (extra_octaves + 1), DRAG_AREA);
 
 last_cap = mouse_cap;
 gfx_setcursor(current_cursor, "arrow");
@@ -1594,3 +1618,6 @@ loop(10,
 */
 !micro_view ? hinter.drawHint_draw();
 
+follow_current_pattern ? (
+  current_pattern_index = viewed_pattern_index;
+);
