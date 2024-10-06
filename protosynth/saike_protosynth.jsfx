@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.47
+version: 0.49
 author: Joep Vanlier
-changelog: Fix regression anti-clicking for DCF based waveforms. Add a few more stock presets.
+changelog: Terminate notes when switching glide mode (prevents stuck notes in rare cases). Reset reverb when switching presets.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -1166,9 +1166,13 @@ verb.reset_verb();
 freemem = fft_verb.init_stft_verb_mem(freemem, 6); //, fft_verb_fft_buffer, fft_verb_window_buffer, 6);
 freemem = spreader.init_spreader(freemem + 1024, 2048);
 
-midi.reset_midi();
-<?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
+function nuke_midi()
+(
+  midi.reset_midi();
+  <?loop(i=0;MAX_VOICES, printf("v%d.process_midi(i, 0, 0, 0, -1, 0);", i, i); i += 1);?>
+);
 
+nuke_midi();
 CURRENT_VERSION = 18;
 version = CURRENT_VERSION;
 
@@ -1179,6 +1183,7 @@ write_mode = file_avail(0) < 0;
 
 (!write_mode) ? (
   <?loop(i2=1;8, printf("memset(wt%d.sample_mem_start, 0, 8 * SAMPLES_PER_WT * WT_LENGTH);", i2); i2 += 1;);?>
+  preset_load = 1;  
 );
 
 file_var(0, version);
@@ -1410,6 +1415,12 @@ version = CURRENT_VERSION;
 @slider
 
 @block
+(last_glide != glide) ? (
+  // Make sure we reset notes when we switch glide modes (otherwise stuck notes might ensue)
+  last_glide = glide;
+  nuke_midi();
+);
+
 pdc_top_ch = 2;
 pdc_bot_ch = 0;
 pdc_delay = spreader_active ? spreader.half_buffer : 0;
@@ -1550,6 +1561,13 @@ pass_through = 1;
 midi.midi_block(pass_through);
 
 @sample
+preset_load ? (
+  current_gain = 0;
+  d_gain = 0;
+  preset_load = 0;
+  verb.reset_verb();
+);
+
 spreader_active ? (
   (d_frequency != 0) ? (
     spreader.filt.init_butter2(current_spread_frequency);
