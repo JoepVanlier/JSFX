@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.50
+version: 0.51
 author: Joep Vanlier
-changelog: Also force a voice update.
+changelog: Force more resets on preset change.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -850,12 +850,12 @@ global(
   mix_mode31,
   fb1, fb2, fb3, fb4, fb21, fb22, fb31,
   filter1_enabled, filter2_enabled, filter3_enabled,
-  current_f3_gain,
+  current_f3_gain, df3_gain, f3_drive,
   <?loop(i=1;N_OSCS, printf("osc%d_active, ", i); i += 1; );?>
 )
 instance(
   declick,
-  current_f3_type,
+  current_f3_type, last_f3_type,
   mix1, mix2, mix3, mix4, mix21, mix22, mix31,
   osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, l, r, declick_l, declick_r,
   g1, g2, g3, g4, g5, g6, g7, g8,
@@ -949,6 +949,27 @@ instance(
   
   <?gen_mixer(1, 31, 1, 2);?>
   l = r = filter3_enabled ? (
+    (current_f3_type != last_f3_type) ? (
+      last_f3_type = current_f3_type;
+      
+      current_f3_gain = pow(10, 0.05 * f3_drive);
+      df3_gain = 0;
+      
+      (current_f3_type == 1) ? (
+        this.filter3.ms20.reset_ms20();
+      ) : (current_f3_type == 2) ? (
+        this.filter3.la2.reset_lad2();
+      ) : (current_f3_type == 3) ? (
+        this.filter3.la4.reset_lad4();
+      ) : (current_f3_type == 4) ? (
+        this.filter3.shriek.reset_shriek();
+      ) : (current_f3_type == 5) ? (
+        this.filter3.pl4.reset_pl4();
+      ) : (current_f3_type == 6) ? (
+        this.filter3.shriek.reset_mj();
+      );
+    );
+  
     (current_f3_type == 0) ? (
       this.filter3.lin.eval_linear_2p(o1)
     ) : (current_f3_type == 1) ? (
@@ -1159,7 +1180,8 @@ printf("osc%d.init_dsf_osc();\n", i);
   );
 ?>
 
-verb.reset_verb();
+verb.reset_diff_verb();
+fft_verb.reset_fft_verb();
 
 //freemem = (fft_verb_window_buffer = freemem) + MAX_FFT_SIZE;
 //freemem = (fft_verb_fft_buffer = freemem) + MAX_FFT_SIZE;
@@ -1182,8 +1204,10 @@ update_ticker = 0;
 write_mode = file_avail(0) < 0;
 
 (!write_mode) ? (
+  preset_load = 1337;
+  current_gain = 0;
+  d_gain = 0;
   <?loop(i2=1;8, printf("memset(wt%d.sample_mem_start, 0, 8 * SAMPLES_PER_WT * WT_LENGTH);", i2); i2 += 1;);?>
-  preset_load = 1;  
 );
 
 file_var(0, version);
@@ -1412,6 +1436,10 @@ has_wavetable_data ? (
 update_solo();
 version = CURRENT_VERSION;
 
+(preset_load == 1337) ? (
+  preset_load = 65;
+);
+
 @slider
 
 @block
@@ -1430,7 +1458,8 @@ must_glide = force_glide && glide;
 
 (reverb_algorithm != last_reverb_algo) ? (
   last_reverb_algo = reverb_algorithm;
-  verb.reset_verb();
+  verb.reset_diff_verb();
+  fft_verb.reset_fft_verb();
 );
 
 shimmer = 0;
@@ -1564,15 +1593,41 @@ midi.midi_block(pass_through);
 preset_load ? (
   current_gain = 0;
   d_gain = 0;
-  preset_load = 0;
-  verb.reset_verb();
   
-  <?
-  loop(i=0;MAX_VOICES,
-    printf("v%d.update_voice();", i, i);
-    i += 1;
+  // Actual prepwork doesn't start until @serialize actually finished
+  (preset_load < 1024) ? (
+    preset_load -= 1;
+    
+    //n_update = update_ticker = 0;
+    chorus.reset_chorus();
+    (preset_load == 64) ? (
+      <?
+      loop(i=0;MAX_VOICES,
+        printf("v%d.update_voice();", i, i);
+        
+        printf("v%d.mix1.reset_phasemod_mem();", i);
+        printf("v%d.mix2.reset_phasemod_mem();", i);
+        printf("v%d.mix3.reset_phasemod_mem();", i);
+        printf("v%d.mix4.reset_phasemod_mem();", i);
+        printf("v%d.mix21.reset_phasemod_mem();", i);
+        printf("v%d.mix22.reset_phasemod_mem();", i);
+        printf("v%d.mix31.reset_phasemod_mem();", i);
+        
+        printf("v%d.env1_state = 0;", i);
+        printf("v%d.env2_state = 0;", i);
+        printf("v%d.env3_state = 0;", i);
+        printf("v%d.env4_state = 0;", i);
+        printf("v%d.env5_state = 0;", i);
+        printf("v%d.env6_state = 0;", i);
+        
+        i += 1;
+      );
+      ?>
+    
+      verb.reset_diff_verb();
+      fft_verb.reset_fft_verb();
+    );
   );
-  ?>
 );
 
 spreader_active ? (
@@ -1733,6 +1788,28 @@ audio_running ? (
   );
   
   spl0 = filter4_enabled ? (
+    (current_f4_type != last_f4_type) ? (
+      last_f4_type = current_f4_type;
+      
+      current_f4_gain = pow(10, 0.05 * f4_drive);
+      df4_gain = 0;
+      
+      (current_f4_type == 1) ? (
+        this.filter4.ms20.reset_ms20();
+      ) : (current_f4_type == 2) ? (
+        this.filter4.la2.reset_lad2();
+      ) : (current_f4_type == 3) ? (
+        this.filter4.la4.reset_lad4();
+      ) : (current_f4_type == 4) ? (
+        this.filter4.shriek.reset_shriek();
+      ) : (current_f4_type == 5) ? (
+        this.filter4.pl4.reset_pl4();
+      ) : (current_f4_type == 6) ? (
+        this.filter4.shriek.reset_mj();
+      );
+      
+    ); 
+  
     (current_f4_type == 0) ? (
       this.filter4.lin.eval_linear_2p(spl0)
     ) : (current_f4_type == 1) ? (
@@ -1821,8 +1898,12 @@ audio_running ? (
     ap_lspl1 = spl1;
   );
   
-  spl0 *= current_gain;
-  spl1 *= current_gain;
+  current_gain ? (
+    spl0 *= current_gain;
+    spl1 *= current_gain;
+  ) : (
+    spl0 = spl1 = 0;
+  );
   
   audio_buffer[audio_buffer_idx] = 0.5 * (spl0 + spl1);
   audio_buffer_idx += 1;
