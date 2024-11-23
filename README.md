@@ -522,136 +522,135 @@ multi-channel analysis and combine it with a sonogram and time window.
 
 ![Spectral Analyzer](https://imgur.com/DTEQ0am.jpg)
 
-The JSFX comes with a lua script which sets up the routing appropriately
-on a new FX track.
+#### Setting up the routing
 
-#### White/Black
+The JSFX comes with a lua script which sets up the routing appropriately on a new FX track.
+The lua script is called `LoadSpectrum.lua` and will automatically add a single track with the spectrum analyzer, routing all the _selected_ tracks to it.
+Note that it will also copy the track names and colors that were set for those tracks.
 
-Chooses background color.
+Some of the options are briefly described below:
 
+#### General operation
+
+The top part of the graph is generally used for the spectrum.
+You can click anywhere on the spectrum to view the frequency / gain and semitone at that point.
+Clicking and dragging with the right mouse button will zoom in on part of the spectrum.
+Clicking with the right button anywhere again will reset the view.
+Freeze pauses the spectral analyzer.
 
 #### Smoothing
 
-Chooses size of spectral smoothing. Spectral smoothing is performed in 
-the frequency domain, 
-  using larger smoothing for higher values. Note 
-that this is not an unbiased smoother.
-  More smoothing means that peaks 
-get wider and the spectrum becomes less accurate.  The noise 
-is also 
-suppressed however, which makes it easier to read when there are multiple 
-spectra.
+Chooses size of spectral smoothing.
+Spectral smoothing is performed in the frequency domain, using larger smoothing for higher values. Note that this is not an unbiased smoother.
+More smoothing means that peaks get wider and the spectrum becomes less accurate.
+The noise is also suppressed however, which makes it easier to read when there are multiple spectra.
+Left to the smooth amount button, we have an option for which smoothing method to use. The options are:
 
+- Fast: Fastest, but most inaccurate smoothing method.
+- Average: Simply averages bins.
+- Maximum: Takes the maximum of the bins being smoothed over.
+- LOESS: Uses local regressions to smooth the spectrum.
+- Adaptive: Tries to be smart about it. Your mileage may vary.
+
+#### Linear/Quad
+
+Chooses how to interpolate the bins.
+Quad generally looks better, but costs a little more performance.
+
+#### Integrate
+
+Integrate spectrum over time.
+This makes the spectrum less noisy, but less sensitive to short transients.
+Smoothness is a tradeoff between smoothing (width), integration time (transients) and noise (no smoothing or integration time).
 
 #### Color map
 
 Specifies colormap for spectral analyzer.
 
+#### Mono or Mid/Side
+
+Defines whether the spectrum should show the side spectrum (it shows this by using a slightly different color fill for it).
+
+#### Freq / Notes
+
+Decides whether to display the frequency axis in frequencies or notes.
 
 #### Scale
 
 Scale indicators the zoom factor on the spectrum analyzer.
 
-  
-#### Integrate
-
-Integrate spectrum over time. This makes the spectrum less noisy, but 
-less sensitive to short transients. Smoothness is a tradeoff between 
-smoothing (width), integration time (transients) 
-and noise (no smoothing 
-or integration time).
-
-
 #### Floor
 
 Specify where to put the noise floor.
 
+#### >A and >B
+
+Dumps the sum spectrum into memory slot A or B.
+It can be visualized alongside the others by enabling the channel MemA or MemB.
 
 #### Window
 
-Window function. Defaults to Blackman-Harris for its resolution.
-
+Window function. Defaults to Blackman-Harris.
+Different windows have different tradeoffs between how wide peaks, how many sidelobes they have and accuracy.
+When reading amplitudes of pure sine waves, use the flat-top window.
+In most cases, the Blackman-Harris window works well enough.
 
 #### FFT
 
-FFT window size. 8192 is pretty good. Higher is heavier on the CPU.
-
+FFT window size. 8192 is pretty good. Higher is heavier on the CPU and less responsive (worse for transients).
 
 #### Log(Sonogram)
 
 Enabling this shows the sonogram with a logarithmic frequency axis. 
 Disabling it means linear.
 
+### Channel buttons (Ch1 - Ch16).
+
+The channel buttons indicate which channels are being visualized.
+Enabling or disabling them can be done by clicking them with the left mouse button.
+Clicking them with the right mouse button will make them the active channel in the sonogram or time window.
+This way you can study the sonograms of  the channels separately.
+
+#### Sum
+
+Indicates the sum of the signal.
+This will show the left and right channel in black and grey in the main graph.
+Enabling or disabling can be done by left clicking.
+Clicking this with the outer mouse button will show the sum signal in the sonogram or time window.
 
 #### Sonogram/Time toggle
 
 Determine whether you want to see the waveform or the sonogram. 
-Waveform is good for studying 
-transients. Sonogram is good for 
-studying frequencies over time.
-
-
-
-### Channel buttons
-
-The next buttons indicate what channels are visualized. Enabling 
-or disabling them can be done 
-  by clicking them with the left 
-mouse button. Clicking them with the right mouse button will make 
-them the active channel in the sonogram or time window. This way,
-you can study the sonograms of  the channels separately.
-
-
-#### Sum
-
-Indicates the sum of the signal. This will show the left and right 
-channel in black and grey in the main graph. Enabling or disabling 
-can be done by left clicking. Clicking this with the outer mouse 
-button will show the signal in the sonogram or time window.
-
-
-#### Ch1 - Ch16
-
-The channels that are routed to the spectral analyser. Enabling or 
-disabling can be done by left 
-  clicking. Clicking this with the outer 
-mouse button will show the signal in the sonogram or time 
-window.
-
-
+Waveform is good for studying transients.
+The sonogram is good for studying frequencies over time.
 
 ### Sonogram mode
-Double-clicking the sonogram will toggle its size. Clicking and 
-dragging with the left mouse button 
-will change how bright it is. 
-Clicking with the right mouse button will switch colormap. The channel 
-you're viewing and the scale are shown on the top left. The colormap 
-on the bottom left. Switch with outer mouse button on the channel 
-button in the second row on the top. Mousewheel will change the 
-scaling 
-w.r.t. the frequency axis. Doubleclicking alters the sonogram size.
+
+Double-clicking the sonogram will toggle its size.
+Clicking and dragging with the left mouse button will change how bright it is. 
+Clicking with the right mouse button will switch colormap.
+The channel you're viewing and the scale are shown on the top left.
+The colormap on the bottom left.
+Switch with outer mouse button on the channel button in the second row on the top.
+Mousewheel will change the scaling w.r.t. the frequency axis.
+Right mouse button on the sonogram provides additional options (such as changing the colormap, speed etc).
 
 ### Time mode
-Clicking and dragging or using the mouse wheel  will change the scale 
-of the graph. The channel you're 
-viewing is shown on the top left. Switch 
-with outer mouse button on the channel button in the second row on the top. 
+
+Clicking and dragging or using the mouse wheel  will change the scale of the graph.
+The channel you're viewing is shown on the top left.
+Switch with outer mouse button on the channel button in the second row on the top. 
 Doubleclicking alters the signal window size.
+Note that in time domain mode, you can also choose a synced mode, to make sure the display is synced to the tempo.
 
-# SideSpectrum Meter
-A stereo spectral analyzer to study how much the left and right channel 
-differ.
+### Time mode (all)
 
-# StereoManipulator
-A stereo width manipulator with a large number of filters. 
+Same as Time mode, but shows all (enabled) channels at once.
+Useful for syncing up tracks.
 
-Splits the channel into two via crossover filter. Both channels can then 
-be mono-ified separately. Use FIR filter for strong transients, but note 
-that this incurs N/2 delay of the signal. Larger filters are required for 
-cutting lower freq. Larger filters will also reduce aliasing. Use high 
-order IIR for less transient heavy stuff. This incurs no global delay 
-but may alter transients. FIRs are much more expensive than IIRs.
+# Diff mode
 
-If you hear phase cancellation, set use channel to left or right rather 
-than mix. Note that widths other than 0 or 100\% in this setting is not
-recommended since this will create volume differences between left and right.
+This is a special operation that is mostly used to test plugins.
+It will show the difference between tracks 1 and 2.
+Operation is typically done by sending white noise to track 1, then sending that same noise through a plugin and the result into track 2.
+Then you can simply look at the gain and phase curves it is applying.
