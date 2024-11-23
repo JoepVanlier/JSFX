@@ -1,8 +1,8 @@
 desc:Saike Spectral Analyzer (beta)
 tags: analysis FFT meter spectrum
-version: 5.0.37
+version: 5.0.39
 author: Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat
-changelog: Tweak font frequency highlighter. Allow increasing font size.
+changelog: Make sure all apodization windows are accessible through clicking. Minor tweaks regarding visibility frequency axis. Support renaming channels. Click the channel while holding CTRL and start typing. Allow modifying the number of active tracks. Serialize stored track colors and names so that you don't have to hit LoadSpectrum every time.
 provides: colormaps.jsfx-inc
 Copyright (C) 2007 Cockos Incorporated
 Copyright (C) 2018 Joep Vanlier, Trond-Viggo Melssen
@@ -21,7 +21,7 @@ slider4:2<0,6,1{rectangular,hamming,blackman-harris,blackman,flat-top,gaussian}>
 slider5:200<0,2500,1>-integration time (ms)
 slider6:1<1,6,.2>-scaling
 slider7:smoothing=20<0,100,1>-smoothing
-slider8:1<0,14,1{dark,intense,fluo,colorblind,pimp,shades,fancy,pastel,purple,dark2,dark3,dark4,dark5,colorblind2,smooth}>-colormap
+slider8:1<0,15,1{dark,intense,fluo,colorblind,pimp,shades,fancy,pastel,purple,dark2,dark3,dark4,dark5,colorblind2,smooth,user}>-colormap
 slider9:16<1,16,1>-mxchannels
 slider10:.15<0,1,.4>-colorBackground
 
@@ -92,6 +92,18 @@ sono_sample = 0;
 last_sono_sample = 0;
 version = 2;
 chNames = 900;
+chNames2 = 916;
+
+chName = 0;
+while (chName <= 16) (
+  chName < 10 ? (
+    chNames2[chName-1] = sprintf(chNames2 + chName - 1, "");
+  ) : (
+    chNames2[chName-1] = sprintf(chNames2 + chName - 1, "");
+  );
+  chName = chName + 1;
+);
+
 memory_debugging = 0;
 !memory_debugging ? (
   ext_noinit = 1;
@@ -107,6 +119,89 @@ bluered   = 6000;
 
 freeze = 0;
 
+function open_text_field(me)
+local(sw, sh)
+global(active_text_input, font_scaling, cap_mode, gfx_h, mouse_x, mouse_y)
+instance(str, x, y)
+(
+  str = 800;
+  x = mouse_x;
+  y = mouse_y - 25 * font_scaling;
+  gfx_measurestr("t", sw, sh);
+  y = min(y, gfx_h - 1.1 * sh);
+  sprintf(str, "");
+  active_text_input = me;
+  cap_mode = 1337;
+);
+
+function process_text_input()
+local(ww, hh, char, did_something, w, h)
+global(chNames2, font_scaling, gfx_x, gfx_y, active_text_input, mouse_cap, lcap)
+instance(str, x, y)
+(
+  did_something = 0;
+  
+  // Clicked elsewhere?
+  str = 800;
+  ((mouse_cap > 0) && (lcap == 0)) ? (
+    sprintf(str, "");
+    active_text_input = 0;
+  );
+  
+  active_text_input ? (
+    char = gfx_getchar();
+    char ? (
+      (char == 13) ? (
+        // Parse and clear
+        sprintf(chNames2[active_text_input - 1], "");
+        match("%s", str, chNames2[active_text_input - 1]) == 1 ? (
+          did_something = 1;
+        );
+        
+        active_text_input = 0;
+      ) : (char == 8) ? (
+        // Delete
+        strlen(str) ? (
+          strcpy_substr(str, str, 0, strlen(str) - 1);
+        );
+      ) : (
+        (strlen(str) == 0) ? (
+          sprintf(str, "%c", char);
+        ) : (
+          str_setchar(str, strlen(str), char);
+        );
+      );
+    );
+  );
+  
+  did_something
+);
+
+function render_text_input()
+local(ww, hh, ix, char, tmp, did_something, w, h, minh, minw)
+global(font_scaling, gfx_x, gfx_y, active_text_input)
+instance(str, x, y, result)
+(
+  active_text_input ? (
+    gfx_measurestr("x", minw, minh);
+    gfx_measurestr(str, ww, hh);
+    
+    ww = max(minw, ww);
+    hh = max(minh, hh);
+    gfx_set(.1, .13, .1, 1);
+    gfx_rect(x - 2, y - 2, ww + 4, hh + 4, 2, 1);
+    gfx_set(.2, .23, .2, 1);
+    
+    gfx_set(1, 1, 1, 1);
+    gfx_roundrect(x - 2, y - 2, ww + 4, hh + 4, 2);
+    gfx_x = x;
+    gfx_y = y;
+    
+    gfx_printf(str);
+  );
+);
+
+
 function setChannelNames()
 local(chName)
 global(chNames)
@@ -114,13 +209,14 @@ global(chNames)
   chName = 1;
   while (chName <= 16) (
     chName < 10 ? (
-      chNames[chName-1] = sprintf(chName-1, "Ch %d", chName);
+      chNames[chName-1] = sprintf(chNames + chName - 1, "Ch %d", chName);
     ) : (
-      chNames[chName-1] = sprintf(chName-1, "Ch%d", chName);
+      chNames[chName-1] = sprintf(chNames + chName - 1, "Ch%d", chName);
     );
     chName = chName + 1;
   );
 );
+
 !trCnt ? setChannelNames();
 
 function updateChannelSliders()
@@ -339,6 +435,26 @@ file_var(0, legacy_style);
 file_var(0, hide_spectrum);
 file_var(0, fast_proc);
 file_var(0, font_scaling);
+file_var(0, removed_track_count);
+
+function write_names(chNames2)
+local()
+global()
+local(chName)
+(
+  chName = 0;
+  while (chName <= 16) (
+    file_string(0, chNames2[chName - 1]);
+    chName = chName + 1;
+  );
+);
+
+write_names(chNames2);
+write_names(chNames);
+
+// Store user colors
+file_var(0, cref);
+file_mem(0, (10000 + 100*floor(15)), 16 * 3);
 
 @slider
 slider2 != lfloor ? old_w=0;
@@ -461,6 +577,11 @@ latencyCompensation ? (
 );
 
 @gfx 900 600
+
+active_text_input ? (
+  mouse_cap = 0;
+);
+
 function rescale(buf)
 global(
   mem_block_size,
@@ -1038,23 +1159,25 @@ function checkChannelButtons()
 (
   hit = 0;
 
-  ch1.hit_button(mouse_x,mouse_y,11)  ? ( hit=11; ) :
-  ch2.hit_button(mouse_x,mouse_y,12)  ? ( hit=12; ) :
-  ch3.hit_button(mouse_x,mouse_y,13)  ? ( hit=13; ) :
-  ch4.hit_button(mouse_x,mouse_y,14)  ? ( hit=14; ) :
-  ch5.hit_button(mouse_x,mouse_y,15)  ? ( hit=15; ) :
-  ch6.hit_button(mouse_x,mouse_y,16)  ? ( hit=16; ) :
-  ch7.hit_button(mouse_x,mouse_y,17)  ? ( hit=17; ) :
-  ch8.hit_button(mouse_x,mouse_y,18)  ? ( hit=18; ) :
-  ch9.hit_button(mouse_x,mouse_y,19)  ? ( hit=19; ) :
-  ch10.hit_button(mouse_x,mouse_y,20) ? ( hit=20; ) :
-  ch11.hit_button(mouse_x,mouse_y,21) ? ( hit=21; ) :
-  ch12.hit_button(mouse_x,mouse_y,22) ? ( hit=22; ) :                                                                       
-  ch13.hit_button(mouse_x,mouse_y,23) ? ( hit=23; ) :
-  ch14.hit_button(mouse_x,mouse_y,24) ? ( hit=24; ) :
-  ch15.hit_button(mouse_x,mouse_y,25) ? ( hit=25; ) :
-  ch16.hit_button(mouse_x,mouse_y,26) ? ( hit=26; );
-    
+  ch1.hit_button(mouse_x,mouse_y,11)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(1) : hit=11; ) :
+  ch2.hit_button(mouse_x,mouse_y,12)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(2) : hit=12; ) :
+  ch3.hit_button(mouse_x,mouse_y,13)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(3) : hit=13; ) :
+  ch4.hit_button(mouse_x,mouse_y,14)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(4) : hit=14; ) :
+  ch5.hit_button(mouse_x,mouse_y,15)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(5) : hit=15; ) :
+  ch6.hit_button(mouse_x,mouse_y,16)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(6) : hit=16; ) :
+  ch7.hit_button(mouse_x,mouse_y,17)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(7) : hit=17; ) :
+  ch8.hit_button(mouse_x,mouse_y,18)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(8) : hit=18; ) :
+  ch9.hit_button(mouse_x,mouse_y,19)  ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(9) : hit=19; ) :
+  ch10.hit_button(mouse_x,mouse_y,20) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(10) : hit=20; ) :
+  ch11.hit_button(mouse_x,mouse_y,21) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(11) : hit=21; ) :
+  ch12.hit_button(mouse_x,mouse_y,22) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(12) : hit=22; ) :                                                                       
+  ch13.hit_button(mouse_x,mouse_y,23) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(13) : hit=23; ) :
+  ch14.hit_button(mouse_x,mouse_y,24) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(14) : hit=24; ) :
+  ch15.hit_button(mouse_x,mouse_y,25) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(15) : hit=25; ) :
+  ch16.hit_button(mouse_x,mouse_y,26) ? ( (mouse_cap&4 > 0) ? text_box.open_text_field(16) : hit=26; );
+  minus_button.hit_button(mouse_x, mouse_y, -1) ? ( (removed_track_count < 15) ? removed_track_count += 1; );
+  plus_button.hit_button(mouse_x, mouse_y, -1) ? ( (removed_track_count > 0) ? removed_track_count -= 1; );
+  
   hit > 0 ? (
     (slider36 == -1) ? (
       slider(hit) = !slider(hit);
@@ -1082,21 +1205,22 @@ instance(fmaxFactorf)
   xscale = 800 / (fmax - 4);
   wsc = h / (log(1+.5*fmax*xscale));
   last_y = -10000;
+  txt = 25;
   while(
     logarithmic ? (
       f += (f<100?10:f<1000?100:f<10000?1000:5000);
       tx = log(1.0 + f * xscale) * wsc;
-      txt = f < 1000 ? sprintf(14, "%dHz", f) : sprintf(14, "%dkHz", f / 1000);
+      txt = f < 1000 ? sprintf(txt, "%dHz", f) : sprintf(txt, "%dkHz", f / 1000);
     ) : (
       factor < 1.1 ? (
         f += 1000;
         txt = sprintf(14, "%dkHz", f / 1000);
       ) : ( factor < 2.5 ) ? (
         f += 500;
-        txt = f < 1000 ? sprintf(14, "%dHz", f) : sprintf(14, "%.1fkHz", f / 1000);
+        txt = f < 1000 ? sprintf(txt, "%dHz", f) : sprintf(txt, "%.1fkHz", f / 1000);
       ) : (
         f += (f<100?10:f<1000?100:f<10000?200:5000);
-        txt = f < 1000 ? sprintf(14, "%dHz", f) : sprintf(14, "%.1fkHz", f / 1000);
+        txt = f < 1000 ? sprintf(txt, "%dHz", f) : sprintf(txt, "%.1fkHz", f / 1000);
       );
       tx = 2 * (f / fmax) * h;
     );
@@ -2100,6 +2224,7 @@ instance()
     ch14.hit_button(mouse_x,mouse_y,-1) ? ( slider28=13; slider_automate(slider28); old_w = 0);
     ch15.hit_button(mouse_x,mouse_y,-1) ? ( slider28=14; slider_automate(slider28); old_w = 0);
     ch16.hit_button(mouse_x,mouse_y,-1) ? ( slider28=15; slider_automate(slider28); old_w = 0);
+    
     showSumButton.hit_button(mouse_x,mouse_y,-1) ? ( slider28=-1; slider_automate(slider28); old_w = 0);  
     showChannel = slider28;        
 
@@ -2190,7 +2315,7 @@ instance()
   );
 );
 
-over_sono_divider = !hide_spectrum && (mouse_y > (gfx_h-sono_yoffset_bottom-sono_size-14)) && (mouse_y < (gfx_h-sono_yoffset_bottom-sono_size + 14));
+over_sono_divider = (slider29 != 3) && !hide_spectrum && (mouse_y > (gfx_h-sono_yoffset_bottom-sono_size-14)) && (mouse_y < (gfx_h-sono_yoffset_bottom-sono_size + 14));
 
 over_sono_divider ? (
   new_cursor = 32645;
@@ -2214,7 +2339,7 @@ over_sono_divider ? (
    !(last_mouse_cap & 1) ? (
       // Reset to defaults
        (cap_mode == 1||cap_mode == 4||cap_mode == 5||cap_mode == 6||cap_mode == 8||cap_mode == 9||cap_mode == 10||cap_mode ==30||cap_mode ==31
-       ||cap_mode ==32 ||cap_mode ==40 ||cap_mode ==42||cap_mode == 44||cap_mode == 49|| (cap_mode > 10 && cap_mode < 27)||cap_mode==28) && !cap_drag && cap_timer < 12 ?(
+       ||cap_mode ==32||cap_mode ==33 ||cap_mode ==40 ||cap_mode ==42||cap_mode == 44||cap_mode == 49|| (cap_mode > 10 && cap_mode < 27)||cap_mode==28) && !cap_drag && cap_timer < 12 ?(
          cap_mode == 1 ? (
             slider2 = -90;
             slider_automate(slider2);
@@ -2451,7 +2576,7 @@ over_sono_divider ? (
     ) :
     cap_mode == 7 && cap_last_y != mouse_y ? (
       // Colormap
-      slider8 = drag_slider(slider8, 0.01, 14, .03);
+      slider8 = drag_slider(slider8, 0.01, 15, .03);
       old_w=0;
       slider_automate(slider8);
     ) :
@@ -2520,7 +2645,7 @@ over_sono_divider ? (
   drawHz = 0;
   (last_mouse_cap & 1) && !cap_drag ? (
     cap_mode == 2 ? (
-    slider4 = cycle_slider(slider4, 0.0, 3.0, 1.0);
+    slider4 = cycle_slider(slider4, 0.0, 5.0, 1.0);
       old_w=0;
       slider_automate(slider4);
     );
@@ -2558,6 +2683,11 @@ over_sono_divider ? (
       slider_automate(displayMode);
     );
   );
+);
+
+function getName(idx)
+(
+  strlen(chNames2[idx]) ? chNames2[idx] : chNames[idx]
 );
 
 function DrawButtons()
@@ -2698,11 +2828,11 @@ function DrawButtons()
         // Change channel name to track name
         sOffs = 0;
         while (gmem[addr] != 256) (
-          str_setchar(chName, sOffs, gmem[addr], 'c');
+          str_setchar(chNames + chName, sOffs, gmem[addr], 'c');
           sOffs = sOffs + 1;
           addr = addr + 1;
         );
-        str_setlen(chName, min(10, sOffs));
+        str_setlen(chNames + chName, min(10, sOffs));
         chName = chName + 1;
         addr = addr + 1;
       );
@@ -2712,36 +2842,52 @@ function DrawButtons()
     );
     
     gfx_measurestr("Ch16", chW, chH);
-    chButtonPad = !trCnt ? 8 : 10;
-    chButtonWidth = !trCnt ? chW + 10 : chW + 58;
-    chButtonSpace = chButtonWidth+chButtonPad;
+    gfx_measurestr("+", plW, plH);
+    
+    num_channels = !trCnt ? 16 - removed_track_count : trCnt;
+    num_channels = min(num_ch, num_channels);
+    custom_count = num_channels != 16;
+    
+    chButtonPad = !custom_count ? 8 : 10;
+    chButtonWidth = !custom_count ? chW + 10 : (num_channels > 4) ? (chW + 58) : (chW + 78);
+    chButtonSpace = chButtonWidth + chButtonPad;
     chButtonYSpace = chH + 24;
-    totalButtonWidth = !trCnt ? 18 * chButtonSpace : (trCnt + 2) * chButtonSpace;
-    xButBlocked = max(spectrum_xpad, theme_button.w+8);
+    
+    totalButtonWidth = !custom_count ? 18 * chButtonSpace : (num_channels + 2) * chButtonSpace;
+    xButBlocked = max(spectrum_xpad, theme_button.w + 8);
     slider41 == 0 ?(
-      gfx_w > ( totalButtonWidth + xButBlocked + arrowX + 8 ) ? (
+      gfx_w > ( totalButtonWidth + xButBlocked + 24 + plW + plH + arrowX + 8 ) ? (
       
-        chB.draw_button2_fixedWidth(gfx_w/2 -xButBlocked*0.5 + .5*totalButtonWidth + .5*arrowX, arrowY, chButtonWidth, "MemB", showB, 0, 0, 0, 15);
-        chA.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, "MemA", showA, 0, 0, 0, 15);
+        chB.draw_button2_fixedWidth(gfx_w / 2 - xButBlocked * 0.5 + 0.5 * totalButtonWidth + 0.5 * arrowX, arrowY, chButtonWidth, "MemB", showB, 0, 0, 0, 18);
+        chA.draw_button2_fixedWidth(gfx_x -= 8, arrowY, chButtonWidth, "MemA", showA, 0, 0, 0, 18);
        
-        !trCnt || trCnt > 15 ? ch16.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[15], slider26, slider28==15, slider36==15, slider36>-1, 15);     
-        !trCnt || trCnt > 14 ? ch15.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[14], slider25, slider28==14, slider36==14, slider36>-1, 14);     
-        !trCnt || trCnt > 13 ? ch14.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[13], slider24, slider28==13, slider36==13, slider36>-1, 13);     
-        !trCnt || trCnt > 12 ? ch13.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[12], slider23, slider28==12, slider36==12, slider36>-1, 12);     
-        !trCnt || trCnt > 11 ? ch12.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[11], slider22, slider28==11, slider36==11, slider36>-1, 11);            
-        !trCnt || trCnt > 10 ? ch11.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[10], slider21, slider28==10, slider36==10, slider36>-1, 10);     
-        !trCnt || trCnt > 9  ? ch10.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[9],  slider20, slider28==9,  slider36==9,  slider36>-1, 9);     
-        !trCnt || trCnt > 8  ?  ch9.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[8],  slider19, slider28==8,  slider36==8,  slider36>-1, 8);
+        (removed_track_count > 0) ? (
+          (num_ch > num_channels) ? (
+            plus_button.draw_button2_fixedWidth(gfx_x-=8, arrowY, plW + plH, "+", 0, 0, 0, 0, 17);
+          );
+        );
+        
+        (removed_track_count < 15) ? (
+          minus_button.draw_button2_fixedWidth(gfx_x-=8, arrowY, plW + plH, "-", 0, 0, 0, 0, 16);     
+        );
+       
+        !custom_count || num_channels > 15 ? ch16.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(15), slider26, slider28==15, slider36==15, slider36>-1, 15);     
+        !custom_count || num_channels > 14 ? ch15.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(14), slider25, slider28==14, slider36==14, slider36>-1, 14);     
+        !custom_count || num_channels > 13 ? ch14.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(13), slider24, slider28==13, slider36==13, slider36>-1, 13);     
+        !custom_count || num_channels > 12 ? ch13.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(12), slider23, slider28==12, slider36==12, slider36>-1, 12);     
+        !custom_count || num_channels > 11 ? ch12.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(11), slider22, slider28==11, slider36==11, slider36>-1, 11);            
+        !custom_count || num_channels > 10 ? ch11.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(10), slider21, slider28==10, slider36==10, slider36>-1, 10);     
+        !custom_count || num_channels > 9  ? ch10.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(9),  slider20, slider28==9,  slider36==9,  slider36>-1, 9);     
+        !custom_count || num_channels > 8  ?  ch9.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(8),  slider19, slider28==8,  slider36==8,  slider36>-1, 8);
              
-        !trCnt || trCnt > 7  ?  ch8.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[7], slider18, slider28==7, slider36==7, slider36>-1, 7);     
-        !trCnt || trCnt > 6  ?  ch7.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[6], slider17, slider28==6, slider36==6, slider36>-1, 6);             
-        !trCnt || trCnt > 5  ?  ch6.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[5], slider16, slider28==5, slider36==5, slider36>-1, 5);            
-        !trCnt || trCnt > 4  ?  ch5.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[4], slider15, slider28==4, slider36==4, slider36>-1, 4);     
-        !trCnt || trCnt > 3  ?  ch4.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[3], slider14, slider28==3, slider36==3, slider36>-1, 3);     
-        !trCnt || trCnt > 2  ?  ch3.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[2], slider13, slider28==2, slider36==2, slider36>-1, 2);     
-        !trCnt || trCnt > 1  ?  ch2.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[1], slider12, slider28==1, slider36==1, slider36>-1, 1);     
-        !trCnt || trCnt > 0  ?  ch1.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, chNames[0], slider11, slider28==0, slider36==0, slider36>-1, 0);     
-                              
+        !custom_count || num_channels > 7  ?  ch8.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(7), slider18, slider28==7, slider36==7, slider36>-1, 7);     
+        !custom_count || num_channels > 6  ?  ch7.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(6), slider17, slider28==6, slider36==6, slider36>-1, 6);             
+        !custom_count || num_channels > 5  ?  ch6.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(5), slider16, slider28==5, slider36==5, slider36>-1, 5);            
+        !custom_count || num_channels > 4  ?  ch5.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(4), slider15, slider28==4, slider36==4, slider36>-1, 4);     
+        !custom_count || num_channels > 3  ?  ch4.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(3), slider14, slider28==3, slider36==3, slider36>-1, 3);     
+        !custom_count || num_channels > 2  ?  ch3.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(2), slider13, slider28==2, slider36==2, slider36>-1, 2);     
+        !custom_count || num_channels > 1  ?  ch2.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(1), slider12, slider28==1, slider36==1, slider36>-1, 1);     
+        !custom_count || num_channels > 0  ?  ch1.draw_button2_fixedWidth(gfx_x-=8, arrowY, chButtonWidth, getName(0), slider11, slider28==0, slider36==0, slider36>-1, 0);     
         
       ) : (
         slider42 != 0 ?(
@@ -2750,28 +2896,38 @@ function DrawButtons()
           yBStart = gfx_h - yShift - chButtonYSpace;
         );
         
-        bRowCol1 = gfx_w-10;
-        bRowCol2 = gfx_w-10-chButtonWidth-chButtonPad;
+        bRowCol1 = gfx_w - 10;
+        bRowCol2 = gfx_w - 10-chButtonWidth-chButtonPad;
         
-        chB.draw_button2_fixedWidth(bRowCol1 , yBStart, chButtonWidth, "MemB",  showB, 0, 0, 0, 7);
-        ch16.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[15], slider26, slider28==15, slider36==15, slider36>-1, 15);
-        ch15.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[14], slider25, slider28==14, slider36==14, slider36>-1, 14);
-        ch14.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[13], slider24, slider28==13, slider36==13, slider36>-1, 13);
-        ch13.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[12], slider23, slider28==12, slider36==12, slider36>-1, 12);
-        ch12.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[11], slider22, slider28==11, slider36==11, slider36>-1, 11);
-        ch11.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[10], slider21, slider28==10, slider36==10, slider36>-1, 10);
-        ch10.draw_button2_fixedWidth(bRowCol1 , gfx_y-chButtonYSpace, chButtonWidth, chNames[9],  slider20, slider28==9,  slider36==9,  slider36>-1, 9);
-        ch9.draw_button2_fixedWidth(bRowCol1 ,  gfx_y-chButtonYSpace, chButtonWidth, chNames[8],  slider19, slider28==8,  slider36==8,  slider36>-1, 8);
-
-        chA.draw_button2_fixedWidth(bRowCol2 , yBStart, chButtonWidth, "MemA",  showA, 0, 0, 0, 7);
-        ch8.draw_button2_fixedWidth(bRowCol2 , gfx_y-chButtonYSpace, chButtonWidth, chNames[7],  slider18, slider28==7,  slider36==7,  slider36>-1, 7);
-        ch7.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[6],  slider17, slider28==6,  slider36==6,  slider36>-1, 6);
-        ch6.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[5],  slider16, slider28==5,  slider36==5,  slider36>-1, 5);
-        ch5.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[4],  slider15, slider28==4,  slider36==4,  slider36>-1, 4);
-        ch4.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[3],  slider14, slider28==3,  slider36==3,  slider36>-1, 3);
-        ch3.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[2],  slider13, slider28==2,  slider36==2,  slider36>-1, 2);
-        ch2.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[1],  slider12, slider28==1,  slider36==1,  slider36>-1, 1);
-        ch1.draw_button2_fixedWidth(bRowCol2,  gfx_y-chButtonYSpace, chButtonWidth, chNames[0],  slider11, slider28==0,  slider36==0,  slider36>-1, 0);
+        chB.draw_button2_fixedWidth(bRowCol1 , yBStart, chButtonWidth, "MemB",  showB, 0, 0, 0, 17);
+        plus_button.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, "+", 0, 0, 0, 0, 17);
+        
+        chButtonWidth2 = chButtonWidth * 2 + chButtonPad;
+        bRowCol2b = gfx_w - 10;
+        (num_channels > 8) ? (
+          bRowCol2b = bRowCol2;
+          ch16.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(15), slider26, slider28==15, slider36==15, slider36>-1, 15);
+          ch15.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(14), slider25, slider28==14, slider36==14, slider36>-1, 14);
+          ch14.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(13), slider24, slider28==13, slider36==13, slider36>-1, 13);
+          ch13.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(12), slider23, slider28==12, slider36==12, slider36>-1, 12);
+          ch12.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(11), slider22, slider28==11, slider36==11, slider36>-1, 11);
+          ch11.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(10), slider21, slider28==10, slider36==10, slider36>-1, 10);
+          ch10.draw_button2_fixedWidth(bRowCol1, gfx_y-chButtonYSpace, chButtonWidth, getName(9),  slider20, slider28==9,  slider36==9,  slider36>-1, 9);
+          ch9.draw_button2_fixedWidth(bRowCol1,  gfx_y-chButtonYSpace, chButtonWidth, getName(8),  slider19, slider28==8,  slider36==8,  slider36>-1, 8);
+          chButtonWidth2 = chButtonWidth;
+        );
+        
+        chA.draw_button2_fixedWidth(bRowCol2 , yBStart, chButtonWidth, "MemA",  showA, 0, 0, 0, 17);
+        minus_button.draw_button2_fixedWidth(bRowCol2 , gfx_y-chButtonYSpace, chButtonWidth, "-", 0, 0, 0, 0, 16);
+        
+        ch8.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(7),  slider18, slider28==7,  slider36==7,  slider36>-1, 7);
+        ch7.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(6),  slider17, slider28==6,  slider36==6,  slider36>-1, 6);
+        ch6.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(5),  slider16, slider28==5,  slider36==5,  slider36>-1, 5);
+        ch5.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(4),  slider15, slider28==4,  slider36==4,  slider36>-1, 4);
+        ch4.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(3),  slider14, slider28==3,  slider36==3,  slider36>-1, 3);
+        ch3.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(2),  slider13, slider28==2,  slider36==2,  slider36>-1, 2);
+        ch2.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(1),  slider12, slider28==1,  slider36==1,  slider36>-1, 1);
+        ch1.draw_button2_fixedWidth(bRowCol2b, gfx_y-chButtonYSpace, chButtonWidth2, getName(0),  slider11, slider28==0,  slider36==0,  slider36>-1, 0);
       )
     );
     slider42 == 0 ?
@@ -2825,11 +2981,13 @@ function updateSpectralBounds()
     spectrum_xmax = gfx_w - spectrum_xpad;
   );
   
+  // We need to explicitly make space for the buttons if the sonogram is off (slider29 == 3)
+  spacing_for_buttons = ((slider29 == 3) && (slider41 == 0)) ? gfx_w > ( totalButtonWidth + xButBlocked + arrowX + 8 ) ? 25 * (1 + font_scaling) : 0;
   ( slider41 == 0 ) ? (
-    sono_yoffset_bottom = 30 * (1 - hideUI) * (1 - micro_view);
+    sono_yoffset_bottom = 30 * (1 + font_scaling) * (1 - hideUI) * (1 - micro_view) + spacing_for_buttons;
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;    
   ) : (
-    sono_yoffset_bottom = 6;
+    sono_yoffset_bottom = 26 * (1 + font_scaling);
     spectrum_yoffsetbottom = sono_yoffset_bottom + sono_size;
   );
   
@@ -3320,8 +3478,10 @@ mouse_cap > 0 ? (
     gfx_printf(from_frequency(f));
   );
 
-  lchar == 13 && gfx_getchar() == 0 ? hideUI = 1 - hideUI;
-  lchar = gfx_getchar();
+  (!active_text_input) ? (
+    lchar == 13 && gfx_getchar() == 0 ? hideUI = 1 - hideUI;
+    lchar = gfx_getchar();
+  );
 
   // Finished
   update = 1;
@@ -3381,3 +3541,8 @@ memory_debugging ? draw_memory_map();
     ix += 1;
   );
 */  
+text_box.process_text_input();
+text_box.render_text_input();
+
+lcap = mouse_cap;
+

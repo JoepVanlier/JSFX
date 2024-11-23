@@ -536,6 +536,7 @@ The top part of the graph is generally used for the spectrum.
 You can click anywhere on the spectrum to view the frequency / gain and semitone at that point.
 Clicking and dragging with the right mouse button will zoom in on part of the spectrum.
 Clicking with the right button anywhere again will reset the view.
+Pressing the return button minimizes visual clutter.
 Freeze pauses the spectral analyzer.
 
 #### Smoothing
@@ -610,6 +611,7 @@ The channel buttons indicate which channels are being visualized.
 Enabling or disabling them can be done by clicking them with the left mouse button.
 Clicking them with the right mouse button will make them the active channel in the sonogram or time window.
 This way you can study the sonograms of  the channels separately.
+Control clicking them will allow you to enter a new channel name.
 
 #### Sum
 
