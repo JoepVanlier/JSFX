@@ -1,8 +1,8 @@
 desc:Saike Tight Compressor
 tags: Tight Compressor
-version: 0.20
+version: 0.21
 author: Joep Vanlier
-changelog: Added channel configuration
+changelog: Fixed bug which affected audio when oversampling was enabled. This bug was introduced in 0.19 when adding a sidechain mode. The channel used for measurement was not participating in oversampling resulting in a small delay between what was being metered and compressed. This is expected to have an effect mostly with short attacks and only when oversampling is enabled.
 provides: saike_upsamplers.jsfx-inc
 Copyright (C) 2024 Joep Vanlier
 License: MIT
@@ -435,17 +435,17 @@ function processSample()
 inL = spl0 *= preGainLin;
 inR = spl1 *= preGainLin;
 
-OperatingMode == 0 ? (
-  measL = spl0;
-  measR = spl1;
-) : (
-  measL = spl2;
-  measR = spl3;
-);
-
 in  = 20*log10(.5*(abs(spl0)+abs(spl1)));
 
 ( overSampling == 1 ) ? (
+  OperatingMode == 0 ? (
+    measL = spl0;
+    measR = spl1;
+  ) : (
+    measL = spl2;
+    measR = spl3;
+  );
+
   processSample();
   spl0 = outL;
   spl1 = outR;
@@ -453,13 +453,27 @@ in  = 20*log10(.5*(abs(spl0)+abs(spl1)));
   upsampleL.updateUpHist(overSampling, inL);
   upsampleR.updateUpHist(overSampling, inR);
 
+  (OperatingMode == 1) ? (
+    sideChainUpsampleL.updateUpHist(overSampling, spl2);
+    sideChainUpsampleR.updateUpHist(overSampling, spl3);
+  );
+
   f = 0;
   loop(overSampling,
     f += 1;
-    inL = overSampling*upsampleL.upSample(overSampling);
-    inR = overSampling*upsampleR.upSample(overSampling);
+    inL = overSampling * upsampleL.upSample(overSampling);
+    inR = overSampling * upsampleR.upSample(overSampling);
+
+    OperatingMode == 0 ? (
+      measL = inL;
+      measR = inR;
+    ) : (
+      measL = overSampling * sideChainUpsampleL.upSample(overSampling);
+      measR = overSampling * sideChainUpsampleR.upSample(overSampling);
+    );
 
     processSample();
+    
     downL.updateDownHist(overSampling, outL);
     downR.updateDownHist(overSampling, outR);
     
