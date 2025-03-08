@@ -1,8 +1,8 @@
 desc:bric-a-brac (Saike)
 tags: texture adder
-version: 0.46
+version: 0.47
 author: Joep Vanlier
-changelog: Add option to use global threshold (right click on the threshold line)
+changelog: Fix pan step size. Add option to send audio to multiple channels.
 license: MIT
 provides:
   bab_dependencies/*
@@ -21,7 +21,7 @@ slider9:hpf1=0<0,1,.000000001>-Sample 1 HPF
 slider10:lpf1=1<0,1,.000000001>-Sample 1 LPF
 slider11:lfo_amount1=1<0,1,.0000001>-LFO 1 Amount
 slider12:lfo_freq1=0.5<0,10,.0000001>-LFO 1 Frequency
-slider13:pan1=0<-1,1,1>-Pan 1
+slider13:pan1=0<-1,1,0.000000001>-Pan 1
 
 slider14:dummy6=0<0,1,1>-Spacer 6
 slider15:dummy7=0<0,1,1>-Spacer 7
@@ -38,7 +38,7 @@ slider24:hpf2=0<0,1,.000000001>-Sample 2 HPF
 slider25:lpf2=1<0,1,.000000001>-Sample 2 LPF
 slider26:lfo_amount2=1<0,1,.0000001>-LFO 2 Amount
 slider27:lfo_freq2=0.5<0,10,.0000001>-LFO 2 Frequency
-slider28:pan2=0<-1,1,1>-Pan 2
+slider28:pan2=0<-1,1,0.000000001>-Pan 2
 
 slider29:dummy13=0<0,1,1>-Spacer 13
 slider30:dummy14=0<0,1,1>-Spacer 14
@@ -55,7 +55,7 @@ slider39:hpf3=0<0,1,.000000001>-Sample 3 HPF
 slider40:lpf3=1<0,1,.000000001>-Sample 3 LPF
 slider41:lfo_amount3=1<0,1,.0000001>-LFO 3 Amount
 slider42:lfo_freq3=0.5<0,10,.0000001>-LFO 3 Frequency
-slider43:pan3=0<-1,1,1>-Pan 3
+slider43:pan3=0<-1,1,0.000000001>-Pan 3
 
 slider44:dummy20=0<0,1,1>-Spacer 20
 slider45:dummy21=0<0,1,1>-Spacer 21
@@ -72,7 +72,7 @@ slider54:hpf4=0<0,1,.000000001>-Sample 4 HPF
 slider55:lpf4=1<0,1,.000000001>-Sample 4 LPF
 slider56:lfo_amount4=1<0,1,.0000001>-LFO 4 Amount
 slider57:lfo_freq4=0.5<0,10,.0000001>-LFO 4 Frequency
-slider58:pan4=0<-1,1,1>-Pan 4
+slider58:pan4=0<-1,1,0.000000001>-Pan 4
 
 slider63:drywet=0<-1,1,.00001>-Dry/Wet
 slider64:c_palette=0<0,10,1>palette
@@ -85,6 +85,12 @@ in_pin:left input
 in_pin:right input
 out_pin:left output
 out_pin:right output
+out_pin:left output 2
+out_pin:right output 2
+out_pin:left output 3
+out_pin:right output 3
+out_pin:left output 4
+out_pin:right output 4
 
 import saike_bab_palettes.jsfx-inc
 import saike_bab_buffer_plotting.jsfx-inc
@@ -96,7 +102,7 @@ import saike_bab_LFOs.jsfx-inc
 import saike_bab_settings.jsfx-inc
 
 @init
-version = 2;
+CURRENT_VERSION = 3;
 last_selected_sample = -1;
 preview_channel.chan_default(0);
 chan1.chan_default(1);
@@ -557,6 +563,14 @@ last_selected_sample = -1;
   chan1.playing = chan2.playing = chan3.playing = chan4.playing = 0;
 );
 
+(version < 3) ? (
+  multi_out = 0;
+) : (
+  file_var(0, multi_out);
+);
+
+version = CURRENT_VERSION;
+
 @block
 israte = 1.0 / srate;
 no_sample_loaded = (samplelocs[0][0] == 0) && (samplelocs[1][0] == 0) && (samplelocs[2][0] == 0) && (samplelocs[3][0] == 0);
@@ -744,15 +758,34 @@ settings3.pan.curmod = clamp11(pan3 + cp3 + cp3);
 cp4 = settings4.pan.mod1 * e4 + settings4.pan.mod2 * lfo4;
 settings4.pan.curmod = clamp11(pan4 + cp4 + cp4);
 
-chan1.playing ? chan1.play_channel(env1, settings1.lpf.curmod, settings1.hpf.curmod);
-chan2.playing ? chan2.play_channel(env2, settings2.lpf.curmod, settings2.hpf.curmod);
-chan3.playing ? chan3.play_channel(env3, settings3.lpf.curmod, settings3.hpf.curmod);
-chan4.playing ? chan4.play_channel(env4, settings4.lpf.curmod, settings4.hpf.curmod);
-
 dry = 0.999 * dry + 0.001 * ((drywet < 0) ? 1 : 1.0 - drywet);
 wet = 0.999 * wet + 0.001 * ((drywet > 0) ? 1 : 1.0 + drywet);
-spl0 = ssl * wet + spl0 * dry;
-spl1 = ssr * wet + spl1 * dry;
+multi_out ? (
+  chan1.playing ? chan1.play_channel(env1, settings1.lpf.curmod, settings1.hpf.curmod);
+  spl0 = ssl * wet + spl0 * dry;
+  spl1 = ssr * wet + spl1 * dry;
+  ssl = ssr = 0;
+  chan2.playing ? chan2.play_channel(env2, settings2.lpf.curmod, settings2.hpf.curmod);
+  spl2 = ssl * wet + spl2 * dry;
+  spl3 = ssr * wet + spl3 * dry;
+  ssl = ssr = 0;
+  chan3.playing ? chan3.play_channel(env3, settings3.lpf.curmod, settings3.hpf.curmod);
+  spl4 = ssl * wet + spl4 * dry;
+  spl5 = ssr * wet + spl5 * dry;
+  ssl = ssr = 0;
+  chan4.playing ? chan4.play_channel(env4, settings4.lpf.curmod, settings4.hpf.curmod);
+  spl6 = ssl * wet + spl6 * dry;
+  spl7 = ssr * wet + spl7 * dry;
+  ssl = ssr = 0;
+) : (
+  chan1.playing ? chan1.play_channel(env1, settings1.lpf.curmod, settings1.hpf.curmod);
+  chan2.playing ? chan2.play_channel(env2, settings2.lpf.curmod, settings2.hpf.curmod);
+  chan3.playing ? chan3.play_channel(env3, settings3.lpf.curmod, settings3.hpf.curmod);
+  chan4.playing ? chan4.play_channel(env4, settings4.lpf.curmod, settings4.hpf.curmod);
+  
+  spl0 = ssl * wet + spl0 * dry;
+  spl1 = ssr * wet + spl1 * dry;
+);
 
 @gfx 954 551
 handle_dropped_files();
@@ -877,6 +910,7 @@ local(x_fraction, y_fraction,
 )
 global(samplelocs, loaded_sample, advanced,
        gfx_x, gfx_y, gfx_w, gfx_h,
+       multi_out,
        input_buffer.draw_buffer_db,
        envelope_buffer.draw_buffer_db
        current_envelope_buffer.draw_buffer_db,
@@ -966,6 +1000,7 @@ global(samplelocs, loaded_sample, advanced,
   current_envelope_buffer.draw_buffer_db(xs, ys-2, ws, hs, meter_space, floorLevel, 0);
   
   toggle_advanced = quick_toggle(xs + ws - 1, ys + hs - 1.5 * button_height, 2 * button_width, button_height, "Advanced", advanced, "Show advanced options");
+  quick_toggle(xs + ws - 1, ys + hs - 2.5 * button_height, 2 * button_width, button_height, "Multi-out", multi_out, "Route each sample to its own output") ? multi_out = 1 - multi_out;
   
   single_threshold ? (
     min_slider_idx = 66;
