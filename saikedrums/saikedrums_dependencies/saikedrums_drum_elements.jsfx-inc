@@ -564,6 +564,167 @@ instance(
   e2.k = pow(10, -24 / (20 * t_s * srate));
 );
 
+function ride_reset_3()
+local(attack_factor, decay_factor, israte_with_decay, israte_with_decay2, idecay, tone_ctrl, israte_tone, open)
+global(srate, israte, ALIVE_COUNT, ride_attack, ride_decay, ride_tone)
+instance(
+  t,
+  current_hat_type,
+  current_hat_body,
+  t1, t2, t3, t4, t5, t6, dt1, dt2, dt3, dt4, dt5, dt6,
+  t7, t8, t9, t10, t11, t12, t13, dt7, dt8, dt9, dt10, dt11, dt12, dt13,
+  lp, bp, bp2, bp3, hp1, hp2, hp3,
+  bps1, bps2, bps3,
+  s1_2, n1_2, k1_2_atk, k1_2_rel, a1_2,
+  s1_3, n1_3, k1_3_atk, k1_3_rel, a1_3,
+  s2, n2, k2_atk, k2_rel, a2,
+  s3, n3, k3_atk, k3_rel, a3,
+  alive,
+)
+(
+  alive = ALIVE_COUNT;
+  t = 0;
+
+  bp.init_linearSVF_invq(4666, 1.2);
+  tone_ctrl = 2.1 * ride_tone - 1;
+  bps1.init_linearSVF_invq(1529.49 + tone_ctrl * 100, 0.08);
+  bps2.init_linearSVF_invq(988.49 + tone_ctrl * 100, 0.13);
+  bps3.init_linearSVF_invq(3500.49 + tone_ctrl * 1000, 0.04);
+  bp2.init_linearSVF_invq(3963.75 + tone_ctrl * 400, 0.41733);
+  bp3.init_linearSVF_invq(6963.75 + tone_ctrl * 400, 0.41733);
+  lp.init_linearSVF_invq(3000.49, 1.14538744609);
+  hp1.init_linearSVF_invq(2477.49, 1.04538744609);
+  hp2.init_linearSVF_invq(8268.56, 1.16018963454);
+  hp3.init_linearSVF_invq(6633.49, 1.2170202297);
+  
+  // Duty cycle of the square is D = t_charge / T = 47.98% (time spent in high state)
+  // Frequencies are 205.3, 369.6, 304.4, 522.7, 359.4-1149.9 (default: 800) 254.3-627.2 (default: 540)
+  //t1 += 205.3 / srate;
+
+  israte_tone = israte * (0.8 + 0.5 * ride_tone);
+  
+  dt1 = 205.3 * israte_tone;
+  dt2 = 369.6 * israte_tone;
+  dt3 = 304.4 * israte_tone;
+  dt4 = 522.7 * israte_tone;
+  
+  dt5 = 443.0 * israte_tone;
+  dt6 = 509.0 * israte_tone;
+  
+  //dt7 = 3392.9200658769764 * israte_tone;
+  dt7 = 3892.9200658769764 * israte_tone;
+  dt8 = dt7 * 1.4471;
+  dt9 = dt7 * 1.6170;
+  dt10 = dt7 * 1.9265;
+  dt11 = dt7 * 0.968;
+  dt13 = dt11 * 1.001;
+  dt12 = dt7 * 2.6637;
+  
+  // Attack and release are given by - log(fraction) / time / srate
+  // fraction = 7e-4 -> log(7e-4) -> -7.264430222920869
+  //
+  // Best fit curves fitting to squared exponential curves (amplitude, attack, release):
+  // env 1_2: 5.886297285230614 0.13362501578292 12.830314491926522
+  // env 1_3: 2.446983835532773 0.0013941882299170012 11.784588871968632
+  // env 2: 5.112817165724925 0.023312507777462504 2.082148383059353
+  // env 3: 13.459926564551697 0.0014790265731799877 0.21747253516471457
+  attack_factor = pow(10, ride_attack - 0.5);
+  decay_factor = pow(10, -(ride_decay - 0.5));
+  idecay = 1.0 / decay_factor;
+  israte_with_decay = israte * decay_factor;
+  israte_with_decay2 = israte * decay_factor / 2;
+  
+  a1_2 = 5.886297285230614 * (0.5 + (idecay > 1.0 ? 1.0 : idecay) * 0.5) * (0.95 + 0.1 * rand());
+  n1_2 = 0.13362501578292 * srate * attack_factor;
+  k1_2_atk = 7.264430222920869 / n1_2;
+  k1_2_rel = 10*7.264430222920869 * israte_with_decay / 12.830314491926522;
+  
+  a1_3 = 2.446983835532773;
+  n1_3 = 0.0013941882299170012 * srate * attack_factor;
+  k1_3_atk = 7.264430222920869 / n1_3;
+  k1_3_rel = 7.264430222920869 * israte_with_decay2 / 11.784588871968632;
+  
+  a2 = 5.112817165724925;
+  n2 = 0.023312507777462504 * srate * attack_factor;
+  k2_atk = 7.264430222920869 / n2;
+  k2_rel = 7.264430222920869 * israte_with_decay2 / 2.082148383059353;
+  
+  a3 = 13.459926564551697;
+  n3 = 0.0014790265731799877 * srate * attack_factor;
+  k3_atk = 7.264430222920869 / n3;
+  k3_rel = 7.264430222920869 * israte_with_decay / 0.541747253516471457;
+);
+
+function ride_tick_3()
+local(oscs, one, metal2, v2, v3, noise, noise2, noise3, ss2)
+instance(
+  t,
+  current_hat_type,
+  current_hat_body,
+  t1, t2, t3, t4, t5, t6, dt1, dt2, dt3, dt4, dt5, dt6,
+  t7, t8, t9, t10, t11, t12, t13, dt7, dt8, dt9, dt10, dt11, dt12, dt13,
+  lp, bp, bp2, bp3, hp1, hp2, hp3,
+  bps1, bps2, bps3,
+  s1_2, n1_2, k1_2_atk, k1_2_rel, a1_2,
+  s1_3, n1_3, k1_3_atk, k1_3_rel, a1_3,
+  s2, n2, k2_atk, k2_rel, a2,
+  s3, n3, k3_atk, k3_rel, a3,
+)
+global()
+(
+  t1 += dt1;
+  t2 += dt2;
+  t3 += dt3;
+  t4 += dt4;// * (1 + 0.007 * sin(0.04 * t3));
+  
+  oscs = sq(t1, dt1, 0.5) + sq(t2, dt2, 0.5) + sq(t3, dt3, 0.5) + sq(t4, dt4, 0.5);
+  
+  t7 += dt7;
+  t8 += dt8;
+  t9 += dt9;
+  t10 += dt10;
+  t11 += dt11;
+  t12 += dt12;
+  
+  one = 0;
+  one ? (
+    metal2 = 0.003 * (sqs(t7) + sqs(t8) + sqs(t9) + sqs(t10) + sqs(t11) + sqs(t12));
+  ) : (
+    t5 += dt5;
+    t6 += dt6;
+    t13 += dt13;
+    metal2 = 0.003 * (
+      sq(t7, dt7, 0.15) + 
+      sq(t8, dt8, 0.5) + 
+      sq(t9, dt9, 0.5) + 
+      sq(t10, dt10, 0.85) + 
+      sq(t12, dt12, 0.25) + 
+      0.009 * sq(t6, dt6, 0.5) * s3 +   // t6
+      0.906 * (sq(t13, dt13, 0.5) + sq(t11, dt11, 0.5)) +
+      0.006 * sq(t5, dt5, 0.5) * s3      // t5
+    ) + 0.0044 * (rand() - 0.5);
+  );
+
+  // Bandpasses
+  v3 = v2 = 25 * bp2.eval_linearSVF_BP(oscs);
+  
+  // Envelopes
+  s1_2 += (t < n1_2) ? k1_2_atk * (a1_2 - s1_2) : - k1_2_rel * s1_2;
+  s1_3 += (t < n1_3) ? k1_3_atk * (a1_3 - s1_3) : - k1_3_rel * s1_3;
+  s2 += (t < n2) ? k2_atk * (a2 - s2) : - k2_rel * s2;
+  s3 += (t < n3) ? k3_atk * (a3 - s3) : - k3_rel * s3;
+  
+  t += 1;
+  ss2 = sqr(s2);
+  noise = ((rand() - 0.5) * ss2 * s1_2);
+  noise2 = 2 * ((rand() * rand() - 0.5) * ss2);
+  noise3 = (rand() - 0.5) * ss2;
+  
+  0.001 * (1.7 * bp3.eval_linearSVF_BP(noise) + 2  * bp.eval_linearSVF_BP(noise3) + 0.2 * bps1.eval_linearSVF_BP(noise) + 0.35 * bps2.eval_linearSVF_BP(noise) + 0.416 * bps3.eval_linearSVF_BP(noise2 + noise3)) + 
+  0.00007 * (1.0493863499171737 * ss2 * sqr(s1_3) * hp2.eval_linearSVF_HP(v2 + 0.6 * noise2) + 2.1827788623083535 * sqr(s3) * hp3.eval_linearSVF_HP(v3)) + metal2 * s3 * s1_3;
+);
+
+
 function ride_tick_2()
 local(oscs, oscs2, v1, v2, v3, crash, crash_env)
 global(srate, israte, ride_duty, ride_tone)
@@ -699,6 +860,8 @@ instance(
     this.ride_reset_1();
   ) : (ride_type == 1) ? (
     this.ride_reset_2();
+  ) : (ride_type == 2) ? (
+    this.ride_reset_3();
   );
   
   k1_2_rel_fast = k1_2_rel * 9;
@@ -762,6 +925,8 @@ global()
     this.ride_tick_1();
   ) : (current_ride == 1) ? (
     this.ride_tick_2();
+  ) : (current_ride == 2) ? (
+    this.ride_tick_3();
   );
 );
 
