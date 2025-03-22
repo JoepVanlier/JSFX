@@ -303,7 +303,7 @@ global(snare_type, snare_envelope, snare_bottom, freq_shift, sample_ratio)
 function clap_reset()
 local(db, t_s, t2_s, t3_s, t4_s, t_wash)
 global(israte, srate, clap_attack, clap_decay, clap_type, ALIVE_COUNT)
-instance(attack, wash, bp, hp, hp2, bp2, bp3, atk_level, wash_level, hf_level, alive, sr, current_clap)
+instance(attack, wash, bp, hp, hp2, bp2, bp3, atk_level, wash_level, hf_level, alive, sr, current_clap, sample_idx, chan)
 (
   alive = ALIVE_COUNT;
 
@@ -416,19 +416,23 @@ instance(attack, wash, bp, hp, hp2, bp2, bp3, atk_level, wash_level, hf_level, a
     atk_level = 4.36; // 12.8 dB
     wash_level = 0.26; // -16 dB
     hf_level = 0.8;
+  ) : (clap_type == 3) ? (
+    chan.start_sample(sample_idx - 1, - 6 + clap_decay * 12, clap_attack);
   );
 );
 
 function clap_stop()
 local()
 global()
-instance(attack, wash, current_clap)
+instance(attack, wash, current_clap, chan)
 (
   current_clap == 0 ? (
     attack.k_current *= 0.996;
     attack.k3 *= 0.996;
     attack.k2 *= 0.996;
     wash.rate *= 0.99985;
+  ) : ( current_clap == 3) ? (
+    chan.k_decay *= 0.9997;
   ) : (
     attack.k_current *= 0.6;
     attack.k3 *= 0.6;
@@ -440,7 +444,7 @@ instance(attack, wash, current_clap)
 function clap_tick()
 local(attack_hf, srt, srt2, yy)
 global(polynomial_aa_sq)
-instance(current_clap, ts, ts2, attack, wash, bp, hp, hp2, bp2, bp3, hf_level, atk_level, wash_level, sr)
+instance(current_clap, ts, ts2, attack, wash, bp, hp, hp2, bp2, bp3, hf_level, atk_level, wash_level, sr, chan)
 (
   (current_clap < 2) ? (
     attack.state *= attack.k_current;
@@ -485,6 +489,8 @@ instance(current_clap, ts, ts2, attack, wash, bp, hp, hp2, bp2, bp3, hf_level, a
     wash = bp3.eval_linearSVF_BP(bp2.eval_linearSVF_BP(wash.state * (rand() - 0.5 + 0.2 * yy)));
     
     atk_level * attack + wash_level * wash + hf_level * attack_hf
+  ) : (current_clap == 3) ? (
+    chan.play_channel()
   );
 );
 
@@ -492,7 +498,7 @@ function ride_stop()
 instance(
   k1_2_rel, k1_3_rel, k2_rel, k3_rel,
   k1_2_rel_fast, k1_3_rel_fast, k2_rel_fast, k3_rel_fast,
-  e1, e2, e3, e4
+  e1, e2, e3, e4, chan
 )
 global()
 (
@@ -500,6 +506,8 @@ global()
   k1_3_rel = k1_3_rel_fast;
   k2_rel = k2_rel_fast;
   k3_rel = k3_rel_fast;
+  
+  chan.k_decay *= 0.9997;
   
   e1.rel = e2.rel = e3.rel = e4.rel = e4.fast_release;
 );
@@ -847,13 +855,15 @@ instance(
 
 function ride_reset()
 local()
-global(ride_type)
+global(ride_type, ride_decay, ride_tone, ALIVE_COUNT)
 instance(
   current_ride,
   k1_2_rel_fast, k1_2_rel,
   k1_3_rel_fast, k1_3_rel,
   k2_rel_fast, k2_rel,
   k3_rel_fast, k3_rel,
+  sample_idx, alive,
+  chan,
 )
 (
   (ride_type == 0) ? (
@@ -862,6 +872,9 @@ instance(
     this.ride_reset_2();
   ) : (ride_type == 2) ? (
     this.ride_reset_3();
+  ) : (ride_type == 3) ? (
+    alive = ALIVE_COUNT;
+    chan.start_sample(sample_idx - 1, - 6 + ride_tone * 12, ride_decay);
   );
   
   k1_2_rel_fast = k1_2_rel * 9;
@@ -918,7 +931,7 @@ instance(
 
 function ride_tick()
 local()
-instance(current_ride)
+instance(current_ride, chan)
 global()
 (
   (current_ride == 0) ? (
@@ -927,6 +940,8 @@ global()
     this.ride_tick_2();
   ) : (current_ride == 2) ? (
     this.ride_tick_3();
+  ) : (current_ride == 3) ? (
+    chan.play_channel()
   );
 );
 
@@ -949,6 +964,8 @@ instance(
   is_closed,
   current_hat_type,
   current_hat_body,
+  sample_idx,
+  chan,
 )
 (
   current_hat_body = hat_body;
@@ -1124,6 +1141,9 @@ instance(
     n3 = 0.0014790265731799877 * srate * attack_factor;
     k3_atk = 7.264430222920869 / n3;
     k3_rel = 7.264430222920869 * israte_with_decay / 0.21747253516471457;
+  ) : (hat_type == 3) ? (
+    alive = ALIVE_COUNT;
+    chan.start_sample(sample_idx - 1, - 6 + hat_tone * 12, hat_decay);
   );
   
   k1_2_rel_fast = k1_2_rel * 9;
@@ -1147,6 +1167,8 @@ instance(
   s1_3, n1_3, k1_3_atk, k1_3_rel, a1_3,
   s2, n2, k2_atk, k2_rel, a2,
   s3, n3, k3_atk, k3_rel, a3,
+  
+  chan,
 )
 (
   (current_hat_type == 1) ? (
@@ -1268,6 +1290,8 @@ instance(
     
     metal3 = 0.003 * (0.005 * bp.eval_linearSVF_BP(noise) * sqr(s2) + 0.04 * s2 * s1_3 * s2 * lp.eval_linearSVF_BP(noise2) + 0.05 * bps1.eval_linearSVF_BP(noise) + 0.05 * bps2.eval_linearSVF_BP(noise)) + 
              (metal2 + 0.00004 * (hp2.eval_linearSVF_HP(noise) + hp1.eval_linearSVF_HP(noise) + hp3.eval_linearSVF_HP(noise))) * s3 * s1_3 + 0.03 * v2 * s3;
+  ) : (current_hat_type == 3) ? (
+    chan.play_channel()
   );
 );
  
@@ -1275,12 +1299,16 @@ function hat_stop()
 instance(
   k1_2_rel, k1_3_rel, k2_rel, k3_rel,
   k1_2_rel_fast, k1_3_rel_fast, k2_rel_fast, k3_rel_fast,
+  chan,
 )
+global()
 (
   k1_2_rel = k1_2_rel_fast;
   k1_3_rel = k1_3_rel_fast;
   k2_rel = k2_rel_fast;
   k3_rel = k3_rel_fast;
+  
+  chan.k_decay *= 0.9997;
 );
 
 function tom_synth1_reset(which, tune, decay)
@@ -1758,7 +1786,7 @@ global()
 function rim_reset()
 local()
 global(rim_type, rim_tune, rim_decay, ALIVE_COUNT)
-instance(current_rim, alive)
+instance(current_rim, alive, sample_idx, chan)
 (
   alive = ALIVE_COUNT;
   current_rim = rim_type;
@@ -1767,15 +1795,17 @@ instance(current_rim, alive)
     this.rim_synth1_reset(rim_tune, rim_decay);
   ) : (current_rim == 1) ? (
     this.rim_synth2_reset(rim_tune, rim_decay);
-  ): (current_rim == 2) ? (
+  ) : (current_rim == 2) ? (
     this.rim_synth3_reset(rim_tune, rim_decay);
+  ) : (current_rim == 3) ? (
+    chan.start_sample(sample_idx - 1, - 6 + rim_tune * 12, rim_decay);
   );
 );
 
 function rim_tick()
 local()
 global()
-instance(current_rim)
+instance(current_rim, chan)
 (
   (current_rim == 0) ? (
     this.rim_synth1_tick()
@@ -1783,15 +1813,17 @@ instance(current_rim)
     this.rim_synth2_tick()
   ) : (current_rim == 2) ? (
     this.rim_synth3_tick()
+  ) : (current_rim == 3) ? (
+    chan.play_channel()
   );
 );
 
 function rim_stop()
 local()
 global()
-instance()
+instance(chan)
 (
-  0
+  chan.k_decay *= 0.9997;
 );
 
 function cowbell_synth1_reset(tune, decay)
@@ -2069,7 +2101,7 @@ function cowbell_stop()
 function shaker_reset()
 local(t_decay, t_atk, tuning)
 global(shaker_decay, shaker_tune, shaker_type, srate, ALIVE_COUNT, shaker_tune_freq)
-instance(env, lp, lp2, hp, hp2, bell, bell2, bell3, current_shaker, alive)
+instance(env, lp, lp2, hp, hp2, bell, bell2, bell3, current_shaker, alive, sample_idx, t, dt, chan)
 (
   alive = ALIVE_COUNT;
   current_shaker = shaker_type;
@@ -2094,11 +2126,28 @@ instance(env, lp, lp2, hp, hp2, bell, bell2, bell3, current_shaker, alive)
     bell2.init_linearSVF_bell(10121 * tuning, 9, 20);
     shaker_tune_freq = max(shaker_tune_freq, 10121 * tuning);
     env.state2 = 1;
+  ) : (current_shaker == 2) ? (
+    t = 0;
+    dt = (0.0006 + 0.0003 * shaker_decay) * 44100 / srate;
+    t_atk = 0.03 * (0.5 + 0.25 * shaker_decay);
+    tuning = 0.5 + shaker_tune;
+    t_decay = 0.5 * (0.5 + 0.5 * shaker_decay);
+    
+    hp.init_linear1p(500 * tuning);
+    hp2.init_linearSVF_invq(3000 * tuning, 1);
+    bell.init_linearSVF_bell(5121 * tuning, 7, 20);
+    bell2.init_linearSVF_bell(7121 * tuning, 9, 20);
+    shaker_tune_freq = max(shaker_tune_freq, 10121 * tuning);
+    env.state2 = 1;
+    env.state3 = 1;
+  ) : (current_shaker == 3) ? (
+    chan.start_sample(sample_idx - 1, - 6 + shaker_tune * 12, shaker_decay);
   );
   
   env.k = pow(10, -24 / (20 * t_decay * srate));
   env.k_atk = pow(10, -24 / (20 * t_atk * srate));
   env.k_fast = pow(10, -24 / (10 * t_decay * srate));
+  env.k_slow = pow(10, -24 / (30 * t_decay * t_decay * srate));
   env.attack = 1;
   env.n_attack = 2 * t_atk * srate;
 );
@@ -2106,7 +2155,7 @@ instance(env, lp, lp2, hp, hp2, bell, bell2, bell3, current_shaker, alive)
 function shaker_tick()
 local(noise, noise2, y)
 global()
-instance(current_shaker, env, lp, lp2, hp, hp2, bell, bell2, bell3)
+instance(current_shaker, env, lp, lp2, hp, hp2, bell, bell2, bell3, t, dt, chan)
 (
   (env.n_attack > 0) ? (
     env.n_attack -= 1;
@@ -2133,6 +2182,21 @@ instance(current_shaker, env, lp, lp2, hp, hp2, bell, bell2, bell3)
       0.007 * env.state2 * bell2.eval_linearSVF_bell(hp.eval_linear1p_HP(noise2)) + 
       0.0005 * noise
     );
+  ) : (current_shaker == 2) ? (
+    env.state < 0.175 ? env.state *= env.k_fast;
+    env.state2 *= env.k_fast;
+    env.state3 *= env.k_slow;
+    noise2 = (rand() > 0.15) * (rand() - 0.5);
+    noise *= (rand() > 0.995);
+    
+    t += dt;
+    y = 0.75 * cos(t) * (sqr(env.state) + env.state3 * (1 - env.state) * (1 - env.state2)) * (
+      0.005 * bell.eval_linearSVF_bell(hp2.eval_linearSVF_HP(noise)) + 
+      0.009 * env.state2 * bell2.eval_linearSVF_bell(hp.eval_linear1p_HP(noise2)) + 
+      0.0005 * noise
+    );
+  ) : (current_shaker == 3) ? (
+    y = chan.play_channel()
   );
   
   y
@@ -2141,9 +2205,9 @@ instance(current_shaker, env, lp, lp2, hp, hp2, bell, bell2, bell3)
 function shaker_stop()
 local()
 global()
-instance()
+instance(chan)
 (
-  0;
+  chan.k_decay *= 0.9997;
 );
 
 function kick_tick()

@@ -1,0 +1,376 @@
+Sample playback handling.
+
+
+Initialize channels as follows:
+  !initialized ? (
+    preview_channel.chan_default(0)
+    chan1.chan_default(1);
+    chan2.chan_default(2);
+    chan3.chan_default(3);
+    chan4.chan_default(4);
+  );
+  
+  preview_channel.stop_sample();
+  chan1.stop_sample();
+  chan2.stop_sample();
+  chan3.stop_sample();
+  chan4.stop_sample();  
+  
+Start a sample:
+  chan1.start_sample(sample_idx);
+  
+Play a channel. Outputs mono.
+  chan1.play_channel();
+
+@init
+function init_sample_data_defaults()
+(
+  SAMPLE_NAMES = 32;
+  ref_note == 0 ? ref_note = 69;
+  crossfade_samples = 128*2;
+  pi_inv_crossfade_samples = $pi / crossfade_samples;
+  SAMPLE_HEADER = 64;
+  SAMPLE_SIZE = 32768 * 16;
+  MAX_SAMPLE_DURATION = SAMPLE_SIZE - SAMPLE_HEADER;
+  N_SAMPLES = 6;
+  TOTAL_MEM = N_SAMPLES * MAX_SAMPLE_DURATION;
+  initialized = 1;
+);
+
+function handle_dropped_files()
+(
+  /* Has the user dropped a file? */
+  DROPPED_FILE_STR = 14;
+  file_dropped = -1;
+  gfx_getdropfile(0, DROPPED_FILE_STR) ? file_dropped = 0;
+);
+
+function load_from_dropped(sample_location)
+local(file_handle, num_channels, samplerate, length, ptr)
+global(DROPPED_FILE_STR, MAX_SAMPLE_DURATION, SAMPLE_HEADER, SAMPLE_SIZE, ref_note, loaded_sample)
+(
+  file_handle = file_open(DROPPED_FILE_STR);
+  file_handle >= 0 ? (
+    file_riff(file_handle, num_channels, samplerate);
+    memset(sample_location, 0, SAMPLE_SIZE);
+    (num_channels == 2) ? (
+      length = min(file_avail(file_handle), MAX_SAMPLE_DURATION - 4);
+      file_mem(file_handle, sample_location + SAMPLE_HEADER, length);
+    ) : (num_channels == 1) ? (
+      length = min(file_avail(file_handle), floor(0.5 * MAX_SAMPLE_DURATION) - 4);
+      ptr = sample_location + SAMPLE_HEADER;
+      loop(length,
+        file_var(file_handle, ptr[]);
+        ptr[1] = ptr[];
+        ptr += 2;
+      );
+      length *= 2;
+    );
+    sample_location[] = length;       // Length
+    sample_location[1] = samplerate;  // Reference samplerate
+    sample_location[2] = ref_note;    // Reference pitch
+    sample_location[3] = -1;          // Loop start (in position; raw sample pos/2)
+    sample_location[4] = -1;          // Loop end (in position; raw sample pos/2)
+    sample_location[5] = 0;           // Bi-directional?
+    file_close(file_handle);
+  );
+  loaded_sample = 1;
+);
+
+function serialize_sample(location, writing)
+local(sample_duration, validate)
+global(samplelocs, critical_error, SAMPLE_HEADER)
+(
+  sample_duration = location[];
+  file_var(0, sample_duration);
+  file_mem(0, location + 1, sample_duration + SAMPLE_HEADER - 1);
+  location[] = sample_duration;
+  
+  !writing ? (
+    file_var(0, validate);
+    critical_error = critical_error || (validate != 1337);
+  ) : (
+    file_var(0, 1337);
+  );
+);
+
+function serialize_all_samples(writing)
+global(N_SAMPLES, SAMPLE_SIZE, SAMPLE_NAMES, samplelocs, critical_error)
+local(swrite_idx)
+(
+  critical_error = 0;
+  file_var(0, N_SAMPLES);
+  swrite_idx = 0;
+  loop(N_SAMPLES,
+    (!writing) ? memset(samplelocs[swrite_idx], 0, SAMPLE_SIZE);
+    serialize_sample(samplelocs[swrite_idx], writing);
+    swrite_idx += 1;
+  );
+  
+  (!writing) ? (
+    swrite_idx = 0;
+    loop(N_SAMPLES,
+      sprintf(SAMPLE_NAMES + swrite_idx, "");
+      swrite_idx += 1;
+    );
+  );
+  
+  swrite_idx = 0;
+  loop(N_SAMPLES,
+    file_string(0, SAMPLE_NAMES + swrite_idx);
+    swrite_idx += 1;
+  );
+);
+
+function process_sample_drop(idx, sample_location, over)
+global(gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap, last_cap, captured,
+       file_dropped, SAMPLE_NAME_STR, SAMPLE_NAMES, DROPPED_FILE_STR,
+       reset_zoom)
+local(ww, hh)
+(
+  ((file_dropped == 0) && over) ? (
+    SAMPLE_NAME_STR = SAMPLE_NAMES + idx;
+    match("*\\%0-16{SAMPLE_NAME_STR}s*.*", DROPPED_FILE_STR);
+    load_from_dropped(sample_location);
+    file_dropped = -1;
+    gfx_getdropfile(-1);  // Clear the list
+  );
+);
+
+function stop_playback()
+instance(x_fade_position)
+global(crossfade_samples)
+(
+  x_fade_position = - crossfade_samples;
+);
+
+function stop_sample()
+instance(current_playback, play0, play1)
+global()
+(
+  (current_playback == 1) ? (
+    play1.stop_playback();
+  ) : (
+    play0.stop_playback();
+  );
+);
+
+function chan_default(idx)
+instance(play0, play1)
+global()
+local()
+(
+  play0.speed = 1;
+  play1.speed = 1;
+);
+
+function start_playback(buffer_loc, playspeed, offset)
+instance(start_ptr, x_fade_position, playing, fade_start, position, speed,
+         loop_start, loop_stop, loop_type, stop_position)
+local(len)
+global(crossfade_samples, SAMPLE_HEADER)
+(
+  len = buffer_loc[];
+  (len > 0) ? (
+    stop_position = len / 2 - 2;
+    fade_start = buffer_loc + len + SAMPLE_HEADER - 2 * playspeed * crossfade_samples;
+    start_ptr = buffer_loc + SAMPLE_HEADER;
+    
+    loop_start = buffer_loc[3];
+    loop_stop = buffer_loc[4];
+    loop_type = buffer_loc[5];
+    
+    x_fade_position = crossfade_samples;
+    position = offset;
+    playing = 1;
+    speed = playspeed;
+    1
+  ) : 0
+);
+
+function update_loop_parameters(buffer_loc)
+instance(loop_start, loop_stop, loop_type, position, speed)
+local()
+global()
+(
+  loop_start = buffer_loc[3];
+  loop_stop = buffer_loc[4];
+  loop_type = buffer_loc[5];
+  
+  (loop_start > -1) ? (
+    ((position > loop_stop) || (position < loop_start)) ? position = loop_start;
+  );
+  
+  // If we are not looping or looping forward, make sure we're not going back
+  // in time (which could happen if we were coming from a bidi loop and would
+  // result in a loud click if we move past the start of the sample (it has
+  // the length there).
+  (loop_type < 1) ? (
+    speed = abs(speed);
+  );
+  
+  position
+);
+
+/* Sample play (each channel has two of these guys that alternate) */
+function play()
+instance(start_ptr, read_ptr, x_fade_position, fade_start,
+         outL, outR, playing, fade_level, position, speed,
+         loop_start, loop_stop, loop_type, stop_position)
+global(crossfade_samples, pi_inv_crossfade_samples)
+local(frac, ism1, is0, is1, is2, id0, id1, id2, id3)
+(
+  // Positive fade means fading in
+  (x_fade_position > 0.01) ? (
+    fade_level = 1.0 - sqrt(0.5 - 0.5 * cos(x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position -= 1;
+  // Negative fade means fading out
+  ) : (x_fade_position < -0.01) ? (
+    fade_level = sqrt(0.5 - 0.5 * cos(- x_fade_position * pi_inv_crossfade_samples));
+    x_fade_position += 1;
+    ((x_fade_position == 0) || (position > stop_position)) ? (
+      playing = 0; // Terminate playback
+      fade_level = 0;
+    );
+  ) : (
+    // Fade out if we're approaching the end of the recorded sample
+    fade_level = 1;
+    (loop_start > 0) ? (
+      (loop_type == 0) ? (
+        (position > loop_stop) ? position -= (loop_stop - loop_start);
+      ) : (
+        (position > loop_stop) ? (
+          speed = - speed;
+        ) : ( position < loop_start ) ? (
+          speed = abs(speed);
+        );
+      );
+    ) : (
+      (read_ptr > fade_start) ? (
+        x_fade_position = - crossfade_samples;
+      );
+    );
+  );
+  
+  frac = position - floor(position);
+  
+  //eco = 1;
+  //eco ? (
+  //  read_ptr = start_ptr + 2 * floor(position) - 2;
+  //  outL = (read_ptr[] * (1.0 - frac) + frac * read_ptr[2]);
+  //  outR = (read_ptr[1] * (1.0 - frac) + frac * read_ptr[3]);
+  //) : (
+    read_ptr = start_ptr + 2 * floor(position) - 8;
+    ism1 = read_ptr[];
+    is0 = read_ptr[2];
+    is1 = read_ptr[4];
+    is2 = read_ptr[6];
+    
+    id0 = is0;
+    id1 = 0.5*(is1 - ism1);
+    id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+    id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+    outL = ((id3*frac+id2)*frac+id1)*frac+id0;
+    
+    ism1 = read_ptr[1];
+    is0 = read_ptr[3];
+    is1 = read_ptr[5];
+    is2 = read_ptr[7];
+    
+    id0 = is0;
+    id1 = 0.5*(is1 - ism1);
+    id2 = ism1 - 2.5*is0 + 2*is1 - 0.5*is2;
+    id3 = 0.5*(is2 - ism1) + 1.5 * (is0 - is1);
+    outR = ((id3*frac+id2)*frac+id1)*frac+id0;
+  //);
+  
+  outL *= fade_level;
+  outR *= fade_level;
+  
+  position += speed;
+  
+  fade_level
+);
+
+/* Channel update loop */
+function channel_update_loop()
+instance(current_playback, sample_location, play0, play1)
+global()
+local()
+(
+  play0.update_loop_parameters(sample_location);
+  play1.update_loop_parameters(sample_location);
+);
+
+function play_channel()
+instance(playing, state, k_decay, play0, play1)
+global()
+local(signal, playing0, playing1)
+(
+  signal = 0;
+  state *= k_decay;
+  
+  playing0 = play0.playing;
+  playing1 = play1.playing;
+  
+  playing0 ? (
+    play0.play();
+    signal = play0.outL + play0.outR;
+  );
+  playing1 ? (
+    play1.play();
+    signal = play1.outL + play1.outR;
+  );
+  
+  playing = playing0 || playing1;
+  
+  0.25 * signal * state;
+);
+
+function pitch_to_speed(pitch)
+local(fs, r_speed, speed)
+global(srate)
+instance(sample_location, sampling_ratio)
+(
+  fs = sample_location[1];
+  //fnote = sample_location[2];  /* Reference note is assumed to be 69 everywhere */
+  sampling_ratio = fs / srate;
+  //r_speed = 2^((pitch - fnote)/12);
+  r_speed = exp(0.057762265046662104872599030613855575211346149444580078 * pitch);  // pitch - reference note (reference note 69 set to 0)
+  speed = r_speed * sampling_ratio;
+);
+
+function start_sample(sample_idx, pitch, decay)
+local(speed, pitch)
+global(samplelocs)
+instance(sample_location, current_playback, playing, state, k_decay, play0, play1)
+(
+  sample_location = samplelocs[sample_idx];
+  speed = this.pitch_to_speed(pitch);
+
+  state = 1;
+  k_decay = exp(-log(2) / (pow(10, 2 * (decay - 1)) * sample_location[0]));
+
+  playing = 0;
+  (current_playback == 1) ? (
+    playing = playing || play0.start_playback(sample_location, speed, 0);
+    play1.stop_playback();
+  ) : (
+    playing = playing || play1.start_playback(sample_location, speed, 0);
+    play0.stop_playback();
+  );
+  
+  current_playback = 1 - current_playback;
+);
+
+function update_pitch(pitch)
+local(speed, r_speed)
+global()
+instance(play0, play1, sampling_ratio)
+(
+  r_speed = exp(0.057762265046662104872599030613855575211346149444580078 * pitch);  // pitch - reference note (reference note 69 set to 0)
+  speed = r_speed * sampling_ratio;
+  play0.speed = sign(play0.speed) * speed;
+  play1.speed = sign(play1.speed) * speed;
+);
+

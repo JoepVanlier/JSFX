@@ -1,8 +1,8 @@
 desc:Saike Dum Drums (DD-101)
 tags: drum, drum machine, drumkit, drums, drum synth, instrument
-version: 0.16
+version: 0.18
 author: Joep Vanlier
-changelog: Added extra cymbal option
+changelog: Add option to load custom samples on some of the pads (clap, cymbal, closed hat, open hat, shaker and rim), simply drag and drop from the media bay. Added extra default shaker sound.
 license: MIT
 provides:
   saikedrums_dependencies/* 
@@ -201,6 +201,7 @@ out_pin:right shaker
 out_pin:left open hat (when decoupled)
 out_pin:right open hat (when decoupled)
 
+import saikedrums_sample_playback.jsfx-inc
 import saikedrums_freq_shift.jsfx-inc
 import saikedrums_triggered_midi.jsfx-inc
 import saikedrums_basic_filters.jsfx-inc
@@ -215,7 +216,7 @@ osc_downsample_factor = 64;
 osc_skipfactor = 2;
 osc_buffer = img_w * osc_downsample_factor;
 
-CURRENT_VERSION = 2;
+CURRENT_VERSION = 3;
 version = CURRENT_VERSION;
 
 NOTE_KICK = 1;
@@ -230,6 +231,12 @@ NOTE_MID_TOM = 9;
 NOTE_LOW_TOM = 10;
 NOTE_RIM = 11;
 NOTE_COWBELL = 12;
+
+clap.sample_idx = 1;
+ride.sample_idx = 2;
+hat.sample_idx = 3;
+shaker.sample_idx = 4;
+rim.sample_idx = 5;
 
 israte = 1.0 / srate;
 freemem = midi.initializeMIDI(free_mem, 1, 1);
@@ -255,6 +262,15 @@ freemem = (note_mapping = freemem) + 256;
 );
 
 freemem = (active_notes = freemem) + 256;
+
+// Sample locations are recorded as [64 byte header (first is length), sampledata]
+init_sample_data_defaults();
+freemem = (samplelocs = freemem) + 128;
+idx = 0;
+loop(N_SAMPLES,
+  freemem = (samplelocs[idx] = freemem) + SAMPLE_SIZE;
+  idx += 1;
+);
 
 audio_buffer_idx = 0;
 
@@ -479,16 +495,16 @@ function initialize_controls()
 (
   kick.initialize_type_toggle(1, 1, 0, 3);
   snare.initialize_type_toggle(21, 10, 0, 3);
-  clap.initialize_type_toggle(3, 20, 0, 2);
-  ride.initialize_type_toggle(4, 42, 0, 2);
-  hat.initialize_type_toggle(5, 30, 0, 2);
-  shaker.initialize_type_toggle(6, 49, 0, 1);
+  clap.initialize_type_toggle(3, 20, 0, 2 + (samplelocs[0][] > 0));
+  ride.initialize_type_toggle(4, 42, 0, 2 + (samplelocs[1][] > 0));
+  hat.initialize_type_toggle(5, 30, 0, 2 + (samplelocs[2][] > 0));
+  shaker.initialize_type_toggle(6, 49, 0, 2 + (samplelocs[3][] > 0));
   low_tom.initialize_type_toggle(7, 54, 0, 2);
   mid_tom.initialize_type_toggle(7, 54, 0, 2);
   hi_tom.initialize_type_toggle(7, 54, 0, 2);
-  rim.initialize_type_toggle(8, 25, 0, 2);
+  rim.initialize_type_toggle(8, 25, 0, 2 + (samplelocs[4][] > 0));
   cowbell.initialize_type_toggle(9, 37, 0, 3);
-  ohat.initialize_type_toggle(5, 173, 0, 2);  // Only active when decoupled
+  ohat.initialize_type_toggle(5, 173, 0, 2 + (samplelocs[5][] > 0));  // Only active when decoupled
   
   MIN_GAIN = -24;
   MAX_GAIN = 12;
@@ -629,6 +645,9 @@ file_var(0, multi_out);
 );
 
 file_var(0, base_oct);
+
+writing = file_avail(0) < 0;
+serialize_all_samples(writing);
 
 version = CURRENT_VERSION;
 
@@ -823,6 +842,7 @@ global()
   right_out = y * current_right;
 );
 
+
 kick.alive ? kick.check_alive(kick.kick_tick()) : 0;
 snare.alive ? snare.check_alive(snare.snare_tick()) : 0;
 clap.alive ? clap.check_alive(clap.clap_tick()) : 0;
@@ -901,6 +921,7 @@ audio_buffer_idx += 1;
 audio_buffer_idx > osc_buffer ? audio_buffer_idx = 0;
 
 @gfx 784 481
+handle_dropped_files();
 loaded = 0;
 !loaded ? (
   loaded = gfx_loadimg(12, "./saikedrums_dependencies/font.png");
@@ -1176,8 +1197,8 @@ instance(over_advanced, advanced, advanced_highlight)
 
 function draw_pad(me, chan, cy, pad_size, knob_radius, knob_spacing, label, hint, override_ly, has_advanced)
 local(ys, tapped, highlight, cy2, am_muted, am_solo, ret)
-global(cx, select, pad_spacing, mute, solo, mouse_nx, mouse_ny, mouse_cap, mouse_x, mouse_y, gfx_x, gfx_y, last_cap)
-instance(hly, is_closed, height, max_y, gain, total_gain)
+global(cx, select, pad_spacing, mute, solo, mouse_nx, mouse_ny, mouse_cap, mouse_x, mouse_y, gfx_x, gfx_y, last_cap, samplelocs, file_dropped)
+instance(hly, is_closed, height, max_y, gain, total_gain, sample_idx)
 (
   gfx_set(1, 1, 1, 1);
   this.txt_measure(label);
@@ -1267,8 +1288,12 @@ instance(hly, is_closed, height, max_y, gain, total_gain)
     hly = 0;
   );
   
-  this.tap_pad(me, cx, cy, pad_size, select, hint, 2.0 * highlight) ? (
+  this.tap_pad(me, cx, cy, pad_size, select, hint, 2.0 * highlight, (sample_idx > 0) && (mouse_cap == 0) && (gfx_getchar(65536) & 2 == 0)) ? (
     tapped = 1;
+  );
+  
+  sample_idx ? (
+    this.process_sample_drop(sample_idx, samplelocs[sample_idx - 1], this.over);
   );
   
   am_muted ? (
@@ -1315,11 +1340,11 @@ simple_serialize_toggle(cxo + 1, cy_toggle, 2, freq_shift, "Freq Shifter") ? ( f
 snare.draw_pad(1, 1, cy, pad_size, knob_radius, knob_spacing, "SNR", "Snare", 0, 1) ? ( snare.snare_update(1); snare.snare_reset(); shake = SCREEN_SHAKE_AMNT; );
 clap.draw_pad(2, 2, cy, pad_size, knob_radius, knob_spacing, "CLP", "Clap", 0, 0) ? ( clap.clap_update(1); clap.clap_reset(); );
 ride.draw_pad(3, 3, cy, pad_size, knob_radius, knob_spacing, "CYM", "Cymbal", 0, 0) ? ( ride.ride_update(1); ride.ride_reset(); );
-
 hat.draw_pad(4, 4, cy, pad_size, knob_radius, knob_spacing, "CHH", "Closed Hat", 1, 0) ? ( hat.hat_update(1); hat.hat_reset(1, hat_attack, hat_decay, hat_tone, hat_type, hat_body); );
 draw_link(cx + pad_size - 17, cy + 6 * pad_size + 3, 1 - uncoupled_hats, "Couple hats") ? ( uncoupled_hats = 1 - uncoupled_hats; );
 
 uncoupled_hats ? (
+  ohat.sample_idx = 6;
   ohat.draw_pad(5, 12, cy, pad_size, knob_radius, knob_spacing, "OHH", "Open Hat", 2, 0) ? ( ohat.hat_update(1); ohat.hat_reset(0, ohat_attack, ohat_decay, ohat_tone, ohat_type, ohat_body); );
 ) : (
   hat.draw_pad(5, 4, cy, pad_size, knob_radius, knob_spacing, "OHH", "Open Hat", 2, 0) ? ( hat.hat_update(1); hat.hat_reset(0, hat_attack, hat_decay, hat_tone, hat_type, hat_body); );
@@ -1584,3 +1609,7 @@ last_mouse_y = mouse_y;
 mouse_nx = (mouse_x - x_offset) / blit_scale;
 mouse_ny = (mouse_y - y_offset) / blit_scale;
 
+loaded_sample ? (
+  initialize_controls();
+  loaded_sample = 0;
+);
