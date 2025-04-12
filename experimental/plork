@@ -1,0 +1,590 @@
+desc:Damaged
+
+slider1:soft=0.005<0.0001,0.4,0.00001:log>Soft
+slider2:nrg_adaptation=0.5<0.0,1,0.00001>-Adaptiveness
+slider3:rumble=0<0.0,8,0.00001:sqr=4>Distortion
+slider4:mode=0<0,2,1>Mode
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+options:no_meter
+
+@init
+loaded = 0;
+
+function fft_mem(freemem)
+instance(prev_fft_size, fft_size
+         overlap_factor,
+         fft_interval,
+         in_fft_mem, out_fft_mem, fftd1, fftd2,
+         nrg_mem,
+         window_mem,
+         input_mem, output_mem,
+         fft_idx, output_idx,
+         fft_scaling_factor,
+         buffer_size)
+global()
+local(i, r, a0, a1, a2, a3, a4)
+(
+  fft_size = 128;
+  buffer_size = 65536;
+  freemem = (input_mem = freemem) + buffer_size;
+  freemem = (output_mem = freemem) + buffer_size;
+  freemem = (in_fft_mem = freemem) + 2 * fft_size;
+  freemem = (out_fft_mem = freemem) + 2 * fft_size;
+  freemem = (window_mem = freemem) + 2 * fft_size;
+  freemem = (fftd1 = freemem) + 2 * fft_size;
+  freemem = (fftd2 = freemem) + 2 * fft_size;
+  freemem = (nrg_mem = freemem) + 2 * fft_size;
+  overlap_factor = 16;
+  
+  output_idx = 0;
+  fft_idx = 0;
+  fft_interval = 2 * fft_size / overlap_factor;
+  fft_scaling_factor = 0.5 / overlap_factor/fft_size;
+  
+  // Hann
+  a0 = 0.5;
+  a1 = 0.5;
+  a2 = a3 = a4 = 0;
+  
+  // Blackmann-Harris
+  a0 = 0.35875;
+  a1 = 0.48829;
+  a2 = 0.14128;
+  a3 = 0.01168;
+  a4 = 0;
+  
+  fft_size != prev_fft_size ? (
+    prev_fft_size = fft_size;
+    
+    i = 0;
+    loop(fft_size,
+      r = (i + 0.5) / fft_size;
+      window_mem[i] = sqrt(fft_scaling_factor) * (a0 - a1 * cos(2 * $pi * r) + a2 * cos(4 * $pi * r) - a3 * cos(6 * $pi * r) + a4 * cos(8 * $pi * r));
+      i += 1;
+    );
+  );
+  freemem
+);
+
+function process_block(in_fft_mem, out_fft_mem)
+instance(fft_size, fft_interval, in_fft_mem, out_fft_mem, fftd1, fftd2, max_mag_l, max_mag_r, clip)
+global(soft, nrg_adaptation, rumble, mode)
+local(rnd, r, idx, idx_rev, left_real, right_real, left_imag, right_imag, new_max_mag_l, new_max_mag_r, mag_l, mag_r, amp_factor, amp_sum, gain, coeff)
+(
+  fft_real(in_fft_mem, fft_size * 2);
+  fft_permute(in_fft_mem, fft_size);
+  
+  new_max_mag_l = new_max_mag_r = 0;
+  
+  idx = 1;
+  idx_rev = fft_size - 1;
+  clip = 0.0001;
+  amp_sum = 0;
+  
+  r = fftd2;
+  fftd2 = fftd1;
+  fftd1 = r;
+  
+  loop(fft_size * 0.5 - 1,
+    // Unfold complex spectrum into two real spectra
+    left_real = in_fft_mem[2*idx] + in_fft_mem[2*idx_rev];
+    left_imag = in_fft_mem[2*idx + 1] - in_fft_mem[2*idx_rev + 1];
+    right_real = in_fft_mem[2*idx + 1] + in_fft_mem[2*idx_rev + 1];
+    right_imag = -in_fft_mem[2*idx] + in_fft_mem[2*idx_rev];
+    
+    (mode == 0) ? (
+      fftd2[2 * idx] = left_real + right_real;
+      fftd2[2 * idx + 1] = left_imag + right_imag;
+      (idx < fft_size) ? (
+        r = floor(0.5 * idx) * 2;
+        left_real += rumble * fftd1[r];
+        left_imag += rumble * fftd1[r + 1];
+        
+        right_real += rumble * fftd1[r];
+        right_imag += rumble * fftd1[r + 1];
+      );
+    ) : (
+      fftd2[2 * idx] = left_real + right_real;
+      fftd2[2 * idx + 1] = left_imag + right_imag;
+      (idx < 0.0625 * fft_size) ? (
+        r = floor(0.25 * idx) * 2;
+        left_real += rumble * fftd1[r];
+        left_imag += rumble * fftd1[r + 1];
+        
+        right_real += rumble * fftd1[r];
+        right_imag -= rumble * fftd1[r + 1];
+      );
+    );
+    
+    mag_l = sqrt(sqr(left_real) + sqr(left_imag));
+    mag_r = sqrt(sqr(right_real) + sqr(right_imag));    
+    
+    new_max_mag_l = max(new_max_mag_l, mag_l);
+    new_max_mag_r = max(new_max_mag_r, mag_r);
+    
+    amp_factor = 1;
+    (mag_l > clip * max_mag_l) ? (
+      amp_factor = sqrt(max_mag_l / (mag_l + soft));
+      left_real *= amp_factor;
+      left_imag *= amp_factor;
+    );
+    
+    (mag_r > clip * max_mag_r) ? (
+      amp_factor = sqrt(max_mag_r / (mag_r + soft));
+      right_real *= amp_factor;
+      right_imag *= amp_factor;
+    );
+     
+    out_fft_mem[2*idx] = (left_real - right_imag)*0.5;
+    out_fft_mem[2*idx + 1] = (left_imag + right_real)*0.5;
+    out_fft_mem[2*idx_rev] = (left_real + right_imag)*0.5;
+    out_fft_mem[2*idx_rev + 1] = (-left_imag + right_real)*0.5;
+    
+    amp_sum += 0.5 * min(1.0, (sqr(mag_l) / (sqr(left_real) + sqr(left_imag)) + sqr(mag_r) / (sqr(right_real) + sqr(right_imag))));
+    
+    idx += 1;
+    idx_rev -= 1;
+  );
+  
+  out_fft_mem[0] = out_fft_mem[1] = out_fft_mem[2 * fft_size] = out_fft_mem[2 * fft_size + 1] = 0;
+  
+  idx = 0;
+  gain = amp_sum / fft_size;
+  loop(fft_size / 2,
+    out_fft_mem[2*idx] *= gain;
+    out_fft_mem[2*idx + 1] *= gain;
+    idx += 2;
+  );
+  
+  max_mag_l = (1.0 - nrg_adaptation) * max_mag_l + nrg_adaptation * new_max_mag_l;
+  max_mag_r = (1.0 - nrg_adaptation) * max_mag_r + nrg_adaptation * new_max_mag_r;
+  
+  fft_ipermute(out_fft_mem, fft_size);
+  ifft_real(out_fft_mem, fft_size * 2);
+);
+
+function read_block(input_mem, input_idx, fft_loc, window_ptr, len, buffer_size)
+local(i1, i2, nrg)
+instance()
+global()
+(
+  input_idx -= len;
+  input_idx < 0 ? input_idx += buffer_size;
+  nrg = 0;
+  loop(len,
+    input_idx == buffer_size ? input_idx = 0;
+    i1 = input_mem[input_idx] * window_ptr[];
+    fft_loc[] = i1;
+    input_idx += 1;
+    i2 = input_mem[input_idx] * window_ptr[];
+    fft_loc[1] = i2;
+    input_idx += 1;
+    
+    window_ptr += 1;
+    fft_loc += 2;
+    nrg += sqr(i1) + sqr(i2);
+  );
+  
+  nrg
+);
+
+function write_block(output_mem, output_idx, fft_ptr, window_ptr, len, buffer_size)
+local(o1, o2, nrg_out)
+instance()
+global()
+(
+  nrg_out = 0;
+  loop(len,
+    (output_idx == buffer_size) ? output_idx = 0;
+    o1 = fft_ptr[] * window_ptr[];
+    output_mem[output_idx] += o1;
+    output_idx += 1;
+    o2 = fft_ptr[1] * window_ptr[];
+    output_mem[output_idx] += o2;
+    output_idx += 1;
+    
+    window_ptr += 1;
+    fft_ptr += 2;
+    nrg_out += sqr(o1) + sqr(o2);
+  );
+  
+  nrg_out
+);
+
+function fft_tick(left, right)
+instance(fft_idx,
+         in_fft_mem, out_fft_mem, window_mem,
+         fft_interval, fft_size, 
+         input_mem, output_mem, buffer_size,
+         input_idx, output_idx, gain, g, nrg_in_last, nrg_in, nrg_out)
+global(spl0, spl1, rumble)
+local(tmp)
+(
+  input_idx == buffer_size ? input_idx = 0;
+  input_mem[input_idx] = left;
+  input_mem[input_idx + 1] = right;
+
+  (fft_idx >= fft_interval) ? (
+    fft_idx = 0;
+    nrg_in_last = nrg_in;
+    nrg_in = read_block(input_mem, input_idx, in_fft_mem, window_mem, fft_size * 2, buffer_size);
+    this.process_block(in_fft_mem, out_fft_mem);
+    nrg_out = write_block(output_mem, output_idx, out_fft_mem, window_mem, fft_size * 2, buffer_size);
+    
+    gain = sqrt(nrg_in_last / max(0.000000000001, nrg_out));
+  );
+
+  g = 0.99 * g + 0.01 * (gain + 0.0075 * rumble);
+
+  output_idx == buffer_size ? output_idx = 0;
+  spl0 = output_mem[output_idx] * g * 8;
+  output_mem[output_idx] = 0;
+  output_idx += 1;
+  
+  spl1 = output_mem[output_idx] * g * 8;
+  output_mem[output_idx] = 0;
+  output_idx += 1;
+  
+  fft_idx += 2;
+  input_idx += 2;
+);
+
+<?
+  n_bodies = 20; //24;
+  dt = 0.001;
+?>
+
+function init_bodies(freemem)
+local(vscale)
+global(gfx_w, gfx_h)
+instance(
+  <?
+    idx = 0;
+    loop(n_bodies,
+      printf("m%d, ", idx);
+      printf("px%d, py%d, pz%d, ", idx, idx, idx);
+      printf("vx%d, vy%d, vz%d, ", idx, idx, idx);
+      printf("ax%d, ay%d, az%d, ", idx, idx, idx);
+      printf("npx%d, npy%d, npz%d, ", idx, idx, idx);
+      printf("nvx%d, nvy%d, nvz%d, ", idx, idx, idx);
+      printf("nax%d, nay%d, naz%d, ", idx, idx, idx);
+      idx += 1;
+    );
+  ?>, scale
+)
+(
+  scale = 1.5;
+  vscale = 20.1;
+  <?
+    idx = 0;
+    loop(n_bodies / 2,
+      printf("m%d = %d;", idx, 1.0 + 0.1 * idx / n_bodies);
+      printf("npx%d = px%d = scale * (rand() - 0.5);", idx, idx);
+      printf("npy%d = py%d = scale * (rand() - 0.5);", idx, idx);
+      printf("npz%d = pz%d = scale * rand();", idx);
+      
+      printf("nax%d = ax%d = 0;", idx, idx);
+      printf("nay%d = ay%d = 0;", idx, idx);
+      printf("naz%d = az%d = 0;", idx, idx);
+      
+      printf("nvx%d = vx%d = vscale * (rand() - 0.5);", idx, idx);
+      printf("nvy%d = vy%d = vscale * (rand() - 0.5);", idx, idx);
+      printf("nvz%d = vz%d = vscale * (rand() - 0.5);", idx, idx);
+      idx += 1;
+      
+      // Moon
+      printf("m%d = %d;", idx, 0.1 + 0.1 * idx / n_bodies);
+      printf("npx%d = px%d = px%d + 0.01 * (rand() - 0.5);", idx, idx, idx - 1);
+      printf("npy%d = py%d = py%d + 0.01 * (rand() - 0.5);", idx, idx, idx - 1);
+      printf("npz%d = pz%d = pz%d + 0.01 * (rand() - 0.5);", idx, idx, idx - 1);
+      
+      printf("nax%d = ax%d = 0;", idx, idx);
+      printf("nay%d = ay%d = 0;", idx, idx);
+      printf("naz%d = az%d = 0;", idx, idx);
+      
+      printf("nvx%d = vx%d = 0;", idx, idx);
+      printf("nvy%d = vy%d = 0;", idx, idx);
+      printf("nvz%d = vz%d = 0;", idx, idx);
+      idx += 1;
+    );
+  ?>
+);
+
+function draw_bodies(offsetx, offsety, scalex, scaley)
+local(hw, hh, zz, scx, scy, scz, spd)
+instance(
+  <?
+    idx = 0;
+    loop(n_bodies,
+      printf("m%d, ", idx);
+      printf("px%d, py%d, pz%d, ", idx, idx, idx);
+      printf("npx%d, npy%d, npz%d, ", idx, idx, idx);
+      printf("nvx%d, nvy%d, nvz%d, ", idx, idx, idx);
+      idx += 1;
+    );
+  ?>
+)
+global(img_w, img_h)
+(
+  hw = 0.5 * img_w + offsetx;
+  hh = 0.5 * img_h + offsety;
+  scx = 0.5 * img_w * scalex;
+  scy = 0.4 * img_w * scaley;
+  <?
+  idx = 0;
+  loop(n_bodies,
+    printf("zz = 1.0 - 0.5 * pz%d * pz%d * pz%d;", idx, idx, idx);
+    printf("spd = sqr(nvx%d) + sqr(nvy%d) + sqr(nvz%d);", idx, idx, idx);
+    printf("spd = 0.01 * spd;");
+    printf("gfx_set(0.3 + spd, 0.2, 1.0, 1.0);", idx, idx, idx, idx, idx);
+    printf("gfx_line(hw + scx * npx%d, hh + scy * npy%d, hw + scx * px%d, hh + scy * py%d);", idx, idx, idx, idx, idx, idx, idx, idx, idx, idx);   // 100 * m%d * (1 - pz%d)
+    printf("gfx_circle(hw + scx * npx%d, hh + scy * npy%d, 3 * max(0.15, (m%d - 2*pz%d)), 1);", idx, idx, idx, idx, idx);   // 100 * m%d * (1 - pz%d)
+    idx += 1;
+  );
+  ?>
+);
+
+function iter_bodies()
+local(mm, px, py, pz, npx, npy, npz, vpx, vpy, vpz, apx, apy, apz, dx, dy, dz, sqd, norm_x, norm_y, norm_z, rel_vx, rel_vy, rel_vz, ilen, impact_vel, im, attrac)
+instance(
+  <?
+    idx = 0;
+    loop(n_bodies,
+      printf("m%d, ", idx);
+      printf("px%d, py%d, pz%d, ", idx, idx, idx);
+      printf("vx%d, vy%d, vz%d, ", idx, idx, idx);
+      printf("ax%d, ay%d, az%d, ", idx, idx, idx);
+      printf("npx%d, npy%d, npz%d, ", idx, idx, idx);
+      printf("nvx%d, nvy%d, nvz%d, ", idx, idx, idx);
+      printf("nax%d, nay%d, naz%d, ", idx, idx, idx);
+      idx += 1;
+    );
+  ?>
+)
+global()
+(
+  // First update positions
+  //   new_pos = pos + vel*dt + acc*(dt*dt*0.5);
+  // Then update accelerations
+  //   Calculate new_acc = a(t + dt)
+  // Then update velocities
+  //   new_vel = vel + (acc + new_acc)*(dt*0.5);
+  attrac = 115 * (0.7 + 0.5 * cos(0.01 * time_precise()));
+  <?
+    // Update
+    idx = 0;
+    loop(n_bodies,
+      printf("vx%d = nvx%d;", idx, idx);
+      printf("vy%d = nvy%d;", idx, idx);
+      printf("vz%d = nvz%d;", idx, idx);
+      
+      printf("ax%d = nax%d;", idx, idx);
+      printf("ay%d = nay%d;", idx, idx);
+      printf("az%d = naz%d;", idx, idx);
+      
+      printf("px%d = npx%d;", idx, idx);
+      printf("py%d = npy%d;", idx, idx);
+      printf("pz%d = npz%d;", idx, idx);
+      idx += 1;
+    );
+  
+    idx = 0;
+    loop(n_bodies,
+      printf("npx%d = px%d + vx%d * %f + ax%d * %f;", idx, idx, idx, dt, idx, dt * dt * 0.5);
+      printf("npy%d = py%d + vy%d * %f + ay%d * %f;", idx, idx, idx, dt, idx, dt * dt * 0.5);
+      printf("npz%d = pz%d + vz%d * %f + az%d * %f;", idx, idx, idx, dt, idx, dt * dt * 0.5);
+      idx += 1;
+    );
+    
+    idx = 0;
+    loop(n_bodies,
+      //printf("nax%d = -250 * npx%d;", idx, idx);
+      //printf("nay%d = -250 * npy%d;", idx, idx);
+      //printf("naz%d = -250 * npz%d;", idx, idx);
+      
+      printf("sqd = sqr(npx%d) + sqr(npy%d) + sqr(npz%d);", idx, idx, idx, idx, idx, idx);
+      printf("nax%d = -attrac * npx%d * sqd;", idx, idx);
+      printf("nay%d = -attrac * npy%d * sqd;", idx, idx);
+      printf("naz%d = -attrac * npz%d * sqd;", idx, idx);
+      
+      idx2 = 0;
+      loop(n_bodies,
+        (idx != idx2) ? (
+          printf("mm = 10 * m%d;", idx2);
+          printf("dx = (npx%d - npx%d);", idx, idx2);
+          printf("dy = (npy%d - npy%d);", idx, idx2);
+          printf("dz = (npz%d - npz%d);", idx, idx2);
+          
+          printf("sqd = sqr(dx) + sqr(dy) + sqr(dz);");
+          printf("mm /= sqd;");
+          printf("mm *= invsqrt(sqd);");
+          
+          /*printf("(sqd < 0.002) ? (");
+          
+          printf("  ilen = invsqrt(dx * dx + dy * dy + dz + dz);");
+          printf("  rel_vx = vx%d - vx%d;", idx, idx2);
+          printf("  rel_vy = vy%d - vy%d;", idx, idx2);
+          printf("  rel_vz = vz%d - vz%d;", idx, idx2);
+          printf("  norm_x = dx * ilen;");
+          printf("  norm_y = dy * ilen;");
+          printf("  norm_z = dz * ilen;");
+          printf("  impact_vel = norm_x * rel_vx + norm_y * rel_vy + norm_z * rel_vz;");
+          printf("  im = 1.0 / (m%d + m%d);", idx, idx2);
+          printf("  vx%d -= impact_vel * m%d * im * norm_x;", idx, idx2);
+          printf("  vy%d -= impact_vel * m%d * im * norm_y;", idx, idx2);
+          printf("  vz%d -= impact_vel * m%d * im * norm_z;", idx, idx2);
+          //printf("  vx%d += impact_vel * m%d * im * norm_x;", idx2, idx);
+          //printf("  vy%d += impact_vel * m%d * im * norm_y;", idx2, idx);
+          //printf("  vz%d += impact_vel * m%d * im * norm_z;", idx2, idx);
+          
+          printf(");");*/
+          printf("mm = min(500000.0, mm);");  // Stability hack
+          
+          printf("nax%d -= mm * dx;", idx);
+          printf("nay%d -= mm * dy;", idx);
+          printf("naz%d -= mm * dz;", idx);
+        );
+        idx2 += 1;
+      );
+      idx += 1;
+    );
+    
+    idx = 0;
+    loop(n_bodies,
+      printf("nvx%d = 0.99 * vx%d + (ax%d + nax%d) * %f;", idx, idx, idx, idx, 0.5 * dt);
+      printf("nvy%d = 0.99 * vy%d + (ay%d + nay%d) * %f;", idx, idx, idx, idx, 0.5 * dt);
+      printf("nvz%d = 0.99 * vz%d + (az%d + naz%d) * %f;", idx, idx, idx, idx, 0.5 * dt);
+      idx += 1;
+    );
+  ?>
+);
+
+freemem = fft_modal.fft_mem(freemem);
+
+@slider
+
+@block
+new_delay = floor(128);
+(new_delay != pdc_delay) ? (
+  pdc_top_ch = 2;
+  pdc_bot_ch = 0;
+  pdc_delay = new_delay;
+);
+
+@sample
+fft_modal.fft_tick(spl0, spl1);
+
+@gfx 640 640
+(!loaded) ? (
+  OFFSCREEN = 1;
+  SHARP = 2;
+  
+  bodies.init_bodies();
+  
+  img_w = img_h = 300;
+  
+  gfx_setimgdim(OFFSCREEN, img_w, img_h);
+  gfx_setimgdim(SHARP, img_w, img_h);
+  loaded = 1;
+  
+  gfx_dest = SHARP;
+  gfx_mode = 0;
+  gfx_clear = 0;
+  gfx_set(0, 0, 0, 1);
+  gfx_rect(0, 0, img_w, img_h);  
+  
+  gfx_dest = OFFSCREEN;
+  gfx_mode = 0;
+  gfx_clear = 0;
+  gfx_set(0, 0, 0, 1);
+  gfx_rect(0, 0, img_w, img_h);
+);
+
+bodies.iter_bodies();
+
+//gfx_x = -0.3 * img_w;
+//gfx_y = -0.3 * img_w;
+/*
+gfx_dest = SHARP;
+gfx_mode = 1;
+gfx_clear = 0;
+gfx_set(0, 0, 0, 1.0);
+gfx_rect(0, 0, gfx_w, gfx_h);
+gfx_set(0.5, 0.2, 0.3, 0.8);
+*/
+
+gfx_dest = OFFSCREEN;
+gfx_mode = 1;
+gfx_blurto(gfx_w, gfx_h);
+bodies.draw_bodies(0, 0, 1, 1);
+bodies.draw_bodies(-0.3 * img_w, - 0.3 * img_w, -0.8, 0.9);
+bodies.draw_bodies(0.3 * img_w, 0.3 * img_w, 0.6, -1.2);
+bodies.draw_bodies(-0.3 * img_w, 0.3 * img_w, -1.2, 1.4);
+bodies.draw_bodies(0.3 * img_w, -0.3 * img_w, -0.9, -0.8);
+
+gfx_set(0, 0, 0, 0.1);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+scale = min(1, max(gfx_w / 640, gfx_h / 640));
+
+gfx_x = gfx_y = 0;
+gfx_dest = -1;
+gfx_mode = 1;
+gfx_set(1, 1, 1, 1.0);
+gfx_blit(OFFSCREEN, 2 * scale, 0);
+
+gfx_set(1, 1, 1, 0.85);
+gfx_blit(OFFSCREEN, 1.97 * scale, 30);
+
+//gfx_set(1, 1, 1, 0.35);
+//gfx_blit(OFFSCREEN, 2.01 * scale, 0);
+
+gfx_set(0.5, 0.2, 0.3, 0.8);
+gfx_blit(OFFSCREEN, 2.09 * scale, 0);
+
+t = time_precise();
+
+bodies.draw_bodies(0, 0, scale, scale);
+bodies.draw_bodies(-0.3 * img_w * scale, - 0.3 * img_w * scale, -2.3 * scale, 2.9 * scale);
+bodies.draw_bodies(0.3 * img_w * scale, 0.3 * img_w * scale, 2.4 * scale, 2.2 * scale);
+bodies.draw_bodies(0.9 * img_w * scale, 0.3 * img_w * scale, -2.2 * scale, -2.5 * scale);
+bodies.draw_bodies(0 * img_w * scale, 0.9 * img_w * scale, 2.6 * scale, 2.2 * scale);
+bodies.draw_bodies(0.2 * img_w + 1.3 * img_w * sin(0.01 * t), 0.5 * img_w * scale, 1.5 * scale, 1.5 * scale);
+bodies.draw_bodies(0.5 * img_w, 0.5 * img_w * scale, 5 * scale, 5 * scale);
+bodies.draw_bodies(0.8 * img_w * scale, 1.1 * img_h * scale, 2.6 * scale, 2.7 * scale);
+
+wnd = 640 * scale;
+
+gfx_set(0.3, 0.1, 0.4 + 0.2 * sin(t), 0.15);
+gfx_rect(0, 0, wnd, wnd);
+
+gfx_set(0.3, 0.1, 0.6, 1.0);
+gfx_rect(5, 5, wnd - 10, wnd - 10, 0);
+gfx_rect(6, 6, wnd - 12, wnd - 12, 0);
+
+gfx_set(0.3, 0.1, 0.4, 1.0);
+gfx_rect(10, 10, wnd - 20, wnd - 20, 0);
+
+
+
+
+//bodies.draw_bodies(-0.3 * img_w, 0.3 * img_w, -1.2, 1.4);
+//bodies.draw_bodies(0.3 * img_w, -0.3 * img_w, -0.9, -0.8);
+
+/*
+gfx_mode = 1;
+gfx_set(1, 1, 1, 1);
+gfx_blit(SHARP, 1.0, 30);
+gfx_x = 0.5 * img_w;
+gfx_y = 0.5 * img_w;
+gfx_set(1, 1, 1, 1);
+gfx_blit(SHARP, 1.0, 20);
+gfx_x = 0.95 * img_w;
+gfx_y = 0.95 * img_w;
+gfx_set(1, 1, 1, 1);
+gfx_blit(SHARP, 1.0, 60);
+*/
