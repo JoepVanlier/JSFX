@@ -1,8 +1,8 @@
 desc:Saike MIDI ARP (beta)
 tags: midi arpeggiator
-version: 0.43
+version: 0.44
 author: Joep Vanlier
-changelog: Expose pattern loop length as modulatable parameter.
+changelog: Add option to reset play position with CC trigger (right click on menu to enable). To only trigger on CC's, set to "Free" mode and then enable Reset position on CC (and pick a CC value to trigger on).
 license: MIT
 provides:
   midi_arp_dependencies/*
@@ -53,6 +53,7 @@ slider36:min_cc8=1<0,127,1>-Minimum Assignable CC8
 slider37:max_cc8=127<0,128,1>-Maximum Assignable CC8
 slider38:enable_speed=0<0,1,1>-Enable speed override
 slider39:pattern_loop_length=32<2,64,1>-Loop length
+slider40:cc_reset=102<0,255,1>-CC which resets MIDI position
 
 in_pin:left input
 in_pin:right input
@@ -383,6 +384,8 @@ file_var(0, enable_mod);
   follow_current_pattern = 1;
 );
 
+file_var(0, reset_on_cc);
+
 file_version = CURRENT_VERSION;
 
 @slider
@@ -590,7 +593,7 @@ loop(samplesblock,
     midi.assign_notes(current_arp, poly_mode);
   );
   
-  (time_mode == 1) ? ( reset_playhead ? ( current_sample = 0; reset_playhead = 0; ) );
+  ((time_mode == 1) || reset_on_cc) ? ( reset_playhead ? ( current_sample = 0; reset_playhead = 0; ) );
   play.pattern_update(current_pattern_index);
   
   current_sample > loop_length ? 
@@ -1075,20 +1078,39 @@ global()
   s
 );
 
+function setup_cc_string(menu_cc_string)
+local(cc_menu_idx)
+global(cc_reset)
+(
+  cc_menu_idx = 0;
+  menu_cc_string = sprintf(menu_cc_string, "|>CC to use for reset");
+  loop(255,
+    menu_cc_string = sprintf(menu_cc_string, "%s|%sCC%d", menu_cc_string, cc_reset == cc_menu_idx ? "!" : "", cc_menu_idx);
+    cc_menu_idx += 1;
+  );
+  
+  menu_cc_string
+);
+
+
 mouse_y < (2 + block_width) && mouse_x < cc_pos ? (
   mouse_cap & 2 == 2 ? (
     gfx_x = mouse_x;
     gfx_y = mouse_y;
-    
-    menu_selection = gfx_showmenu(sprintf(8, ">In channel%s|>Out channel%s|%sMIDI passthrough", setup_menu_string(8, in_channel, 0), setup_menu_string(9, out_channel, 1), disable_midi ? "!" : ""));
+
+    menu_selection = gfx_showmenu(sprintf(8, ">In channel%s|>Out channel%s|%sMIDI passthrough|%s%sReset position on CC%s", setup_menu_string(8, in_channel, 0), setup_menu_string(9, out_channel, 1), disable_midi ? "!" : "", reset_on_cc ? "!" : "", time_mode == 0 ? "#" : "", (reset_on_cc && (time_mode > 0)) ? setup_cc_string(10) : ""));
     (menu_selection > 0) ? (
       menu_selection < 18 ? (
         slider_automate(in_channel = menu_selection - 1);
       ) : (
         menu_selection < 34 ? (
           slider_automate(out_channel = menu_selection - 17);
-        ) : (
+        ) : (menu_selection == 34) ? (
           disable_midi = 1 - disable_midi;
+        ) : (menu_selection == 35) ? (
+          reset_on_cc = 1 - reset_on_cc;
+        ) : (
+          cc_reset = menu_selection - 36;
         );
       );
     );
