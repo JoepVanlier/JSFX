@@ -1,8 +1,8 @@
 desc:Saike Tight Compressor
 tags: Tight Compressor
-version: 0.21
+version: 0.23
 author: Joep Vanlier
-changelog: Fixed bug which affected audio when oversampling was enabled. This bug was introduced in 0.19 when adding a sidechain mode. The channel used for measurement was not participating in oversampling resulting in a small delay between what was being metered and compressed. This is expected to have an effect mostly with short attacks and only when oversampling is enabled.
+changelog: Disable auto make-up gain by default. Report gain reduction. Make the gain level indicator in side chain mode report the gain level of the side chain rather than the modified chain.
 provides: saike_upsamplers.jsfx-inc
 Copyright (C) 2024 Joep Vanlier
 License: MIT
@@ -13,17 +13,18 @@ import saike_upsamplers.jsfx-inc
 slider1:Treshold1=-20<-40,0,.1>Threshold (dB)
 slider2:Ratio1=.85<0,2,.0001>Ratio (-)
 slider3:sAttack1=0.1<0,1,.00001>Attack (-)
-slider4:sDecay1=0.1<0,1,.00001>Decay (-)
+slider4:sDecay1=0.1<0,1,.00001>Release (-)
 slider5:Knee1=0<0,30,0.1>Knee (dB)
-slider6:MakeUp1=1<0,1,1{No,Yes}>Auto make-up gain
+slider6:MakeUp1=0<0,1,1{No,Yes}>Auto make-up gain
 slider7:PreGain=0<-24,12,0.01>Pre-Gain
 slider8:PostGain=0<-24,12,0.01>Post-Gain
 slider9:Scrolls=0<0,1,1{No,Yes}>Scrolls?
 slider10:Topology=0<0,4,1{LogDetect (Smoother),LinDetect (Harsher),LogDetect Non-smooth,LinDetect Non-smooth}>Topology
 slider11:DryWet=1<0,1,.00001>Dry/Wet
 slider12:Oversampling=1<1,8,1>Oversampling factor
-slider13:LinkStereo=1<0,1,1>Link Stereo
+slider13:LinkStereo=1<0,1,1{No,Yes}>Link Stereo
 slider14:OperatingMode=0<0,1,1{Normal (1-2),Sidechain (3-4)}>Operating Mode
+
 
 in_pin:Input L
 in_pin:Input R
@@ -33,7 +34,7 @@ out_pin:Output L
 out_pin:Output R
 
 @init
-
+ext_gr_meter = 0;
 MIN_ATTACK = 0;
 MAX_ATTACK = 120;
 
@@ -223,7 +224,7 @@ function setCompressorOptions( thr, rat, atk, release, knee, makeupToggle )
 /* Level detection log domain */
 function compressor(mx)
   instance( rt, at, yL, makeUp, 
-            xG, c, ya, outGain )
+            xG, c, ya, outGain, gain_reduction )
   global()
   local(xL, yG)
   (
@@ -246,6 +247,7 @@ function compressor(mx)
    
     // Determine current gain correction
     //outGain = 10^((c + makeUp)/20);
+    gain_reduction = c + makeUp;
     outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );  
   
@@ -253,7 +255,7 @@ function compressor(mx)
 // Topology 3:
 // Level detection linear domain
 function compressor2(mx)
-  instance(rt, at, c, xG, yL, ratio, makeUp, outGain)
+  instance(rt, at, c, xG, yL, ratio, makeUp, outGain, gain_reduction)
   global()
   local(xL, yG, ya)
   (
@@ -271,6 +273,7 @@ function compressor2(mx)
     c = yG - xG;
     
     //outGain = 10^((c + makeUp)/20);
+    gain_reduction = c + makeUp;
     outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );  
   
@@ -278,7 +281,7 @@ function compressor2(mx)
 /* Level detection log domain (decoupled) */
 function compressor_dc(mx)
   instance( rt, at, yL, makeUp, 
-            xG, c, ya, outGain )
+            xG, c, ya, outGain, gain_reduction)
   global()
   local(xL, yG)
   (
@@ -300,6 +303,7 @@ function compressor_dc(mx)
    
     // Determine current gain correction
     //outGain = 10^((c + makeUp)/20);
+    gain_reduction = c + makeUp;
     outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );
   
@@ -307,7 +311,7 @@ function compressor_dc(mx)
 // Topology 3:
 // Level detection linear domain (decoupled)
 function compressor2_dc(mx)
-  instance(rt, at, c, xG, yL, ratio, makeUp, outGain)
+  instance(rt, at, c, xG, yL, ratio, makeUp, outGain, gain_reduction)
   global()
   local(xL, yG, ya)
   (
@@ -324,6 +328,7 @@ function compressor2_dc(mx)
     c = yG - xG;
     
     //outGain = 10^((c + makeUp)/20);
+    gain_reduction = c + makeUp;
     outGain = exp(.11512925464970228420089957273422 * (c + makeUp)); //log(10)/20 = .11512925464970228420089957273422;
   );    
   
@@ -397,7 +402,8 @@ function processSample()
   global(inL, inR, measL, measR, Topology, outL, outR, LinkStereo,
          cL.compressor, cR.compressor, cL.compressor2, cR.compressor2, 
          cL.compressor_dc, cR.compressor_dc, cL.compressor2_dc, cR.compressor2_dc, 
-         DryWet)
+         cL.gain_reduction, cR.gain_reduction,
+         DryWet, ext_gr_meter)
   local(G)
   (
     LinkStereo ? (
@@ -412,6 +418,7 @@ function processSample()
       );
       outL = G * inL;
       outR = G * inR;
+      ext_gr_meter = cL.gain_reduction;
     ) : (
       ( Topology == 0 ) ? (
         outL = cL.compressor(measL) * inL;
@@ -426,6 +433,7 @@ function processSample()
         outL = cL.compressor2_dc(measL) * inL;
         outR = cR.compressor2_dc(measR) * inR;
       );
+      ext_gr_meter = (cL.gain_reduction + cR.gain_reduction) * 0.5;
     );
     
     outL = inL * (1-DryWet) + outL * DryWet;
@@ -490,7 +498,13 @@ spl1 *= postGainLin;
 out = 20*log10(.5*(abs(spl0)+abs(spl1)));
 
 bufSmoothing = .995;
-movIn = movIn * bufSmoothing + in * (1-bufSmoothing);
+OperatingMode ? (
+  sideIn = 20*log10(.5*(abs(spl2)+abs(spl3)));
+  movIn = movIn * bufSmoothing + sideIn * (1-bufSmoothing);
+) : (
+  movIn = movIn * bufSmoothing + in * (1-bufSmoothing);
+);
+
 inBuf.updateBuffer( movIn );
 gainBuf.updateBuffer( cL.c );
 
