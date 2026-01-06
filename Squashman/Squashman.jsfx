@@ -1,8 +1,8 @@
 desc:Squashman (Saike)
 tags: multiband saturation plugin
-version: 0.85
+version: 0.86
 author: Joep Vanlier
-changelog: Make sure modulation tab does not occlude frequency indicator.
+changelog: Fix clicking behavior by correcting DC offset analytically before the DC blocker.
 provides: Squashman_Dependencies/*
 about:
   # Squashman
@@ -2601,10 +2601,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
   /* TO DO: Merge crossovers with control */
   function processBand(drive, pan, play, mode, modifier, fbl, fbr)
   global(antialiased_tanh_rect, side, bjt, overSampling, srate, logten005, legacy_pan)
-  instance(l, r, inL, inR, in, pre, post, t, panl, panr, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin)
+  instance(dc_l, dc_r, l, r, inL, inR, in, pre, post, t, panl, panr, preampl, preampr, ldrive, lpan, lastl, lastr, ttime, lastrin, lastlin)
   local(inv_ceiling, factor, depth, idepth, pre_l, pre_r,
-        tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, dc_corr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
+        tl, tr, t2l, t2r, t3l, t3r, t4r, t4l, ll, rr, loc, tc, g, dg, dt, dl, dr, dl2, dr2, alpha, beta, intl, intr, ddl, ddr)
   (
+    dc_l = dc_r = 0;
     play ? (
       in = max(in, abs(inL+inR));
       
@@ -2662,19 +2663,20 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = sign(r)*(1-exp(-abs(r)));
       ) : ( mode == 3 ) ? (
         /* Asymmetric */
-        l = l - (1-side)*modifier;
-        r = r - (1-side)*modifier;
+        dc_l = - (1 - side) * modifier;
+        l = l + dc_l;
+        r = r + dc_l;
         
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 );
         
-        dc_corr = 0;
+        dc_l = dc_r = dc_l - 0.17 * dc_l * dc_l - 0.17 * dc_l * dc_l * dc_l;
         
         t = l*l;
-        l = l - 0.17 * t - 0.17 * t*l + dc_corr;
-        
+        l = l - 0.17 * t - 0.17 * t*l - dc_l;
+          
         t = r*r;
-        r = r - 0.17 * t - 0.17 * t*r + dc_corr;
+        r = r - 0.17 * t - 0.17 * t*r - dc_r;
       ) : ( mode == 4 ) ? (
         /* Rapid saturation */
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 );
@@ -2731,22 +2733,39 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r = sin(1.5*r*(1+2*modifier));
       ) : ( mode == 10 ) ? (
         /* Octaver up */
-        l = 2*abs(l)-1+modifier;
-        r = 2*abs(r)-(1-side)*(1-modifier);
+        // TODO: Run dc part only on update of modifier / side
+        dc_l = 1.399 * (- 1 + modifier);
+        dc_l = sign(dc_l) * (1-exp(-abs(dc_l)));
+        
+        dc_r = 1.399 * ( - (1 - side) * (1 - modifier));
+        dc_r = sign(dc_r) * (1-exp(-abs(dc_r)));
+        
+        l = 2 * abs(l) - 1 + modifier;
+        r = 2 * abs(r) - (1 - side) * (1 - modifier);
         l = 1.399 * l;
         r = 1.399 * r;
-        l = sign(l)*(1-exp(-abs(l)));
-        r = sign(r)*(1-exp(-abs(r)));
+        l = sign(l)*(1-exp(-abs(l))) - dc_l;
+        r = sign(r)*(1-exp(-abs(r))) - dc_r;
       ) : ( mode == 11 ) ? (
         /* Wavefolder */
         this.ch0.folder_init(0, 1);
         this.ch1.folder_init(0, 1);
+        
+        dc_l = -this.ch0.folder_eval(modifier);
+        t = dc_l * dc_l;
+        dc_l = dc_l / (1 + t * t);
+        
         l = -this.ch0.folder_eval(l+modifier);
         t = l*l;
-        l = l / (1+t*t);
+        l = l / (1+t*t) - dc_l;
+        
+        dc_r = -this.ch1.folder_eval((1 - side) * modifier);
+        t = dc_r * dc_r;
+        dc_r = dc_r / (1 + t * t);
+        
         r = -this.ch1.folder_eval(r+(1-side)*modifier);
         t = r*r;
-        r = r / (1+t*t);
+        r = r / (1+t*t) - dc_r;
       ) : ( mode == 12 ) ? (
         /* Serge wavefolder */
         l = .5*l;
@@ -2813,8 +2832,10 @@ function initSpectrum(memoryOffset, fftSize, srate)
         l = floor( l * depth + 1.5*modifier - .5 ) * idepth;
         r = floor( r * depth + 1.5*modifier - .5 ) * idepth;
         
-        l = .5*l;
-        r = .5*r;
+        dc_l = dc_r = floor( 1.5*modifier - .5 ) * idepth;
+        
+        l = .5*(l - dc_l);
+        r = .5*(r - dc_l);
         ( l > 1 ) ? ( l = 1 ) : ( l < -1 ) ? ( l = -1 ) : l = sign(l)*(2*abs(l)-l*l);
         ( r > 1 ) ? ( r = 1 ) : ( r < -1 ) ? ( r = -1 ) : r = sign(r)*(2*abs(r)-r*r);
       ) : ( mode == 17 ) ? (
@@ -2976,8 +2997,11 @@ function initSpectrum(memoryOffset, fftSize, srate)
         r=tanh((exp(tr*tr*t2l) - exp(t3r*t3r*t2l))*abs(r));
       ) : ( mode == 25 ) ? (
         /* Warm hug */
-        l = tanh(l - modifier*tanh(6*l+modifier) + tanh(4*modifier*l-modifier));
-        r = tanh(r - modifier*tanh(6*r+(1-side)*modifier) + tanh(4*modifier*r-(1-side)*modifier));
+        dc_l = -tanh(tanh(modifier) * (modifier + 1));
+        dc_r = side ? 0 : -tanh(tanh((1-side)*modifier) * (modifier + 1));
+         
+        l = tanh(l - modifier*tanh(6*l+modifier) + tanh(4*modifier*l-modifier)) - dc_l;
+        r = tanh(r - modifier*tanh(6*r+(1-side)*modifier) + tanh(4*modifier*r-(1-side)*modifier)) - dc_r; 
         
         // Flattened:
 //        l = -1 + 2/(exp(-2*l + 2*modifier*(-1 + 2/(exp(-12*l - 2*modifier) + 1)) + 2 - 4/(exp(-8*l*modifier + 2*modifier) + 1)) + 1);
@@ -3077,8 +3101,9 @@ function initSpectrum(memoryOffset, fftSize, srate)
         lastr = lastr + .2*modifier*(dr-lastr)/overSampling;
         intr = intr + .01625*dt*(.25*r-intr)*(1+5.5*abs(intr));
         
-        l = (2*lastl+intl);
-        r = (2*lastr+intr);
+        dc_l = dc_r = - 0.08409;
+        l = (2*lastl+intl - dc_l);
+        r = (2*lastr+intr - dc_r);
       ) : ( mode == 32 ) ? (
         // Clipped inflator
         l = inflator_clip(l, modifier);
@@ -3270,6 +3295,8 @@ function drawShaper(drive, waveform_display)
     calc.ldrive = -9999;
     calc.lpan = -9999;
     calc.processBand(displayDrive, 0, 1, mode, modifier, 0, 0);
+    calc.l += calc.dc_l;
+    calc.r += calc.dc_r;
     ll = calc.l*.5 + .5;
     lr = calc.r*.5 + .5;
     loop(steps,
@@ -3279,14 +3306,20 @@ function drawShaper(drive, waveform_display)
       calc.inL = s2;
       calc.inR = s2;
       
-      calc.processBand(displayDrive, 0, 1, mode, modifier, 0, 0);      
-      ol = calc.l*.5 + .5;
-      or = calc.r*.5 + .5;
+      calc.processBand(displayDrive, 0, 1, mode, modifier, 0, 0);
+      calc.l += calc.dc_l;
+      calc.r += calc.dc_r;
+      ol = calc.l * .5 + .5;
+      or = calc.r * .5 + .5;
       
-      gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
-      gfx_line(cx, y+h-lr*hm, cx+dx, y+h-or*hm);
-      gfx_line(cx, y+h-ll*hm-1, cx+dx, y+h-ol*hm-1);
-      gfx_line(cx, y+h-lr*hm-1, cx+dx, y+h-or*hm-1);
+      (abs(calc.l) < 1) ? (
+        gfx_line(cx, y+h-ll*hm, cx+dx, y+h-ol*hm);
+        gfx_line(cx, y+h-ll*hm-1, cx+dx, y+h-ol*hm-1);
+      );
+      (abs(calc.r) < 1) ? (
+        gfx_line(cx, y+h-lr*hm, cx+dx, y+h-or*hm);
+        gfx_line(cx, y+h-lr*hm-1, cx+dx, y+h-or*hm-1);
+      );
       
       ll = ol;
       lr = or;
@@ -5403,7 +5436,7 @@ cMasterGainSlider += d_MasterGainSlider;
   gfx_x = gfx_y = 30;
   gfx_setfont(1,"ARIAL",30);
   gfx_set(0,0,0,.1+0.2*abs(sin(time_precise())));
-  gfx_printf("S Q U A S H M A N  v  0 . 8 5 [Beta]");
+  gfx_printf("S Q U A S H M A N  v  0 . 8 6 [Beta]");
   
   gfx_x = gfx_w-130*(1+scaling);
   gfx_y = bottomRow + 30*(1+scaling);
