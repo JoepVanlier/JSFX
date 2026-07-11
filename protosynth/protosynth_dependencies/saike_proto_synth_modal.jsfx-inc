@@ -1,0 +1,542 @@
+@init
+// Very basic modal model
+//
+// Fundamental is given by:
+//    f0 = (1 / 2L) * ct
+// with L being the length, and ct being the transverse propagation speed, we opt for directly setting this for convenience
+//
+// Inharmonicity coefficient is given by:
+//    B = kappa^2 * (ES / T0) * (pi / L) ** 2
+//
+// Here kappa^2 * ES reflects the stiffness and T0 the radius of gyration. We also just set it directly.
+
+// Model of a single resonator is
+//          b z^-1
+// -------------------------
+// 1 + a1 * z^-1 + a2 * z^-2
+//
+// pk = exp(2*pi*j*f/fs) exp(-1 / (tau * fs))
+
+// Define: gamma_k = exp(-1 / (tau_k * fs))
+// Given that 1 / tau_k = r_k = base_damp + f_damp * 2 * pi * fk
+// We can rewrite gamma_k as exp(-r_k / fs)
+
+// Define: omega_k = 2 * pi * f_k / fs
+
+// bk = (A/fs) Im{pk} = (A/fs) * gamma_k * sin(omega_k)
+// a1_k = -2 Re(pk) = -2 * gamma_k * cos(omega_k)
+// a2_k = |pk|^2 = gamma_k
+
+<?max_partials=48;?>
+
+function prepare_impulse_globals()
+local(w, ip)
+global(srate,
+       impulse_init_1, impulse_init_2, impulse_window_coeff, impulse_halflength, impulse_length)
+instance()
+(
+  // Cheap Hann window N is given by the relation (note that N must be odd)
+  //   w = 2.0 * pi / (N - 1)
+  //   impulse_window_coeff = 2.0 * cos(w)
+  // Where the initial conditions of the system are given by:
+  //   ip = - 0.5 * pi
+  //   y1 = sin( ip - w )
+  //   y2 = sin( ip - 2.0*w );
+  // Upon initialization in the oscillator.
+  // Since we want a bright impulse, we switch sign halfway through the window.
+  
+  // The dynamical system that we need to run inside the oscillator is:
+  //    y0 = impulse_window_coeff * y1 - y2
+  //    y2 = y1
+  //    y1 = y0
+  //    w = 0.5 * (y0 + 1) * sign(i - impulse_halflength)
+  
+  impulse_length = floor(0.01 * srate);
+  ((impulse_length % 2) == 0) ? impulse_length += 1; // Force it to be odd
+  impulse_halflength = floor(impulse_length / 2);
+  
+  w = 2.0 * $pi / (impulse_length - 1);
+  ip = - 0.5 * $pi;
+  impulse_window_coeff = 2.0 * cos(w);
+  impulse_init_1 = sin(ip - w);
+  impulse_init_2 = sin(ip - 2.0 * w); 
+);
+
+function update_global_parameters()
+(
+  //base_damp = 10^damp;
+  //f_damp = 10^freq_damp;
+  // rel_position = 0.1; // x_h / L
+  //inharm = 10^inharmonic;
+  soundboard_factor = $pi * 0.1; // $pi * T0 / L
+  irate = 1.0 / srate;
+  omega_base = 2 * $pi * irate;
+  Adivfs = 1.0 / srate;
+);
+
+function calc_base_gain(f_0)
+local()
+global(Adivfs)
+instance()
+(
+  Adivfs * f_0 * 0.1;
+);
+
+function pars(f_0, k, norm_factor)
+global(inharm, omega_base, base_damp, f_damp, irate, rel_position, soundboard_factor, srate)
+local(win, b, f_k, omega_k, gamma_k, wb)
+instance(winb, a1, a2, wout) 
+(
+  f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1));
+  omega_k = f_k * omega_base;
+  gamma_k = exp(- (base_damp + f_damp * 2.0 * $pi * f_k) * irate);
+  
+  wout = win = sin(k * $pi * rel_position);
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = norm_factor * gamma_k * sin(omega_k) / f_k;
+    winb = win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = win * b;
+    0
+  );
+);
+
+function pars_offset(f_0, k, offset, norm_factor)
+global(inharm, omega_base, base_damp, f_damp, irate, rel_position, soundboard_factor, srate)
+local(win, b, f_k, omega_k, gamma_k, wb)
+instance(winb, a1, a2, wout)
+(
+  f_k = f_0 * k * sqrt(1 + inharm * (k-1) * (k-1)) + offset * (1 + .05 * k * k) * (0.1 + rel_position);
+  omega_k = f_k * omega_base;
+  gamma_k = exp(- (base_damp + f_damp * 2.0 * $pi * f_k * (1 + f_k / 1000)) * irate);
+  
+  wout = win = (2 * floor(k / 2) != floor(k)) + 0.08;//sin(k * $pi * rel_position);
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = norm_factor * gamma_k * sin(omega_k) / f_k;
+    winb = win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = win * b;
+    0
+  );
+);
+
+function pars_beam(f_0, k, ratio, norm_factor)
+global(inharm, omega_base, base_damp, f_damp, irate, rel_position, soundboard_factor, srate)
+local(win, b, f_k, omega_k, gamma_k, wb, omk)
+instance(winb, a1, a2, wout)
+(
+  f_k = f_0 * ratio;
+  f_k *= (1 + inharm * k);
+  omega_k = f_k * omega_base;
+  omk = 2.0 * $pi * f_k;
+  gamma_k = exp(- (base_damp + (f_damp / 1000) * (omk * omk)) * irate);
+  
+  wout = win = sin(k * $pi * rel_position);
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = norm_factor * gamma_k * sin(omega_k) / f_k;
+    winb = win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = win * b;
+    0
+  );
+);
+
+function pars_drum(f_0, k, norm_factor)
+global(inharm, omega_base, base_damp, f_damp, irate, rel_position, soundboard_factor, srate, bessel_roots)
+local(b, win, f_k, omega_k, gamma_k, wb, omk)
+instance(winb, a1, a2, wout)
+(
+  f_k = f_0 * bessel_roots[k - 1] * (1 + inharm * k * k);
+  
+  omega_k = f_k * omega_base;
+  omk = 2.0 * $pi * f_k;
+  gamma_k = exp(- (base_damp + (10/k) + (f_damp / 1000) * (omk * omk)) * irate);
+  
+  wout = win = sin(k * $pi * rel_position);
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  winb += winb;
+  winb += winb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = norm_factor * gamma_k * sin(omega_k) / f_k;
+    winb = win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = win * b;
+    0
+  );
+);
+
+function pars_marimba(f_0, ratio, k, camp, norm_factor)
+global(inharm, omega_base, base_damp, f_damp, irate, rel_position, soundboard_factor, srate)
+local(win, b, f_k, omega_k, gamma_k, wb, omk)
+instance(winb, a1, a2, wout)
+(
+  f_k = ratio * f_0;
+  f_k *= sqrt((1 + inharm * k * k));
+  omega_k = f_k * omega_base;
+  omk = 2.0 * $pi * f_k;
+  gamma_k = exp(- (base_damp + (f_damp / 1000) * (omk * omk)) * irate);
+  
+  wout = win = camp;
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = norm_factor * gamma_k * sin(omega_k) / f_k;
+    winb = 3 * win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = 3 * win * b;
+    0
+  );
+);
+
+function pars_pan(f_0, ratio, k, camp, norm_factor)
+global(inharm, omega_base, base_damp, f_damp, irate, rel_position, soundboard_factor, srate)
+local(f_k, omega_k, gamma_k, wb, omk, win, b)
+instance(winb, a1, a2, wout)
+(
+  f_k = ratio * f_0;
+  f_k *= sqrt((1 + (inharm - 0.0001) * k * k));
+  omega_k = f_k * omega_base;
+  omk = 2.0 * $pi * f_k;
+  gamma_k = exp(- (base_damp + (5/k) + (f_damp / 1000) * (omk * omk)) * irate);
+  
+  wout = win = camp;
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = norm_factor * gamma_k * sin(omega_k) / f_k;
+    winb = win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = win * b;
+    0
+  );
+);
+
+function pars_vowels(f_0, k, spectrum_a, spectrum_b, spectrum_frac)
+global(inharm, omega_base, base_damp, f_damp, irate, soundboard_factor, Adivfs, srate)
+local(win, b, f_k, camp, omega_k, gamma_k, wb, omk, tmp)
+instance(a1, a2, winb, wout)
+(
+  f_k = f_0 * k;
+  f_k *= sqrt((1 + (inharm - 0.0001) * k * k));
+
+  camp = f_k < 22050 ? (
+    tmp = f_k - floor(f_k);
+    (spectrum_a[f_k] * (1.0 - tmp) + spectrum_a[f_k + 1] * tmp) * (1 - spectrum_frac) +
+    (spectrum_b[f_k] * (1.0 - tmp) + spectrum_b[f_k + 1] * tmp) * spectrum_frac
+  ) : 0;
+  
+  omega_k = f_k * omega_base;
+  omk = 2.0 * $pi * f_k;
+  gamma_k = exp(- (base_damp + (f_damp / 1000) * (omk * omk)) * irate);
+  
+  wout = win = camp;
+  wb = k * soundboard_factor;
+  
+  // Scale such that we don't have to multiply by wb_k on the output.
+  win *= wb;
+  wout /= wb;
+  
+  (f_k < 0.48 * srate) ? (
+    b = Adivfs * gamma_k * sin(omega_k) / (100 * wb);
+    winb = win * b;
+    a1 = -2 * gamma_k * cos(omega_k);
+    a2 = gamma_k * gamma_k;
+    1
+  ) : (
+    b = a1 = a2 = 0;
+    winb = win * b;
+    0
+  );
+);
+
+function set_pars_td(model, f_0, in_rel_position, in_base_damp, in_f_damp, in_inharm)
+instance(
+  <?c = 1; loop(max_partials, printf("f%d, ", c); c += 1;)?>
+  l1, l2, l3, l4, l5, l6, l7,
+  used_partials
+)
+local(norm_factor, ptr, inharm_01, damp_01, marimba_factor)
+global(rel_position, base_damp, f_damp, inharm, what_f0)
+(
+  used_partials = 0;
+  rel_position = in_rel_position;
+  base_damp = in_base_damp;
+  f_damp = in_f_damp;
+  inharm = in_inharm;
+  norm_factor = calc_base_gain(f_0);
+  
+  what_f0 = f_0;
+  
+  (model == 0) ? (
+    <?
+      c = 1;
+      mode = 1;
+      loop(
+        max_partials,
+        printf("used_partials += f%d.pars(f_0, %d, norm_factor);", c, mode);
+        c += 1;
+        (f_0 < 100) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 30 ? 4 : 5;
+        ) : (f_0 < 200) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 32 ? 4 : 5;
+        ) : (
+          mode += c < 20 ? 1 : c < 36 ? 2 : 3;
+        );
+      );
+    ?> 
+  ) : (model == 1) ? (
+    <?
+      c = 1;
+      mode = 0;
+      t = ratio;
+      loop(
+        max_partials,
+        ratio = 1 + 2 * mode; printf("used_partials += f%d.pars(f_0, %d, norm_factor);", c, ratio);
+        c += 1;
+        (f_0 < 200) ? (
+          mode += c < 20 ? 1 : c < 36 ? 2 : 4;
+        ) : (
+          mode += c < 25 ? 1 : c < 36 ? 2 : 3;
+        );
+      );
+    ?> 
+  ) : (model == 2) ? (
+    // Beating
+    <?
+      c = 1;
+      mode = 1;
+      loop(max_partials / 2,
+        printf("used_partials += f%d.pars_offset(f_0, %d, 0, norm_factor);", c, mode);
+        printf("used_partials += f%d.pars_offset(f_0, %d, 3, norm_factor);", c + 1, mode);
+        c += 2;
+        
+        (f_0 < 100) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 30 ? 4 : 5;
+        ) : (f_0 < 200) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 32 ? 4 : 5;
+        ) : (
+          mode += c < 20 ? 1 : c < 36 ? 2 : 3;
+        );
+      );
+    ?>
+  ) : (model == 3) ? (
+    // Beam unclamped
+    <?
+      c = 1;
+      mode = 1;
+      loop(max_partials,
+        printf("used_partials += f%d.pars_beam(f_0, %d, %d + 0.5, norm_factor);", c, mode, mode);
+        c += 1;
+        
+        (f_0 < 100) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 30 ? 4 : 5;
+        ) : (f_0 < 200) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 32 ? 4 : 5;
+        ) : (
+          mode += c < 20 ? 1 : c < 36 ? 2 : 3;
+        );
+      );
+    ?>
+  ) : (model == 4) ? (
+    // Beam clamped
+    used_partials += f1.pars_beam(f_0, 1, 0.5968642, norm_factor);
+    <?
+      mode = 2;
+      c = 2;
+      loop(max_partials - 1,
+        printf("used_partials += f%d.pars_beam(f_0, %d, %d - 0.5, norm_factor);", c, mode, mode);
+        c += 1;
+        
+        (f_0 < 100) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 30 ? 4 : 5;
+        ) : (f_0 < 200) ? (
+          mode += c < 16 ? 1 : c < 24 ? 2 : c < 32 ? 4 : 5;
+        ) : (
+          mode += c < 20 ? 1 : c < 36 ? 2 : 3;
+        );
+      );
+    ?>
+  ) : (model == 5) ? (
+    <?c = 1; loop(max_partials, printf("used_partials += f%d.pars_drum(f_0, %d, norm_factor);", c, c); c += 1);?> 
+  ) : ( model == 6 ) ? (
+    marimba_factor = norm_factor + norm_factor;
+    used_partials += f1.pars_marimba(f_0, 1, 1, 1, marimba_factor);
+    used_partials += f2.pars_marimba(f_0, 1.911076, 2, 0.04 + 0.2 * rel_position, marimba_factor);
+    used_partials += f3.pars_marimba(f_0, 4, 3, 1, marimba_factor);
+    used_partials += f4.pars_marimba(f_0, 10.25, 4, 1, marimba_factor);
+    used_partials += f5.pars_marimba(f_0, 14.2511700468, 5, 0.04 + 0.3 * rel_position, marimba_factor);
+    used_partials += f6.pars_marimba(f_0, 17.745709828, 6, 0.04 + 0.3 * rel_position, marimba_factor);
+    used_partials += f7.pars_marimba(f_0, 19, 7, 0.09, marimba_factor);
+    used_partials += f8.pars_marimba(f_0, 24.352574, 8, 0.04 + 0.2 * rel_position, marimba_factor);
+    used_partials += f9.pars_marimba(f_0, 18, 9, 0.09, marimba_factor);
+    
+    <?
+      c = 10;
+      loop(max_partials - 9,
+        printf("used_partials += f%d.pars_marimba(f_0, %d, %d, 0.09, norm_factor);", c, c + c, c);
+        c += 1;
+      );
+    ?>
+
+  ) : ( model == 7 ) ? (
+    // Pan  (f_0, ratio, k, camp)
+    used_partials += f1.pars_pan(f_0, 1, 1, 3.5 - 1.0 * rel_position, norm_factor);
+    used_partials += f2.pars_pan(f_0, 1.19672275218, 2, 0.05 + 0.26 * rel_position, norm_factor);
+    used_partials += f3.pars_pan(f_0, 0.74899885, 3, 0.05 + 0.18 * rel_position, norm_factor);
+    used_partials += f4.pars_pan(f_0, 1.57885, 4, 0.01 + 0.03 * rel_position, norm_factor);   /* Maybe muted ? */
+    used_partials += f5.pars_pan(f_0, 2.000333953889411, 5, 0.025, norm_factor);
+    used_partials += f6.pars_pan(f_0, 2.000333953889411 + 3.34 / used_partials += f_0, 6, 0.025, norm_factor);
+    used_partials += f7.pars_pan(f_0, 2.23426319696, 7, 0.005 * rel_position, norm_factor);
+    used_partials += f8.pars_pan(f_0, 3.0029642446, 8, 0.05, norm_factor);
+    used_partials += f9.pars_pan(f_0, 3.5708, 9, 0.003 * rel_position, norm_factor);
+    used_partials += f10.pars_pan(f_0, 3.997778188, 10, 0.03 * rel_position, norm_factor);
+    
+    <?
+      c = 11;
+      mode = 15;
+      loop((max_partials - 10) / 2,
+        printf("used_partials += f%d.pars_pan(f_0, %d, %d, 0.02 / (1 + 0.2 * %d), norm_factor);", c, mode, c, mode);
+        c += 1;
+        printf("used_partials += f%d.pars_pan(f_0, %d, %d, 0.02 / (1 + 0.1 * %d), norm_factor);", c, mode * 1.01, c, mode);
+        c += 1;
+        mode += 20 / (c - 10);
+      );
+    ?>
+  );
+);
+
+function eval_impulse()
+local(y0, loc)
+global(impulse_window_coeff, impulse_halflength, srate)
+instance(
+  t, y1, y2,
+  yr,
+  b0, b1, b2, white, pink, glot,
+  len, scale,
+  released, dt
+  osc_time,
+)
+(
+  t += 1;
+  (t < len) ? (
+    // Rise phase
+    y0 = impulse_window_coeff * y1 - y2;
+    y2 = y1;
+    y1 = y0;
+    loc = t - impulse_halflength;
+    5000 * (y0 + 1) * (scale * loc / (1 + scale * abs(loc)))
+  )
+);
+
+function eval_string_td(x)
+global(partials, bp_resonator_mode, fbbb)
+local(hist, f_h, x)
+instance(
+  current_in, in_m1, in_m2
+  f_hn, f_b, active, partials_played, used_partials,
+  <?c = 1; loop(max_partials, printf("f%d, ", c); c += 1;)?>
+)
+(
+  active = max(0.999 * active, max(abs(f_hn), abs(x)));
+  partials_played = min(partials, max(0.99999 * partials_played, used_partials));
+  
+  in_m2 = in_m1;
+  in_m1 = current_in;
+  current_in = x;
+  
+  // bp_resonator_mode ? printf("f_h = 4.0 * (x - in_m2);") : printf("f_h = x;");
+  f_h = x; // 4.0 * (x - in_m2);
+  f_hn = f_b = 0;
+  <?
+    c = 1;
+    loop(max_partials,
+      printf("hist = f%d.yh; f%d.yh = f%d.y; f%d.y = f%d.winb * f_h - f%d.a1 * f%d.y - f%d.a2 * hist; f_hn += f%d.wout * f%d.y; f_b += f%d.y;", c, c, c, c, c, c, c, c, c, c, c);
+      c += 1;
+    );
+  ?>
+  
+  f_hn  //vs f_b
+);
+
+function update_impulse_note(state, inverse_brightness)
+instance(
+  clipped_inverse,
+  t, y1, y2, len, scale, released, osc_time,
+)
+local()
+global(
+  impulse_init_1, impulse_init_2, impulse_window_coeff, impulse_halflength, impulse_length,
+)
+(
+  clipped_inverse = max(min(1, inverse_brightness), 0);
+  
+  /* State 1 is press, -1 is release */
+  (state > 0) ? (
+    released = 0;
+    t = 0;
+    
+    // Simple pulse
+    y1 = impulse_init_1;
+    y2 = impulse_init_2;
+    len = impulse_length;
+    scale = pow(10, 1 - 3 * clipped_inverse);
+  ) : ( state < -0.1 ) ? (
+    released = 1;
+  );
+);
+
