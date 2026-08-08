@@ -342,7 +342,7 @@ global()
   c1 = 0.5 * (x1 - xm1);
   c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
   c3 = 1.5 * (x0 - x1) + 0.5 * (x2 - xm1);
-  ((c3 * frac + c2) * frac + c1) * frac + c0
+  ((c3 * frac + c2) * frac + c1) * frac + c0 
 );
 
 function block_spinner()
@@ -364,6 +364,17 @@ global()
 (
   buffer = freemem;
   (write_ptr < buffer) ? write_ptr = buffer;
+  buffer_end = buffer + size
+);
+
+function circ_buffer_mono(freemem, size)
+local()
+instance(buffer, buffer_end, write_ptr, mask)
+global()
+(
+  buffer = freemem;
+  write_ptr = 0;
+  mask = size - 1;
   buffer_end = buffer + size
 );
 
@@ -426,10 +437,292 @@ global(TWO_PI, fatal)
   dyl = y - 0.1;
   dyr = y - 0.1;
   
-  left_distance = smul * sqrt(dxl * dxl + dyl * dyl);
+  left_distance = smul * sqrt(dxl * dxl + dyl * dyl); 
   right_distance = smul * sqrt(dxr * dxr + dyr * dyr);
   
   outl = buffer_left.hermite_buffer_mono(left_distance + 1);
   outr = buffer_right.hermite_buffer_mono(right_distance + 1);
+);
+
+function init_simple_diffuser(freemem)
+local(drift_update_time_seconds, circ_buffer_size)
+instance(
+  drift, drift_target, drift_counter, drift_update_samples, drift_amount
+  buf_dA1, buf_dA2, buf_dA3, buf_dA4, buf_dB1, buf_dB2l, buf_dB2r,
+  delayA1, delayA2, delayA3, delayA4, delayB1, delayB2_left, delayB2_right,
+)
+global(srate)
+(
+  circ_buffer_size = 8192;
+  drift = 0;
+  drift_target = 0;
+  
+  drift_counter = 0;
+  drift_update_time_seconds = 0.2;
+  drift_update_samples = drift_update_time_seconds * srate;
+  drift_amount = 0.60 / 1000 * srate;
+  
+  // Fixed sample delay lines (don't need interpolation / no loss)
+  delayA3 = floor(3.6 / 1000 * srate);
+  delayA4 = floor(12.7 / 1000 * srate);
+  delayB1 = floor(7.1 / 1000 * srate);
+  
+  delayA1 = floor(15.3 / 1000 * srate);
+  delayA2 = floor(12.1 / 1000 * srate); // Set to 72.1 for delay-like
+  
+  // Decorrelation (hermite ahoy :D)
+  delayB2_left = floor(9.3 / 1000 * srate);
+  delayB2_right = floor(9.731 / 1000 * srate);
+  
+  freemem = buf_dA1.circ_buffer_mono(freemem, circ_buffer_size);  // A1
+  freemem = buf_dA2.circ_buffer_mono(freemem, circ_buffer_size * 4);  // A2
+  
+  freemem = buf_dA3.circ_buffer_mono(freemem, circ_buffer_size);  // A3
+  freemem = buf_dA4.circ_buffer_mono(freemem, circ_buffer_size);  // A4
+  
+  freemem = buf_dB1.circ_buffer_mono(freemem, circ_buffer_size);  // B1
+  
+  freemem = buf_dB2l.circ_buffer_mono(freemem, circ_buffer_size);  // B2  left
+  freemem = buf_dB2r.circ_buffer_mono(freemem, circ_buffer_size);  // B2  right
+);
+
+function init_harmonizer(freemem)
+local()
+instance(pitch_sampling, pitch_sampling2, circ_buffer, half_buffer, harm_offset, harm_offset2)
+global(srate)
+(
+  circ_buffer = 4096;
+  freemem = pitch_sampling.circ_buffer_mono(freemem, circ_buffer);
+  freemem = pitch_sampling2.circ_buffer_mono(freemem, circ_buffer);
+  
+  harm_offset = 0;
+  harm_offset2 = circ_buffer * 0.25;
+  
+  freemem
+);
+
+// Hermite
+function mask_interpolator(offset)
+local(
+  c1, c2, c3,
+  read_pos,
+  read_idx,
+  frac,
+  xm1, x0, x1, x2
+  _mask,
+)
+instance(buffer, write_ptr, mask)
+global()
+(
+  _mask = mask;
+  
+  // Read position relative to current write position
+  read_pos = write_ptr - offset;
+
+  read_idx = read_pos|0;
+  frac = read_pos - read_idx;
+
+  // Wrap indices
+  xm1 = buffer[(read_idx - 1) & _mask];
+  x0  = buffer[ read_idx      & _mask];
+  x1  = buffer[(read_idx + 1) & _mask];
+  x2  = buffer[(read_idx + 2) & _mask];
+
+  // 4-point Hermite interpolation
+  c1 = 0.5 * (x1 - xm1);
+  c2 = xm1 - 2.5*x0 + 2*x1 - 0.5*x2;
+  c3 = 1.5*(x0 - x1) + 0.5*(x2 - xm1);
+
+  ((c3 * frac + c2) * frac + c1) * frac + x0;
+);
+
+// Quadratic (cheaper)
+function mask_interpolator(offset)
+local(
+  read_pos,
+  read_idx,
+  frac,
+  xm1, x0, x1,
+  a, b, c
+)
+instance(buffer, write_ptr, mask)
+(
+  read_pos = write_ptr - offset;
+
+  read_idx = read_pos|0;
+  frac = read_pos - read_idx;
+
+  xm1 = buffer[(read_idx - 1) & mask];
+  x0  = buffer[ read_idx      & mask];
+  x1  = buffer[(read_idx + 1) & mask];
+
+  // 3-point Lagrange
+  a = 0.5 * frac * (frac - 1);
+  b = -(frac + 1) * (frac - 1);
+  c = 0.5 * frac * (frac + 1);
+
+  xm1*a + x0*b + x1*c;
+);
+
+<?
+  function print_reader(buffer_name, offset_variable)
+  (
+      printf("%s.buffer[(%s.write_ptr - %s) & %s.mask]", buffer_name, buffer_name, offset_variable, buffer_name);
+  );
+?>
+
+<?
+  function store_sample(buffer_name, sample_name)
+  (
+      printf("%s.buffer[%s.write_ptr] = %s;", buffer_name, buffer_name, sample_name);
+      printf("%s.write_ptr = (%s.write_ptr + 1) & %s.mask;", buffer_name, buffer_name, buffer_name);
+  );
+?>
+
+function add_sample_mono(sample)
+local()
+global()
+instance(buffer, write_ptr, buffer_end)
+(
+  write_ptr[] = sample;
+  write_ptr += 1;
+  (write_ptr == buffer_end) ? write_ptr = buffer;
+);
+
+function update_diffuser_params(semitones, density, drift, delay)
+local()
+global(srate)
+instance(playhead_speed, high_density, drift_level, playhead_speed2, delayA2, harm_offset, harm_offset2, circ_buffer)
+(
+  density ? (
+    playhead_speed = 1 - pow(2, max(-1000, semitones - 0.02) / 12);
+    playhead_speed2 = 1 - pow(2, max(-1000, semitones + 0.02) / 12);
+    
+    (high_density != density) ? (
+      harm_offset2 = harm_offset + circ_buffer * 0.24;
+      (harm_offset2 < 0) ? harm_offset2 = circ_buffer;
+      (harm_offset2 > circ_buffer) ? harm_offset2 = 0;
+    );
+  ) : (
+    playhead_speed = 1 - pow(2, max(-1000, semitones) / 12);
+  );
+  high_density = density;
+  delayA2 = floor(12.1 * exp(log(160/12.1) * delay) / 1000 * srate);
+  drift_level = drift;
+);
+
+function eval_simple_diffuser(s0)
+local(
+  r,
+  k1, k2, k3,
+  A_s,
+  delayed,
+  A_d1, A_d2, A_d3, A_d4, y, gain, phase,
+  pitch_drift,
+)
+instance(
+  drift, drift_target, drift_counter, drift_update_samples, drift_amount, drift_level,
+  
+  buf_dA1, buf_dA2, buf_dA3, buf_dA4, buf_dB1, buf_dB2l, buf_dB2r,
+  delayA1, delayA2, delayA3, delayA4, delayB1, delayB2_left, delayB2_right,
+  
+  out_left, out_right,
+  
+  pitch_sampling, pitch_sampling2,
+  harm_offset, harm_offset2, circ_buffer, buf_center, playhead_speed, playhead_speed2, high_density, ddrift,
+)
+global()
+(
+  //////////////////////
+  // DIFFUSION STAGE
+  //////////////////////
+  
+  // Nested allpass
+  A_d1 = <?print_reader("buf_dA1", "delayA1")?>;
+  A_d2 = <?print_reader("buf_dA2", "delayA2")?>;
+   
+  k1 = 0.5;
+  k2 = 0.3;
+  y = A_d2 - k2 * A_d1 - k1 * s0;
+  <?store_sample("buf_dA1", "s0 + k1 * y")?>
+  <?store_sample("buf_dA2", "A_d1 + k2 * (A_d2 - k2 * A_d1)")?>
+
+  <?store_sample("pitch_sampling2", "y")?>
+
+  // Simple allpass
+  k3 = 0.85;
+  delayed = <?print_reader("buf_dB1", "delayB1")?>;
+  A_s = y - k3 * delayed;
+  <?store_sample("buf_dB1", "A_s")?>
+  y = k3 * A_s + delayed;
+
+  //////////////////////
+  // DIFFUSION STAGE
+  //////////////////////
+  A_d3 = <?print_reader("buf_dA3", "delayA3")?>;
+  A_d4 = <?print_reader("buf_dA4", "delayA4")?>;
+  
+  s0 = y;
+  k1 = 0.5;
+  k2 = 0.3;
+  y = A_d3 - k2 * A_d4 - k1 * s0;
+  <?store_sample("buf_dA3", "s0 + k1 * y")?>
+  <?store_sample("buf_dA4", "A_d3 + k2 * (A_d4 - k2 * A_d3)")?>
+
+  //////////////////////
+  // HARMONIZER
+  //////////////////////
+  pitch_drift = drift * drift_level;
+  harm_offset += playhead_speed;
+  (harm_offset < 0) ? harm_offset = circ_buffer;
+  
+  (harm_offset > circ_buffer) ? harm_offset = 0;
+  buf_center = circ_buffer / 2;
+  
+  phase = 1.0 - abs(harm_offset - buf_center) / buf_center;
+  gain = phase * phase * (3.0 - 2.0 * phase);
+ 
+  <?store_sample("pitch_sampling", "y")?>
+  y = pitch_sampling.mask_interpolator(harm_offset) * sqrt(gain);
+  y += pitch_sampling2.mask_interpolator(harm_offset + buf_center + (1 - gain) * pitch_drift) * sqrt(1 - gain);
+  
+  high_density ? (
+    harm_offset2 += playhead_speed2;
+    (harm_offset2 < 0) ? harm_offset2 = circ_buffer;
+    (harm_offset2 > circ_buffer) ? harm_offset2 = 0;
+    
+    phase = 1.0 - abs(harm_offset2 - buf_center) / buf_center;
+    gain = phase * phase * (3.0 - 2.0 * phase);
+    y += pitch_sampling2.mask_interpolator(harm_offset2) * sqrt(gain);
+    y += pitch_sampling.mask_interpolator(harm_offset2 + buf_center - (1 - gain) * pitch_drift) * sqrt(1 - gain);
+    y *= 0.6;
+  );
+  
+  //////////////////////
+  // STEREOIZE OUTPUT
+  //////////////////////
+  drift_counter += 1;
+  (drift_counter >= drift_update_samples) ?
+  (
+    drift_counter = 0;
+    r = rand(1);
+    drift_target = (r + r - 1) * drift_amount;
+    ddrift = (drift_target - drift) / drift_update_samples
+  );
+
+  drift += ddrift;
+
+  k3 = 0.5;
+  delayed = buf_dB2l.mask_interpolator(delayB2_left + drift);
+  //delayed = <?print_reader("buf_dB2l", "delayB2_left")?>;
+  A_s = y - k3 * delayed;
+  <?store_sample("buf_dB2l", "A_s")?>
+  out_left = k3 * A_s + delayed;
+
+  delayed = buf_dB2r.mask_interpolator(delayB2_right + drift);
+  //delayed = <?print_reader("buf_dB2r", "delayB2_right")?>;
+  A_s = y - k3 * delayed;
+  <?store_sample("buf_dB2r", "A_s")?>
+  out_right = k3 * A_s + delayed;
 );
 

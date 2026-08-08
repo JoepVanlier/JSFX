@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.58
+version: 0.60
 author: Joep Vanlier
-changelog: Added razor oscillator. Added optional keytracking for smear.
+changelog: Added modal oscillator types. Adding stereo fx. Improved themeing. Improved efficiency shriek filters. Improved legibility sliders. Declicked ssaw and triangle initialization. Support optional harmonic oscillator reinitialization. Added option to force disable early voice re-use at the cost of CPU.
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -111,7 +111,7 @@ slider236:ap_sat=0.01<0.01, 0.25, 0.001>-AP saturation
 
 slider237:pitchbend_range=2<0,24,0.001>-Pitch bend range
 slider238:global_tuning=0<-24,24,0.001>-Global tuning
-
+ 
 slider239:fb1=0<-0.999,0.999,.0001>-fb1
 slider240:fb2=0<-0.999,0.999,.0001>-fb2
 slider241:fb3=0<-0.999,0.999,.0001>-fb3
@@ -696,7 +696,7 @@ global(
   <?loop(i=1;8, printf("spacing_slider%d.mod_target1, spacing_slider%d.mod_amount1_clamped, spacing_slider%d.get_modulated_value1, spacing_slider%d.sl, spacing_slider%d.sl_max, spacing_slider%d.sl_min,", i, i, i, i, i, i); i += 1);?>
   <?loop(i=1;8, printf("brightness_slider%d.mod_target1, brightness_slider%d.mod_amount1_clamped, brightness_slider%d.get_modulated_value1, brightness_slider%d.sl, brightness_slider%d.sl_max, brightness_slider%d.sl_min,", i, i, i, i, i, i); i += 1);?>
   
-  filter1_enabled, filter2_enabled, filter3_enabled,
+  filter1_enabled, filter2_enabled, filter3_enabled, filter1_mode, filter2_mode
   <?loop(i=1;N_FILTERS - 1, printf("f_cutoff_slider%d.mod_target1, f_cutoff_slider%d.mod_amount1_clamped, f_cutoff_slider%d.mod_target2, f_cutoff_slider%d.mod_amount2_clamped, f_cutoff_slider%d.get_modulated_value1, f_cutoff_slider%d.sl, f_cutoff_slider%d.sl_max, f_cutoff_slider%d.sl_min,", i, i, i, i, i, i, i, i); i += 1);?>
   <?loop(i=1;N_FILTERS - 1, printf("f_reso_slider%d.mod_target1, f_reso_slider%d.mod_amount1_clamped, f_reso_slider%d.mod_target2, f_reso_slider%d.mod_amount2_clamped, f_reso_slider%d.get_modulated_value1, f_reso_slider%d.sl, f_reso_slider%d.sl_max, f_reso_slider%d.sl_min,", i, i, i, i, i, i, i, i); i += 1);?>
   <?loop(i=1;N_FILTERS - 1, printf("f_morph_slider%d.mod_target1, f_morph_slider%d.mod_amount1_clamped, f_morph_slider%d.mod_target2, f_morph_slider%d.mod_amount2_clamped, f_morph_slider%d.get_modulated_value1, f_morph_slider%d.sl, f_morph_slider%d.sl_max, f_morph_slider%d.sl_min,", i, i, i, i, i, i, i, i); i += 1);?>
@@ -722,6 +722,8 @@ instance(
   velocity,
   current_f3_type,
   keyfollow_mod,
+  outp,
+  current_filter1_mode, current_filter2_mode,
   <?loop(i=1;N_MODULATORS, printf("mod%d_lfo,", i); i += 1; );?>
   <?loop(i=1;N_OSCS, printf("mod%d_lfo,", i); i += 1; );?>
   <?loop(i=1;N_OSCS, printf("osc%d_wave, ", i); i += 1; );?>
@@ -749,7 +751,7 @@ instance(
     printf("modulator_mem[%d] = cur_pitch;", N_ENVELOPES + N_MODULATORS + 1);
   ?>
   
-  has_output = max(max(max(max(max(max(max(max(g1, g2), g3), g4), g5), g6), g7), g8), pressed) > 0.0001;
+  has_output = max(outp, max(max(max(max(max(max(max(max(g1, g2), g3), g4), g5), g6), g7), g8), pressed)) > 0.0001;
   (!has_output) ? (
     on = 0;
     // Flag as available for new midi notes
@@ -769,6 +771,7 @@ instance(
   <?
     loop(i=1;N_OSCS,
       printf("osc%d_active ? (", i);
+        // Cheap gain smoothing
         printf("gain = min(0, osc%d_gain + (gain_slider%d.mod_target1 ? 72 * gain_slider%d.mod_amount1_clamped * modulator_mem[gain_slider%d.mod_target1] : 0));", i, i, i, i);
         printf("dg%d = INV_SLOW_UPDATE_FACTOR * (10^(0.05 * gain) * modulator_mem[gain_slider%d.gain_mod_target] - g%d);", i, i, i);
       
@@ -832,13 +835,25 @@ instance(
     <?
     loop(i=1;2,
       printf("filter%d_enabled ? (\n", i);
-      get_modulated_value2_preproc("f_cutoff", "f_cutoff_slider", i);
-      get_modulated_value2_preproc("f_reso", "f_reso_slider", i);
-      get_modulated_value2_preproc("f_morph", "f_morph_slider", i);
-      
-      // Basic SVF
-      printf("this.filter%d.L.init_linear(f_cutoff, f_reso, f_morph);", i);
-      //printf("this.filter%d.R.init_linearSVF_all(f_cutoff, f_reso, f_morph);", i);
+        printf("current_filter%d_mode = filter%d_mode;", i, i);
+        
+        get_modulated_value2_preproc("f_cutoff", "f_cutoff_slider", i);
+        get_modulated_value2_preproc("f_reso", "f_reso_slider", i);
+        get_modulated_value2_preproc("f_morph", "f_morph_slider", i);
+         
+        // Basic SVF
+        printf("(current_filter%d_mode == 0) ? (", i);
+          printf("this.filter%d.L.init_linear(f_cutoff, f_reso, f_morph);", i);
+          //printf("this.filter%d.R.init_linearSVF_all(f_cutoff, f_reso, f_morph);", i);
+        printf(") : (current_filter%d_mode == 1) ? (", i);
+        
+          // model, base freq, relative position, base damping, rel damping, inharmonicity
+          // Brightness ranges from 0 - 0.95, want 0.1 - 0.000001 logarithmically, so approx y = 0.1 * exp(-11.512925464970227 * cur_brightness);
+          // For spacing we map from 0.25 - 8 to 0.0001 - 1 in the same way, so approx y = exp(1.188431338 * (cur_spacing - 8));
+          //resonator_mode%d, out_mode%d
+          printf("this.filter%d.modal.set_pars_td(0 /* model */, (0.25 + f_cutoff * 7.75) * cfreq, rel_pos /* rel pos */, 1 /* base damp */, exp(-2.302585092994046 - f_reso * 11.512925464970229) /* brightness */, exp(-9.210340371976184 + f_morph * 9.210340371976184) /*inharmonicity*/, 0, 0)", i, i, i, i);
+          
+        printf(");\n");
       printf(");\n");
       
       //printf("this.filter%d.init_filter(0, f_cutoff, f_cutoff, f_morph, f_morph, f_reso);", i+1);
@@ -944,6 +959,7 @@ global(
   mix_mode31,
   fb1, fb2, fb3, fb4, fb21, fb22, fb31,
   filter1_enabled, filter2_enabled, filter3_enabled,
+  
   current_f3_gain, df3_gain, f3_drive,
   <?loop(i=1;N_OSCS, printf("osc%d_active, ", i); i += 1; );?>
 )
@@ -955,7 +971,9 @@ instance(
   osc1, osc2, osc3, osc4, osc5, osc6, osc7, osc8, l, r, declick_l, declick_r,
   g1, g2, g3, g4, g5, g6, g7, g8,
   dg1, dg2, dg3, dg4, dg5, dg6, dg7, dg8,
+  current_filter1_mode, current_filter2_mode,
   <?loop(i=1;N_OSCS, printf("osc%d_wave, ", i); i += 1; );?>
+  outp,
 )
 (
   <?
@@ -1049,10 +1067,23 @@ instance(
   o7 = o8 = 0;
   
   <?gen_mixer(1, 21, 1, 2);?>
-  o1 = filter1_enabled ? this.filter1.L.eval_linearSVF_all(o1) : o1;
+  o1 = filter1_enabled ? (
+    (current_filter1_mode == 0) ? (
+      this.filter1.L.eval_linearSVF_all(o1) 
+    ) : (
+      this.filter1.modal.eval_string_td(500 * o1 * (o1 > 0))
+    );
+  ) : o1;
+  //osc%d.modal.eval_string_td(impulse.eval_impulse())
   
   <?gen_mixer(2, 22, 3, 4);?>
-  o2 = filter2_enabled ? this.filter2.L.eval_linearSVF_all(o2) : o2;
+  o2 = filter2_enabled ? (
+    (current_filter2_mode == 0) ? (
+      this.filter2.L.eval_linearSVF_all(o2) 
+    ) : (
+      this.filter2.modal.eval_string_td(500 * o2 * (o2 > 0))
+    );
+  ) : o2;
   
   <?gen_mixer(1, 31, 1, 2);?>
   l = r = filter3_enabled ? (
@@ -1093,6 +1124,8 @@ instance(
       this.filter3.shriek.run_mj(o1 * current_f3_gain) / current_f3_gain;
     )
   ) : o1;
+  
+  outp = 0.9999 * outp + 0.0001 * abs(o1);
   
   declick ? (
     declick = 0;
@@ -1138,6 +1171,9 @@ local(new_freq)
 global(
   initialize_envelopes, modulator_mem, force_filter4_update, latest_voice, must_glide,
   <?loop(i=1;N_MODULATORS, printf("mod%d_restart, mod%d_phase, ", i, i); i += 1; );?>
+  
+  
+  <?loop(i=1;8, printf("re_init_dsf%d,", i); i += 1; )?>
 )
 instance(
   on, freq, pressed, current_sample, midi_idx, velocity, keyfollow_mod, target_freq, cur_pitch, declick, rel_pos,
@@ -1165,6 +1201,8 @@ instance(
     latest_voice = me;
     
     declick = 1;
+    
+    <?loop(i=1;8, printf("re_init_dsf%d ? this.osc%d.init_dsf_osc();\n", i, i); i += 1; )?>
     
     <?loop(i=1;8,
       printf("this.osc%d.init_ssaw();\n", i); i += 1;
@@ -1338,7 +1376,7 @@ function init_stereoizer()
 init_stereoizer();
 
 nuke_midi();
-CURRENT_VERSION = 20;
+CURRENT_VERSION = 22;
 version = CURRENT_VERSION;
 
 @serialize
@@ -1598,6 +1636,21 @@ has_wavetable_data ? (
   <?loop(i=1;8, printf("out_mode%d = 0;", i); i += 1);?>
 );
 
+(version > 20) ? (
+  file_var(0, filter1_mode);
+  file_var(0, filter2_mode);
+) : (
+  filter1_mode = filter2_mode = 0;
+);
+
+(version > 21) ? (
+  <?loop(i=1;8, printf("file_var(0, re_init_dsf%d);", i); i += 1; )?>
+  file_var(0, block_reuse);
+) : (
+  <?loop(i=1;8, printf("re_init_dsf%d = 0;", i); i += 1; )?>
+  block_reuse = 0;
+);
+
 update_solo();
 version = CURRENT_VERSION;
 
@@ -1837,7 +1890,7 @@ audio_running ? (
 
   big_tick = update_ticker == 0;
   update_ticker += 1;
-  (update_ticker > 128) ? (
+  (update_ticker > 8) ? (
     update_ticker = 0;
   );
   
@@ -2449,6 +2502,10 @@ sprintf(MODULATOR_STRING, "Modulator to apply\n\nRight click to select modulator
     printf("txt_blit(\"OSC%d\", cx, cy + 2); cx += 25;", i + 1);
     printf("dark_font = 0;");
     
+    printf("(osc%d_type == 0) || (osc%d_type == 2) ? (", i + 1, i + 1);
+      printf("dsf_mode%d_enabled.simple_serialize_toggle(cx - 4, cy, 3, re_init_dsf%d, \"Reinitialize oscillator on note %d\", \"Phase reset %d\") ? (re_init_dsf%d = 1 - re_init_dsf%d);\n", i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
+    printf(");");
+    
     printf("osc%d_type > 8 ? (", i + 1);
       printf("bp_mode%d_enabled.simple_serialize_toggle(cx - 4, cy, 3, resonator_mode%d, \"Bandpass mode %d\", \"BP mode%d\") ? (resonator_mode%d = 1 - resonator_mode%d);\n", i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
       printf("out_mode%d_enabled.simple_serialize_toggle(cx - 4, cy + 4, 3, out_mode%d, \"Bypass output shaping %d\", \"Out mode%d\") ? (out_mode%d = 1 - out_mode%d);\n", i + 1, i + 1, i + 1, i + 1, i + 1, i + 1);
@@ -2848,16 +2905,17 @@ n7.over ? (
 !filter4_enabled ? ( gfx_set(0, 0, 0, 0.7); gfx_rect(cx, cy, 2 * block_size - 1, block_size, 1); );
 
 
-//gfx_set(0.2, 0.2, 0.3, 1.0);
 colormodel(grid_color);
 gfx_a = 0.2;
-gfx_rect(right_side, 164, 180, 30);
+oscilloscope_height = 30;
+oscilloscope_width = 191;
+gfx_rect(right_side, 164, oscilloscope_width, oscilloscope_height);
 gfx_a = 0.6;
 gfx_r = 0.5 * gfx_r;
 gfx_g = 0.5 * gfx_g;
 gfx_b = 0.5 * gfx_b;
-gfx_rect(right_side - 1, 164 - 1, 182, 32, 0);
-draw_oscilloscope(right_side, 163, 180, 30);
+gfx_rect(right_side - 1, 164 - 1, oscilloscope_width + 2, oscilloscope_height + 2, 0);
+draw_oscilloscope(right_side, 163, oscilloscope_width, oscilloscope_height);
 
 gfx_a = 1.0;
 
@@ -2912,33 +2970,68 @@ cy = 208 - 10;
     printf("gfx_rect(right_side - 1, cy, 181, 8 %s, 1);", i == 2 ? "+ 8" : "");
     printf("filt%d_enabled.simple_serialize_toggle(cx, cy + 1, toggle_size, filter%d_enabled, \"Enable Filter %d\", \"Enable F%d\") ? (filter%d_enabled = 1 - filter%d_enabled);\ncx += toggle_size + 2;", i + 1, i + 1, i + 1, i+1, i + 1, i + 1, i + 1);
     printf("dark_font = light_theme;");
-    printf("txt_blit(\"F%d\", cx, cy + 2); cx += 15;", i + 1);
+    printf("txt_blit(\"F%d\", cx, cy + 2);", i + 1);
+    
+    /*
+    printf("filter_toggle%d.simple_serialize_toggle(cx, cy + 2, 5, 0, \"Right mouse to select filter mode\", \"Filter\") ? (");
+      printf("gfx_x = mouse_x;");
+      printf("gfx_y = mouse_y;");
+      printf("ix = gfx_showmenu(\"Lowpass|Metal\");");
+      printf("  (ix > 0) ? (");
+        printf("    filter%d_mode = ix - 1;", i + 1);
+      printf("  );");
+    printf(");");
+    */
+    printf("cx += 15;");
+    
     printf("dark_font = 0;");
     
-    printf("center = 0.5 * sampling_ratio * srate * exp((1.0 - min(f_cutoff_slider%d.display_value, 0.99999)) * log(20/22050));\n", i + 1);
-    printf("f_cutoff_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
-    printf("f_cutoff_slider%d.rounding_increment = 0.05;", i + 1);
-    printf("f_cutoff_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, center < 1000 ? sprintf(1, \"%%dHz\", center) : sprintf(1, \"%%.1fk\", center/1000), \"Filter %d cutoff\", \"F%d Cutoff\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
-    printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Cutoff Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
-    printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Cutoff Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
-
-
-    printf("f_cutoff_slider%d.check_text_input(%d) ? ( slider(f_cutoff_slider%d.sl) = max(f_cutoff_slider%d.sl_min, min(f_cutoff_slider%d.sl_max, 1.0 - log(2.0 * text_box.result / sampling_ratio / srate) / log(20/22050) )); );", i + 1, uuid(), i + 1, i + 1, i + 1);
-
-    printf("f_reso_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
-    printf("f_reso_slider%d.rounding_increment = 0.1;\n", i + 1);
-    printf("f_reso_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(9, \"%%\d\", 100 * f_reso_slider%d.display_value), \"Filter %d resonance\", \"F%d Resonance\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
-    printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Reso Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
-    printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Reso Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
-    
-    printf("f_reso_slider%d.check_text_input(%d) ? ( slider(f_reso_slider%d.sl) = max(f_reso_slider%d.sl_min, min(f_reso_slider%d.sl_max, text_box.result / 100)); );", i + 1, uuid(), i + 1, i + 1, i + 1);
-    
-    printf("f_morph_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
-    printf("f_morph_slider%d.rounding_increment = 0.25;", i + 1);
-    printf("f_morph_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, morph_level(f%d_morph), \"Filter %d morph\\n\\nMorphs between LP, \\nBP, HP, BR and LP\\n\", \"F%d Morph\"); cx += 5 * toggle_size + 4 + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
-    printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Morph Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
-    printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Morph Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
-    printf("f_morph_slider%d.check_text_input_defaults();", i + 1);
+    printf("slider_size = 5 * toggle_size + 7;");
+    printf("(filter%d_mode == 0) ? (", i + 1);
+      printf("center = 0.5 * sampling_ratio * srate * exp((1.0 - min(f_cutoff_slider%d.display_value, 0.99999)) * log(20/22050));\n", i + 1);
+      printf("f_cutoff_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
+      printf("f_cutoff_slider%d.rounding_increment = 0.05;", i + 1);
+      printf("f_cutoff_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, center < 1000 ? sprintf(1, \"%%dHz\", center) : sprintf(1, \"%%.1fk\", center/1000), \"Filter %d cutoff\", \"F%d Cutoff\"); cx += slider_size + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
+      printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Cutoff Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Cutoff Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_cutoff_slider%d.check_text_input(%d) ? ( slider(f_cutoff_slider%d.sl) = max(f_cutoff_slider%d.sl_min, min(f_cutoff_slider%d.sl_max, 1.0 - log(2.0 * text_box.result / sampling_ratio / srate) / log(20/22050) )); );", i + 1, uuid(), i + 1, i + 1, i + 1);
+  
+      printf("f_reso_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
+      printf("f_reso_slider%d.rounding_increment = 0.1;\n", i + 1);
+      printf("f_reso_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, sprintf(9, \"%%\d\", 100 * f_reso_slider%d.display_value), \"Filter %d resonance\", \"F%d Resonance\"); cx += slider_size + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
+      printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Reso Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Reso Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_reso_slider%d.check_text_input(%d) ? ( slider(f_reso_slider%d.sl) = max(f_reso_slider%d.sl_min, min(f_reso_slider%d.sl_max, text_box.result / 100)); );", i + 1, uuid(), i + 1, i + 1, i + 1);
+      
+      printf("f_morph_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
+      printf("f_morph_slider%d.rounding_increment = 0.25;", i + 1);
+      printf("f_morph_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, morph_level(f%d_morph), \"Filter %d morph\\n\\nMorphs between LP, \\nBP, HP, BR and LP\\n\", \"F%d Morph\"); cx += slider_size + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
+      printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Morph Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Morph Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_morph_slider%d.check_text_input_defaults();", i + 1);
+    printf(") : (");
+      printf("center = 0.25 + 7.75 * f_cutoff_slider%d.display_value;\n", i + 1);
+      printf("f_cutoff_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
+      printf("f_cutoff_slider%d.rounding_increment = 0.05;", i + 1);
+      printf("f_cutoff_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, sprintf(1, \"%%.2f\", center), \"Tuning %d\", \"F%d Tuning\"); cx += slider_size + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
+      printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Tuning Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_cutoff_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Tuning Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      //printf("f_cutoff_slider%d.check_text_input(%d) ? ( slider(f_cutoff_slider%d.sl) = max(f_cutoff_slider%d.sl_min, min(f_cutoff_slider%d.sl_max, 1.0 - log(2.0 * text_box.result / sampling_ratio / srate) / log(20/22050) )); );", i + 1, uuid(), i + 1, i + 1, i + 1);
+  
+      printf("f_reso_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
+      printf("f_reso_slider%d.rounding_increment = 0.1;\n", i + 1);
+      printf("f_reso_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, sprintf(9, \"%%\.3f\", f_reso_slider%d.display_value), \"Frequency %d spacing\", \"F%d Spacing\"); cx += slider_size + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
+      printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Reso Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_reso_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Reso Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_reso_slider%d.check_text_input(%d) ? ( slider(f_reso_slider%d.sl) = max(f_reso_slider%d.sl_min, min(f_reso_slider%d.sl_max, text_box.result / 100)); );", i + 1, uuid(), i + 1, i + 1, i + 1);
+      
+      printf("f_morph_slider%d.active = filter%d_enabled;\n", i + 1, i + 1);
+      printf("f_morph_slider%d.rounding_increment = 0.25;", i + 1);
+      printf("f_morph_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, sprintf(9, \"%%\.3f\", f%d_morph), \"Filter %d brightness\\n\\nBrightness\\n\", \"F%d Morph\"); cx += slider_size + 1;", i + 1, uuid(), i + 1, i + 1, i + 1, i + 1);
+      printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Morph Env\", 0, %d, 1);\n cx += 8;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_morph_slider%d.modulator_field(%d, cx, cy, 8, 1, MODULATOR_STRING, \"F%d Morph Env\", 0, %d, 2);\n cx += 10;", i + 1, uuid(), i + 1, N_SELECTABLE_MODULATORS);
+      printf("f_morph_slider%d.check_text_input_defaults();", i + 1);    
+    printf(");");
     
     (i > 1) ? (
       printf("cy += 8;");
@@ -2947,7 +3040,7 @@ cy = 208 - 10;
       printf("filter_type_slider%d.active = filter%d_enabled;", j, i + 1);
       printf("filter_type_slider%d.rounding_increment = 1;", j);
       printf("filter_type_slider%d.current_value = f%d_type;", j, i + 1);
-      printf("filter_type_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, filt_type(f%d_type), \"Filter Type\", \"F%d Type\");", j, uuid(), i + 1, i + 1);
+      printf("filter_type_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, filt_type(f%d_type), \"Filter Type\", \"F%d Type\");", j, uuid(), i + 1, i + 1);
       
       printf("(filter_type_slider%d.over && (mouse_cap == 2) && (last_cap == 0)) ? (\n", j);
         printf("gfx_x = mouse_x;");
@@ -2958,18 +3051,18 @@ cy = 208 - 10;
         printf("  );");
       printf(");");
       
-      printf("cx += 8 * toggle_size + 5;");
+      printf("cx += slider_size + 3 * toggle_size + 1;");
       printf("f%d_type = filter_type_slider%d.current_value;", i + 1, j);
       
       printf("filter_gain_slider%d.rounding_increment = 1;", i + 1);
       printf("filter_gain_slider%d.active = filter%d_enabled && f%d_type > 0;", i + 1, i + 1, i + 1);
-      printf("filter_gain_slider%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, \"%%0.1f\", f%d_drive), \"F%d Drive\", \"F%d Drive\");", i + 1, uuid(), i + 1, i + 1, i + 1);
+      printf("filter_gain_slider%d.text_slider_ui(%d, cx, cy, slider_size, 8, sprintf(1, \"%%0.1f\", f%d_drive), \"F%d Drive\", \"F%d Drive\");", i + 1, uuid(), i + 1, i + 1, i + 1);
 
-      printf("cx += 8 * toggle_size + 5;\n");
+      printf("cx +=slider_size + 3 * toggle_size + 1;\n");
       
       printf("filter_keyfollow%d.active = filter%d_enabled;", j, i + 1);
       printf("filter_keyfollow%d.rounding_increment = 0.1;", j);
-      printf("filter_keyfollow%d.text_slider_ui(%d, cx, cy, 5 * toggle_size + 4, 8, sprintf(1, \"%%d\", 100 * filter_keyfollow%d.display_value), \"Key follow\", \"Key follow\");", j, uuid(), j);
+      printf("filter_keyfollow%d.text_slider_ui(%d, cx, cy, slider_size, 8, sprintf(1, \"%%d\", 100 * filter_keyfollow%d.display_value), \"Key follow\", \"Key follow\");", j, uuid(), j);
       
       j += 1;
     );
@@ -3178,6 +3271,10 @@ cy += 10;
 dark_font = light_theme;
 txt_blit("OUTPUT", fx_origin + 1, cy + 2);
 dark_font = 0;
+
+block_reuse_toggle.simple_serialize_toggle(fx_origin + 74, cy + 1, toggle_size, block_reuse, "Block voice reuse\n\nEnabling this will block reusing a voice\nthat is currently decaying.\n\nThis may reduce clicks at the cost\nof more CPU.", "Block reuse") ? (
+  block_reuse = 1 - block_reuse;
+);
 
 cy += 8;
 chorus_slider1.rounding_increment = 0.05;
