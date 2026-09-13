@@ -1,0 +1,583 @@
+desc:Neverb (ALPHA)
+
+slider1:drywet=0.4<0,1,0.001>-Wet
+slider2:low_decay_time=3.37<0.1,30,0.01>-Low RT60
+slider3:high_decay_time=2.49<0.1,30,0.01>-High RT60
+slider4:crossover=4940<50,12000,10:log>-Crossover
+slider5:mod_depth=0.411<0,1,0.001>-Mod Depth
+slider6:mod_rate=0.67<0.001,1,0.001>-Mod Rate
+slider7:freeze=0<0,1,1{Normal,Freeze}>-Freeze
+slider8:freeze_time=0.361<0.001,2,0.001>-Freeze Transition
+slider9:stereo_width=1.0<0,1,0.001>-Stereo width
+
+slider10:nonlinear=1<0,1,{Off,On}>-Feedback nonlinearity
+slider11:noise_level=0.0171<0,0.1,0.0001>-Compander noise
+slider12:drive=0.0075<0,0.025,0.0001>-Tube drive
+slider13:bias=50<0,100,0.01>-Tube bias
+slider14:noise_type=0<0,4,1>-Noise type
+slider15:shimmer_amount=0<0,0.3,0.0001>-Shimmer amount
+slider16:shimmer_lp_freq=1800<50,20000,10:log>-Shimmer lowpass
+slider17:pitch_instability=4<0,8,.0001>-Depth [ms]
+slider18:pitch_slowness=500<200,1000,.1:log>-slowness [ms]
+
+import saike_shimmer_fdn.jsfx-inc
+import saike_nonlinear_fx.jsfx-inc
+import saike_neverb_gfx.jsfx-inc
+
+@init
+// init_slider(_me, _slider_idx, _min, _max, _mapping, _default)
+panel_mix.drywet.init_slider(1, 1, 0, 1, 0, 0.4);
+panel_time.low_decay_time.init_slider(2, 2, 0.1, 30.0, 0, 3.37);
+panel_time.high_decay_time.init_slider(3, 3, 0.1, 30.0, 0, 2.49);
+panel_time.crossover.init_slider(4, 4, 50, 12000, 1, 4940);
+panel_mod.mod_depth.init_slider(5, 5, 0, 1, 0, 0.411);
+panel_mod.mod_rate.init_slider(6, 6, 0.001, 1, 0, 0.67);
+panel_freeze.freeze_time.init_slider(8, 8, 0.001, 2, 0, 0.361);
+panel_mix.stereo_width.init_slider(9, 9, 0, 1, 0, 1.0);
+
+panel_nonlinear.noise_level.init_slider(11, 11, 0, 0.1, 0, 0.0171);
+panel_nonlinear.drive.init_slider(12, 12, 0, 0.025, 0, 0.0075);
+panel_nonlinear.bias.init_slider(13, 13, 0, 100, 0, 50);
+
+panel_shimmer.shimmer_amount.init_slider(15, 15, 0, 0.3, 0, 0);
+panel_shimmer.shimmer_lp_freq.init_slider(16, 16, 50, 20000, 1, 1800);
+
+panel_pitch.pitch_instability.init_slider(17, 17, 0, 8, 0, 4);
+panel_pitch.pitch_slowness.init_slider(18, 18, 200, 1000, 1, 500);
+
+function init_slow_noise(interval)
+instance(noise_dt)
+local()
+global(srate)
+(
+  noise_dt = 1.0 / (srate * interval / 1000);
+);
+
+function slow_noise_sample()
+instance(timeleft, d0, d1, d2, d3, w_noise, p_noise, noise_dt)
+global()
+local(t, t2, a0, a1, a2, a3)
+(
+  timeleft <= 0 ? (
+    d3 = d2;
+    d2 = d1;
+    d1 = d0;
+    d0 = 2.0 * (rand()-0.5);
+    d0 *= d0 * d0;
+    
+    timeleft = timeleft + 1.0;
+  );
+  
+  // Cubic interpolation
+  t = 1.0 - timeleft;
+  t2 = t * t;
+  a0 = d0 - d1 - d3 + d2;
+  a1 = d3 - d2 - a0;
+  a2 = d1 - d3;
+  a3 = d2;
+  
+  timeleft -= noise_dt;
+  
+  0.666 * (a0*t*t2+a1*t2+a2*t+a3);   // 0.666 ensures noise stays between -1 and 1
+);
+
+function pitch_drift_init(freemem)
+local()
+global()
+instance(buffer)
+(
+  (buffer = freemem) + 4096
+);
+
+function pitch_drift_sample(sample, pitch_instability, noise)
+globals(srate)
+local(r, i, f, im1, ip1, ip2, a, b, c, d, read_loc, delay)
+instance(buffer, write_loc)
+(
+  delay = 0.001 * srate * (pitch_instability * noise + 8);
+  
+  buffer[write_loc] = sample;
+  write_loc = (write_loc + 1) & 4095;
+
+  read_loc = write_loc - delay;
+  read_loc < 0 ? read_loc += 4096;
+  i = read_loc|0;
+  f = read_loc - i;
+  
+  im1 = (i-1) & 4095;
+  ip1 = (i+1) & 4095;
+  ip2 = (i+2) & 4095;
+
+  a = buffer[im1];
+  b = buffer[i];
+  c = buffer[ip1];
+  d = buffer[ip2];
+
+  b + 0.5*f*(c-a + f*(2*a-5*b+4*c-d + f*(3*(b-c)+d-a)))
+);
+
+
+noise.init_slow_noise(pitch_slowness);
+noise2.init_slow_noise(pitch_slowness);
+
+freemem = 0;
+
+freemem = verb.init_verb(freemem);
+freemem = pitch_drift_left.pitch_drift_init(freemem);
+freemem = pitch_drift_right.pitch_drift_init(freemem);
+
+function update_settings()
+(
+  verb.set_verb(low_decay_time, high_decay_time, crossover, mod_depth, mod_rate, stereo_width, shimmer_amount, shimmer_lp_freq);
+  verb.freeze_target = freeze;
+  verb.freeze_time = freeze_time;
+  noise.init_slow_noise(pitch_slowness);
+  noise2.init_slow_noise(pitch_slowness);
+);
+
+update_settings();
+
+verb.clear_verb();
+
+@slider
+update_settings();
+
+@gfx 1400 960
+panel_mix.c1.r = 0.435294;
+panel_mix.c1.g = 0.964706;
+panel_mix.c1.b = 0.815686;
+
+panel_mix.c2.r = 0.466667;
+panel_mix.c2.g = 0.980392;
+panel_mix.c2.b = 0.788235;
+
+panel_mix.c3.r = 0.152941;
+panel_mix.c3.g = 0.192157;
+panel_mix.c3.b = 0.274510;
+
+panel_time.c1.r = 0.615686;
+panel_time.c1.g = 0.584314;
+panel_time.c1.b = 0.945098;
+
+panel_time.c2.r = 0.592157;
+panel_time.c2.g = 0.549020;
+panel_time.c2.b = 0.933333;
+
+panel_time.c3.r = 0.160784;
+panel_time.c3.g = 0.203922;
+panel_time.c3.b = 0.301961;
+
+panel_mod.c1.r = 0.972549;
+panel_mod.c1.g = 0.396078;
+panel_mod.c1.b = 0.576471;
+
+panel_mod.c2.r = 0.980392;
+panel_mod.c2.g = 0.407843;
+panel_mod.c2.b = 0.588235;
+
+panel_mod.c3.r = 0.164706;
+panel_mod.c3.g = 0.207843;
+panel_mod.c3.b = 0.298039;
+
+panel_freeze.c1.r = 0.392157;
+panel_freeze.c1.g = 0.725490;
+panel_freeze.c1.b = 0.815686;
+
+panel_freeze.c2.r = 0.392157;
+panel_freeze.c2.g = 0.784314;
+panel_freeze.c2.b = 0.854902;
+
+panel_freeze.c3.r = 0.152941;
+panel_freeze.c3.g = 0.203922;
+panel_freeze.c3.b = 0.321569;
+
+panel_nonlinear.c1.r = 0.854902;
+panel_nonlinear.c1.g = 0.670588;
+panel_nonlinear.c1.b = 0.627451;
+
+panel_nonlinear.c2.r = 0.956863;
+panel_nonlinear.c2.g = 0.807843;
+panel_nonlinear.c2.b = 0.623529;
+
+panel_nonlinear.c3.r = 0.156863;
+panel_nonlinear.c3.g = 0.196078;
+panel_nonlinear.c3.b = 0.294118;
+
+panel_pitch.c1.r = 0.745098;
+panel_pitch.c1.g = 0.486275;
+panel_pitch.c1.b = 0.858824;
+
+panel_pitch.c2.r = 0.768627;
+panel_pitch.c2.g = 0.521569;
+panel_pitch.c2.b = 0.878431;
+
+panel_pitch.c3.r = 0.164706;
+panel_pitch.c3.g = 0.207843;
+panel_pitch.c3.b = 0.317647;
+
+panel_shimmer.c1.r = 0.243137;
+panel_shimmer.c1.g = 0.709804;
+panel_shimmer.c1.b = 0.941176;
+
+panel_shimmer.c2.r = 0.290196;
+panel_shimmer.c2.g = 0.721569;
+panel_shimmer.c2.b = 0.945098;
+
+panel_shimmer.c3.r = 0.145098;
+panel_shimmer.c3.g = 0.203922;
+panel_shimmer.c3.b = 0.345098;
+
+loaded = 0;
+!loaded ? (
+  img_w = 700;
+  img_h = 480;
+  loaded = gfx_loadimg(12, "./Neverb_Dependencies/font_coz.png");
+  
+  gfx_loadimg(9, "./Neverb_Dependencies/ui_overlay.png");
+  gfx_loadimg(8, "./Neverb_Dependencies/stacked.png");
+  gfx_loadimg(7, "./Neverb_Dependencies/highlights.png");
+  
+  panel_mix.make_font_atlas(13);
+  panel_time.make_font_atlas(14);
+  panel_mod.make_font_atlas(15);
+  panel_freeze.make_font_atlas(16);
+  panel_nonlinear.make_font_atlas(17);
+  panel_pitch.make_font_atlas(18);
+  panel_shimmer.make_font_atlas(19);
+  
+  gfx_setimgdim(10, img_w, img_h);
+);
+
+scaling = max(1, min(gfx_w / 700 | 0, gfx_h / 480 | 0));;
+
+gfx_dest = 10;
+gfx_mode = 0;
+
+gfx_clear = 0;
+gfx_set(5 / 256, 10 / 256, 20 / 256, 1.0);
+gfx_rect(0, 0, img_w, img_h);
+
+rel_mouse_x = mouse_x / scaling;
+rel_mouse_y = mouse_y / scaling;
+
+panel_offset_x = 55;
+panel_offset_y = 50;
+
+panel_mix.set_position(panel_offset_x + 5, panel_offset_y + 10, 132, 6);
+panel_mix.panel_title("MIX");
+panel_mix.panel_edge(85, 175, 130, 100);
+panel_mix.drywet.draw_slider("DRY/WET", sprintf(1, "%.2f", drywet));
+panel_mix.stereo_width.draw_slider("STEREO WIDTH", sprintf(1, "%.2f", stereo_width));
+
+panel_time.set_position(panel_offset_x + 200, panel_offset_y - 5, 192, 6);
+panel_time.panel_title("VERB");
+//panel_time.panel_edge(110, 250);
+panel_time.low_decay_time.draw_slider("LOW RT60 [s]", sprintf(1, "%.2f", low_decay_time));
+panel_time.high_decay_time.draw_slider("HIGH RT60 [s]", sprintf(1, "%.2f", high_decay_time));
+panel_time.crossover.draw_slider("CROSSOVER [Hz]", sprintf(1, "%d", crossover));
+
+panel_mod.set_position(panel_offset_x + 5, panel_offset_y + 125, 132, 6);
+panel_mod.panel_title("MOD");
+panel_mod.panel_edge(85, 175, 0, 0);
+panel_mod.mod_depth.draw_slider("MOD DEPTH", sprintf(1, "%.2f", mod_depth));
+panel_mod.mod_rate.draw_slider("MOD RATE", sprintf(1, "%.2f", mod_rate));
+
+panel_freeze.set_position(panel_offset_x + 200, panel_offset_y + 125, 132, 6);
+panel_freeze.panel_title("FREEZE");
+panel_freeze.panel_edge(85, 175, 0, 0);
+panel_freeze.freeze_time.draw_slider("FREEZE TIME", sprintf(1, "%.2f", freeze_time));
+panel_freeze.freeze_mode.slider_idx = 7;
+panel_freeze.freeze_mode.draw_toggle("OFF", 0, 80, 0, 25, 1);
+panel_freeze.freeze_mode.draw_toggle("ON", 1, 80, 84, 25, 1);
+
+panel_nonlinear.set_position(panel_offset_x + 400, panel_offset_y + 125, 112, 6);
+panel_nonlinear.panel_title("NON-LINEAR");
+panel_nonlinear.panel_edge(150, 155, 65, 0);
+panel_nonlinear.drive.draw_slider("DRIVE", sprintf(1, "%.2f", drive));
+panel_nonlinear.bias.draw_slider("BIAS", sprintf(1, "%d", bias));
+panel_nonlinear.noise_level.draw_slider("NOISE", sprintf(1, "%.2f", noise_level));
+
+panel_nonlinear.nonlinear.slider_idx = 10;
+//txt_blit(panel_nonlinear.font, "FB", panel_nonlinear.noise_level.x, panel_nonlinear.noise_level.y + 25);
+//panel_nonlinear.nonlinear.y = panel_nonlinear.noise_level.y + 40;
+panel_nonlinear.nonlinear.draw_toggle("CLEAN", 0, 80, 0, 25, 1);
+panel_nonlinear.nonlinear.draw_toggle("LOSSY", 1, 80, 84, 25, 1);
+
+panel_nonlinear.noise_type.slider_idx = 14;
+panel_nonlinear.noise_type.y = panel_nonlinear.noise_level.y + 1;
+panel_nonlinear.noise_type.x = panel_nonlinear.noise_level.x + 40;
+panel_nonlinear.noise_type.draw_toggle("1", 0, 13, 0, 10, 0);
+panel_nonlinear.noise_type.draw_toggle("2", 1, 13, 14, 10, 0);
+panel_nonlinear.noise_type.draw_toggle("3", 2, 13, 27, 10, 0);
+panel_nonlinear.noise_type.draw_toggle("4", 3, 13, 40, 10, 0);
+panel_nonlinear.noise_type.draw_toggle("5", 4, 13, 53, 10, 0);
+
+panel_pitch.set_position(panel_offset_x + 5, panel_offset_y + 240, 132, 6);
+panel_pitch.panel_title("RETRO");
+panel_pitch.panel_edge(80, 175, 0, 0);
+panel_pitch.pitch_instability.draw_slider("DEPTH [ms]", sprintf(1, "%.2f", pitch_instability));
+panel_pitch.pitch_slowness.draw_slider("SLOWNESS [ms]", sprintf(1, "%.1f", pitch_slowness));
+
+panel_shimmer.set_position(panel_offset_x + 200, panel_offset_y + 240, 132, 6);
+panel_shimmer.panel_title("SHIMMER");
+panel_shimmer.panel_edge(80, 175, 0, 0);
+panel_shimmer.shimmer_amount.draw_slider("AMOUNT", sprintf(1, "%.2f", shimmer_amount));
+panel_shimmer.shimmer_lp_freq.draw_slider("FREQ", sprintf(1, "%d", shimmer_lp_freq));
+
+gfx_dest = -1;
+gfx_mode = 4;
+gfx_x = gfx_y = 0; gfx_a = 1.0;
+gfx_blit(10, scaling, 0);
+
+gfx_blit(9, scaling, 0);
+
+gfx_mode = 1;
+gfx_a = 0.5 + 0.5 * abs(sin(time_precise()));
+gfx_blit(7, scaling, 0);
+
+txt_blit(12, "NEVERB - NOT PRODUCTION READY", 0, 0);
+
+
+function blit_sprite(x, y, scaling, sprite, index)
+global()
+(
+  gfx_blit(8, scaling, 0, 8 * index, 8 * sprite, 8, 8, x, y);
+);
+
+//bird.draw_bird(1110, 190);
+
+function draw_sprite(x, y, sprite, max_anim, speed, proba)
+instance(index)
+global(scaling)
+(
+  blit_sprite(x * scaling, y * scaling, scaling, sprite, index | 0);
+  
+  (index > 0) ? (
+    index += speed;
+    index > max_anim ? index = 0;
+  ) : (
+    (rand() < proba) ? ( index = speed );
+  );
+);
+
+function draw_mosquito(x, y, diff)
+local()
+global(x_offset, y_offset, scaling)
+instance(xc, yc)
+(
+  xc == 0 ? xc = x;
+  yc == 0 ? yc = y;
+  xc += diff * (rand() - 0.5) + 0.01 * (x - xc);
+  yc += diff * (rand() - 0.5) + 0.01 * (y - yc);
+  x = xc | 0;
+  y = yc | 0;
+  gfx_rect(scaling * x, scaling * y, 2, 2);
+);
+
+function draw_flying_bird(x, y, diff, spd)
+local()
+global(x_offset, y_offset, blit_scale)
+instance(xc, yc, xt, yt, new_pos)
+(
+  new_pos -= 1;
+  
+  (new_pos < 0) ? (
+    xt = x + (rand() - 0.5) * diff;
+    yt = y + (rand() - 0.5) * diff;
+    new_pos = 20 + 40 * rand();
+  );
+  
+  xc == 0 ? ( xc = xt; yc = yt; );
+  
+  xc += 0.1 * (xt - xc);
+  yc += 0.1 * (yt - yc);
+  
+  x = xc | 0;
+  y = yc | 0;
+  
+  this.draw_sprite(x, y, 3, 5, spd, 1.0);
+);
+
+
+function mouse_run(x, y, w, h)
+local()
+instance(dx, dy, cx, cy, nx, ny)
+global(scaling)
+(
+  (cx == 0) ? (
+    cx = x;
+    cy = y;
+    nx = x + rand() * w;
+    ny = y + rand() * h;
+  );
+  
+  (rand() < 0.05) ? (
+    nx = x + rand() * w;
+    ny = y + rand() * h;
+  );
+  dx = nx - cx;
+  dy = ny - cy;
+  
+  cx += 0.1 * dx;
+  cy += 0.1 * dy;
+  
+  (abs(dx) + abs(dy) < 0.3) ? (
+    gfx_rect(cx, cy - 1, 1, 1);
+  );
+  
+  gfx_rect(scaling * (cx | 0), scaling * (cy | 0), 4, 2);
+);
+
+
+gfx_set(0, 0, 0, 1.0);
+mosquito1.draw_mosquito(499, 455, 1.0);
+mosquito2.draw_mosquito(489, 460, 2.0);
+mosquito3.draw_mosquito(479, 456, 1.0);
+mosquito4.draw_mosquito(510, 451, 2.0);
+
+gfx_set(1, 1, 0.9, 1.0);
+firefly1.draw_mosquito(666, 462, 1.0);
+firefly2.draw_mosquito(660, 465, 2.0);
+firefly3.draw_mosquito(670, 466, 1.0);
+firefly4.draw_mosquito(15, 305, 1.0);
+firefly5.draw_mosquito(20, 311, 2.0);
+
+firefly6.draw_mosquito(266, 429, 5.0);
+firefly7.draw_mosquito(268, 430, 4.0);
+gfx_set(0.6, 0.7, 0.9, 1.0);
+firefly8.draw_mosquito(268, 430, 2.0);
+
+gfx_set(0, 0, 0, 1.0);
+butterfly.draw_mosquito(20, 311, 1.0);
+
+mouse1.mouse_run(636, 462, 70, 15);
+mouse2.mouse_run(114, 450, 70, 15);
+mouse3.mouse_run(636, 462, 70, 15);
+mouse4.mouse_run(114, 450, 70, 15);
+
+bird1.draw_sprite(550, 91, 0, 13, 0.25, 0.005);
+bird2.draw_sprite(4, 218, 0, 13, 0.25, 0.005);
+gfx_a = 0.8;
+beast.draw_sprite(647, 311, 1, 27, 0.05, 0.005);
+gfx_a = 1.0;
+beast2.draw_sprite(4, 325, 1, 27, 0.05, 0.005);
+gfx_a = 0.8;
+person2.draw_sprite(7, 207, 2, 5, 0.05, 0.005);
+
+gfx_a = 0.8;
+creature.draw_sprite(660, 465, 4, 15, 0.1, 0.005);
+creature2.draw_sprite(176, 460, 4, 15, 0.1, 0.005);
+creature3.draw_sprite(225, 472, 4, 15, 0.1, 0.005);
+
+gfx_a = 0.1 + 0.7 * abs(sin(0.01 * time_precise()));
+flying_bird1.draw_flying_bird(582, 94, 10, 0.25);
+flying_bird4.draw_flying_bird(686, 195, 10, 0.25);
+gfx_a = 0.1 + 0.7 * abs(sin(0.01 * time_precise() + 0.5));
+flying_bird2.draw_flying_bird(562, 94, 10, 0.244);
+flying_bird5.draw_flying_bird(20, 235, 10, 0.25);
+gfx_a = 0.1 + 0.7 * abs(sin(0.01 * time_precise() + 1.0));
+flying_bird3.draw_flying_bird(572, 84, 10, 0.33);
+flying_bird6.draw_flying_bird(15, 185, 10, 0.25);
+
+gfx_a = 1;
+bat1.draw_sprite(466, 451, 6, 31, 0.25, 0.003);
+bat2.draw_sprite(456, 447, 5, 21, 0.25, 0.003);
+gfx_a = 0.7;
+bat3.draw_sprite(386, 451, 6, 31, 0.25, 0.003);
+bat4.draw_sprite(391, 446, 6, 31, 0.25, 0.002);
+gfx_a = 0.8;
+bat5.draw_sprite(356, 447, 5, 21, 0.25, 0.003);
+gfx_a = 0.5;
+bat6.draw_sprite(346, 448, 6, 31, 0.25, 0.003);
+
+gfx_a = 1.0;
+bat7.draw_sprite(110, 441, 6, 31, 0.25, 0.003);
+bat8.draw_sprite(120, 439, 5, 21, 0.25, 0.003);
+
+gfx_a = 0.4;
+drop1.draw_sprite(466, 471, 7, 8, 0.25, 0.003);
+drop2.draw_sprite(468, 468, 7, 8, 0.25, 0.003);
+gfx_a = 0.5;
+drop3.draw_sprite(472, 472, 7, 8, 0.25, 0.003);
+gfx_a = 0.5;
+drop4.draw_sprite(511, 468, 7, 8, 0.25, 0.003);
+drop5.draw_sprite(311, 468, 7, 8, 0.25, 0.01);
+
+last_cap = mouse_cap;
+rel_mouse_dx = (mouse_x - last_mouse_x) / scaling;
+rel_mouse_dy = (mouse_y - last_mouse_y) / scaling;
+last_mouse_x = mouse_x;
+last_mouse_y = mouse_y;
+
+
+
+@sample
+slider_changed ? (
+  update_settings();
+  slider_changed = 0;
+);
+
+verb.process(spl0 + fb_l, spl1 + fb_r);
+fb_l = fb_r = 0;
+
+((noise_level > 0) || (drive > 0)) ? (
+  verb.out_l = l_compander.compander_compress(verb.out_l);
+  verb.out_r = r_compander.compander_compress(verb.out_r);
+  
+  noise_type == 0 ? (
+    r1 = rand();
+    r1 = r1 * r1 * r1 - 0.25;
+    r2 = rand();
+    r2 = r2 * r2 * r2 - 0.25;
+    
+    r1 = 0.5 * (r1 + lr1);
+    lr1 = r1;
+    
+    r2 = 0.5 * (r2 + lr2);
+    lr2 = r2;
+  ) : (noise_type == 1) ? (
+    r1 = 0.25 * rand() - 0.125;
+    b0 = 0.99765 * b0 + r1 * 0.0990460;
+    b1 = 0.96300 * b1 + r1 * 0.2965164;
+    b2 = 0.57000 * b2 + r1 * 1.0526913;
+    r1 = b0 + b1 + b2 + r1 * 0.1848;
+  
+    r2 = 0.25 * rand() - 0.125;
+    c0 = 0.99765 * c0 + r2 * 0.0990460;
+    c1 = 0.96300 * c1 + r2 * 0.2965164;
+    c2 = 0.57000 * c2 + r2 * 1.0526913;
+    r2 = c0 + c1 + c2 + r2 * 0.1848;
+  ) : (noise_type == 2) ? (
+    r1 = c1.lp_fuzz(0.999);
+    r2 = c2.lp_fuzz(0.999);
+  ) : (noise_type == 3) ? (
+    r1 = c1.crackle(70, 0.008) + c2.crackle(4, 0.055);
+    r2 = c3.crackle(70, 0.008) + c4.crackle(4, 0.055);
+  ) : (noise_type == 4) ? (
+    r1 = c1.granckle(15, 0.028, 3) + c2.granckle(8, 0.035, 4);
+    r2 = c3.granckle(15, 0.028, 3) + c4.granckle(8, 0.035, 4);
+    fb_l += 0.01 * r1;
+    fb_r += 0.01 * r2;
+  );
+  
+  bias_const = bias * drive;
+  verb.out_l += noise_level * r1 + bias_const;
+  verb.out_r += noise_level * r2 + bias_const;
+  
+  verb.out_l = verb.out_l - drive * verb.out_l * verb.out_l * verb.out_l;
+  verb.out_r = verb.out_r - drive * verb.out_r * verb.out_r * verb.out_r;
+  bias_const = bias_const - drive * bias_const * bias_const * bias_const;
+  verb.out_l -= bias_const;
+  verb.out_r -= bias_const;
+  
+  verb.out_l = l_compander.compander_expand(verb.out_l);
+  verb.out_r = r_compander.compander_expand(verb.out_r);
+);
+
+drift_noise = noise.slow_noise_sample();
+verb.out_l = pitch_drift_left.pitch_drift_sample(verb.out_l, pitch_instability, drift_noise);
+verb.out_r = pitch_drift_right.pitch_drift_sample(verb.out_r, pitch_instability, drift_noise);
+
+spl0 = spl0 * (1 - drywet) + verb.out_l * drywet;
+spl1 = spl1 * (1 - drywet) + verb.out_r * drywet;
+

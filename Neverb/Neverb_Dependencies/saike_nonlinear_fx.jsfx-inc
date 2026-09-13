@@ -1,0 +1,180 @@
+@init
+function compander_compress(x)
+local()
+global()
+instance(y_comp, y_comp_current, alpha_compander)
+(
+  alpha_compander = 0.001;
+  y_comp == 0 ? y_comp = abs(x);
+  y_comp = abs(y_comp_current) * alpha_compander + y_comp * (1-alpha_compander);
+  y_comp_current = x / (.0001 + y_comp)
+);
+
+function compander_expand(x)
+local()
+global()
+instance(y_expand, alpha_compander)
+(
+  y_expand = abs(x) * alpha_compander + y_expand * (1-alpha_compander);
+
+  x * y_expand
+);
+
+function compander_compress(x)
+local()
+global()
+instance(y_comp, alpha_compander)
+(
+  alpha_compander = 0.001;
+  y_comp = abs(x) * alpha_compander + y_comp * (1-alpha_compander);
+  x / (.0001 + y_comp)
+);
+
+
+function compander_expand(x)
+local()
+instance(y_comp)
+(
+  x * y_comp
+);
+
+function lp_fuzz(ar_uni)
+instance(p, w)
+global()
+(
+  w = ar_uni * w + rand() - 0.5
+);
+
+
+function crackle(rate, amount)
+instance(
+  next_event,
+  burst_env,
+  burst_decay,
+  density,
+  density_target,
+  density_slew,
+  click_lp,
+  noise_state,
+  initialized,
+  click_lp_coeff
+)
+local(
+  r,
+  event_amp,
+  white,
+  click,
+  out
+)
+global(srate)
+(
+  initialized == 0 ? (
+    next_event = 1;
+    burst_env = 0;
+    burst_decay = 0;
+    density = 1;
+    density_target = 1;
+    density_slew = 0.00002;
+    click_lp = 0;
+    noise_state = 0;
+    click_lp_coeff = 1 - exp(-1 / (srate * 0.0015));
+    initialized = 1;
+  );
+
+  density_slew = 0.01;
+  density_target += (rand(1) - 0.5) * density_slew;
+
+  density_target < 0 ? density_target = 0;
+  density_target > 1.8  ? density_target = 1.8;
+
+  density += (density_target - density) * density_slew;
+
+  next_event -= 1;
+
+  next_event <= 0 ? (
+    r = rand(1);
+    event_amp = rand(1) * 0.05 + r * r * r * 0.65;
+    burst_decay = exp(
+      -1 / (srate * (0.0015 + rand(1) * 0.08))
+    );
+
+    r < 0.5 ? event_amp = - event_amp;
+    burst_env = event_amp;
+
+    rand(1) < 0.035 ? (
+      burst_env *= 2.5 + rand(1) * 3;
+    );
+
+    r = rand(1);
+    r < 0.000001 ? r = 0.000001;
+
+    next_event = -log(r) * srate / (max(0.001, rate) * density);
+  );
+
+
+  burst_env *= burst_decay;
+  white = rand(1) * 2 - 1;
+
+  click_lp += (white - click_lp) * click_lp_coeff;
+  click = burst_env * (0.75 + 0.25 * click_lp);
+
+  // Return the sample.
+  click * amount * 200;
+);
+
+function granckle(rate, amount, playrate)
+instance(next_event, source_pos, grain_len, attack, decay, env_norm, density, density_target, density_slew, initialized, peak_t, grain_amp, e1, e2, k1, k2)
+local(r, t, src, env, grain_spl)
+global(verb, srate, verb.read_delay, verb.d6, verb.p)
+(
+  initialized == 0 ? (
+    next_event = 1; source_pos = 1;
+    density = 1; density_target = 1; density_slew = 0.01;
+    initialized = 1;
+  );
+
+  density_target += (rand(1) - 0.5) * density_slew;
+  density_target = min(1.8, max(0, density_target));
+  density += (density_target - density) * density_slew;
+
+  next_event -= 1;
+
+  (next_event <= 0) ? (
+    r = rand(1);
+    grain_len = 0.01 + rand(1) * 0.02;
+    attack = grain_len * (0.1 + rand(1) * 1.2);
+    decay = grain_len * (0.8 + rand(1) * 2.5);
+
+    r = rand(1);
+    r < 0.000001 ? r = 0.000001;
+    next_event = -log(r) * srate / (max(0.001, rate) * density);
+
+    peak_t = attack * decay / (decay - attack) * log(decay / attack);
+    env_norm = 1 / (exp(-peak_t / decay) - exp(-peak_t / attack));
+    
+    grain_amp = rand(1) * 0.05 + r * r * r * 0.65;
+    rand(1) < 0.5 ? grain_amp = -grain_amp;
+
+    e1 = env_norm;
+    e2 = - env_norm;
+    k1 = exp(-1 / (srate * decay));
+    k2 = exp(-1 / (srate * attack));
+
+    source_pos = 1;
+  ) : (next_event < 15) ? (
+    // Rapid fade
+    k1 *= 0.4;
+    k2 *= 0.4;
+  );
+
+  env = e1 + e2;
+  e1 *= k1;
+  e2 *= k2;
+
+  src = verb.read_delay(verb.d6, verb.p, source_pos);
+  source_pos += playrate;
+
+  grain_spl = src * grain_amp * env * amount;
+  grain_spl * 2000;
+);
+
