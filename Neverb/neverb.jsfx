@@ -20,11 +20,92 @@ slider16:shimmer_lp_freq=1800<50,20000,10:log>-Shimmer lowpass
 slider17:pitch_instability=4<0,8,.0001>-Depth [ms]
 slider18:pitch_slowness=500<200,1000,.1:log>-slowness [ms]
 
+//slider19:transient_chop=24.0<0, 24, 0.01>Transient remover
+slider19:lpg_level=1.0<0,1,.00001>-Low pass gate
+slider20:lpg_wiring=0<0,3,1{Tank,Reverb,Full Input,Full Output}>-Low pass gate target
+
 import saike_shimmer_fdn.jsfx-inc
 import saike_nonlinear_fx.jsfx-inc
 import saike_neverb_gfx.jsfx-inc
 
 @init
+function init_linearSVF_absolute(f0, res)
+global(srate)
+local(g)
+instance(f0, ic1eq, ic2eq, k, a1, a2, a3)
+(
+  g = tan($pi * f0 / srate);
+  k = 2 - 2*res;
+      
+  a1 = 1/(1+g*(g+k));
+  a2 = g*a1;
+  a3 = g*a2;
+);
+
+function lpg_LP1(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq, ic2eq, a1, a2, a3)
+(
+  v3 = v0 - ic2eq;
+  v1 = a1 * ic1eq + a2 * v3;
+  v2 = ic2eq + a2 * ic1eq + a3*v3;
+  ic1eq = 2*v1 - ic1eq;
+  ic2eq = 2*v2 - ic2eq;    
+  
+  v2
+);
+
+function lpg_LP2(v0)
+global()
+local(v1, v2, v3)
+instance(ic1eq2, ic2eq2, a1, a2, a3)
+(
+  v3 = v0 - ic2eq2;
+  v1 = a1 * ic1eq2 + a2 * v3;
+  v2 = ic2eq2 + a2 * ic1eq2 + a3*v3;
+  ic1eq2 = 2*v1 - ic1eq2;
+  ic2eq2 = 2*v2 - ic2eq2;    
+  
+  v2
+);
+
+function lpg_sat_func(lpg, input_gain)
+local(t)
+global()
+(
+  t = (0.573144 + 20.2149 * lpg*lpg*lpg*lpg) * input_gain;
+
+  2.0 * (0.185304 * (1.0 - exp(- t*t)) - 0.00307613)
+);
+
+function init_lpg_rates()
+global(srate)
+instance(k_atk, k_decay)
+(
+  k_atk = 1000 / 9.22 / srate;
+  k_decay = 1000 / 110.666667 / srate;
+);
+
+function lpg_update(spl0, spl1)
+global(lpg_level)
+local(cur, gate)
+instance(c_sample, k_decay, k_atk, state, gate_freq)
+(
+  cur = max(abs(spl0), abs(spl1));
+  
+  state += state < cur ? k_atk * (cur - state) : k_decay * (cur - state);
+  
+  (c_sample % 8 == 0) ? (
+    gate = min(lpg_sat_func(lpg_level, state), 1.0);
+    
+    gate_freq = max(50, 22050 * gate);
+    this.init_linearSVF_absolute(gate_freq, 0);
+  );
+  
+  c_sample += 1;
+);
+
 // init_slider(_me, _slider_idx, _min, _max, _mapping, _default)
 panel_mix.drywet.init_slider(1, 1, 0, 1, 0, 0.4);
 panel_time.low_decay_time.init_slider(2, 2, 0.1, 30.0, 0, 3.37);
@@ -38,12 +119,15 @@ panel_mix.stereo_width.init_slider(9, 9, 0, 1, 0, 1.0);
 panel_nonlinear.noise_level.init_slider(11, 11, 0, 0.1, 0, 0.0171);
 panel_nonlinear.drive.init_slider(12, 12, 0, 0.025, 0, 0.0075);
 panel_nonlinear.bias.init_slider(13, 13, 0, 100, 0, 50);
+panel_nonlinear.lpg_level.init_slider(19, 19, 0, 1, 0, 1);
 
 panel_shimmer.shimmer_amount.init_slider(15, 15, 0, 0.3, 0, 0);
 panel_shimmer.shimmer_lp_freq.init_slider(16, 16, 50, 20000, 1, 1800);
 
 panel_pitch.pitch_instability.init_slider(17, 17, 0, 8, 0, 4);
 panel_pitch.pitch_slowness.init_slider(18, 18, 200, 1000, 1, 500);
+
+// transients.init_detector();
 
 function init_slow_noise(interval)
 instance(noise_dt)
@@ -125,7 +209,9 @@ freemem = 0;
 freemem = verb.init_verb(freemem);
 freemem = pitch_drift_left.pitch_drift_init(freemem);
 freemem = pitch_drift_right.pitch_drift_init(freemem);
-
+freemem = (particles = freemem) + 90;
+freemem = (particles2 = freemem) + 90;
+freemem = (particles3 = freemem) + 90;
 function update_settings()
 (
   verb.set_verb(low_decay_time, high_decay_time, crossover, mod_depth, mod_rate, stereo_width, shimmer_amount, shimmer_lp_freq);
@@ -266,63 +352,74 @@ panel_offset_y = 50;
 panel_mix.set_position(panel_offset_x + 5, panel_offset_y + 10, 132, 6);
 panel_mix.panel_title("MIX");
 panel_mix.panel_edge(85, 175, 130, 100);
-panel_mix.drywet.draw_slider("DRY/WET", sprintf(1, "%.2f", drywet));
-panel_mix.stereo_width.draw_slider("STEREO WIDTH", sprintf(1, "%.2f", stereo_width));
+panel_mix.drywet.draw_slider("DRY/WET", sprintf(1, "%.2f", drywet), "Dry / wet mix");
+panel_mix.stereo_width.draw_slider("STEREO WIDTH", sprintf(1, "%.2f", stereo_width), "Set stereo width");
 
 panel_time.set_position(panel_offset_x + 200, panel_offset_y - 5, 192, 6);
 panel_time.panel_title("VERB");
 //panel_time.panel_edge(110, 250);
-panel_time.low_decay_time.draw_slider("LOW RT60 [s]", sprintf(1, "%.2f", low_decay_time));
-panel_time.high_decay_time.draw_slider("HIGH RT60 [s]", sprintf(1, "%.2f", high_decay_time));
-panel_time.crossover.draw_slider("CROSSOVER [Hz]", sprintf(1, "%d", crossover));
+panel_time.low_decay_time.draw_slider("LOW RT60 [s]", sprintf(1, "%.2f", low_decay_time), "Low frequency decay time");
+panel_time.high_decay_time.draw_slider("HIGH RT60 [s]", sprintf(1, "%.2f", high_decay_time), "High frequency decay time");
+panel_time.crossover.draw_slider("CROSSOVER [Hz]", sprintf(1, "%d", crossover), "Crossover frequency");
 
 panel_mod.set_position(panel_offset_x + 5, panel_offset_y + 125, 132, 6);
 panel_mod.panel_title("MOD");
 panel_mod.panel_edge(85, 175, 0, 0);
-panel_mod.mod_depth.draw_slider("MOD DEPTH", sprintf(1, "%.2f", mod_depth));
-panel_mod.mod_rate.draw_slider("MOD RATE", sprintf(1, "%.2f", mod_rate));
+panel_mod.mod_depth.draw_slider("MOD DEPTH", sprintf(1, "%.2f", mod_depth), "Modulation depth");
+panel_mod.mod_rate.draw_slider("MOD RATE", sprintf(1, "%.2f", mod_rate), "Modulation rate");
 
 panel_freeze.set_position(panel_offset_x + 200, panel_offset_y + 125, 132, 6);
 panel_freeze.panel_title("FREEZE");
 panel_freeze.panel_edge(85, 175, 0, 0);
-panel_freeze.freeze_time.draw_slider("FREEZE TIME", sprintf(1, "%.2f", freeze_time));
+panel_freeze.freeze_time.draw_slider("FREEZE TIME", sprintf(1, "%.2f", freeze_time), "Time for freeze to initiate");
 panel_freeze.freeze_mode.slider_idx = 7;
-panel_freeze.freeze_mode.draw_toggle("OFF", 0, 80, 0, 25, 1);
-panel_freeze.freeze_mode.draw_toggle("ON", 1, 80, 84, 25, 1);
+panel_freeze.freeze_mode.draw_toggle("OFF", 0, 80, 0, 25, 1, "Let reverb decay freely");
+panel_freeze.freeze_mode.draw_toggle("ON", 1, 80, 84, 25, 1, "Freeze audio in the reverb");
 
 panel_nonlinear.set_position(panel_offset_x + 400, panel_offset_y + 125, 112, 6);
 panel_nonlinear.panel_title("NON-LINEAR");
-panel_nonlinear.panel_edge(150, 155, 65, 0);
-panel_nonlinear.drive.draw_slider("DRIVE", sprintf(1, "%.2f", drive));
-panel_nonlinear.bias.draw_slider("BIAS", sprintf(1, "%d", bias));
-panel_nonlinear.noise_level.draw_slider("NOISE", sprintf(1, "%.2f", noise_level));
+panel_nonlinear.panel_edge(175, 155, 65, 0);
+panel_nonlinear.drive.draw_slider("DRIVE", sprintf(1, "%.2f", drive), "Drive amount");
+panel_nonlinear.bias.draw_slider("BIAS", sprintf(1, "%d", bias), "Bias amount (makes drive more tube-like)");
+
+panel_nonlinear.lpg_level.draw_slider("MUFFLE", sprintf(1, "%.2f", lpg_level), "Lowpass gate level (lower is more filtering)");
+
+panel_nonlinear.lpg_wiring.slider_idx = 20;
+panel_nonlinear.lpg_wiring.y = panel_nonlinear.lpg_level.y + 1;
+panel_nonlinear.lpg_wiring.x = panel_nonlinear.lpg_level.x + 47;
+panel_nonlinear.lpg_wiring.draw_toggle("T", 0, 13, 0, 10, 0, "Muffle audio going into reverb");
+panel_nonlinear.lpg_wiring.draw_toggle("R", 1, 13, 14, 10, 0, "Muffle reverb output (wet only)");
+panel_nonlinear.lpg_wiring.draw_toggle("I", 2, 13, 27, 10, 0, "Muffle full input");
+panel_nonlinear.lpg_wiring.draw_toggle("O", 3, 13, 40, 10, 0, "Muffle full output (wet and dry)");
+
+panel_nonlinear.noise_level.draw_slider("NOISE", sprintf(1, "%.2f", noise_level), "Noise level");
 
 panel_nonlinear.nonlinear.slider_idx = 10;
 //txt_blit(panel_nonlinear.font, "FB", panel_nonlinear.noise_level.x, panel_nonlinear.noise_level.y + 25);
 //panel_nonlinear.nonlinear.y = panel_nonlinear.noise_level.y + 40;
-panel_nonlinear.nonlinear.draw_toggle("CLEAN", 0, 80, 0, 25, 1);
-panel_nonlinear.nonlinear.draw_toggle("LOSSY", 1, 80, 84, 25, 1);
+panel_nonlinear.nonlinear.draw_toggle("CLEAN", 0, 80, 0, 25, 1, "Linear feedback in reverb tank");
+panel_nonlinear.nonlinear.draw_toggle("LOSSY", 1, 80, 84, 25, 1, "Nonlinear feedback in reverb tank");
 
 panel_nonlinear.noise_type.slider_idx = 14;
 panel_nonlinear.noise_type.y = panel_nonlinear.noise_level.y + 1;
 panel_nonlinear.noise_type.x = panel_nonlinear.noise_level.x + 40;
-panel_nonlinear.noise_type.draw_toggle("1", 0, 13, 0, 10, 0);
-panel_nonlinear.noise_type.draw_toggle("2", 1, 13, 14, 10, 0);
-panel_nonlinear.noise_type.draw_toggle("3", 2, 13, 27, 10, 0);
-panel_nonlinear.noise_type.draw_toggle("4", 3, 13, 40, 10, 0);
-panel_nonlinear.noise_type.draw_toggle("5", 4, 13, 53, 10, 0);
+panel_nonlinear.noise_type.draw_toggle("1", 0, 13, 0, 10, 0, "Noise type 1");
+panel_nonlinear.noise_type.draw_toggle("2", 1, 13, 14, 10, 0, "Noise type 2");
+panel_nonlinear.noise_type.draw_toggle("3", 2, 13, 27, 10, 0, "Noise type 3");
+panel_nonlinear.noise_type.draw_toggle("4", 3, 13, 40, 10, 0, "Vinyl crackle");
+panel_nonlinear.noise_type.draw_toggle("5", 4, 13, 53, 10, 0, "Granular octaver");
 
 panel_pitch.set_position(panel_offset_x + 5, panel_offset_y + 240, 132, 6);
 panel_pitch.panel_title("RETRO");
 panel_pitch.panel_edge(80, 175, 0, 0);
-panel_pitch.pitch_instability.draw_slider("DEPTH [ms]", sprintf(1, "%.2f", pitch_instability));
-panel_pitch.pitch_slowness.draw_slider("SLOWNESS [ms]", sprintf(1, "%.1f", pitch_slowness));
+panel_pitch.pitch_instability.draw_slider("DEPTH [ms]", sprintf(1, "%.2f", pitch_instability), "Amount of read head modulation");
+panel_pitch.pitch_slowness.draw_slider("SLOWNESS [ms]", sprintf(1, "%.1f", pitch_slowness), "Speed at which read head modulates");
 
 panel_shimmer.set_position(panel_offset_x + 200, panel_offset_y + 240, 132, 6);
 panel_shimmer.panel_title("SHIMMER");
 panel_shimmer.panel_edge(80, 175, 0, 0);
-panel_shimmer.shimmer_amount.draw_slider("AMOUNT", sprintf(1, "%.2f", shimmer_amount));
-panel_shimmer.shimmer_lp_freq.draw_slider("FREQ", sprintf(1, "%d", shimmer_lp_freq));
+panel_shimmer.shimmer_amount.draw_slider("AMOUNT", sprintf(1, "%.2f", shimmer_amount), "Shimmer mix");
+panel_shimmer.shimmer_lp_freq.draw_slider("FREQ", sprintf(1, "%d", shimmer_lp_freq), "Shimmer lowpass frequency");
 
 gfx_dest = -1;
 gfx_mode = 4;
@@ -494,6 +591,106 @@ gfx_a = 1.0;
 bat7.draw_sprite(110, 441, 6, 31, 0.25, 0.003);
 bat8.draw_sprite(120, 439, 5, 21, 0.25, 0.003);
 
+
+function power_arc(x, y, h, t)
+local(i, n, yy, yy2, xx, xx2)
+(
+  n = 30;
+
+  i = 0;
+  loop(n,
+
+    i / n <= t ? (
+      yy  = y + h * i / n;
+      yy2 = y + h * (i + 1) / n;
+
+      xx  = x + (rand(1) * 2 - 1) * 4;
+      xx2 = x + (rand(1) * 2 - 1) * 4;
+
+      gfx_set(0.6, 0.8, 1, 0.3);
+      gfx_line(xx, yy, xx2, yy2);
+
+      gfx_set(1, 0.9, 1, 1);
+      gfx_line(xx, yy, xx2, yy2);
+    );
+
+    i += 1;
+  );
+);
+
+function particle_line(particle_mem, x, y, h, n_particles, block_new, particle_pow)
+local(ix, _x, _y, _life)
+global(particle_mem, scaling)
+(
+  ix = 0;
+  loop(n_particles,
+    (particle_mem[ix] <= 0 && !block_new) ? (
+      particle_mem[ix] = 20 * rand();
+      particle_mem[ix + 1] = x;
+      particle_mem[ix + 2] = y + rand() * h;
+    ) : (
+      particle_mem[ix] -= 1;
+      particle_mem[ix + 1] += (rand() - 0.5) * particle_pow;
+      particle_mem[ix + 2] += (rand() - 0.5) * particle_pow;
+      
+      _x = particle_mem[ix + 1];
+      _y = particle_mem[ix + 2];
+      _life = min(1.0, particle_mem[ix] * 0.3);
+      gfx_set(1, 0.6, 1.5, 0.4 * _life);
+      gfx_rect(scaling * (_x - 1), scaling * (_y - 1), 3 * scaling, 3 * scaling);
+      gfx_set(1, 1, 1, _life);
+      gfx_rect(scaling * _x, scaling * _y, scaling, scaling);
+    );
+    
+    ix += 3;
+  );
+);
+
+function core_line(x, y, h, w)
+global(scaling)
+local()
+(
+  (w > 0) ? (
+    gfx_set(1, 0.6, 1, 0.4);
+    gfx_rect((x - w) * scaling, y * scaling, (2 * w + 1) * scaling, h * scaling);
+    gfx_set(1, 0.8, 1, 1);
+    gfx_rect((x - w + 1) * scaling, y * scaling, (2 * w - 1) * scaling, h * scaling);
+  );
+);
+
+gfx_mode = 1;
+
+
+function emitter(mem, x, y, h)
+global()
+instance(t)
+local(num, frac, block_new)
+(
+  t < 70 ? (
+    block_new = 0;
+    num = min(20, t);
+    
+    frac = t < 50 ? 1 - (t - 44) / 50 : (t - 50) / 5;
+    frac = 1.8 * max(0, 1 - frac * frac);
+    core_line(x, y, h, frac);
+  ) : (
+    block_new = 1;
+  );
+  particle_line(mem, x, y, h, num, block_new, 1.0 + frac);
+  t += 1;
+  t > 5000 ? t = 0;
+);
+
+
+spire1.emitter(particles, 662, 0, 140);
+spire2.emitter(particles2, 629, 0, 134);
+spire3.emitter(particles3, 647, 0, 70);
+
+
+gfx_mode = 0;
+
+
+
 gfx_a = 0.4;
 drop1.draw_sprite(466, 471, 7, 8, 0.25, 0.003);
 drop2.draw_sprite(468, 468, 7, 8, 0.25, 0.003);
@@ -503,13 +700,16 @@ gfx_a = 0.5;
 drop4.draw_sprite(511, 468, 7, 8, 0.25, 0.003);
 drop5.draw_sprite(311, 468, 7, 8, 0.25, 0.01);
 
+hinter.draw_hints();
+
 last_cap = mouse_cap;
 rel_mouse_dx = (mouse_x - last_mouse_x) / scaling;
 rel_mouse_dy = (mouse_y - last_mouse_y) / scaling;
 last_mouse_x = mouse_x;
 last_mouse_y = mouse_y;
 
-
+@block
+lpg.init_lpg_rates();
 
 @sample
 slider_changed ? (
@@ -517,7 +717,41 @@ slider_changed ? (
   slider_changed = 0;
 );
 
-verb.process(spl0 + fb_l, spl1 + fb_r);
+function run_lpg(left, right)
+global(lpg_level)
+instance(smooth_lpg, out_left, out_right)
+local(smooth_lpg_iterp)
+(
+  smooth_lpg = 0.001 * max(0.95, lpg_level) + 0.999 * smooth_lpg;
+  
+  (smooth_lpg < 0.9999) ? (
+    this.lpg_update(left, right);
+    smooth_lpg_iterp = (smooth_lpg - 0.95) * 20;
+    out_left = this.lpg_LP1(left) * (1.0 - smooth_lpg_iterp) + left * smooth_lpg_iterp;
+    out_right = this.lpg_LP2(right) * (1.0 - smooth_lpg_iterp) + right * smooth_lpg_iterp;
+  ) : (
+    out_left = left;
+    out_right = right;
+  );
+);
+
+
+(lpg_wiring == 2) ? (
+  lpg.run_lpg(spl0, spl1);
+  spl0 = lpg.out_left;
+  spl1 = lpg.out_right;
+);
+
+tank_input_left = spl0 + fb_l;
+tank_input_right = spl1 + fb_r;
+
+(lpg_wiring == 0) ? (
+  lpg.run_lpg(tank_input_left, tank_input_right);
+  tank_input_left = lpg.out_left;
+  tank_input_right = lpg.out_right;
+);
+
+verb.process(tank_input_left, tank_input_right);
 fb_l = fb_r = 0;
 
 ((noise_level > 0) || (drive > 0)) ? (
@@ -578,6 +812,19 @@ drift_noise = noise.slow_noise_sample();
 verb.out_l = pitch_drift_left.pitch_drift_sample(verb.out_l, pitch_instability, drift_noise);
 verb.out_r = pitch_drift_right.pitch_drift_sample(verb.out_r, pitch_instability, drift_noise);
 
+
+(lpg_wiring == 1) ? (
+  lpg.run_lpg(verb.out_l, verb.out_r);
+  verb.out_l = lpg.out_left;
+  verb.out_r = lpg.out_right;
+);
+
 spl0 = spl0 * (1 - drywet) + verb.out_l * drywet;
 spl1 = spl1 * (1 - drywet) + verb.out_r * drywet;
+
+(lpg_wiring == 3) ? (
+  lpg.run_lpg(spl0, spl1);
+  spl0 = lpg.out_left;
+  spl1 = lpg.out_right;
+);
 

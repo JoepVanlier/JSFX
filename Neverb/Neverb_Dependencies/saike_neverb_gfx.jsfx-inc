@@ -1,5 +1,4 @@
 @init
-
 function make_font_atlas(dest)
 local(dim_w, dim_h)
 global(gfx_dest)
@@ -53,6 +52,121 @@ global(gfx_dest, gfx_x, gfx_a, gfx_mode)
   );
   
   gfx_x = xc;
+);
+
+function scaled_txt_blit(font, str, x, y, scale)
+local(ix, row, c_char, src_x, src_y, x_start, xc, yc, old_dest, old_mode)
+global(gfx_dest, gfx_x, gfx_a, gfx_mode)
+(
+  ix = 0;
+  xc = x;
+  yc = y;
+  
+  // W = 40 for coz
+  
+  old_mode = gfx_mode;
+  gfx_mode = 4;
+  x_start = x;
+  loop(strlen(str),
+    c_char = str_getchar(str, ix, 'cu');
+    (c_char == 10) ? (
+      yc += 5 * scale;
+      xc = x_start;
+    ) : (
+      c_char -= 16 * 2;
+      row = floor(c_char / 16);
+      src_y = 13 * row;
+      src_x = 14 * (c_char - row * 16);
+      gfx_a = 1.0;
+      gfx_blit(font, scale, 0, src_x, src_y, 14, 13, xc, yc, 14 * scale, 13 * scale, 0, 0); 
+      gfx_a = 0.5;
+      gfx_blit(font, scale, 0, src_x + 1, src_y, 14, 13, xc, yc, 14 * scale, 13 * scale, 0, 0); 
+      xc += 7 * scale;
+    );
+    ix += 1;
+  );
+  
+  gfx_x = xc;
+  gfx_mode = old_mode;
+);
+
+function set_hint(hint, _font)
+global(gfx_x, gfx_y, mouse_x, mouse_y, mouse_cap)
+local()
+instance(lx, ly, lc, hint_time, current_hint, delta_time, font)
+(
+  ( (lc != mouse_cap) || ( abs(lx - mouse_x) + abs(ly - mouse_y)) > 0 ) ? (
+    hint_time = 0;
+  ) : (      
+    (hint != 0) ? (
+      font = _font;
+      current_hint = hint;
+      hint_time = hint_time + delta_time;
+      hint_time = min(1, hint_time)
+    ) : (
+      0
+    )
+  );
+  
+  lx = mouse_x;
+  ly = mouse_y;
+  lc = mouse_cap;
+);
+
+
+function txt_measure(str, scale)
+local(ix, row, c_char, src_x, src_y, xc, yc, tx_max)
+global()
+instance(txt_w, txt_h)
+(
+  ix = 0;
+  xc = 0;
+  yc = 0;
+  tx_max = 0;
+  loop(strlen(str),
+    c_char = str_getchar(str, ix, 'cu');
+    (c_char == 10) ? (
+      yc += 13 * scale;
+      tx_max = max(xc, tx_max);
+      xc = 0;
+    ) : (
+      xc += 7 * scale;
+    );
+    ix += 1;
+  );
+  
+  txt_w = max(xc + 6, tx_max);
+  txt_h = yc + 13 * scale;
+);
+
+function draw_hints()
+global(
+  gfx_x, gfx_y, mouse_x, mouse_y, img_w, img_h,
+  x_offset, y_offset, scaling,
+)
+local(w, h)
+instance(hint_time, current_hint, last_global_time, global_time, delta_time, txt_w, txt_h, font)
+(
+  this.set_hint(0, 0);
+
+  global_time = time_precise();
+  delta_time = global_time - last_global_time;
+  last_global_time = global_time;
+
+  ( hint_time > .99 ) ? (
+    gfx_x = (mouse_x - x_offset + 15);
+    gfx_y = (mouse_y - y_offset + 15);
+    
+    this.txt_measure(current_hint, scaling);
+    
+    ( gfx_x > 0.5 * img_w ) ? gfx_x = (mouse_x - x_offset + 15) - txt_w - 8;
+    ( gfx_y > 0.5 * img_h ) ? gfx_y = (mouse_y - y_offset) - txt_h;
+    
+    gfx_set(0.05, 0.05, 0.1, 1.0);
+    gfx_rect(gfx_x - 1, gfx_y - 1, txt_w + 2, txt_h + 1);
+    gfx_set(0.5, 0.5, 0.5, 0.6);
+    scaled_txt_blit(font, current_hint, gfx_x, gfx_y, scaling);
+  );
 );
 
 function init_slider(_me, _slider_idx, _min, _max, _mapping, _default)
@@ -166,7 +280,7 @@ local(tx_base, y_height, x_width)
   );
 );
 
-function draw_slider(label, value)
+function draw_slider(label, value, hint)
 local(yc, xpip, ypip, pip_w, change)
 instance(
   x, y, w, h,
@@ -177,7 +291,7 @@ instance(
   slider_idx,
   min_value, max_value, mapping,
 )
-global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, rel_mouse_dx, rel_mouse_dy, gfx_a, slider_changed)
+global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, rel_mouse_dx, rel_mouse_dy, gfx_a, slider_changed, hinter.set_hint)
 (
   // Derive position from panel?
   (w == 0 && h == 0 && this..w != 0 && this..h != 0) ? (
@@ -229,6 +343,7 @@ global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, rel_mouse_dx, 
     // Release
     (global_cap == me) ? (
       global_cap = 0;
+      slider_automate(slider(slider_idx), 1);
     );
   );
   
@@ -268,28 +383,32 @@ global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, rel_mouse_dx, 
   gfx_set(this..c1.r, this..c1.g, this..c1.b, 1.0);
   txt_blit(this..font, value, x + w + 5, yc - 0.5 * h);
   
+  over ? (
+    hinter.set_hint(hint, this..font);
+  );
+  
   change ? (
     slider_idx ? (
       (mapping == 0) ? (
         // Linear
-        slider(slider_idx) = val * (max_value - min_value) + min_value;
+        slider_automate(slider(slider_idx) = val * (max_value - min_value) + min_value, 0);
       ) : (
         // Log
-        slider(slider_idx) = exp((log(max_value) - log(min_value)) * val + log(min_value));
+        slider_automate(slider(slider_idx) = exp((log(max_value) - log(min_value)) * val + log(min_value)), 0);
       );
     );
     slider_changed = 1;
   );
 );
 
-function draw_toggle(label, value, w, offset, height, want_edge)
+function draw_toggle(label, value, w, offset, height, want_edge, hint)
 local(val, xc, height)
 instance(
   slider_idx,
   x, y,
   over,
 )
-global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, slider_changed)
+global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, slider_changed, hinter.set_hint)
 (
   val = slider(slider_idx);
   
@@ -309,15 +428,20 @@ global(rel_mouse_x, rel_mouse_y, last_cap, mouse_cap, global_cap, slider_changed
   want_edge ? gfx_rect(xc, y, w, height, 0);
   
   gfx_set(this..c1.r, this..c1.g, this..c1.b, 1.0);
-  txt_blit(this..font, label, xc + 0.5 * (w - strlen(label) * 8), y + 0.5 * (height - 12));
+  txt_blit(this..font, label, xc + 0.5 * (w - strlen(label) * 8) - 1, y + 0.5 * (height - 12));
 
   gfx_set(this..c1.r, this..c1.g, this..c1.b, 1.0);
   //gfx_rect(x, yc, w * val, h);
+  
+  over ? (
+    hinter.set_hint(hint, this..font);
+  );
   
   (over && (last_cap == 0) && (mouse_cap == 1) && (global_cap == 0)) ? (
     (value != val) ? (
       slider_changed = 1;
       slider(slider_idx) = value;
+      slider_automate(slider(slider_idx), 0);
     );
   )
 );
