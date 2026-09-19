@@ -6,7 +6,7 @@ slider3:high_decay_time=2.49<0.1,30,0.01>-High RT60
 slider4:crossover=4940<50,12000,10:log>-Crossover
 slider5:mod_depth=0.411<0,1,0.001>-Mod Depth
 slider6:mod_rate=0.67<0.001,1,0.001>-Mod Rate
-slider7:freeze=0<0,1,1{Normal,Freeze}>-Freeze
+slider7:freeze=0<0,2,1{Normal,Freeze,MIDI}>-Freeze
 slider8:freeze_time=0.361<0.001,2,0.001>-Freeze Transition
 slider9:stereo_width=1.0<0,1,0.001>-Stereo width
 
@@ -30,10 +30,13 @@ slider22:extra_voice_type=0<0,2,1{+7,+12,+0.5,-5,-12}>-Extra voice semitones
 slider23:retro_level=0<0, 1, 0.0001>-Retro level
 slider24:retro_mode=0<0, 3, 1{Peaks Mid,Peaks High,Side swoosh,Center swoosh}>-Retro mode
 slider25:stereo_mode=0<0, 2, 1{Width,Front/Back,Smart}>-Stereo mode
+slider26:eq_curve=0<0,8,1>-EQ curve
 
 import saike_shimmer_fdn.jsfx-inc
 import saike_nonlinear_fx.jsfx-inc
 import saike_neverb_gfx.jsfx-inc
+import saike_neverb_midi.jsfx-inc
+import saike_neverb_eqs.jsfx-inc
 
 @init
 function init_linearSVF_absolute(f0, res)
@@ -216,23 +219,37 @@ noise2.init_slow_noise(pitch_slowness);
 freemem = 0;
 
 freemem = verb.init_verb(freemem);
+freemem = verb2.init_verb(freemem);
+freemem = verb3.init_verb(freemem);
+freemem = verb4.init_verb(freemem);
 freemem = pitch_drift_left.pitch_drift_init(freemem);
 freemem = pitch_drift_right.pitch_drift_init(freemem);
 freemem = diff.init_simple_diffuser(freemem);
 freemem = diff.init_harmonizer(freemem);
 freemem = diff2.init_simple_diffuser(freemem);
 freemem = diff2.init_harmonizer(freemem);
+freemem = midi.init_midi(freemem);
 
 freemem = (particles = freemem) + 90;
 freemem = (particles2 = freemem) + 90;
 freemem = (particles3 = freemem) + 90;
+
+function update_freeze()
+(
+  verb.freeze_target = freeze > 0;
+  verb.freeze_time = freeze_time;
+);
+
 function update_settings()
 (
   verb.set_verb(low_decay_time, high_decay_time, crossover, mod_depth, mod_rate, stereo_mode == 0 ? stereo_width : 1.0, shimmer_amount, shimmer_lp_freq);
-  verb.freeze_target = freeze;
-  verb.freeze_time = freeze_time;
+  verb2.set_verb(low_decay_time, high_decay_time, crossover, mod_depth, mod_rate, stereo_mode == 0 ? stereo_width : 1.0, shimmer_amount, shimmer_lp_freq);
+  verb3.set_verb(low_decay_time, high_decay_time, crossover, mod_depth, mod_rate, stereo_mode == 0 ? stereo_width : 1.0, shimmer_amount, shimmer_lp_freq);
+  verb4.set_verb(low_decay_time, high_decay_time, crossover, mod_depth, mod_rate, stereo_mode == 0 ? stereo_width : 1.0, shimmer_amount, shimmer_lp_freq);
   noise.init_slow_noise(pitch_slowness);
   noise2.init_slow_noise(pitch_slowness);
+  
+  update_freeze();
 );
 
 update_settings();
@@ -369,6 +386,20 @@ panel_mix.panel_edge(85, 175, 130, 100);
 panel_mix.drywet.draw_slider("DRY/WET", sprintf(1, "%.2f", drywet), "Dry / wet mix");
 panel_mix.stereo_width.draw_slider("STEREO WIDTH", sprintf(1, "%.2f", stereo_width), "Set stereo width");
 
+panel_mix.eq_curve.slider_idx = 26;
+panel_mix.eq_curve.y = panel_mix.drywet.y + 1;
+panel_mix.eq_curve.x = panel_mix.drywet.x + 55;
+panel_mix.eq_curve.draw_toggle("-", 0, 12, 0, 10, 0, "No EQ curve");
+panel_mix.eq_curve.draw_toggle("1", 1, 12, 13, 10, 0, "EQ curve 1");
+panel_mix.eq_curve.draw_toggle("2", 2, 12, 26, 10, 0, "EQ curve 2");
+panel_mix.eq_curve.draw_toggle("3", 3, 12, 39, 10, 0, "EQ curve 3");
+panel_mix.eq_curve.draw_toggle("4", 4, 12, 52, 10, 0, "EQ curve 4");
+panel_mix.eq_curve.draw_toggle("5", 5, 12, 65, 10, 0, "EQ curve 5");
+//panel_mix.eq_curve.draw_toggle("6", 1, 12, 0, 10, 0, "EQ curve 1");
+//panel_mix.eq_curve.draw_toggle("7", 1, 12, 0, 10, 0, "EQ curve 1");
+//panel_mix.eq_curve.draw_toggle("8", 1, 12, 0, 10, 0, "EQ curve 1");
+//panel_mix.eq_curve.draw_toggle("9", 1, 12, 0, 10, 0, "EQ curve 1");
+
 panel_mix.stereo_mode.slider_idx = 25;
 panel_mix.stereo_mode.y = panel_mix.stereo_width.y + 1;
 panel_mix.stereo_mode.x = panel_mix.stereo_width.x + 90;
@@ -394,11 +425,12 @@ panel_freeze.panel_title("FREEZE");
 panel_freeze.panel_edge(85, 175, 0, 0);
 panel_freeze.freeze_time.draw_slider("FREEZE TIME", sprintf(1, "%.2f", freeze_time), "Time for freeze to initiate");
 panel_freeze.freeze_mode.slider_idx = 7;
-panel_freeze.freeze_mode.draw_toggle("OFF", 0, 80, 0, 25, 1, "Let reverb decay freely");
-panel_freeze.freeze_mode.draw_toggle("ON", 1, 80, 84, 25, 1, "Freeze audio in the reverb");
+panel_freeze.freeze_mode.draw_toggle("OFF", 0, 50, 0, 25, 1, "Let reverb decay freely");
+panel_freeze.freeze_mode.draw_toggle("ON", 1, 50, 56, 25, 1, "Freeze audio in the reverb");
+panel_freeze.freeze_mode.draw_toggle("MIDI", 2, 50, 112, 25, 1, "Freeze audio but switch tank when\nnumber of midi notes goes from\nzero to more than zero.");
 
 panel_nonlinear.set_position(panel_offset_x + 400, panel_offset_y + 125, 112, 6);
-panel_nonlinear.panel_title("NON-LINEAR");
+panel_nonlinear.panel_title("EFFECTS");
 panel_nonlinear.panel_edge(175, 155, 65, 0);
 panel_nonlinear.drive.draw_slider("DRIVE", sprintf(1, "%.2f", drive), "Drive amount");
 panel_nonlinear.bias.draw_slider("BIAS", sprintf(1, "%d", bias), "Bias amount (makes drive more tube-like)");
@@ -410,8 +442,8 @@ panel_nonlinear.lpg_wiring.y = panel_nonlinear.lpg_level.y + 1;
 panel_nonlinear.lpg_wiring.x = panel_nonlinear.lpg_level.x + 47;
 panel_nonlinear.lpg_wiring.draw_toggle("T", 0, 13, 0, 10, 0, "Muffle audio going into reverb");
 panel_nonlinear.lpg_wiring.draw_toggle("R", 1, 13, 14, 10, 0, "Muffle reverb output (wet only)");
-panel_nonlinear.lpg_wiring.draw_toggle("I", 2, 13, 27, 10, 0, "Muffle full input");
-panel_nonlinear.lpg_wiring.draw_toggle("O", 3, 13, 40, 10, 0, "Muffle full output (wet and dry)");
+panel_nonlinear.lpg_wiring.draw_toggle("I", 2, 13, 28, 10, 0, "Muffle full input");
+panel_nonlinear.lpg_wiring.draw_toggle("O", 3, 13, 42, 10, 0, "Muffle full output (wet and dry)");
 
 panel_nonlinear.noise_level.draw_slider("NOISE", sprintf(1, "%.2f", noise_level), "Noise level");
 
@@ -426,9 +458,9 @@ panel_nonlinear.noise_type.y = panel_nonlinear.noise_level.y + 1;
 panel_nonlinear.noise_type.x = panel_nonlinear.noise_level.x + 40;
 panel_nonlinear.noise_type.draw_toggle("1", 0, 13, 0, 10, 0, "Noise type 1");
 panel_nonlinear.noise_type.draw_toggle("2", 1, 13, 14, 10, 0, "Noise type 2");
-panel_nonlinear.noise_type.draw_toggle("3", 2, 13, 27, 10, 0, "Noise type 3");
-panel_nonlinear.noise_type.draw_toggle("4", 3, 13, 40, 10, 0, "Vinyl crackle");
-panel_nonlinear.noise_type.draw_toggle("5", 4, 13, 53, 10, 0, "Granular octaver");
+panel_nonlinear.noise_type.draw_toggle("3", 2, 13, 28, 10, 0, "Noise type 3");
+panel_nonlinear.noise_type.draw_toggle("4", 3, 13, 42, 10, 0, "Vinyl crackle");
+panel_nonlinear.noise_type.draw_toggle("5", 4, 13, 56, 10, 0, "Granular octaver");
 
 panel_pitch.set_position(panel_offset_x + 5, panel_offset_y + 240, 132, 6);
 panel_pitch.panel_title("RETRO");
@@ -443,8 +475,8 @@ panel_pitch.retro_mode.y = panel_pitch.retro_level.y + 1;
 panel_pitch.retro_mode.x = panel_pitch.retro_level.x + 20;
 panel_pitch.retro_mode.draw_toggle("1", 0, 13, 0, 10, 0, "Peaks mid");
 panel_pitch.retro_mode.draw_toggle("2", 1, 13, 14, 10, 0, "Peaks high");
-panel_pitch.retro_mode.draw_toggle("3", 2, 13, 27, 10, 0, "Side swoosh");
-panel_pitch.retro_mode.draw_toggle("4", 3, 13, 40, 10, 0, "Mid swoosh");
+panel_pitch.retro_mode.draw_toggle("3", 2, 13, 28, 10, 0, "Side swoosh");
+panel_pitch.retro_mode.draw_toggle("4", 3, 13, 42, 10, 0, "Mid swoosh");
 
 panel_shimmer.set_position(panel_offset_x + 200, panel_offset_y + 240, 132, 6);
 panel_shimmer.panel_title("SHIMMER");
@@ -454,13 +486,13 @@ panel_shimmer.shimmer_lp_freq.draw_slider("SHIMMER FREQ", sprintf(1, "%d", shimm
 
 panel_shimmer.extra_voice.draw_slider("HARMONIZE", sprintf(1, "%.2f", extra_voice), "Harmonizer mix\n\n\nAdds harmonization to the input\ngoing into the reverb");
 panel_shimmer.extra_voice_type.y = panel_shimmer.extra_voice.y + 1;
-panel_shimmer.extra_voice_type.x = panel_shimmer.extra_voice.x + 70;
+panel_shimmer.extra_voice_type.x = panel_shimmer.extra_voice.x + 68;
 panel_shimmer.extra_voice_type.slider_idx = 22;
-panel_shimmer.extra_voice_type.draw_toggle("1", 0, 13, 0, 10, 0, "+7 semitones");
-panel_shimmer.extra_voice_type.draw_toggle("2", 1, 13, 14, 10, 0, "+12 semitones");
-panel_shimmer.extra_voice_type.draw_toggle("3", 2, 13, 27, 10, 0, "+- 0.5 semitones");
-panel_shimmer.extra_voice_type.draw_toggle("4", 3, 13, 40, 10, 0, "-7 semitones");
-panel_shimmer.extra_voice_type.draw_toggle("5", 4, 13, 53, 10, 0, "-12 semitones");
+panel_shimmer.extra_voice_type.draw_toggle("1", 0, 12, 0, 10, 0, "+7 semitones");
+panel_shimmer.extra_voice_type.draw_toggle("2", 1, 12, 13, 10, 0, "+12 semitones");
+panel_shimmer.extra_voice_type.draw_toggle("3", 2, 12, 26, 10, 0, "+- 0.5 semitones");
+panel_shimmer.extra_voice_type.draw_toggle("4", 3, 12, 39, 10, 0, "-7 semitones");
+panel_shimmer.extra_voice_type.draw_toggle("5", 4, 12, 52, 10, 0, "-12 semitones");
 
 gfx_dest = -1;
 gfx_mode = 4;
@@ -537,8 +569,8 @@ instance(xc, yc, xt, yt, new_pos)
 );
 
 
-function mouse_run(x, y, w, h)
-local()
+function mouse_run(x, y, w, h, speed)
+local(r)
 instance(dx, dy, cx, cy, nx, ny)
 global(scaling)
 (
@@ -549,15 +581,16 @@ global(scaling)
     ny = y + rand() * h;
   );
   
-  (rand() < 0.05) ? (
+  r = rand();
+  ((r + r) < speed) ? (
     nx = x + rand() * w;
     ny = y + rand() * h;
   );
   dx = nx - cx;
   dy = ny - cy;
   
-  cx += 0.1 * dx;
-  cy += 0.1 * dy;
+  cx += speed * dx;
+  cy += speed * dy;
   
   (abs(dx) + abs(dy) < 0.3) ? (
     gfx_rect(cx, cy - 1, 1, 1);
@@ -588,10 +621,14 @@ firefly8.draw_mosquito(268, 430, 2.0);
 gfx_set(0, 0, 0, 1.0);
 butterfly.draw_mosquito(20, 311, 1.0);
 
-mouse1.mouse_run(636, 462, 70, 15);
-mouse2.mouse_run(114, 450, 70, 15);
-mouse3.mouse_run(636, 462, 70, 15);
-mouse4.mouse_run(114, 450, 70, 15);
+mouse1.mouse_run(636, 462, 70, 15, 0.08);
+mouse2.mouse_run(114, 450, 70, 15, 0.08);
+mouse3.mouse_run(636, 462, 70, 15, 0.07);
+mouse4.mouse_run(114, 450, 70, 15, 0.06);
+
+gfx_a = 0.8;
+mouse5.mouse_run(18, 80, 10, 70, 0.04);
+
 
 bird1.draw_sprite(550, 91, 0, 13, 0.25, 0.005);
 bird2.draw_sprite(4, 218, 0, 13, 0.25, 0.005);
@@ -750,6 +787,7 @@ last_mouse_x = mouse_x;
 last_mouse_y = mouse_y;
 
 @block
+midi.midi_block(pass_through);
 lpg.init_lpg_rates();
 splitter.init_bandsplit(110, stereo_mode < 2 ? 3000 : 3000);
 resonator_r1 = pow(0.999995, 48000.0 / srate);
@@ -777,6 +815,22 @@ slider_changed ? (
   update_settings();
   slider_changed = 0;
 );
+
+midi.curSample += 1;
+midi.notes_remain ? (
+  // Reset if MIDI stuff updated
+  midi_input = 1;
+  midi.midi_sample(midi_input) ? (
+    settings_changed = 1;
+  );
+);
+
+((last_notes_on == 0) && (midi.notes_on > 0)) ? (
+  current_frozen_verb += 1;
+  current_frozen_verb > 3 ? current_frozen_verb = 0;
+);
+
+last_notes_on = midi.notes_on;
 
 function run_lpg(left, right)
 global(lpg_level)
@@ -818,13 +872,39 @@ extra_voice ? (
   tank_input_right = lpg.out_right;
 );
 
-verb.process(tank_input_left, tank_input_right);
+(freeze == 2) ? (
+  verb.force_inject = 1;
+  verb2.force_inject = 1;
+  verb3.force_inject = 1;
+  verb4.force_inject = 1;
+  
+  verb.freeze_target = current_frozen_verb == 0;
+  verb.process(tank_input_left * verb.freeze_target, tank_input_right * verb.freeze_target);
+  
+  verb2.freeze_target = current_frozen_verb == 1;
+  verb2.process(tank_input_left * verb2.freeze_target, tank_input_right * verb2.freeze_target);
+  
+  verb3.freeze_target = current_frozen_verb == 2;
+  verb3.process(tank_input_left * verb3.freeze_target, tank_input_right * verb3.freeze_target);
+  
+  verb4.freeze_target = current_frozen_verb == 3;
+  verb4.process(tank_input_left * verb4.freeze_target, tank_input_right * verb4.freeze_target);
+  
+  verb_out_left = verb.out_l + verb2.out_l + verb3.out_l + verb4.out_l;
+  verb_out_right = verb.out_r + verb2.out_r + verb3.out_r + verb4.out_r;
+  
+  verb.force_inject = 0;
+  verb2.force_inject = 0;
+  verb3.force_inject = 0;
+  verb4.force_inject = 0;
+) : (
+  verb.process(tank_input_left, tank_input_right);
+  verb_out_left = verb.out_l;
+  verb_out_right = verb.out_r;
+);
+
+
 fb_l = fb_r = 0;
-
-
-
-verb_out_left = verb.out_l;
-verb_out_right = verb.out_r;
 
 ((noise_level > 0) || (drive > 0)) ? (
   verb_out_left = l_compander.compander_compress(verb_out_left);
@@ -942,7 +1022,11 @@ verb_out_right = pitch_drift_right.pitch_drift_sample(verb_out_right, pitch_inst
 //  verb.out_r = last_r;
 //);
 
-
+eq_curve ? (
+  cabs.update_cabs(eq_curve, verb_out_left, verb_out_right);
+  verb_out_left = cabs.out_left;
+  verb_out_right = cabs.out_right;
+);
 
 spl0 = spl0 * (1 - drywet) + verb_out_left * drywet;
 spl1 = spl1 * (1 - drywet) + verb_out_right * drywet;
