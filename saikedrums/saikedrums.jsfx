@@ -292,9 +292,10 @@ global(samplesblock, invblock, MIN_GAIN, MAX_GAIN, mute, solo, mmm)
 instance(
   current_left, current_right, delta_left, delta_right, target_left, target_right, vel,
   gain_slider, pan_slider, gain_slider_vel, pan_slider_vel, total_gain,
-  alive,
+  alive, my_idx, ramp,
 )
 (
+  my_idx = me;
   new_panning = min(1, max(-1, slider(pan_slider) + vel * slider(pan_slider_vel)));
   new_gain = min(MAX_GAIN, max(MIN_GAIN, slider(gain_slider) + vel * slider(gain_slider_vel)));
 
@@ -306,8 +307,11 @@ instance(
   target_left = total_gain * sin(0.5 * (1.0 - pan) * $pi);
   target_right = total_gain * sin(0.5 * pan * $pi);
 
-  delta_left = (target_left - current_left) * invblock;
-  delta_right = (target_right - current_right) * invblock;
+  // Let a pending note-on ramp finish (check_alive snaps to target at its end)
+  ramp <= 0 ? (
+    delta_left = (target_left - current_left) * invblock;
+    delta_right = (target_right - current_right) * invblock;
+  );
 
   ((abs(delta_left) + abs(delta_right)) > 0.00000001) ? (
     alive = samplesblock;
@@ -315,26 +319,31 @@ instance(
 );
 
 function hard_update()
-local()
-global(samplesblock)
+local(n)
+global(samplesblock, srate)
 instance(
   current_left, current_right, delta_left, delta_right, target_left, target_right,
   vel,
   last_vel,
-  alive,
+  alive, my_idx, ramp,
 )
 (
-  // Only force a vel update immediately if it's louder (otherwise things get clicky)
-  (vel > last_vel) ? (
-    this.lerp_output_settings_block();
-    
+  this.lerp_output_settings_block(my_idx);
+  (vel >= last_vel) ? (
+    // Louder: snap immediately
     current_left = target_left;
     current_right = target_right;
     delta_left = 0;
     delta_right = 0;
-    
-    alive = samplesblock;
+    ramp = 0;
+  ) : (
+    // Softer: short ~1 ms ramp to avoid clicks on a ringing tail
+    n = max(1, floor(0.001 * srate));
+    delta_left = (target_left - current_left) / n;
+    delta_right = (target_right - current_right) / n;
+    ramp = n;
   );
+  alive = samplesblock;
   last_vel = vel;
 );
 
@@ -827,7 +836,7 @@ instance(lastWheel, smoothWheel, notePtr, remainingNotes, nextNote, curSample, p
 midi.processMIDISample();
 
 function check_alive(y)
-instance(ly, alive, hly, current_left, delta_left, current_right, delta_right, left_out, right_out)
+instance(ly, alive, hly, current_left, delta_left, current_right, delta_right, left_out, right_out, target_left, target_right, ramp)
 local()
 global()
 (
@@ -838,6 +847,15 @@ global()
 
   current_left += delta_left;
   current_right += delta_right;
+  ramp > 0 ? (
+    ramp -= 1;
+    ramp == 0 ? (
+      current_left = target_left;
+      current_right = target_right;
+      delta_left = 0;
+      delta_right = 0;
+    );
+  );
   left_out = y * current_left;
   right_out = y * current_right;
 );
