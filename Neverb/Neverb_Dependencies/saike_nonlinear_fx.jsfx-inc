@@ -1092,3 +1092,64 @@ global(srate)
   lp
 );
 
+function r2db(x)
+(
+  20 * log(x) / log(10);
+);
+
+function db2r(x)
+(
+  exp(x * log(10) / 20);
+);
+
+function ducker_init()
+instance(attack, release, tail, envelope, release_envelope)
+global(srate)
+local()
+(
+  attack = exp(-1 / (0.001 * srate));
+  release = exp(-1 / (0.10 * srate));
+  tail = exp(-1 / (0.100 * srate));
+);
+
+function ducker_process(left, right, amount)
+instance(attack, release, envelope, release_envelope)
+local(thresh, detector, level, target_gain)
+global()
+(
+  thresh = -40 * amount;
+  detector = max(abs(left), abs(right)) + 0.000001;
+  level = 8.685889638065036 * log(detector);  // r2db(detector);
+
+  target_gain = level > thresh ? -0.9 * (level - thresh) : 0;
+
+  release_envelope = min(target_gain, release * release_envelope + (1 - release) * target_gain);
+
+  envelope = attack * envelope + (1.0 - attack) * release_envelope;
+
+  exp(0.1151292546497023 * envelope);
+);
+
+
+function ducker_process(left, right, tail_left, tail_right, amount)
+instance(attack, release, tail, envelope)
+local(dry, tail_sample, dry_db, tail_db, target, coeff)
+global()
+(
+  dry = max(abs(left), abs(right)) + 0.000001;
+  dry_db = 8.685889638065036 * log(dry);
+
+  tail_sample = max(tail_left * tail_left, tail_right * tail_right);
+
+  tail = tail * tail + (1 - tail) * tail_sample;
+  tail_db = 4.342944819032518 * log(tail + 0.000000000001);
+
+  // duck when dry is louder than the tail.
+  target = min(0, -0.9 * (dry_db - tail_db) * amount);
+  coeff = target < envelope ? attack : release;
+
+  envelope = coeff * envelope + (1 - coeff) * target;
+
+  exp(0.1151292546497023 * envelope);
+);
+
