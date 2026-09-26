@@ -214,7 +214,7 @@ local(i)
   out_r = 0;
 );
 
-function set_verb(low_decay_time, high_decay_time, crossover, depth, rate, stereo_width, shimmer_amnt, shim_lp)
+function set_verb(low_decay_time, high_decay_time, crossover, depth, rate, stereo_width, shimmer_amnt, shim_lp, shim_mode)
 instance(
   len0,len1,len2,len3,
   len4,len5,len6,len7,
@@ -244,6 +244,8 @@ instance(
 
   osc_c0,osc_c1,osc_c2,osc_c3,
   osc_s0,osc_s1,osc_s2,osc_s3
+  
+  shimmer_mode, shim_inc,
 )
 globals(srate)
 local(
@@ -333,6 +335,10 @@ local(
   osc_s1 = sin(w1);
   osc_s2 = sin(w2);
   osc_s3 = sin(w3);
+  
+  shimmer_mode = shim_mode;
+  
+  shim_inc = 64 * 4 / srate;
 );
 
 
@@ -421,6 +427,44 @@ local(r, i, f, im1, ip1, a,b,c)
   b + 0.5*f*(c-a + f*(a-2*b+c))
 );
 
+function gross_pitch_detect(x)
+local(y)
+instance(
+  level,
+  lp_coeff, hp_coeff, hp_state, lp1, lp2, lp3, lp4, last_lp4,
+  samples_since_crossing, detected_period,
+  phase, phase_inc,
+)
+global()
+(
+  hp_coeff = 0.0005;
+  lp_coeff = 0.02;
+  level += 0.001 * (abs(x) - level);;
+
+  (level > 0.001) ? (
+    hp_state += hp_coeff * (x - hp_state);
+    y = x - hp_state;
+    lp1 += lp_coeff * (y  - lp1);
+    lp2 += lp_coeff * (lp1 - lp2);
+    lp3 += lp_coeff * (lp2 - lp3);
+    lp4 += lp_coeff * (lp3 - lp4);
+    
+    (lp4 >= 0.0 && last_lp4 < 0.0) ? (
+        detected_period += 0.1 * (samples_since_crossing - detected_period);
+        samples_since_crossing = 0;
+        phase_inc = 0.5 / detected_period;
+    );
+    
+    samples_since_crossing += 1;
+    last_lp4 = lp4;
+  );
+  
+  phase += phase_inc;
+  (phase >= 1.0) ? phase -= 1.0;
+  
+  phase
+);
+
 function process(in_l, in_r)
 instance(
   d0,d1,d2,d3,d4,d5,d6,d7,
@@ -448,8 +492,9 @@ instance(
   shimmer_amount,
   shim_buf, ptr_s, shim_offset, shim_mask, half_shim_size,
   force_inject,
+  shimmer_mode, shim_inc, shim_phase, shim_lfo,
 )
-globals(srate, nonlinear)
+globals(srate, nonlinear, shimmer_mode)
 local(
   y0,y1,y2,y3,y4,y5,y6,y7,
   lo0,lo1,lo2,lo3,
@@ -473,7 +518,8 @@ local(
   side,
   sat, scale,
   inj_amount,
-  shim_phase, shim_gain, shim_val,
+  shim_phase, shim_gain, shim_val, lfo_counter,
+  leaky,
 )
 (
   freeze_amount +=
@@ -542,12 +588,49 @@ local(
 
   nonlinear ? h0 *= (1 + 0.1 * exp(-abs(h0)*10) * (1 - abs(h0)*10));
 
-  shim_offset = (shim_offset - 1) & shim_mask;
-  shim_phase = 1.0 - abs(shim_offset - half_shim_size) / half_shim_size;
-  shim_gain = shim_phase * shim_phase * (3.0 - 2.0 * shim_phase);
-  shim_val = shim_buf[(ptr_s - shim_offset) & shim_mask] * shim_gain + shim_buf[(ptr_s - shim_offset - half_shim_size) & shim_mask] * (1 - shim_gain);
-  
-  shim_val = lp_shim_state += (shim_val - lp_shim_state) * (1.0 - lp_shim);
+  (shimmer_mode < 5) ? (
+    (shimmer_mode === 0) ? (
+      shim_offset = (shim_offset - 1) & shim_mask;
+    ) : (
+      lfo_counter -= 1;
+      lfo_counter <= 0 ? (
+        lfo_counter = 64 - 20 * rand();
+        shim_phase += shim_inc;
+        shim_phase >= 2*$pi ? shim_phase -= 2*$pi;
+        shim_lfo = 0.03 * sin(shim_phase);
+      );
+    
+      shim_offset -= shim_lfo + (
+        (shimmer_mode === 1) ? 0.99 :
+        (shimmer_mode === 2) ? 0.49830707687 :
+        (shimmer_mode === 3) ? 0.33483985417 :
+        (shimmer_mode === 4) ? 0.41421
+      );
+      
+      shim_offset < 0 ? shim_offset += shim_mask + 1;
+    );
+    
+    shim_phase = 1.0 - abs(shim_offset - half_shim_size) / half_shim_size;
+    shim_gain = shim_phase * shim_phase * (3.0 - 2.0 * shim_phase);
+    shim_val = shim_buf[(ptr_s - shim_offset) & shim_mask] * shim_gain + shim_buf[(ptr_s - shim_offset - half_shim_size) & shim_mask] * (1 - shim_gain);
+    shim_val = lp_shim_state += (shim_val - lp_shim_state) * (1.0 - lp_shim);
+  ) : (shimmer_mode < 7) ? (
+    (shimmer_mode === 5) ? (
+      shim_val = abs(in_l + in_r);
+    ) : (shimmer_mode === 6) ? (
+      shim_val = in_l + in_r;
+      shim_val = shim_val + 0.9 * (shim_val * shim_val - abs(shim_val));
+    );
+    
+    leaky += 0.01 * (shim_val - leaky);
+    shim_val -= leaky;
+    shim_val = lp_shim_state += (shim_val - lp_shim_state) * (1.0 - lp_shim);
+  ) : (
+    shim_val = in_l + in_r;
+    //shim_val = sin(2.0 * $PI * this.pd.gross_pitch_detect(shim_val));
+    shim_val *= (this.pd.gross_pitch_detect(shim_val) < 0.5) ? 1.0 : 0.0;
+    shim_val = lp_shim_state += (shim_val - lp_shim_state) * (1.0 - lp_shim);
+  );
   
   in_l -= shimmer_amount * shim_val;
   in_r -= shimmer_amount * shim_val;
