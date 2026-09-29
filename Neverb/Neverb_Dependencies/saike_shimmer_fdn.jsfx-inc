@@ -1,3 +1,5 @@
+import saike_neverb_pitchlib.jsfx-inc
+
 @init
 function init_verb(freemem)
 instance(
@@ -37,8 +39,12 @@ instance(
 
   out_l,
   out_r
+  
+  shifter_shimmer,
+  shifter_down,
+  shifter_down2,
 )
-local(buffer_size)
+local(buffer_size, pitch_block_size, semitones)
 globals()
 (
   buffer_size = 65536;
@@ -53,6 +59,24 @@ globals()
   freemem = (d6 = freemem) + buffer_size;
   freemem = (d7 = freemem) + buffer_size;
   freemem = (shim_buf = freemem) + half_shim_size + half_shim_size;
+
+  pitch_block_size = 4*4096; /* We have 64 blocks of this */
+  freemem = shifter_shimmer.alloc_shifter(freemem, pitch_block_size);
+  freemem = shifter_down.alloc_shifter(freemem, pitch_block_size);
+  freemem = shifter_down2.alloc_shifter(freemem, pitch_block_size);
+
+  shifter_shimmer.update_shifter();
+  shifter_down.update_shifter();
+  shifter_down2.update_shifter();
+
+  semitones = 12;
+  shifter_shimmer.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+  
+  semitones = -12;
+  shifter_down.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
+
+  semitones = -24;
+  shifter_down2.setPitchShifterSpeed(2*((2^(semitones/12))-1.0));
 
   p = 0;
 
@@ -156,18 +180,17 @@ globals()
 
 function clear_verb()
 instance(
-  d0,d1,d2,d3,d4,d5,d6,d7,
+  d0, d1, d2, d3, d4, d5, d6, d7,
   p,
-
-  lp0,lp1,lp2,lp3,
-  lp4,lp5,lp6,lp7,
-
-  osc_x0,osc_x1,osc_x2,osc_x3,
-  osc_y0,osc_y1,osc_y2,osc_y3,
+  lp0, lp1, lp2, lp3, lp4, lp5, lp6, lp7,
+  osc_x0, osc_x1, osc_x2, osc_x3,
+  osc_y0, osc_y1, osc_y2, osc_y3,
 
   freeze_amount,
 
-  out_l,out_r
+  out_l, out_r,
+  
+  shifter_shimmer, shifter_down, shifter_down2,
 )
 globals()
 local(i)
@@ -212,6 +235,10 @@ local(i)
 
   out_l = 0;
   out_r = 0;
+  
+  shifter_shimmer.pitchlibClearBuffer();
+  shifter_down.pitchlibClearBuffer();
+  shifter_down2.pitchlibClearBuffer();
 );
 
 function set_verb(low_decay_time, high_decay_time, crossover, depth, rate, stereo_width, shimmer_amnt, shim_lp, shim_mode)
@@ -493,6 +520,8 @@ instance(
   shim_buf, ptr_s, shim_offset, shim_mask, half_shim_size,
   force_inject,
   shimmer_mode, shim_inc, shim_phase, shim_lfo,
+  
+  shifter_down, shifter_down2, shifter_shimmer,
 )
 globals(srate, nonlinear, shimmer_mode)
 local(
@@ -625,15 +654,31 @@ local(
     leaky += 0.01 * (shim_val - leaky);
     shim_val -= leaky;
     shim_val = lp_shim_state += (shim_val - lp_shim_state) * (1.0 - lp_shim);
-  ) : (
+  ) : (shimmer_mode == 7) ? (
     shim_val = in_l + in_r;
     //shim_val = sin(2.0 * $PI * this.pd.gross_pitch_detect(shim_val));
     shim_val *= (this.pd.gross_pitch_detect(shim_val) < 0.5) ? 1.0 : 0.0;
     shim_val = lp_shim_state += (shim_val - lp_shim_state) * (1.0 - lp_shim);
   );
   
-  in_l -= shimmer_amount * shim_val;
-  in_r -= shimmer_amount * shim_val;
+  (shimmer_mode < 8) ? (
+    in_l -= shimmer_amount * shim_val;
+    in_r -= shimmer_amount * shim_val;
+  ) : (
+    (shimmer_mode === 8) ? (
+      shifter_down.pitchShifterUpdate(in_l, in_r);
+      in_l -= 4.0 * shimmer_amount * shifter_down.outL;
+      in_r -= 4.0 * shimmer_amount * shifter_down.outR;
+    ) : (shimmer_mode === 9) ? (
+      shifter_down2.pitchShifterUpdate(in_l, in_r);
+      in_l -= 4.0 * shimmer_amount * shifter_down2.outL;
+      in_r -= 4.0 * shimmer_amount * shifter_down2.outR;      
+    ) : (shimmer_mode === 10) ? (
+      shifter_shimmer.pitchShifterUpdate(in_l, in_r);
+      in_l -= shimmer_amount * shifter_shimmer.outL;
+      in_r -= shimmer_amount * shifter_shimmer.outR;
+    );
+  );
 
   inj0 = norm*(in_l + in_r);
   inj1 = norm*(in_l - in_r);
