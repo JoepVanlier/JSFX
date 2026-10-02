@@ -1,16 +1,19 @@
 desc:Neverb (ALPHA)
 tags: reverb, effect
-version: 0.07
+version: 0.08
 author: Joep Vanlier
-changelog: add extra shimmer algo
+changelog: add interpolation for most things
 license: MIT
 provides:
   Neverb_Dependencies/*
   neverb.jsfx.rpl
 
 slider1:drywet=0.4<0,1,0.001>-Wet
+// TODO
 slider2:low_decay_time=3.37<0.1,30,0.01:log>-Low RT60
+// TODO
 slider3:high_decay_time=2.49<0.1,30,0.01:log>-High RT60
+// TODO
 slider4:crossover=4940<50,12000,10:log>-Crossover
 slider5:mod_depth=0.411<0,1,0.001>-Mod Depth
 slider6:mod_rate=0.67<0.001,1,0.001>-Mod Rate
@@ -40,7 +43,9 @@ slider25:stereo_mode=0<0, 2, 1{Width,Front/Back,Smart}>-Stereo mode
 slider26:eq_curve=0<0,8,1>-EQ curve
 
 slider27:shimmer_mode=0<0,9,1{Digital +12,Smooth +12,Smooth +7,Smooth +5,Evil Tritone,Rect,Fuzz,Down,-12 HQ,-24 HQ,+12 HQ>-Shimmer mode
+// TODO X
 slider28:ducker_amount=0<0,1,0.0001>-Ducking amount
+
 
 import saike_shimmer_fdn.jsfx-inc
 import saike_nonlinear_fx.jsfx-inc
@@ -49,6 +54,19 @@ import saike_neverb_midi.jsfx-inc
 import saike_neverb_eqs.jsfx-inc
 
 @init
+function init_currents()
+(
+  current_drywet = drywet;
+  current_noise_level = noise_level;
+  current_drive = drive;
+  current_bias = bias;
+  current_pitch_instability = pitch_instability;
+  current_lpg_level = lpg_level;
+  current_retro_level = retro_level;
+  current_ducker_amount = ducker_amount;
+);
+init_currents();
+
 anim_trigger = 1;
 lpg.smooth_lpg = max(0.95, lpg_level);
 retro_left.lamt = -1;
@@ -113,7 +131,7 @@ instance(k_atk, k_decay)
 );
 
 function lpg_update(spl0, spl1)
-global(lpg_level)
+global(current_lpg_level)
 local(cur, gate)
 instance(c_sample, k_decay, k_atk, state, gate_freq)
 (
@@ -122,7 +140,7 @@ instance(c_sample, k_decay, k_atk, state, gate_freq)
   state += state < cur ? k_atk * (cur - state) : k_decay * (cur - state);
   
   (c_sample % 8 == 0) ? (
-    gate = min(lpg_sat_func(lpg_level, state), 1.0);
+    gate = min(lpg_sat_func(current_lpg_level, state), 1.0);
     
     gate_freq = max(50, 22050 * gate);
     this.init_linearSVF_absolute(gate_freq, 0);
@@ -234,10 +252,10 @@ noise2.init_slow_noise(pitch_slowness);
 
 freemem = 0;
 
-freemem = verb.init_verb(freemem);
-freemem = verb2.init_verb(freemem);
-freemem = verb3.init_verb(freemem);
-freemem = verb4.init_verb(freemem);
+freemem = verb.init_verb(freemem, low_decay_time, high_decay_time);
+freemem = verb2.init_verb(freemem, low_decay_time, high_decay_time);
+freemem = verb3.init_verb(freemem, low_decay_time, high_decay_time);
+freemem = verb4.init_verb(freemem, low_decay_time, high_decay_time);
 freemem = pitch_drift_left.pitch_drift_init(freemem);
 freemem = pitch_drift_right.pitch_drift_init(freemem);
 freemem = diff.init_simple_diffuser(freemem);
@@ -818,10 +836,7 @@ spire1.emitter(particles, 662, 0, 140);
 spire2.emitter(particles2, 629, 0, 134);
 spire3.emitter(particles3, 647, 0, 70);
 
-
 gfx_mode = 0;
-
-
 
 gfx_a = 0.6;
 drop1.draw_sprite(466, 471, 7, 8, 0.25, 0.003);
@@ -841,6 +856,15 @@ last_mouse_x = mouse_x;
 last_mouse_y = mouse_y;
 
 @block
+d_drywet = (drywet - current_drywet) / samplesblock;
+d_noise_level = (noise_level - current_noise_level) / samplesblock;
+d_drive = (drive - current_drive) / samplesblock;
+d_bias = (bias - current_bias) / samplesblock;
+d_pitch_instability = (pitch_instability - current_pitch_instability) / samplesblock;
+d_lpg_level = (lpg_level - current_lpg_level) / samplesblock;
+d_retro_level = (retro_level - current_retro_level) / samplesblock;
+d_ducker_amount = (ducker_amount - current_ducker_amount) / samplesblock;
+
 ducker.ducker_init();
 midi.midi_block(pass_through);
 lpg.init_lpg_rates();
@@ -865,10 +889,19 @@ semitones2 =
 diff.update_diffuser_params(semitones, 1, 0.5, 0.7);  // Semitones, density, noise, smear
 diff2.update_diffuser_params(semitones2, 1, 0.6, 0.6);  // Semitones, density, noise, smear
 
-spreader.spreader_update_parameters(0.2 + 0.4 * retro_level, 100 * retro_level);
+spreader.spreader_update_parameters(0.2 + 0.4 * current_retro_level, 100 * current_retro_level);
 
 @sample
 in_level = 0.95 * in_level + 1 * max(abs(spl0), abs(spl1));
+
+current_drywet += d_drywet;
+current_noise_level += d_noise_level;
+current_drive += d_drive;
+current_bias += d_bias;
+current_pitch_instability += d_pitch_instability;
+current_lpg_level += d_lpg_level;
+current_retro_level += d_retro_level;
+current_ducker_amount += d_ducker_amount;
 
 slider_changed ? (
   update_settings();
@@ -892,11 +925,11 @@ midi.notes_remain ? (
 last_notes_on = midi.notes_on;
 
 function run_lpg(left, right)
-global(lpg_level)
+global(current_lpg_level)
 instance(smooth_lpg, out_left, out_right)
 local(smooth_lpg_iterp)
 (
-  smooth_lpg = 0.001 * max(0.95, lpg_level) + 0.999 * smooth_lpg;
+  smooth_lpg = 0.001 * max(0.95, current_lpg_level) + 0.999 * smooth_lpg;
   
   (smooth_lpg < 0.9999) ? (
     this.lpg_update(left, right);
@@ -965,7 +998,7 @@ extra_voice ? (
 
 fb_l = fb_r = 0;
 
-((noise_level > 0) || (drive > 0)) ? (
+((current_noise_level > 0) || (current_drive > 0)) ? (
   verb_out_left = l_compander.compander_compress(verb_out_left);
   verb_out_right = r_compander.compander_compress(verb_out_right);
   
@@ -1005,13 +1038,13 @@ fb_l = fb_r = 0;
     fb_r += 0.01 * r2;
   );
   
-  bias_const = bias * drive;
-  verb_out_left += noise_level * r1 + bias_const;
-  verb_out_right += noise_level * r2 + bias_const;
+  bias_const = current_bias * current_drive;
+  verb_out_left += current_noise_level * r1 + bias_const;
+  verb_out_right += current_noise_level * r2 + bias_const;
   
-  verb_out_left = verb_out_left - drive * verb_out_left * verb_out_left * verb_out_left;
-  verb_out_right = verb_out_right - drive * verb_out_right * verb_out_right * verb_out_right;
-  bias_const = bias_const - drive * bias_const * bias_const * bias_const;
+  verb_out_left = verb_out_left - current_drive * verb_out_left * verb_out_left * verb_out_left;
+  verb_out_right = verb_out_right - current_drive * verb_out_right * verb_out_right * verb_out_right;
+  bias_const = bias_const - current_drive * bias_const * bias_const * bias_const;
   verb_out_left -= bias_const;
   verb_out_right -= bias_const;
   
@@ -1020,8 +1053,8 @@ fb_l = fb_r = 0;
 );
 
 drift_noise = noise.slow_noise_sample();
-verb_out_left = pitch_drift_left.pitch_drift_sample(verb_out_left, pitch_instability, drift_noise);
-verb_out_right = pitch_drift_right.pitch_drift_sample(verb_out_right, pitch_instability, drift_noise);
+verb_out_left = pitch_drift_left.pitch_drift_sample(verb_out_left, current_pitch_instability, drift_noise);
+verb_out_right = pitch_drift_right.pitch_drift_sample(verb_out_right, current_pitch_instability, drift_noise);
 
 
 (lpg_wiring === 1) ? (
@@ -1043,28 +1076,28 @@ verb_out_right = pitch_drift_right.pitch_drift_sample(verb_out_right, pitch_inst
 );
 
 (retro_mode === 0) ? (
-  retro_level ? (
+  current_retro_level ? (
     movement_resonators.movement_resonators(verb_out_left, verb_out_right);
-    verb_out_left += retro_level * movement_resonators.out_left;
-    verb_out_right += retro_level * movement_resonators.out_right;
+    verb_out_left += current_retro_level * movement_resonators.out_left;
+    verb_out_right += current_retro_level * movement_resonators.out_right;
   );
 ) : (retro_mode === 1) ? (
-  retro_level ? (
+  current_retro_level ? (
     movement_resonators.movement_resonators2(verb_out_left, verb_out_right);
-    verb_out_left += retro_level * movement_resonators.out_left;
-    verb_out_right += retro_level * movement_resonators.out_right;
+    verb_out_left += current_retro_level * movement_resonators.out_left;
+    verb_out_right += current_retro_level * movement_resonators.out_right;
   );
 ) : (retro_mode === 2) ? (
-  retro_level ? (
-    cur_mod1 = 5.0 * retro_level;
+  current_retro_level ? (
+    cur_mod1 = 5.0 * current_retro_level;
     freq_shifter_left.init_cheapest_freq_shifter(cur_mod1);
     shifted = 2.0 * min(1.0, cur_mod1) * freq_shifter_left.eval_cheapest_freq_shifter(0.5 * (verb_out_left - verb_out_right));
     verb_out_left += shifted;
     verb_out_right += shifted;
   );
 ) : (retro_mode === 3) ? (
-  retro_level ? (
-    cur_mod1 = 5.0 * retro_level;
+  current_retro_level ? (
+    cur_mod1 = 5.0 * current_retro_level;
     freq_shifter_left.init_cheapest_freq_shifter(cur_mod1);
     shifted = 2.0 * min(0.5, cur_mod1) * freq_shifter_left.eval_cheapest_freq_shifter(0.5 * (verb_out_left + verb_out_right));
     verb_out_left += shifted;
@@ -1075,11 +1108,11 @@ verb_out_right = pitch_drift_right.pitch_drift_sample(verb_out_right, pitch_inst
   verb_out_left = spreader.outL;
   verb_out_right = spreader.outR;
 ) : (retro_mode === 5) ? (
-  verb_out_left = retro_left.retro_degrade(verb_out_left, retro_level);
-  verb_out_right = retro_right.retro_degrade(verb_out_right, retro_level);
+  verb_out_left = retro_left.retro_degrade(verb_out_left, current_retro_level);
+  verb_out_right = retro_right.retro_degrade(verb_out_right, current_retro_level);
 ) : (retro_mode === 6) ? (
-  verb_out_left = retro_left.bitcrush(verb_out_left, retro_level);
-  verb_out_right = retro_right.bitcrush(verb_out_right, retro_level);
+  verb_out_left = retro_left.bitcrush(verb_out_left, current_retro_level);
+  verb_out_right = retro_right.bitcrush(verb_out_right, current_retro_level);
 );
 
 eq_curve ? (
@@ -1088,13 +1121,13 @@ eq_curve ? (
   verb_out_right = cabs.out_right;
 );
 
-verb_out_left *= drywet;
-verb_out_right *= drywet;
+verb_out_left *= current_drywet;
+verb_out_right *= current_drywet;
 
-duck = ducker_amount ? ducker.ducker_process(spl0, spl1, verb_out_left, verb_out_right, ducker_amount) : 1.0;
+duck = current_ducker_amount ? ducker.ducker_process(spl0, spl1, verb_out_left, verb_out_right, current_ducker_amount) : 1.0;
 
-spl0 = spl0 * (1 - drywet) + verb_out_left * duck;
-spl1 = spl1 * (1 - drywet) + verb_out_right * duck;
+spl0 = spl0 * (1 - current_drywet) + verb_out_left * duck;
+spl1 = spl1 * (1 - current_drywet) + verb_out_right * duck;
 
 (lpg_wiring == 3) ? (
   lpg.run_lpg(spl0, spl1);
