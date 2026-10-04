@@ -1,8 +1,8 @@
 desc:Neverb (ALPHA)
 tags: reverb, effect
-version: 0.09
+version: 0.10
 author: Joep Vanlier
-changelog: fix bug introduced with interpolation change
+changelog: add a few more shimmer and retro options
 license: MIT
 provides:
   Neverb_Dependencies/*
@@ -35,11 +35,11 @@ slider21:extra_voice=0<0, 1, 0.l000001>-Extra voice
 slider22:extra_voice_type=0<0,2,1{+7,+12,+0.5,-5,-12}>-Extra voice semitones
 
 slider23:retro_level=0<0, 1, 0.0001>-Retro level
-slider24:retro_mode=0<0, 6, 1{Peaks Mid,Peaks High,Side swoosh,Center swoosh,Chorus,Degrade,Bitcrush}>-Retro mode
+slider24:retro_mode=0<0, 6, 1{Peaks Mid,Peaks High,Side swoosh,Center swoosh,Chorus,Degrade,Bitcrush,Frequency shift}>-Retro mode
 slider25:stereo_mode=0<0, 2, 1{Width,Front/Back,Smart}>-Stereo mode
 slider26:eq_curve=0<0,8,1>-EQ curve
 
-slider27:shimmer_mode=0<0,9,1{Digital +12,Smooth +12,Smooth +7,Smooth +5,Evil Tritone,Rect,Fuzz,Down,-12 HQ,-24 HQ,+12 HQ>-Shimmer mode
+slider27:shimmer_mode=0<0,11,1{Digital +12,Smooth +12,Smooth +7,Smooth +5,Evil Tritone,Rect,Fuzz,Down,-12 HQ,-24 HQ,+12 HQ,Frq Shift +1,Frq Shift +2>-Shimmer mode
 slider28:ducker_amount=0<0,1,0.0001>-Ducking amount
 
 import saike_shimmer_fdn.jsfx-inc
@@ -544,11 +544,12 @@ panel_pitch.retro_mode.draw_toggle("4", 3, 13, 42, 10, 0, "Mid swoosh");
 panel_pitch.retro_mode.draw_toggle("5", 4, 13, 56, 10, 0, "Chorus");
 panel_pitch.retro_mode.draw_toggle("6", 5, 13, 70, 10, 0, "Degrade");
 panel_pitch.retro_mode.draw_toggle("7", 6, 13, 84, 10, 0, "Bit crush");
+panel_pitch.retro_mode.draw_toggle("8", 7, 13, 98, 10, 0, "Freq shift");
 
 panel_shimmer.set_position(panel_offset_x + 200, panel_offset_y + 240, 132, 6);
 panel_shimmer.panel_title("SHIMMER");
 panel_shimmer.panel_edge(107, 175, 0, 0);
-panel_shimmer.shimmer_amount.draw_slider("SHIM", sprintf(1, "%.2f", shimmer_amount), "Shimmer mix");
+panel_shimmer.shimmer_amount.draw_slider("MODE", sprintf(1, "%.2f", shimmer_amount), "Shimmer mix");
 
 // shimmer groups
 //  0 LQ : 0: +12, 1: +12, 2: +7, 3: +5, 4: +6
@@ -578,10 +579,12 @@ shimmer_group == 0 ? (
   panel_shimmer.shimmer_mode.draw_toggle("+5", 3, increment, 3 * (increment + 1), 10, 0, "+5 Smooth");
   panel_shimmer.shimmer_mode.draw_toggle("+6", 4, increment, 4 * (increment + 1), 10, 0, "Evil tritone");
 ) : ( shimmer_group == 2 ) ? (
-  increment = 20;
-  panel_shimmer.shimmer_mode.draw_toggle("RECT", 5, increment, 0 * (increment + 1), 10, 0, "Rect\n\nRectifier");
-  panel_shimmer.shimmer_mode.draw_toggle("FUZZ", 6, increment, 1 * (increment + 1), 10, 0, "Fuzz\n\nSubtle rectifier");
-  panel_shimmer.shimmer_mode.draw_toggle("HALF", 7, increment, 2 * (increment + 1), 10, 0, "Down\n\nHalfwave cancellation");
+  increment = 12;
+  panel_shimmer.shimmer_mode.draw_toggle("RT", 5, increment, 0 * (increment + 1), 10, 0, "Rect\n\nRectifier");
+  panel_shimmer.shimmer_mode.draw_toggle("FZ", 6, increment, 1 * (increment + 1), 10, 0, "Fuzz\n\nSubtle rectifier");
+  panel_shimmer.shimmer_mode.draw_toggle("HL", 7, increment, 2 * (increment + 1), 10, 0, "Down\n\nHalfwave cancellation");
+  panel_shimmer.shimmer_mode.draw_toggle("F1", 11, increment, 3 * (increment + 1), 10, 0, "Frequency shifter 1\n\nShifts 1 octave up based on incoming midi pitch");
+  panel_shimmer.shimmer_mode.draw_toggle("F2", 12, increment, 4 * (increment + 1), 10, 0, "Frequency shift\n\nShifts 2 octaves up based on incoming midi pitch");
 ) : (
   increment = 20;
   panel_shimmer.shimmer_mode.draw_toggle("-12", 8, increment, 0 * (increment + 1), 10, 0, "-12 HQ");
@@ -1152,6 +1155,23 @@ verb_out_right = pitch_drift_right.pitch_drift_sample(verb_out_right, current_pi
 ) : (retro_mode === 6) ? (
   verb_out_left = retro_left.bitcrush(verb_out_left, current_retro_level);
   verb_out_right = retro_right.bitcrush(verb_out_right, current_retro_level);
+) : (retro_mode == 7) ? (
+  current_retro_level ? (
+    cur_mod1 = 40 * exp(6.312170375 * current_retro_level);
+    freq_shifter_left.init_cheapest_freq_shifter(cur_mod1);
+    shifted = 2.0 * min(0.5, cur_mod1) * freq_shifter_left.eval_cheapest_freq_shifter(0.5 * (verb_out_left + verb_out_right));
+    fb_l += 0.26 * shifted;
+    fb_r += 0.26 * shifted;
+  );
+);
+
+(shimmer_mode > 10) ? (
+  cur_mod1 = (shimmer_mode == 11) ? 440 * 2^((midi.note - 69)/12) : 880 * 2^((midi.note - 69)/12);
+  
+  shim_freq_shifter.init_cheapest_freq_shifter(cur_mod1);
+  shifted = 1.5 * shim_freq_shifter.eval_cheapest_freq_shifter(0.5 * (verb_out_left + verb_out_right));
+  fb_l += shimmer_amount * shifted;
+  fb_r += shimmer_amount * shifted;
 );
 
 eq_curve ? (
