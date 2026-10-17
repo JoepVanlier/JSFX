@@ -2775,6 +2775,107 @@ global()
   ybp4 * 64
 );
 
+function reset_elliptic()
+local()
+global()
+instance(s1, s2, s3, s4, s5, s6, y, ss1, ss2, ss3, ss4, ss5, ss6, sy)
+(
+  y = s1 = s2 = s3 = s4 = s5 = s6 = sy = ss1 = ss2 = ss3 = ss4 = ss5 = ss6 = 0;
+);
+
+function elliptic_4x(x)
+local()
+global()
+instance(ss1, ss2, ss3, ss4, ss5, ss6, sy)
+(
+  sy = 0.008468922117243878 * x + ss1;
+  ss1 = -0.019462386781351294 * x - -4.693138348960238 * sy + ss2;
+  ss2 = 0.03252284776764872 * x - 9.820163714210157 * sy + ss3;
+  ss3 = -0.03405093434418795 * x - -11.58857973879957 * sy + ss4;
+  ss4 = 0.03252284776764873 * x - 8.100872972866496 * sy + ss5;
+  ss5 = -0.0194623867813513 * x - -3.1752300192471665 * sy + ss6;
+  ss6 = 0.008468922117243876 * x - 0.546018373513739 * sy;
+  
+  sy
+);
+
+function init_polivoks(slider_value, resonance, morph_value)
+global(srate, sampling_ratio)
+instance(g, r, slew_ceiling, slew_ceiling_down, islew, islew_down, fac, leak, dc_coeff, morph)
+local(osrate, cutoff)
+(
+  morph = 4 * morph_value;
+  cutoff = 0.5 * sampling_ratio * srate * exp( (1-clamp(slider_value, 0, .99)) * log(20/22050) );
+  osrate = 4 * srate;
+  g = tan(2.0 * $pi * cutoff / osrate);
+  r = (1.0 - resonance);
+  fac = cutoff / 22050;
+  slew_ceiling = 0.4 * fac * fac + 0.001 + 0.005 * resonance;
+  slew_ceiling = slew_ceiling * (192000 / osrate);
+  slew_ceiling_down = slew_ceiling * 0.58;
+  islew = 1.0 / slew_ceiling;
+  islew_down = 1.0 / slew_ceiling_down;
+  
+  leak = max(0, resonance - 0.9) * 10;
+  leak *= leak;
+  leak = exp(-1 / (osrate * (0.00521 + 0.1 * leak * leak * leak)));
+
+  dc_coeff = 1.0 - (100.0 / osrate);
+);
+
+function poli_sample(x)
+global()
+instance(s1, s2, r, g, slew_ceiling, slew_ceiling_down, islew, islew_down, leak, dc_coeff, s2m1, lpm1, morph)
+local(frac, hp, bp, lp, step1, step2, gstar)
+(
+  gstar = g + 0.002 * s2 - 0.0001 * s1;
+  
+  hp = x - (r * s1) - s2;
+  
+  step1 = gstar * hp;
+  s1 += ((hp > 0) ? (slew_ceiling * tanh(step1 * islew)) : (slew_ceiling_down * tanh(step1 * islew_down)));
+  bp = s1;
+  s1 *= leak;
+  
+  step2 = gstar * bp;
+  s2 += ((bp > 0) ? (slew_ceiling * tanh(step2 * islew)) : (slew_ceiling_down * tanh(step2 * islew_down)));
+  s2 *= leak;
+  
+  // DC block for the low pass
+  lp = s2 - s2m1 + dc_coeff * lpm1;
+  s2m1 = s2;
+  lpm1 = lp;
+  
+  
+  frac = morph - floor(morph);
+  morph < 1 ? (
+    // LP to BP
+    bp * frac + (1.0 - frac) * lpm1
+  ) : ( morph < 2 ) ? (
+    // BP to HP
+    hp * frac + (1.0 - frac) * bp
+  ) : ( morph < 3 ) ? (
+    // HP to BR
+    frac * (hp + s2) + (1.0 - frac) * hp
+  ) : (
+    frac * lp + (1.0 - frac) * (hp + s2)
+  );
+);
+
+function poli_4x(x)
+local(y, frac)
+global()
+instance(last_x, choice, choice_frac)
+(
+  this.elliptic_4x(this.poli_sample(last_x));
+  this.elliptic_4x(this.poli_sample(last_x * 0.75 + x * 0.25));
+  this.elliptic_4x(this.poli_sample(last_x * 0.5 + x * 0.5));
+  y = this.elliptic_4x(this.poli_sample(last_x * 0.25 + x * 0.75));
+  
+  last_x = x;
+  y
+);
+
 function init_filter(filter_type, sliderCutoffL, sliderCutoffR, sliderMorphL, sliderMorphR, sliderReso)
 local()
 instance(
@@ -2974,6 +3075,9 @@ global(oversampling, safety_limit_pir, safety_limit_ms20, safety_limit_moog, cur
     ) : ( filter_type == 29 ) ? (
       L.duo.init_duoreso(sliderCutoffL, sliderReso, sliderMorphL);
       R.duo.init_duoreso(sliderCutoffR, sliderReso, sliderMorphR);
+    ) : ( filter_type == 30 ) ? (
+      L.voks.init_polivoks(sliderCutoffL, sliderReso, sliderMorphL);
+      R.voks.init_polivoks(sliderCutoffR, sliderReso, sliderMorphR);
     );
   );
   
@@ -3100,6 +3204,9 @@ global(ssl, ssr, epsilon)
       ) : ( filter_type == 29 ) ? (
         ssl = L.duo.eval_duoreso(ssl);
         ssr = R.duo.eval_duoreso(ssr);
+      ) : ( filter_type == 30 ) ? (
+        ssl = L.voks.poli_4x(ssl * 0.25) * 4;
+        ssr = R.voks.poli_4x(ssr * 0.25) * 4 ;
       );
     );
   );
