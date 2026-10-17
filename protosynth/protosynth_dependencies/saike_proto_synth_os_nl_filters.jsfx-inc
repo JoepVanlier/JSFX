@@ -1183,3 +1183,89 @@ instance(ic1eq, ic2eq, a1, a2, a3, m0, m1, m2, k)
   (m0 * v0 + m1 * v1 + m2 * v2)
 );
 
+function init_polivoks(normalized_cutoff, resonance, morph_value)
+global(srate)
+instance(g, r, slew_ceiling, slew_ceiling_down, islew, islew_down, fac, leak, dc_coeff, morph)
+local(osrate, cutoff)
+(
+  morph = 4 * morph_value;
+  osrate = 4 * srate;
+  cutoff = exp((1 - normalized_cutoff) * log(20/22050) ) * 22050;
+  g = tan(2.0 * $pi * cutoff / osrate);
+  
+  r = (1.0 - resonance);
+  fac = cutoff / 22050;
+  slew_ceiling = 0.4 * fac * fac + 0.001 + 0.005 * resonance;
+  slew_ceiling = slew_ceiling * (192000 / osrate);
+  slew_ceiling_down = slew_ceiling * 0.58;
+  islew = 1.0 / slew_ceiling;
+  islew_down = 1.0 / slew_ceiling_down;
+  
+  leak = max(0, resonance - 0.9) * 10;
+  leak *= leak;
+  leak = exp(-1 / (osrate * (0.00521 + 0.1 * leak * leak * leak)));
+
+  dc_coeff = 1.0 - (100.0 / osrate);
+);
+
+function poli_reset()
+local()
+global()
+instance()
+(
+  1
+);
+
+function poli_sample(x)
+global()
+instance(s1, s2, r, g, slew_ceiling, slew_ceiling_down, islew, islew_down, leak, dc_coeff, s2m1, lpm1, morph)
+local(frac, hp, bp, lp, step1, step2, gstar)
+(
+  gstar = g + 0.002 * s2 - 0.0001 * s1;
+  
+  hp = x - (r * s1) - s2;
+  
+  step1 = gstar * hp;
+  s1 += ((hp > 0) ? (slew_ceiling * tanh(step1 * islew)) : (slew_ceiling_down * tanh(step1 * islew_down)));
+  bp = s1;
+  s1 *= leak;
+  
+  step2 = gstar * bp;
+  s2 += ((bp > 0) ? (slew_ceiling * tanh(step2 * islew)) : (slew_ceiling_down * tanh(step2 * islew_down)));
+  s2 *= leak;
+  
+  // DC block for the low pass
+  lp = s2 - s2m1 + dc_coeff * lpm1;
+  s2m1 = s2;
+  lpm1 = lp;
+  
+  
+  frac = morph - (morph | 0);
+  morph < 1 ? (
+    // LP to BP
+    bp * frac + (1.0 - frac) * lpm1
+  ) : ( morph < 2 ) ? (
+    // BP to HP
+    hp * frac + (1.0 - frac) * bp
+  ) : ( morph < 3 ) ? (
+    // HP to BR
+    frac * (hp + s2) + (1.0 - frac) * hp
+  ) : (
+    frac * lp + (1.0 - frac) * (hp + s2)
+  );
+);
+
+function poli_4x(x)
+local(y)
+global()
+instance(last_x)
+(
+  this.elliptic_4x(this.poli_sample(last_x));
+  this.elliptic_4x(this.poli_sample(last_x * 0.75 + x * 0.25));
+  this.elliptic_4x(this.poli_sample(last_x * 0.5 + x * 0.5));
+  y = this.elliptic_4x(this.poli_sample(last_x * 0.25 + x * 0.75));
+  
+  last_x = x;
+  y
+);
+
