@@ -1,9 +1,9 @@
 desc:Saike Protosynth
 options:maxmem=32000000
 tags: instrument, synth, generator, synthesizer
-version: 0.61
+version: 0.62
 author: Joep Vanlier
-changelog: Reduce compilation time by storing variables intended to go into instance variables into globals over call boundary.
+changelog: Add new VX filter type
 license: MIT
 provides:
   protosynth_dependencies/*
@@ -82,14 +82,14 @@ slider151:f2_morph=0<0,1,0.000001>-F2 Morph
 slider152:f3_cutoff=1<0,1,0.000001>-F3 Filter Cutoff
 slider153:f3_reso=0<0,1,0.000001>-F3 Filter Resonance
 slider154:f3_morph=0<0,1,0.000001>-F3 Filter Morph
-slider155:f3_type=0<0,6,1{LIN,MS,L2,L4,SHRK,PL,SHRK2>-F3 Type
+slider155:f3_type=0<0,6,1{LIN,MS,L2,L4,SHRK,PL,SHRK2,VOKS>-F3 Type
 slider156:f3_drive=0<-6,48,0.00001>-F3 Drive
 slider157:keyfollow=0<0,1,0.00001>-Key follow
 
 slider158:f4_cutoff=1<0,1,0.000001>-Output Filter Cutoff
 slider159:f4_reso=0<0,1,0.000001>-Output Filter Resonance
 slider160:f4_morph=0<0,1,0.000001>-Output Filter Morph
-slider161:f4_type=0<0,6,1{LIN,MS,L2,L4,SHRK,PL,SHRK2>-Output Filter Type
+slider161:f4_type=0<0,6,1{LIN,MS,L2,L4,SHRK,PL,SHRK2,VOKS>-Output Filter Type
 slider162:f4_drive=0<-6,24,0.00001>-Output Drive
 slider163:f4_keyfollow=0<0,1,0.00001>-Output Key follow
 
@@ -345,11 +345,11 @@ instance()
   );
 );
 
-filter_type_slider1.init_slider_ui(-1, 0, 6, 0, 0);
+filter_type_slider1.init_slider_ui(-1, 0, 7, 0, 0);
 filter_gain_slider3.init_slider_ui(156, -24, 24, 0, 0);
 filter_keyfollow1.init_slider_ui(157, 0, 1, 0, 0);
 
-filter_type_slider2.init_slider_ui(-1, 0, 6, 0, 0);
+filter_type_slider2.init_slider_ui(-1, 0, 7, 0, 0);
 filter_gain_slider4.init_slider_ui(162, -24, 24, 0, 0);
 filter_keyfollow2.init_slider_ui(163, 0, 1, 0, 0);
 
@@ -575,6 +575,7 @@ function filt_type(type)
   : (type == 4) ? "Shrk"
   : (type == 5) ? "PL"
   : (type == 6) ? "Sh2"
+  : (type == 7) ? "Vx"
 );
 
 // Modulator handling
@@ -884,8 +885,10 @@ instance(
         this.filter3.shriek.init_shriek(f_cutoff, f_reso, f_morph);
       ) : (current_f3_type == 5) ? (
         this.filter3.pl4.init_pl4(f_cutoff, f_reso, f_morph);
-      ): (current_f3_type == 6) ? (
+      ) : (current_f3_type == 6) ? (
         this.filter3.shriek.init_shriek(f_cutoff, f_reso, f_morph);
+      ) : (current_f3_type == 7) ? (
+        this.filter3.vox.init_polivoks(f_cutoff, f_reso, f_morph);
       );
     );
   );
@@ -1106,6 +1109,8 @@ instance(
         this.filter3.pl4.reset_pl4();
       ) : (current_f3_type == 6) ? (
         this.filter3.shriek.reset_mj();
+      ) : (current_f3_type == 7) ? (
+        this.filter3.poli_reset();
       );
     );
   
@@ -1123,7 +1128,9 @@ instance(
       this.filter3.pl4.run_pl4(o1 * current_f3_gain) / current_f3_gain;
     ) : (current_f3_type == 6) ? (
       this.filter3.shriek.run_mj(o1 * current_f3_gain) / current_f3_gain;
-    )
+    ) : (
+      this.filter3.vox.poli_4x(o1 * current_f3_gain) / current_f3_gain;
+    );
   ) : o1;
   
   outp = 0.9999 * outp + 0.0001 * abs(o1);
@@ -1974,7 +1981,7 @@ audio_running ? (
       
       f_cutoff = min(1, max(0, f_cutoff - f4_keyfollow * keyfollow_mod));
       
-      current_f4_type = floor(f4_type);
+      current_f4_type = f4_type | 0;
       (current_f4_type == 0) ? (
         this.filter4.lin.init_linear(f_cutoff, f_reso, f_morph);
       ) : (current_f4_type == 1) ? (
@@ -1989,6 +1996,8 @@ audio_running ? (
         this.filter4.pl4.init_pl4(f_cutoff, f_reso, f_morph);
       ) : (current_f4_type == 6) ? (
         this.filter4.shriek.init_shriek(f_cutoff, f_reso, f_morph);      
+      ) : (current_f4_type == 7) ? (
+        this.filter4.vox.init_polivoks(f_cutoff, f_reso, f_morph);
       );
     );
   );
@@ -2031,8 +2040,9 @@ audio_running ? (
         this.filter4.pl4.reset_pl4();
       ) : (current_f4_type == 6) ? (
         this.filter4.shriek.reset_mj();
+      ) : (
+        this.filter4.vox.poli_reset();
       );
-      
     ); 
   
     (current_f4_type == 0) ? (
@@ -2049,7 +2059,9 @@ audio_running ? (
       this.filter4.pl4.run_pl4(spl0 * current_f4_gain) / current_f4_gain;
     ) : (current_f4_type == 6) ? (
       this.filter4.shriek.run_mj(spl0 * current_f4_gain) / current_f4_gain;
-    )
+    ) : (
+      this.filter4.vox.poli_4x(spl0 * current_f4_gain) / current_f4_gain;
+    );
   ) : spl0;
   
   
@@ -3046,7 +3058,7 @@ cy = 208 - 10;
       printf("(filter_type_slider%d.over && (mouse_cap == 2) && (last_cap == 0)) ? (\n", j);
         printf("gfx_x = mouse_x;");
         printf("gfx_y = mouse_y;");
-        printf("ix = gfx_showmenu(\"Linear|Nonlinear 2-pole MS-20|Nonlinear 2-pole ladder|Nonlinear 4-pole ladder|Nonlinear shriek 2-pole|Nonlinear pillow 4-pole|Shriek 2\");");
+        printf("ix = gfx_showmenu(\"Linear|Nonlinear 2-pole MS-20|Nonlinear 2-pole ladder|Nonlinear 4-pole ladder|Nonlinear shriek 2-pole|Nonlinear pillow 4-pole|Shriek 2|Polivox\");");
         printf("  (ix > 0) ? (");
           printf("    filter_type_slider%d.current_value = ix - 1;", j);
         printf("  );");
